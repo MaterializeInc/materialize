@@ -28,6 +28,10 @@ skip = [
     { name = "itoa", version = "0.4.1" },
 ]
 
+# Use `prost` or `protobuf-native` instead.
+[[bans.deny]]
+name = "protobuf"
+
 # The `md5` and `sha1` crates are not part of the RustCrypto project. Use
 # `md-5` and `sha-1` instead, despite their somewhat suspicious names.
 [[bans.deny]]
@@ -118,9 +122,6 @@ allow-git = [
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
-
-    # Waiting on https://github.com/stepancheg/rust-protobuf/pull/581.
-    "https://github.com/MaterializeInc/rust-protobuf.git",
 
     # Waiting on https://github.com/tokio-rs/prost/pull/576.
     "https://github.com/MaterializeInc/prost.git",

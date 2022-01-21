@@ -13,7 +13,7 @@ import os
 import platform
 import sys
 from enum import Enum
-from typing import List
+from typing import Dict, List
 
 from materialize import ROOT, spawn
 
@@ -79,55 +79,37 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
 
-    # `-static-libstdc++` avoids introducing a runtime dependency on the
-    # extremely new version of libstdc++ that our cross-compiling toolchain
-    # uses.
-    ldflags: List[str] = ["-static-libstdc++"]
-    rustflags += [
-        "-Clink-arg=-Wl,--compress-debug-sections=zlib",
-        "-Clink-arg=-static-libstdc++",
-    ]
+    rustflags += ["-Clink-arg=-Wl,--compress-debug-sections=zlib"]
 
-    if not sys.platform == "darwin":
-        # lld is not yet easy to install on macOS.
-        ldflags += ["-fuse-ld=lld"]
-        rustflags += ["-Clink-arg=-fuse-ld=lld"]
+    if sys.platform == "darwin":
+        sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
+        rustflags += [f"-L{sysroot}/lib"]
+        extra_env = {
+            f"CMAKE_SYSTEM_NAME": "Linux",
+            f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
+            f"TARGET_AR": f"{_target}-ar",
+            f"TARGET_CPP": f"{_target}-cpp",
+            f"TARGET_CC": f"{_target}-cc",
+            f"TARGET_CXX": f"{_target}-c++",
+            f"TARGET_CXXSTDLIB": "static=stdc++",
+            f"TARGET_LD": f"{_target}-ld",
+            f"TARGET_RANLIB": f"{_target}-ranlib",
+        }
+    else:
+        # NOTE(benesch): The required Rust flags have to be duplicated with
+        # their definitions in ci/builder/Dockerfile because `rustc` has no way
+        # to merge together Rust flags from different sources.
+        rustflags += [
+            "-Clink-arg=-fuse-ld=lld",
+            f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
+        ]
+        extra_env: Dict[str, str] = {}
 
     env = {
-        f"CMAKE_SYSTEM_NAME": "Linux",
-        f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-        f"LDFLAGS": " ".join(ldflags),
-        f"RUSTFLAGS": " ".join(rustflags),
-        f"TARGET_AR": f"{_target}-ar",
-        f"TARGET_CPP": f"{_target}-cpp",
-        f"TARGET_CC": f"{_target}-cc",
-        f"TARGET_CXX": f"{_target}-c++",
-        f"TARGET_LD": f"{_target}-ld",
-        f"TARGET_RANLIB": f"{_target}-ranlib",
+        **extra_env,
+        "RUSTFLAGS": " ".join(rustflags),
         **KRB5_CONF_OVERRIDES,
     }
-
-    # Handle the confusing situation of "cross compiling" from x86_64 Linux to
-    # x86_64 Linux. This counts as a cross compile because, while the platform
-    # is identical, we're targeting an older kernel and libc. In an ideal world,
-    # our dependencies would use the native toolchain (e.g., `cc`) when compiled
-    # as build dependencies, but the cross toolchain (e.g.,
-    # `x86_64-unknown-linux-gnu-cc`) when compiled as normal dependencies. But
-    # the build systems of several of our dependencies flub this distinction and
-    # use the native toolchain (`cc`) when compiled as a normal dependency.
-    # Fixing the build systems is hard, so instead we use the cross toolchain
-    # for build dependencies too, by setting `CC` in addition to `TARGET_CC`,
-    # `CPP` in addition to `TARGET_CPP`, etc. That means we're incorrectly using
-    # the cross toolchain to compile build dependencies, but it works out
-    # because we're still able to *run* those dependencies on the build machine,
-    # and this way we guarantee that the buggy dependencies use the cross
-    # toolchain when compiled as normal dependencies, which is the actually
-    # important consideration.
-    if Arch.host() == arch and sys.platform != "darwin":
-        for k, v in env.copy().items():
-            if k.startswith("TARGET_"):
-                k = k[len("TARGET_") :]
-                env[k] = v
 
     return [
         *_enter_builder(arch),

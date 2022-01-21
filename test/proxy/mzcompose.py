@@ -27,12 +27,12 @@ tests: List[Dict[str, Any]] = [
     {
         "name": "with_proxy",
         "env": ["ALL_PROXY=http://squid:3128"],
-        "td": "testdrive/avro-registry.td testdrive/esoteric/s3.td",
+        "td": ["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
     },
     {
         "name": "proxy_failure",
         "env": ["ALL_PROXY=http://localhost:1234"],
-        "td": "proxy-failure.td",
+        "td": ["proxy-failure.td"],
     },
     {
         "name": "no_proxy",
@@ -40,7 +40,7 @@ tests: List[Dict[str, Any]] = [
             "ALL_PROXY=http://localhost:1234",
             "NO_PROXY=schema-registry,amazonaws.com,localstack",
         ],
-        "td": "testdrive/avro-registry.td testdrive/esoteric/s3.td",
+        "td": ["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
     },
 ]
 
@@ -80,5 +80,5 @@ def test_proxy(c: Composition, aws: str) -> None:
         mz: Materialized = test["mz"]
         c.up(mz.name)
         c.wait_for_materialized(mz.name)
-        c.run("testdrive-svc", aws, test["td"])
+        c.run("testdrive-svc", aws, *test["td"])
         c.kill(mz.name)

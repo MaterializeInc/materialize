@@ -20,7 +20,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
-use interchange::protobuf::NormalizedProtobufMessageName;
 use itertools::Itertools;
 use regex::Regex;
 use reqwest::Url;
@@ -1148,18 +1147,14 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 {
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
-                        message_name: NormalizedProtobufMessageName::new(
-                            value.message_name.clone(),
-                        ),
+                        message_name: value.message_name.clone(),
                         confluent_wire_format: true,
                     });
                     if let Some(key) = key {
                         return Ok(SourceDataEncoding::KeyValue {
                             key: DataEncoding::Protobuf(ProtobufEncoding {
                                 descriptors: strconv::parse_bytes(&key.schema)?,
-                                message_name: NormalizedProtobufMessageName::new(
-                                    key.message_name.clone(),
-                                ),
+                                message_name: key.message_name.clone(),
                                 confluent_wire_format: true,
                             }),
                             value,
@@ -1183,7 +1178,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
 
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
-                    message_name: NormalizedProtobufMessageName::new(message_name.to_owned()),
+                    message_name: message_name.to_owned(),
                     confluent_wire_format: false,
                 })
             }

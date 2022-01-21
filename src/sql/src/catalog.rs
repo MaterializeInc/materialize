@@ -370,7 +370,7 @@ lazy_static! {
         nonce: 0,
         cluster_id: Uuid::from_u128(0),
         session_id: Uuid::from_u128(0),
-        experimental_mode: false,
+        experimental_mode: true,
         safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
         timestamp_frequency: Duration::from_secs(1),

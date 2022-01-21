@@ -107,6 +107,11 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Detect and reject multiple materializations of sources that would silently
+  lose data when materialized more than once. This enables safe use of
+  unmaterialized PostgreSQL and S3 with SQS notifications sources. {{% gh 8203
+  %}}
+
 - Fix a bug in the `ILIKE` operator where matching against a [`char`] value did
   not take any trailing spaces into account {{% gh 10075 %}}. The new behavior
   matches the behavior of the `LIKE` operator.
@@ -115,6 +120,10 @@ changes that have not yet been documented.
   {{% gh 10077 %}}. The new behavior matches PostgreSQL.
 
 - Add basic Prometheus counters for PostgreSQL sources.
+
+- Improve PostgreSQL compatibility:
+
+  - Support `SHOW TIME ZONE` as an alias for `SHOW TIMEZONE` {{% gh 9908 %}}.
 
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`date`] value but a time-related field (e.g., `SECOND`).

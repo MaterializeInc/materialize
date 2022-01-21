@@ -49,7 +49,7 @@ tokio = { version = "1.15.0", default-features = false, features = ["macros", "s
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]
-mz-protoc = { path = "../protoc" }
+prost-build = "0.9.1"
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }

@@ -54,42 +54,50 @@ Unlike the `sqllogictest` driver, `testdrive` will fail the test at the first di
 
 The easiest way to run testdrive tests is via mzcompose.
 
-The mzcompose configuration will automatically set up all of testdrive's dependencies, including
-Zookeeper, Kafka, the Confluent Schema Registry, and mock versions of AWS S3 and Kinesis.
+The mzcompose configuration will automatically set up all of testdrive's
+dependencies, including Zookeeper, Kafka, the Confluent Schema Registry, and
+mock versions of AWS S3 and Kinesis.
+
+**WARNING:** On ARM-based machines (like M1 Macs), running the Confluent
+Platform in Docker is nearly unusably slow because it runs under QEMU emulation.
+(Confluent [refuses to announce a timeline][confluent-arm] for when they will
+provide ARM images.) As a workaround, run tests using Redpanda instead of the
+Confluent Platform, or run tests locally without mzcompose.
+
+For full reference documentation on the available mzcompose optoins, consult the
+help text:
 
 ```
-TD_TEST=*.td ./mzcompose --dev run testdrive
+./mzcompose run testdrive --help
 ```
 
-Supported **environment variables**:
+### Common invocations
 
-* `TD_TEST` (default `*.td`) is a glob of tests to run from the test/testdrive directory. The
-  default is to not run any of the "esoteric" tests.
+Run testdrive against all files in `test/testdrive` using Confluent Platform and
+Localstack:
 
-  ```
-  TD_TEST=joins.td ./mzcompose --dev run testdrive
-  ```
+```
+./mzcompose --dev run testdrive
+```
 
-* `AWS_REGION`/`AWS_ENDPOINT`: will be supplied to the testdrive `--aws-region`/`--aws-endpoint`
-  command line options, respectively.
+Run using Redpanda instead of the Confluent Platform:
 
-Supported **workflows** (target of `mzcompose run <workflow>`):
+```
+./mzcompose --dev run testdrive --redpanda
+```
 
-* `testdrive`: Run tests with [LocalStack][] stubbing out AWS services. This allows you to run all
-  tests without needing to configure AWS credentials:
+Run testdrive against a single file:
 
-  ```console
-  $ TD_TEST=*.td ./mzcompose run testdrive
-  ```
+```
+./mzcompose --dev run testdrive FILE.td
+```
 
-* `ci`: Expect actual AWS credentials to be available (q.v. [our documentation][aws-creds-docs]),
-  either in the process environment or via AWS EC2 Profiles:
+Run S3 tests against a real AWS region. This expects actual AWS credentials to
+be available (q.v. [our documentation][aws-creds]).
 
-  ```console
-  $ aws-vault exec scratch -- env TD_TEST=**/*.td ./mzcompose run local-aws
-  ```
-
-[aws-creds-docs]: https://handbook.dev.i.mtrlz.dev/setup/#configure-aws-vault
+```
+./mzcompose --dev run testdrive --aws-region=us-east-2 esoteric/s3.td
+```
 
 ## Running tests locally without mzcompose
 
@@ -658,9 +666,9 @@ Set the starting value of the `${kafka-ingest.iteration}` variable.
 
 Send the data to the specified partition.
 
-#### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium] [greedy-search=false]`
+#### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium] [partial-search=usize]`
 
-Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test. If `greedy-search=true` is specified, the messages do not have to match starting at the beginning of the sink but once one record matches, the following must all match.
+Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test. If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and compared to the provided records. The recordsdo not have to match starting at the beginning of the sink but once one record matches, the following must all match.  There are permitted to be records remaining in the topic after the matching is complete.  Note that if the topic is not required to have `partial-search` elements in it but there will be an attempt to read up to this number with a blocking read.
 
 ## Actions on Kinesis
 
@@ -724,3 +732,6 @@ Block the test until the specified schema has been defined at the schema registr
 
 Executes a command against Materialize via `psql`. This is intended for testing
 `psql`-specific commands like `\dn`.
+
+[confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
+[aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md

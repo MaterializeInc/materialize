@@ -103,7 +103,8 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-ci
+          run: testdrive
+          args: [--aws-region=us-east-2]
 
   - id: cluster-smoke
     label: "Cluster smoke test"

@@ -3785,6 +3785,8 @@ impl<'a> Parser<'a> {
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 Ident::new("transaction_isolation")
+            } else if self.parse_keywords(&[TIME, ZONE]) {
+                Ident::new("timezone")
             } else {
                 self.parse_identifier()?
             };

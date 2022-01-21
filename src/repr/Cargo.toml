@@ -41,7 +41,7 @@ smallvec = { version = "1.8.0", features = ["serde", "union"] }
 uuid = "0.8.2"
 
 [build-dependencies]
-mz-protoc = { path = "../protoc" }
+prost-build = "0.9.1"
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }

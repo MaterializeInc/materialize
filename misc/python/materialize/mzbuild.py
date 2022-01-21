@@ -26,7 +26,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import time
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -98,9 +97,7 @@ class RepositoryDetails:
 def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
     return set(
-        spawn.capture(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], unicode=True
-        )
+        spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
         .strip()
         .split("\n")
     )
@@ -274,14 +271,18 @@ class CargoBuild(CargoPreImage):
         if self.extract:
             output = spawn.capture(
                 cargo_build + ["--message-format=json"],
-                unicode=True,
                 cwd=self.rd.root,
             )
+            target_dir = str(self.rd.cargo_target_dir().absolute())
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
                     continue
                 message = json.loads(line)
                 if message["reason"] != "build-script-executed":
+                    continue
+                if not message["out_dir"].startswith(target_dir):
+                    # Some crates are built for both the host and the target.
+                    # Ignore the built-for-host out dir.
                     continue
                 package = message["package_id"].split()[0]
                 for src, dst in self.extract.get(package, {}).items():
@@ -318,12 +319,11 @@ class CargoTest(CargoPreImage):
             self.rd,
             self.path,
             {
-                "bin": "protoc",
+                "bin": "testdrive",
                 "strip": True,
                 "extract": {"protobuf-src": {"install": "protobuf-install"}},
             },
         ).build()
-        CargoBuild(self.rd, self.path, {"bin": "testdrive", "strip": True}).build()
         CargoBuild(self.rd, self.path, {"bin": "materialized", "strip": True}).build()
 
         # NOTE(benesch): The two invocations of `cargo test --no-run` here
@@ -335,9 +335,7 @@ class CargoTest(CargoPreImage):
         # user would only see a vague "could not compile <package>" error.
         args = [*self.rd.cargo("test", rustflags=[]), "--locked", "--no-run"]
         spawn.runv(args, cwd=self.rd.root)
-        output = spawn.capture(
-            args + ["--message-format=json"], unicode=True, cwd=self.rd.root
-        )
+        output = spawn.capture(args + ["--message-format=json"], cwd=self.rd.root)
 
         tests = []
         for line in output.split("\n"):
@@ -502,7 +500,7 @@ class ResolvedImage:
 
     def build(self) -> None:
         """Build the image from source."""
-        spawn.runv(["git", "clean", "-ffdX", self.image.path], print_to=sys.stderr)
+        spawn.runv(["git", "clean", "-ffdX", self.image.path])
         for pre_image in self.image.pre_images:
             pre_image.run()
         build_args = {
@@ -521,7 +519,7 @@ class ResolvedImage:
             self.spec(),
             str(self.image.path),
         ]
-        spawn.runv(cmd, stdin=f, stdout=sys.stderr, print_to=sys.stderr)
+        spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
     def acquire(self) -> AcquiredFrom:
         """Download or build the image.
@@ -530,19 +528,14 @@ class ResolvedImage:
             acquired_from: How the image was acquired.
         """
         if self.image.publish:
-            while True:
-                try:
-                    spawn.runv(
-                        ["docker", "pull", self.spec()],
-                        print_to=sys.stderr,
-                        stdout=sys.stderr,
-                    )
-                    return AcquiredFrom.REGISTRY
-                except subprocess.CalledProcessError:
-                    if not ui.env_is_truthy("MZBUILD_WAIT_FOR_IMAGE"):
-                        break
-                    print(f"waiting for mzimage to become available", file=sys.stderr)
-                    time.sleep(10)
+            try:
+                spawn.runv(
+                    ["docker", "pull", self.spec()],
+                    stdout=sys.stderr.buffer,
+                )
+                return AcquiredFrom.REGISTRY
+            except subprocess.CalledProcessError:
+                pass
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 

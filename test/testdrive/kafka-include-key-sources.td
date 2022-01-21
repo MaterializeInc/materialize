@@ -250,8 +250,8 @@ $ protobuf-compile-descriptors inputs=test.proto output=test.proto
 $ kafka-create-topic topic=proto partitions=1
 
 $ kafka-ingest topic=proto
-  key-format=protobuf key-descriptor-file=test.proto key-message=.Key
-  format=protobuf descriptor-file=test.proto message=.Value
+  key-format=protobuf key-descriptor-file=test.proto key-message=Key
+  format=protobuf descriptor-file=test.proto message=Value
 {"id": "a"} {"measurement": 10}
 
 > CREATE MATERIALIZED SOURCE input_proto
@@ -268,8 +268,8 @@ a   10           1
 $ kafka-create-topic topic=proto-structured partitions=1
 
 $ kafka-ingest topic=proto-structured
-  key-format=protobuf key-descriptor-file=test.proto key-message=.KeyComplex
-  format=protobuf descriptor-file=test.proto message=.Value
+  key-format=protobuf key-descriptor-file=test.proto key-message=KeyComplex
+  format=protobuf descriptor-file=test.proto message=Value
 {"id1": 1, "id2": 2} {"measurement": 10}
 
 > CREATE MATERIALIZED SOURCE input_proto_structured
