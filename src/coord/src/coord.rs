@@ -129,6 +129,7 @@ use expr::{
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, NowFn};
 use ore::retry::Retry;
+use ore::task::spawn;
 use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
 use repr::adt::numeric;
 use repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
@@ -1547,12 +1548,15 @@ where
             let compaction_fut = persist_multi
                 .write_handle
                 .allow_compaction(&table_since_updates);
-            let _ = tokio::spawn(async move {
-                if let Err(err) = compaction_fut.await {
-                    // TODO: Do something smarter here
-                    tracing::error!("failed to compact persisted tables: {}", err);
-                }
-            });
+            let _ = spawn(
+                "compaction <insert some details about what we are compacting here>",
+                async move {
+                    if let Err(err) = compaction_fut.await {
+                        // TODO: Do something smarter here
+                        tracing::error!("failed to compact persisted tables: {}", err);
+                    }
+                },
+            );
         }
     }
 

@@ -30,7 +30,7 @@ log = "0.4.13"
 tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util" }
-ore = { path = "../ore" }
+ore = { path = "../ore", features = ["task"] }
 persist = { path = "../persist" }
 pgrepr = { path = "../pgrepr" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
