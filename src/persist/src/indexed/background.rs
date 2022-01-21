@@ -17,6 +17,8 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::runtime::Runtime as AsyncRuntime;
 
+use ore::task::RuntimeExt;
+
 use crate::error::Error;
 use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::BlobCache;
@@ -81,9 +83,11 @@ impl<B: Blob> Maintainer<B> {
         //
         // TODO: Push the spawn_blocking down into the cpu-intensive bits and
         // use spawn here once the storage traits are made async.
-        let _ = self
-            .async_runtime
-            .spawn_blocking(move || tx.fill(Self::compact_trace_blocking(blob, req)));
+        let _ = <_ as RuntimeExt>::spawn_blocking(
+            &self.async_runtime,
+            || "",
+            move || tx.fill(Self::compact_trace_blocking(blob, req)),
+        );
         rx
     }
 

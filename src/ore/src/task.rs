@@ -14,7 +14,9 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::sync::Arc;
 
+use tokio::runtime::{Handle, Runtime};
 use tokio::task::{self, JoinHandle};
 
 /// Spawns a task on the executor.
@@ -87,4 +89,84 @@ where
     task::Builder::new()
         .name(nc().as_ref())
         .spawn_blocking(function)
+}
+
+pub trait RuntimeExt {
+    fn spawn_blocking<Function, Output, Name, NameClosure>(
+        &self,
+        nc: NameClosure,
+        function: Function,
+    ) -> JoinHandle<Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Function: FnOnce() -> Output + Send + 'static,
+        Output: Send + 'static;
+
+    fn spawn<Fut, Name, NameClosure>(
+        &self,
+        _nc: NameClosure,
+        future: Fut,
+    ) -> JoinHandle<Fut::Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Fut: Future + Send + 'static,
+        Fut::Output: Send + 'static;
+}
+
+impl RuntimeExt for Arc<Runtime> {
+    fn spawn_blocking<Function, Output, Name, NameClosure>(
+        &self,
+        nc: NameClosure,
+        function: Function,
+    ) -> JoinHandle<Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Function: FnOnce() -> Output + Send + 'static,
+        Output: Send + 'static,
+    {
+        let _g = self.enter();
+        spawn_blocking(nc, function)
+    }
+
+    fn spawn<Fut, Name, NameClosure>(&self, nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Fut: Future + Send + 'static,
+        Fut::Output: Send + 'static,
+    {
+        let _g = self.enter();
+        spawn(nc, future)
+    }
+}
+
+impl RuntimeExt for Handle {
+    fn spawn_blocking<Function, Output, Name, NameClosure>(
+        &self,
+        nc: NameClosure,
+        function: Function,
+    ) -> JoinHandle<Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Function: FnOnce() -> Output + Send + 'static,
+        Output: Send + 'static,
+    {
+        let _g = self.enter();
+        spawn_blocking(nc, function)
+    }
+
+    fn spawn<Fut, Name, NameClosure>(&self, nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Fut: Future + Send + 'static,
+        Fut::Output: Send + 'static,
+    {
+        let _g = self.enter();
+        spawn(nc, future)
+    }
 }
