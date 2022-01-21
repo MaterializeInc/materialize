@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -28,7 +28,7 @@ use walkdir::WalkDir;
 use mz_aws_util::config::AwsConfig;
 use ore::path::PathExt;
 
-use testdrive::Config;
+use testdrive::{validate_var_name, Config};
 
 macro_rules! die {
     ($($e:expr),*) => {{
@@ -122,6 +122,13 @@ struct Args {
     #[clap(long)]
     temp_dir: Option<String>,
 
+    /// CLI arguments that are converted to testdrive variables.
+    ///
+    /// Passing: `--arg-var foo=bar` will create a variable named 'arg.foo' with the value 'bar'.
+    /// Can be specified multiple times to set multiple variables.
+    #[clap(long)]
+    arg_var: Vec<String>,
+
     // === Positional arguments. ===
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
@@ -187,6 +194,29 @@ async fn main() {
         args.max_errors
     );
 
+    let arg_vars: Result<BTreeMap<String, String>, String> = args
+        .arg_var
+        .iter()
+        .map(|arg| {
+            let mut parts = arg.splitn(2, '=');
+            let name = parts
+                .next()
+                .ok_or_else(|| "No key for --arg-var".to_string())?;
+            validate_var_name(name)?;
+            let val = parts
+                .next()
+                .ok_or_else(|| format!("No =value for --arg-var {}", name))?;
+            Ok((name.to_string(), val.to_string()))
+        })
+        .collect();
+    let arg_vars = match arg_vars {
+        Ok(args) => args,
+        Err(e) => {
+            println!("{}", e);
+            process::exit(1)
+        }
+    };
+
     let config = Config {
         kafka_addr: args.kafka_addr,
         kafka_opts: args.kafka_option,
@@ -201,6 +231,7 @@ async fn main() {
         default_timeout: args.default_timeout,
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
+        arg_vars,
         seed: args.seed,
         temp_dir: args.temp_dir,
     };

@@ -123,19 +123,8 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
                 });
             }
         };
-        lazy_static! {
-            static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
-        }
-        if !VALID_KEY_REGEX.is_match(pieces[0]) {
-            return Err(PosError {
-                source: anyhow!(
-                    "invalid builtin argument name '{}': \
-                     only lowercase letters, numbers, and hyphens allowed",
-                    pieces[0]
-                ),
-                pos: Some(pos),
-            });
-        }
+        validate_var_name(pieces[0]).map_err(|e| PosError::new(e, pos))?;
+
         if let Some(original) = args.insert(pieces[0].to_owned(), pieces[1].to_owned()) {
             return Err(PosError {
                 source: anyhow!("argument '{}' specified twice", original),
@@ -148,6 +137,21 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
         args: ArgMap(args),
         input: slurp_all(line_reader),
     })
+}
+
+/// Validate that the string is an allowed variable name (lowercase letters, numbers and dashes)
+pub fn validate_var_name(name: &str) -> Result<(), anyhow::Error> {
+    lazy_static! {
+        static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
+    }
+    if !VALID_KEY_REGEX.is_match(name) {
+        bail!(
+            "invalid builtin argument name '{}': \
+             only lowercase letters, numbers, and hyphens allowed",
+            name
+        );
+    }
+    Ok(())
 }
 
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {

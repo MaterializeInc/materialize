@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::future::Future;
@@ -94,6 +94,9 @@ pub struct Config {
     /// Backoff factor to use when retrying
     pub backoff_factor: f64,
 
+    /// `--arg-var` values provied to the cli
+    pub arg_vars: BTreeMap<String, String>,
+
     /// A random number to distinguish each run of a testdrive script.
     pub seed: Option<u32>,
     /// Force the use of a specific temporary directory
@@ -120,6 +123,7 @@ pub struct State {
     aws_config: AwsConfig,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
+    arg_vars: BTreeMap<String, String>,
     s3_client: S3Client,
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
@@ -402,6 +406,10 @@ pub(crate) async fn build(
 
     for (key, value) in env::vars() {
         vars.insert(format!("env.{}", key), value);
+    }
+
+    for (key, value) in state.arg_vars.iter().map(|(k, v)| (k.clone(), v.clone())) {
+        vars.insert(format!("arg.{}", key), value);
     }
 
     for cmd in cmds {
@@ -748,6 +756,7 @@ pub async fn create_state(
         seed,
         temp_path,
         _tempfile_handle,
+        arg_vars: config.arg_vars.clone(),
         materialized_catalog_path,
         materialized_addr,
         materialized_user,

@@ -31,6 +31,7 @@ mod util;
 
 pub use self::action::Config;
 pub use self::error::Error;
+pub use self::parser::validate_var_name;
 
 /// Runs a testdrive script stored in a file.
 pub async fn run_file(config: &Config, filename: &Path) -> Result<(), Error> {
