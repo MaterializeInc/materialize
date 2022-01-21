@@ -18,6 +18,7 @@ use tokio_postgres::config::{ReplicationMode, SslMode};
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{Client, Config};
 
+use ore::task;
 use repr::adt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::Ident;
@@ -210,7 +211,10 @@ pub async fn publication_info(
     let config = conn.parse()?;
     let tls = make_tls(&config)?;
     let (client, connection) = config.connect(tls).await?;
-    tokio::spawn(connection);
+    task::spawn(
+        &format!("publication_info:postgres_connection{conn}"),
+        connection,
+    );
 
     client
         .query(
@@ -343,7 +347,10 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
     let config = conn.parse()?;
     let tls = make_tls(&config)?;
     let (client, connection) = tokio_postgres::connect(&conn, tls).await?;
-    tokio::spawn(connection);
+    task::spawn(
+        &format!("drop_replication_slots:postgres_connection{conn}"),
+        connection,
+    );
 
     let replication_client = connect_replication(conn).await?;
     for slot in slots {
@@ -379,10 +386,13 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
 pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
     let mut config: Config = conn.parse()?;
     let tls = make_tls(&config)?;
-    let (client, conn) = config
+    let (client, connection) = config
         .replication_mode(ReplicationMode::Logical)
         .connect(tls)
         .await?;
-    tokio::spawn(conn);
+    task::spawn(
+        &format!("connect_replication:postgres_connection:{conn}"),
+        connection,
+    );
     Ok(client)
 }

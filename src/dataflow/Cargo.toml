@@ -38,7 +38,7 @@ log = "0.4.13"
 tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs"] }
-ore = { path = "../ore" }
+ore = { path = "../ore", features = ["task"]  }
 pdqselect = "0.1.1"
 persist = { path = "../persist" }
 persist-types = { path = "../persist-types" }

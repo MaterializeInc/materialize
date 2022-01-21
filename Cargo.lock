@@ -3804,6 +3804,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "openssl",
+ "ore",
  "postgres-openssl",
  "repr",
  "sql-parser",

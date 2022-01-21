@@ -52,6 +52,7 @@ use dataflow_types::sources::{
 };
 use expr::{PartitionId, SourceInstanceId};
 use ore::retry::{Retry, RetryReader};
+use ore::task;
 use repr::MessagePayload;
 
 use crate::logging::materialized::Logger;
@@ -823,16 +824,19 @@ impl SourceReader for S3SourceReader {
             let (shutdowner, shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Running);
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
 
-            tokio::spawn(download_objects_task(
-                source_id.to_string(),
-                keys_rx,
-                dataflow_tx,
-                shutdown_rx.clone(),
-                s3_conn.aws.clone(),
-                consumer_activator,
-                s3_conn.compression,
-                metrics.clone(),
-            ));
+            task::spawn(
+                &format!("s3_download:{}", source_id),
+                download_objects_task(
+                    source_id.to_string(),
+                    keys_rx,
+                    dataflow_tx,
+                    shutdown_rx.clone(),
+                    s3_conn.aws.clone(),
+                    consumer_activator,
+                    s3_conn.compression,
+                    metrics.clone(),
+                ),
+            );
             for key_source in s3_conn.key_sources {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
@@ -842,14 +846,17 @@ impl SourceReader for S3SourceReader {
                             bucket,
                             worker_id
                         );
-                        tokio::spawn(scan_bucket_task(
-                            bucket,
-                            source_id.to_string(),
-                            glob.clone(),
-                            s3_conn.aws.clone(),
-                            keys_tx.clone(),
-                            metrics.clone(),
-                        ));
+                        task::spawn(
+                            &format!("s3_scan:{}:{}", source_id, bucket),
+                            scan_bucket_task(
+                                bucket,
+                                source_id.to_string(),
+                                glob.clone(),
+                                s3_conn.aws.clone(),
+                                keys_tx.clone(),
+                                metrics.clone(),
+                            ),
+                        );
                     }
                     S3KeySource::SqsNotifications { queue } => {
                         tracing::debug!(
@@ -858,15 +865,18 @@ impl SourceReader for S3SourceReader {
                             queue,
                             worker_id
                         );
-                        tokio::spawn(read_sqs_task(
-                            source_id.to_string(),
-                            glob.clone(),
-                            queue,
-                            s3_conn.aws.clone(),
-                            keys_tx.clone(),
-                            shutdown_rx.clone(),
-                            metrics.clone(),
-                        ));
+                        task::spawn(
+                            &format!("s3_read_sqs:{}", source_id),
+                            read_sqs_task(
+                                source_id.to_string(),
+                                glob.clone(),
+                                queue,
+                                s3_conn.aws.clone(),
+                                keys_tx.clone(),
+                                shutdown_rx.clone(),
+                                metrics.clone(),
+                            ),
+                        );
                     }
                 }
             }

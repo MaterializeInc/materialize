@@ -18,11 +18,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::bail;
 
 use kafka_util::client::MzClientContext;
+use ore::task;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use reqwest::Url;
-use tokio::task;
 use tokio::time::Duration;
 
 use ccsr::tls::{Certificate, Identity};
@@ -278,7 +278,7 @@ pub async fn create_consumer(
             // e.g. the hostname was mistyped. librdkafka doesn't expose a
             // better API for asking whether a connection succeeded or failed,
             // unfortunately.
-            task::spawn_blocking({
+            task::spawn_blocking(&format!("kafka_set_metadata:{broker}:{topic}"), {
                 let consumer = Arc::clone(&consumer);
                 move || {
                     let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
@@ -363,7 +363,7 @@ pub async fn lookup_start_offsets(
     };
 
     // Lookup offsets
-    task::spawn_blocking({
+    task::spawn_blocking(&format!("kafka_lookup_start_offets:{topic}"), {
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions

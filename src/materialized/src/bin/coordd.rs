@@ -22,6 +22,7 @@ use materialized::mux::Mux;
 use materialized::server_metrics::Metrics;
 use ore::metrics::MetricsRegistry;
 use ore::now::SYSTEM_TIME;
+use ore::task;
 
 /// Independent coordinator server for Materialize.
 #[derive(clap::Parser)]
@@ -105,7 +106,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let listener = TcpListener::bind(&args.listen_addr).await?;
 
-    tokio::spawn({
+    task::spawn("pgwire_server", {
         let pgwire_server = pgwire::Server::new(pgwire::Config {
             tls: None,
             coord_client: coord_client.clone(),

@@ -43,6 +43,7 @@ use expr::{GlobalId, PartitionId, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use ore::now::NowFn;
+use ore::task;
 use prometheus::core::{AtomicI64, AtomicU64};
 use tracing::error;
 
@@ -1178,7 +1179,7 @@ where
     let (tx, mut rx) = mpsc::channel(64);
 
     if active {
-        tokio::spawn(async move {
+        task::spawn(&format!("create_source_simple:{}", name), async move {
             let timestamper = Timestamper::new(tx, timestamp_frequency, now);
             let source = connector.start(&timestamper);
             tokio::pin!(source);
