@@ -157,7 +157,6 @@ fn add_expiring_update(
 fn add_metadata_update<I: IntoIterator<Item = Row>>(
     updates: I,
     diff: Diff,
-    retain_for: u64,
     out: &mut Vec<TimestampedUpdate>,
 ) {
     let id = MZ_PROMETHEUS_METRICS.id;
@@ -166,7 +165,7 @@ fn add_metadata_update<I: IntoIterator<Item = Row>>(
             .into_iter()
             .map(|row| BuiltinTableUpdate { id, row, diff })
             .collect(),
-        timestamp_offset: retain_for,
+        timestamp_offset: 0,
     });
 }
 
@@ -248,7 +247,7 @@ impl Scraper {
                     .insert(metric.clone(), now + retain_for)
                     .is_none()
             });
-        add_metadata_update(missing, 1, retain_for, &mut out);
+        add_metadata_update(missing, 1, &mut out);
 
         // Expire any that can now go (I would love HashMap.drain_filter here):
         add_metadata_update(
@@ -258,7 +257,6 @@ impl Scraper {
                 .map(|(row, _)| row)
                 .cloned(),
             -1,
-            retain_for,
             &mut out,
         );
         self.metadata.retain(|_, &mut retention| retention > now);
