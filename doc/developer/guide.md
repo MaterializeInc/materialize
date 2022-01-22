@@ -72,6 +72,20 @@ to be able to get help if something goes wrong. It's important to note that you
 conflict with Rust-Analyzer; the latter has far more advanced code navigation
 features and is the de-facto standard for developing Rust.
 
+Visual Studio Code also works well for editing Python; to work on the Python code
+in the Materialize repository, install the official Python extension from Microsoft
+and add the following to your `settings.json`.
+
+``` json
+{
+  "python.linting.mypyEnabled": true,
+  "python.analysis.extraPaths": [
+      "misc/python"
+  ],
+  "python.defaultInterpreterPath": "misc/python/venv/bin/python"
+}
+```
+
 If you prefer to use another editor, such as Vim or Emacs, we recommend that
 you install an LSP plugin with Rust-Analyzer. How to do so is beyond the scope
 of this document; if you have any issues, ask in one of the engineering channels
@@ -87,7 +101,9 @@ Rust-Analyzer has long since caught up to it in maturity.
 The standard debuggers for Rust code are `rust-lldb` on macOS, and `rust-gdb` on GNU/Linux.
 (It is also possible to run `rust-lldb` on GNU/Linux if necessary for whatever reason).
 These are wrappers around `lldb` and `gdb`, respectively, that endow them with slightly
-improved capabilities for pretty-printing Rust data structures.
+improved capabilities for pretty-printing Rust data structures. Visual Studio Code
+users may want to try the [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+plugin.
 
 Unfortunately, you will soon find that these programs work less well than the equivalent
 tools for some other mainstream programming languages. In particular, inspecting
