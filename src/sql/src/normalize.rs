@@ -16,9 +16,9 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 
-use dataflow_types::sources::{AwsConfig, AwsCredentials};
+use dataflow_types::sources::{AwsConfig, AwsCredentials, SerdeUri};
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
@@ -485,7 +485,10 @@ pub fn aws_config(
         None => extract("region")?.ok_or_else(|| anyhow!("region is required"))?,
     };
 
-    let endpoint = extract("endpoint")?;
+    let endpoint = match extract("endpoint")? {
+        None => None,
+        Some(endpoint) => Some(SerdeUri(endpoint.parse().context("parsing AWS endpoint")?)),
+    };
 
     let access_key_id = extract("access_key_id")?;
     let secret_access_key = extract("secret_access_key")?;

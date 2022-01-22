@@ -61,10 +61,10 @@ valid2  85
 bad1    0
 
 ! SELECT * FROM divide
-division by zero
+contains:division by zero
 
 ! SELECT * FROM both
-division by zero
+contains:division by zero
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
 {"before": {"row": {"id": "bad1", "a": 7, "b": 0}}, "after": null}

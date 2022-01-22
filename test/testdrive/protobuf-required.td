@@ -36,4 +36,4 @@ $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb messag
 {}
 
 ! SELECT * FROM required
-protobuf message missing required field f
+contains:protobuf message missing required field f

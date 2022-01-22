@@ -328,12 +328,39 @@ The syntax is identical, however the statement will not be retried on error:
 
 ```
 ! SELECT * FROM no_such_table
-unknown catalog item
+contains:unknown catalog item
 ```
 
 The expected error string is provided after the statement and `testdrive` will retry the statement until the expected error is returned or a timeout occurs.
 
-Note that you can provide a string that is a substring of the expected error. The full error above would have been `ERROR:  unknown catalog item 'no_such_table'` but the substring `unknown catalog item` will match and the test will pass. This allows for any variable portions of the error message to be omitted from the test file.
+The full error above would have been `ERROR:  unknown catalog item 'no_such_table'` but the match specifier `contains` ensures that the substring `unknown catalog item` will match and the test will pass.
+
+There are three match specifiers: `contains`, `exact`, and `regex`.
+
+The alternatives would be written as:
+
+```
+! SELECT * FROM no_such_table
+exact: ERROR:  unknown catalog item 'no_such_table'
+```
+
+or:
+
+```
+! SELECT * FROM no_such_table
+regex: unknown catalog.*no_such_table
+```
+
+It is possible to include variables in expected errors:
+
+```
+$ set table_name=no_table
+
+$ SELECT * FROM ${table_name}
+exact:ERROR:  unknown catalog item '${table_name}'
+```
+
+And for regex matches all variables match literally, they are not treated as regular expression patterns. A variable valued `my.+name` will match the string `my.+name`, not `my friend's name`.
 
 ## Executing statements in multiple sessions
 

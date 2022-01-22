@@ -130,21 +130,8 @@ async fn download_objects_task(
     compression: Compression,
     metrics: SourceBaseMetrics,
 ) {
-    let client = match aws_config
-        .load()
-        .await
-        .and_then(|config| mz_aws_util::s3::client(&config))
-    {
-        Ok(client) => client,
-        Err(e) => {
-            tx.send(Err(S3Error::ClientConstructionFailed(e)))
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::debug!("unable to send error on stream creating s3 client: {}", e)
-                });
-            return;
-        }
-    };
+    let config = aws_config.load().await;
+    let client = mz_aws_util::s3::client(&config);
 
     struct BucketInfo {
         keys: HashSet<String>,
@@ -258,21 +245,8 @@ async fn scan_bucket_task(
     tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
-    let client = match aws_config
-        .load()
-        .await
-        .and_then(|config| mz_aws_util::s3::client(&config))
-    {
-        Ok(client) => client,
-        Err(e) => {
-            tx.send(Err(S3Error::ClientConstructionFailed(e)))
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::debug!("unable to send error on stream creating s3 client: {}", e)
-                });
-            return;
-        }
-    };
+    let config = aws_config.load().await;
+    let client = mz_aws_util::s3::client(&config);
 
     let glob = glob.as_ref();
     let prefix = glob.map(|g| find_prefix(g.glob().glob()));
@@ -394,25 +368,8 @@ async fn read_sqs_task(
         queue,
     );
 
-    let client = match aws_config
-        .load()
-        .await
-        .and_then(|config| mz_aws_util::sqs::client(&config))
-    {
-        Ok(client) => client,
-        Err(e) => {
-            tx.send(Err(S3Error::ClientConstructionFailed(e)))
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::debug!(
-                        "source_id={} unable to send error on stream creating sqs client: {}",
-                        source_id,
-                        e
-                    )
-                });
-            return;
-        }
-    };
+    let config = aws_config.load().await;
+    let client = mz_aws_util::sqs::client(&config);
 
     let glob = glob.as_ref();
 
@@ -657,7 +614,6 @@ enum DownloadError {
 
 #[derive(Debug)]
 enum S3Error {
-    ClientConstructionFailed(anyhow::Error),
     GetObjectError {
         bucket: String,
         key: String,
@@ -684,9 +640,6 @@ impl From<S3Error> for std::io::Error {
 impl std::fmt::Display for S3Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            S3Error::ClientConstructionFailed(err) => {
-                write!(f, "Unable to build S3 client: {}", err)
-            }
             S3Error::GetObjectError { bucket, key, err } => {
                 write!(f, "Unable to get S3 object {}/{}: {}", bucket, key, err)
             }
@@ -954,9 +907,7 @@ impl SourceReader for S3SourceReader {
                     );
                     Ok(NextMessage::Pending)
                 }
-                e @ (S3Error::ListObjectsFailed { .. }
-                | S3Error::ClientConstructionFailed(_)
-                | S3Error::IoError { .. }) => Err(e.into()),
+                e @ (S3Error::ListObjectsFailed { .. } | S3Error::IoError { .. }) => Err(e.into()),
             },
             None => Ok(NextMessage::Pending),
             Some(None) => Ok(NextMessage::Finished),

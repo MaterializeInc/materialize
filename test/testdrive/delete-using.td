@@ -16,11 +16,11 @@
 > CREATE TABLE t3 (f1 INTEGER);
 
 ! DELETE FROM t1 USING t1;
-table name "t1" specified more than once
+contains:table name "t1" specified more than once
 
 # Ambiguous column name
 ! DELETE FROM t1 USING t2 WHERE f1 = 1;
-column reference "f1" is ambiguous
+contains:column reference "f1" is ambiguous
 
 #
 # Self-join

@@ -24,4 +24,4 @@ $ protobuf-compile-descriptors inputs=maps.proto output=maps.pb
 ! CREATE SOURCE maps FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-maps-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Maps' USING SCHEMA FILE '${testdrive.temp-dir}/maps.pb'
-Protobuf map fields are not supported
+contains:Protobuf map fields are not supported

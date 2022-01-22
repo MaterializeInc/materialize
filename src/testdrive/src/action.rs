@@ -34,7 +34,7 @@ use mz_aws_util::config::AwsConfig;
 use ore::retry::Retry;
 
 use crate::error::{DynError, Error, InputError, ResultExt};
-use crate::parser::{Command, PosCommand, SqlOutput};
+use crate::parser::{Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
 
 mod avro_ocf;
@@ -411,7 +411,10 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
             Command::Builtin(builtin) => Some(builtin.name.clone()),
             _ => None,
         };
-        let subst = |msg: &str| substitute_vars(msg, &vars, &ignore_prefix).map_err(wrap_err);
+        let subst =
+            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, false).map_err(wrap_err);
+        let subst_re =
+            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, true).map_err(wrap_err);
 
         let action: Box<dyn Action + Send + Sync> = match cmd.command {
             Command::Builtin(mut builtin) => {
@@ -441,6 +444,9 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => {
                         Box::new(kafka::build_verify(builtin, context.clone()).map_err(wrap_err)?)
+                    }
+                    "kafka-verify-schema" => {
+                        Box::new(kafka::build_verify_schema(builtin).map_err(wrap_err)?)
                     }
                     "kinesis-create-stream" => {
                         Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
@@ -554,7 +560,12 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
-                sql.expected_error = subst(&sql.expected_error)?;
+
+                sql.expected_error = if matches!(sql.error_match_type, SqlErrorMatchType::Regex) {
+                    subst_re(&sql.expected_error)?
+                } else {
+                    subst(&sql.expected_error)?
+                };
                 Box::new(sql::build_fail_sql(sql, context.clone()).map_err(wrap_err)?)
             }
         };
@@ -571,6 +582,7 @@ fn substitute_vars(
     msg: &str,
     vars: &HashMap<String, String>,
     ignore_prefix: &Option<String>,
+    regex_escape: bool,
 ) -> Result<String, String> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"\$\{([^}]+)\}").unwrap();
@@ -586,7 +598,11 @@ fn substitute_vars(
         }
 
         if let Some(val) = vars.get(name) {
-            val.to_string()
+            if regex_escape {
+                regex::escape(val)
+            } else {
+                val.to_string()
+            }
         } else {
             err = Some(format!("unknown variable: {}", name));
             "#VAR-MISSING#".to_string()
@@ -736,10 +752,9 @@ pub async fn create_state(
         )
     };
 
-    let kinesis_client =
-        mz_aws_util::kinesis::client(&config.aws_config).err_ctx("creating Kinesis client")?;
-    let s3_client = mz_aws_util::s3::client(&config.aws_config).err_ctx("creating S3 client")?;
-    let sqs_client = mz_aws_util::sqs::client(&config.aws_config).err_ctx("creating SQS client")?;
+    let kinesis_client = mz_aws_util::kinesis::client(&config.aws_config);
+    let s3_client = mz_aws_util::s3::client(&config.aws_config);
+    let sqs_client = mz_aws_util::sqs::client(&config.aws_config);
 
     let state = State {
         seed,

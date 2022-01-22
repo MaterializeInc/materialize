@@ -101,7 +101,8 @@ i  mz_offset
 # Expect that ingesting an incompatible message will brick the topic. We have to
 # explicitly disable the schema registry's protection against this.
 
-$ http-request method=PUT url=${testdrive.schema-registry-url}config/testdrive-evolution-${testdrive.seed}-value
+$ http-request method=PUT content-type=application/json
+  url=${testdrive.schema-registry-url}config/testdrive-evolution-${testdrive.seed}-value
 {"compatibility": "NONE"}
 
 $ set schema
@@ -124,4 +125,4 @@ $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb mess
 {"wrong": "i'm not an int!"}
 
 ! SELECT * FROM evolution
-Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)
+contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)

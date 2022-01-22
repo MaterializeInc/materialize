@@ -46,7 +46,7 @@ logging_derived_mat logging_derived_mat_primary_idx 1             count       <n
 > SHOW MATERIALIZED VIEWS
 
 ! SELECT * FROM mat_view
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 > SHOW INDEXES FROM mat_view;
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
@@ -63,7 +63,7 @@ mat_view  mat_view_primary_idx  1             sum          <null>      true     
 
 # Cannot alter disabled index
 ! ALTER INDEX mat_view_primary_idx RESET (logical_compaction_window)
-invalid ALTER on disabled index "materialize.public.mat_view_primary_idx"
+contains:invalid ALTER on disabled index "materialize.public.mat_view_primary_idx"
 
 # 🔬🔬🔬🔬 Materialized sources
 
@@ -71,7 +71,7 @@ invalid ALTER on disabled index "materialize.public.mat_view_primary_idx"
 > SHOW MATERIALIZED SOURCES
 
 ! SELECT * FROM mat_data
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 > SHOW INDEXES FROM mat_data;
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
@@ -89,7 +89,7 @@ mat_data  mat_data_primary_idx  1             a            <null>      false    
 # 🔬🔬🔬🔬 Non-materialized views
 
 ! SELECT * FROM join_view
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 # 🔬🔬 Sinks
 
@@ -100,13 +100,13 @@ unable to automatically determine a query timestamp
 # 🔬🔬 Tables
 
 ! INSERT INTO t VALUES (1)
-cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
+contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
 
 ! UPDATE t SET a = 1
-cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
+contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
 
 ! DELETE FROM t;
-cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
+contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
 
 # Selects work but are always empty
 > SELECT * FROM t
@@ -193,7 +193,7 @@ mat_data
 # Still cannot select from non-materialized view because some of its indexes are disabled
 
 ! SELECT * FROM join_view
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 > ALTER INDEX join_data_primary_idx SET ENABLED
 
@@ -210,7 +210,7 @@ $ kafka-verify format=avro sink=materialize.public.snk_indexes_disabled sort-mes
 
 # Tables still work with non-primary indexes enabled because all indexes are covering
 ! ALTER INDEX t_secondary_idx SET ENABLED;
-cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
+contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
 
 > ALTER INDEX t_primary_idx SET ENABLED
 

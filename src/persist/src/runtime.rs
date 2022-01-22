@@ -20,7 +20,7 @@ use build_info::BuildInfo;
 use differential_dataflow::trace::Description;
 use ore::metrics::MetricsRegistry;
 use timely::progress::Antichain;
-use tokio::runtime::Runtime;
+use tokio::runtime::Runtime as AsyncRuntime;
 use tokio::time;
 
 use crate::client::RuntimeClient;
@@ -78,7 +78,7 @@ pub fn start<L, B>(
     blob: B,
     build: BuildInfo,
     reg: &MetricsRegistry,
-    pool: Option<Arc<Runtime>>,
+    async_runtime: Option<Arc<AsyncRuntime>>,
 ) -> Result<RuntimeClient, Error>
 where
     L: Log + Send + 'static,
@@ -88,34 +88,24 @@ where
     let (tx, rx) = crossbeam_channel::unbounded();
     let metrics = Arc::new(Metrics::register_with(reg));
 
-    // Any usage of S3Blob requires a runtime context to be set. `Indexed::new`
-    // use the blob impl to start the recovery process, so make sure this stays
-    // early.
-    let pool = match pool {
+    let async_runtime = match async_runtime {
         Some(pool) => pool,
-        None => Arc::new(Runtime::new()?),
+        None => Arc::new(AsyncRuntime::new()?),
     };
-    let pool_guard = pool.enter();
 
     // Start up the runtime.
-    let blob = BlobCache::new(build, metrics.clone(), blob);
-    let maintainer = Maintainer::new(blob.clone(), pool.clone());
+    let blob = BlobCache::new(build, metrics.clone(), async_runtime.clone(), blob);
+    let maintainer = Maintainer::new(blob.clone(), async_runtime.clone());
     let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
     let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
-    let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
         .name("persist:runtime".into())
-        .spawn(move || {
-            let pool_guard = runtime_pool.enter();
-            while runtime.work() {}
-            // Explictly drop the pool guard so the lifetime is obvious.
-            drop(pool_guard);
-        })?;
+        .spawn(move || while runtime.work() {})?;
 
     // Start up the ticker thread.
     let ticker_tx = tx.clone();
-    let ticker_handle = pool.spawn(async move {
+    let ticker_handle = async_runtime.spawn(async move {
         // Try to keep worst case command response times to roughly `110% of
         // min_step_interval` by ensuring there's a tick relatively shortly
         // after a step becomes eligible. We could just as easily make this
@@ -137,7 +127,7 @@ where
     let handles = Mutex::new(Some(RuntimeHandles {
         impl_handle,
         ticker_handle,
-        ticker_pool: pool.clone(),
+        ticker_async_runtime: async_runtime,
     }));
     let core = RuntimeCore {
         handles,
@@ -145,9 +135,6 @@ where
         metrics,
     };
     let client = RuntimeClient::new(id, Arc::new(core));
-
-    // Explictly drop the pool guard so the lifetime is obvious.
-    drop(pool_guard);
 
     Ok(client)
 }
@@ -167,7 +154,7 @@ impl RuntimeId {
 struct RuntimeHandles {
     impl_handle: JoinHandle<()>,
     ticker_handle: tokio::task::JoinHandle<()>,
-    ticker_pool: Arc<Runtime>,
+    ticker_async_runtime: Arc<AsyncRuntime>,
 }
 
 #[derive(Debug)]
@@ -222,10 +209,10 @@ impl RuntimeCore {
             if let Err(err) = block_on(handles.ticker_handle) {
                 tracing::error!("persist ticker thread error'd: {:?}", err);
             }
-            // Thread a copy of the Arc<Runtime> being used to drive
+            // Thread a copy of the Arc<AsyncRuntime> being used to drive
             // ticker_handle to make sure the runtime doesn't shut down before
             // ticker_handle has a chance to finish cleanly.
-            drop(handles.ticker_pool);
+            drop(handles.ticker_async_runtime);
             rx.recv()
         } else {
             Ok(())

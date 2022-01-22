@@ -118,7 +118,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   )
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-unexpected parameters for CREATE SOURCE: badoption
+contains:unexpected parameters for CREATE SOURCE: badoption
 
 > SHOW SOURCES
 name
@@ -175,7 +175,7 @@ a  b  json                     c            d             e                   f
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA FILE 'data-schema.json'
   ENVELOPE DEBEZIUM
-No such file or directory
+contains:No such file or directory
 
 $ file-append path=data-schema.json
 \${schema}
@@ -233,7 +233,7 @@ a b
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE TOPIC
   ENVELOPE NONE
-INCLUDE TOPIC not yet supported
+contains:INCLUDE TOPIC not yet supported
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
@@ -537,14 +537,14 @@ $ kafka-ingest format=avro key-format=avro topic=invalid-keyed-dbz-data schema=$
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-invalid-keyed-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-Cannot use key due to error: Value schema missing primary key column: c
+contains:Cannot use key due to error: Value schema missing primary key column: c
 
 ! CREATE MATERIALIZED SOURCE invalid_keyed_dbz_with_dedup
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-invalid-keyed-dbz-data-${testdrive.seed}'
   WITH (deduplication = 'full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-Cannot use key due to error: Value schema missing primary key column: c
+contains:Cannot use key due to error: Value schema missing primary key column: c
 
 ! CREATE MATERIALIZED SOURCE invalid_keyed_dbz_with_range_dedup
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-invalid-keyed-dbz-data-${testdrive.seed}'
@@ -555,7 +555,7 @@ Cannot use key due to error: Value schema missing primary key column: c
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-Cannot use key due to error: Value schema missing primary key column: c
+contains:Cannot use key due to error: Value schema missing primary key column: c
 
 # Test that deduplication=full_in_range accepts mis-ordered debezium data in the range
 
@@ -633,7 +633,7 @@ a b
 ! CREATE SOURCE recursive
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
   FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
-validating avro schema: Recursive types are not supported: .a
+contains:validating avro schema: Recursive types are not supported: .a
 
 $ set key-schema={"type": "string"}
 $ set value-schema={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}

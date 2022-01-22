@@ -289,7 +289,7 @@ pub mod sources {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use anyhow::{anyhow, bail, Context};
+    use anyhow::{anyhow, bail};
     use globset::Glob;
     use http::Uri;
     use serde::{Deserialize, Serialize};
@@ -1296,6 +1296,10 @@ pub mod sources {
         SqsNotifications { queue: String },
     }
 
+    /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct SerdeUri(#[serde(with = "http_serde::uri")] pub Uri);
+
     /// AWS configuration overrides for a source or sink.
     ///
     /// This is a distinct type from any of the configuration types built into the
@@ -1309,7 +1313,7 @@ pub mod sources {
         /// The AWS region to use.
         pub region: String,
         /// The custom AWS endpoint to use, if any.
-        pub endpoint: Option<String>,
+        pub endpoint: Option<SerdeUri>,
     }
 
     /// Static AWS credentials for a source or sink.
@@ -1323,7 +1327,7 @@ pub mod sources {
     impl AwsConfig {
         /// Loads the AWS SDK configuration object from the environment, then
         /// applies the overrides from this object.
-        pub async fn load(&self) -> Result<mz_aws_util::config::AwsConfig, anyhow::Error> {
+        pub async fn load(&self) -> mz_aws_util::config::AwsConfig {
             use aws_smithy_http::endpoint::Endpoint;
             use aws_types::credentials::SharedCredentialsProvider;
             use aws_types::region::Region;
@@ -1340,10 +1344,9 @@ pub mod sources {
             }
             let mut config = mz_aws_util::config::AwsConfig::from_loader(loader).await;
             if let Some(endpoint) = &self.endpoint {
-                let endpoint: Uri = endpoint.parse().context("parsing AWS endpoint")?;
-                config.set_endpoint(Endpoint::immutable(endpoint));
+                config.set_endpoint(Endpoint::immutable(endpoint.0.clone()));
             }
-            Ok(config)
+            config
         }
     }
 }

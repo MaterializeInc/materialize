@@ -15,16 +15,16 @@
 > INSERT INTO t VALUES (1, 2);
 
 ! CREATE VIEW t_v AS SELECT a, a FROM t;
-column "a" specified more than once
+contains:column "a" specified more than once
 
 ! CREATE VIEW t_v AS SELECT b, a, b FROM t;
-column "b" specified more than once
+contains:column "b" specified more than once
 
 ! CREATE VIEW t_v AS SELECT a, b AS a FROM t;
-column "a" specified more than once
+contains:column "a" specified more than once
 
 ! CREATE VIEW t_v AS SELECT a, b FROM t AS t(a, a);
-column reference "a" is ambiguous
+contains:column reference "a" is ambiguous
 
 > CREATE VIEW t_v AS SELECT a, b FROM t;
 > SELECT * FROM t_v;
@@ -35,16 +35,16 @@ column reference "a" is ambiguous
 2 1
 
 ! CREATE MATERIALIZED VIEW t_m_v AS SELECT a, a FROM t;
-column "a" specified more than once
+contains:column "a" specified more than once
 
 ! CREATE MATERIALIZED VIEW t_m_v AS SELECT b, a, b FROM t;
-column "b" specified more than once
+contains:column "b" specified more than once
 
 ! CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b AS a FROM t;
-column "a" specified more than once
+contains:column "a" specified more than once
 
 ! CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b FROM t AS t(a, a);
-column reference "a" is ambiguous
+contains:column reference "a" is ambiguous
 
 > CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b FROM t;
 > SELECT * FROM t_v;
@@ -56,7 +56,7 @@ column reference "a" is ambiguous
 
 # Regression for #9376
 ! CREATE VIEW gh9376 AS SELECT 1, 2;
-column "?column?" specified more than once
+contains:column "?column?" specified more than once
 
 >CREATE VIEW gh9376 AS SELECT 1;
 > SELECT name FROM mz_columns WHERE id = (SELECT id FROM mz_views WHERE name = 'gh9376');

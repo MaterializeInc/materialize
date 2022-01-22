@@ -32,14 +32,14 @@ UTF8
 UTF8
 
 ! SET client_encoding = UTF9
-parameter "client_encoding" can only be set to "UTF8"
+contains:parameter "client_encoding" can only be set to "UTF8"
 
 # if its utf8 we let it through
 > SET NAMES 'UTF8';
 
 # match the behavior of postgres as specified here: https://www.postgresql.org/docs/9.1/sql-set.html
 ! SET NAMES = "something";
-unrecognized configuration parameter "names"
+contains:unrecognized configuration parameter "names"
 
 > SET sql_safe_updates = on
 > SHOW sql_safe_updates
@@ -63,18 +63,18 @@ off
 > SET DateStyle = 'MDY'
 > SET DateStyle = 'ISO,MDY'
 ! SET DateStyle = 'ooga booga'
-parameter "DateStyle" can only be set to "ISO, MDY"
+contains:parameter "DateStyle" can only be set to "ISO, MDY"
 
 # `search_path` is tested elsewhere.
 
 ! SET server_version = "9.6.0"
-parameter "server_version" cannot be changed
+contains:parameter "server_version" cannot be changed
 
 ! SET server_version_num = "90600"
-parameter "server_version_num" cannot be changed
+contains:parameter "server_version_num" cannot be changed
 
 ! SET TimeZone = 'nope'
-parameter "TimeZone" can only be set to "UTC"
+contains:parameter "TimeZone" can only be set to "UTC"
 
 # The `transaction_isolation` variable has dedicated syntax as mandated by the
 # SQL standard.
@@ -82,7 +82,7 @@ parameter "TimeZone" can only be set to "UTC"
 serializable
 
 ! SET transaction_isolation = 'read committed'
-parameter "transaction_isolation" cannot be changed
+contains:parameter "transaction_isolation" cannot be changed
 
 ! SET integer_datetimes = false
-parameter "integer_datetimes" cannot be changed
+contains:parameter "integer_datetimes" cannot be changed

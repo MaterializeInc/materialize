@@ -13,6 +13,7 @@ use ore::metrics::MetricsRegistry;
 use ore::test::init_logging;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use tokio::runtime::Runtime as AsyncRuntime;
 
 use crate::client::RuntimeClient;
 use crate::error::{Error, ErrorLog};
@@ -144,9 +145,9 @@ fn golden() -> Result<(), Error> {
 }
 
 fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
-    let runtime = Arc::new(tokio::runtime::Runtime::new()?);
+    let async_runtime = Arc::new(AsyncRuntime::new()?);
     let mut blob = MemBlob::new_no_reentrance("");
-    if let Err(err) = runtime.block_on(Blobs::deserialize_to(blob_json, &mut blob)) {
+    if let Err(err) = async_runtime.block_on(Blobs::deserialize_to(blob_json, &mut blob)) {
         tracing::error!("error deserializing golden: {}", err);
     }
     let mut persist = runtime::start(
@@ -155,7 +156,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
         blob,
         build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
-        Some(runtime),
+        Some(async_runtime),
     )?;
     let state = PersistState::slurp_from(&persist)?;
     persist.stop()?;
@@ -184,7 +185,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
         }
     }
 
-    let runtime = Arc::new(tokio::runtime::Runtime::new()?);
+    let async_runtime = Arc::new(AsyncRuntime::new()?);
     let reg = MemRegistry::new();
     let start_fn = GoldenStartRuntime(reg.clone());
     let mut persist = Direct::new(start_fn)?;
@@ -197,7 +198,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
 
     let mut blob = reg.blob_no_reentrance()?;
     let raw_blobs = Blobs::serialize_from(&blob)?;
-    runtime.block_on(blob.close())?;
+    async_runtime.block_on(blob.close())?;
     Ok((persist_state, raw_blobs))
 }
 

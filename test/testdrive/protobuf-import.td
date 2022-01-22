@@ -113,4 +113,4 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr
-Decode error: Text: protobuf deserialization error: unsupported Confluent-style protobuf message descriptor id: expected 0, but found: 123. See https://github.com/MaterializeInc/materialize/issues/9250
+contains:Decode error: Text: protobuf deserialization error: unsupported Confluent-style protobuf message descriptor id: expected 0, but found: 123. See https://github.com/MaterializeInc/materialize/issues/9250

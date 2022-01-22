@@ -68,6 +68,8 @@ Field                | Value type | Description
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 `retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.
 `retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default.
+`avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`.
+`avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`.
 
 {{< version-changed v0.9.7 >}}
 The `retention_ms` and `retention_bytes` options were added.
@@ -128,7 +130,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 - For most sinks, Materialize creates new, distinct topics and files for each sink on restart.
 - A beta feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#enabling-topic-reuse-after-restart-exactly-once-sinks).
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
-- For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink.
+- For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `avro_key_fullname` and `avro_value_fullname` options.
 - Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction id information inline with the data, and adds a separate transaction metadata topic.
 
 ### Debezium envelope details

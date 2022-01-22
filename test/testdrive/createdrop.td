@@ -58,16 +58,16 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
-catalog item 'i' already exists
+contains:catalog item 'i' already exists
 
 ! CREATE INDEX i ON s("Y")
-catalog item 'i' already exists
+contains:catalog item 'i' already exists
 
 ! CREATE INDEX j on v2(x)
-catalog item 'j' already exists
+contains:catalog item 'j' already exists
 
 ! CREATE INDEX v ON v2(x)
-catalog item 'v' already exists
+contains:catalog item 'v' already exists
 
 $ set dummy={
     "type": "record",
@@ -100,56 +100,56 @@ $ set dummy={
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dummy}'
   ENVELOPE DEBEZIUM
-catalog item 'v2' already exists
+contains:catalog item 'v2' already exists
 
 ! CREATE SOURCE i
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dummy}'
   ENVELOPE DEBEZIUM
-catalog item 'i' already exists
+contains:catalog item 'i' already exists
 
 ! CREATE INDEX s ON v2(x)
-catalog item 's' already exists
+contains:catalog item 's' already exists
 
 ! CREATE MATERIALIZED VIEW s AS SELECT 'bloop' AS d
-catalog item 's' already exists
+contains:catalog item 's' already exists
 
 # Test that objects do not get dropped if the drop command does not specify the correct type
 ! DROP SOURCE v
-v is not of type SOURCE
+contains:v is not of type SOURCE
 
 ! DROP SOURCE IF EXISTS v
-v is not of type SOURCE
+contains:v is not of type SOURCE
 
 ! DROP INDEX v
-v is not of type INDEX
+contains:v is not of type INDEX
 
 ! DROP INDEX IF EXISTS v
-v is not of type INDEX
+contains:v is not of type INDEX
 
 ! DROP SOURCE i
-i is not of type SOURCE
+contains:i is not of type SOURCE
 
 ! DROP SOURCE IF EXISTS i
-i is not of type SOURCE
+contains:i is not of type SOURCE
 
 ! DROP VIEW i
-i is not of type VIEW
+contains:i is not of type VIEW
 
 ! DROP VIEW IF EXISTS i
-i is not of type VIEW
+contains:i is not of type VIEW
 
 ! DROP INDEX s
-s is not of type INDEX
+contains:s is not of type INDEX
 
 ! DROP INDEX IF EXISTS s
-s is not of type INDEX
+contains:s is not of type INDEX
 
 ! DROP VIEW s
-s is not of type VIEW
+contains:s is not of type VIEW
 
 ! DROP VIEW IF EXISTS s
-s is not of type VIEW
+contains:s is not of type VIEW
 
 # Delete objects
 
@@ -190,13 +190,13 @@ s is not of type VIEW
 # Test that drop without if exists does not work if the object does not exist
 
 ! DROP INDEX nonexistent
-unknown catalog item 'nonexistent'
+contains:unknown catalog item 'nonexistent'
 
 ! DROP VIEW nonexistent
-unknown catalog item 'nonexistent'
+contains:unknown catalog item 'nonexistent'
 
 ! DROP SOURCE nonexistent
-unknown catalog item 'nonexistent'
+contains:unknown catalog item 'nonexistent'
 
 # Test CREATE VIEW IF NOT EXISTS
 > CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
@@ -207,7 +207,7 @@ View                      "Create View"
 materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
 
 ! CREATE MATERIALIZED VIEW test1 AS SELECT 43 AS b
-catalog item 'test1' already exists
+contains:catalog item 'test1' already exists
 
 > SELECT * FROM test1
 a

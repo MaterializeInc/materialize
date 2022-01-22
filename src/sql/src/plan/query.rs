@@ -2373,50 +2373,82 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 }
 
 fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName> {
-    match expr {
-        Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
-        Expr::Value(v) => match v {
-            // Per PostgreSQL, `bool` and `interval` literals take on the name
-            // of their type, but not other literal types.
-            Value::Boolean(_) => Some("bool".into()),
-            Value::Interval(_) => Some("interval".into()),
-            _ => None,
-        },
-        Expr::Function(func) => {
-            let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
-            if name.schema.as_deref() == Some("mz_internal") {
-                None
-            } else {
-                Some(name.item.into())
-            }
-        }
-        Expr::Coalesce { .. } => Some("coalesce".into()),
-        Expr::NullIf { .. } => Some("nullif".into()),
-        Expr::Array { .. } => Some("array".into()),
-        Expr::List { .. } => Some("list".into()),
-        Expr::Cast { expr, data_type } => match invent_column_name(ecx, expr) {
-            Some(name) => Some(name),
-            None => {
-                let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
-                let pgrepr_type = pgrepr::Type::from(&ty);
-                let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
-                Some(entry.name().item.clone().into())
-            }
-        },
-        Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
-        Expr::Exists { .. } => Some("exists".into()),
-        Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
-            invent_column_name(ecx, expr)
-        }
-        Expr::Subquery(query) | Expr::ListSubquery(query) => {
-            // A bit silly to have to plan the query here just to get its column
-            // name, since we throw away the planned expression, but fixing this
-            // requires a separate semantic analysis phase.
-            let (_expr, scope) = plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
-            scope.items.first().map(|name| name.column_name.clone())
-        }
-        _ => None,
+    // We follow PostgreSQL exactly here, which has some complicated rules
+    // around "high" and "low" quality names. Low quality names override other
+    // low quality names but not high quality names.
+    //
+    // See: https://github.com/postgres/postgres/blob/1f655fdc3/src/backend/parser/parse_target.c#L1716-L1728
+
+    enum NameQuality {
+        Low,
+        High,
     }
+
+    fn invent(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<(ColumnName, NameQuality)> {
+        match expr {
+            Expr::Identifier(names) => names
+                .last()
+                .map(|n| (normalize::column_name(n.clone()), NameQuality::High)),
+            Expr::Value(v) => match v {
+                // Per PostgreSQL, `bool` and `interval` literals take on the name
+                // of their type, but not other literal types.
+                Value::Boolean(_) => Some(("bool".into(), NameQuality::High)),
+                Value::Interval(_) => Some(("interval".into(), NameQuality::High)),
+                _ => None,
+            },
+            Expr::Function(func) => {
+                let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
+                if name.schema.as_deref() == Some("mz_internal") {
+                    None
+                } else {
+                    Some((name.item.into(), NameQuality::High))
+                }
+            }
+            Expr::Coalesce { .. } => Some(("coalesce".into(), NameQuality::High)),
+            Expr::NullIf { .. } => Some(("nullif".into(), NameQuality::High)),
+            Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
+            Expr::List { .. } => Some(("list".into(), NameQuality::High)),
+            Expr::Cast { expr, data_type } => match invent(ecx, expr) {
+                Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
+                _ => {
+                    let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
+                    let pgrepr_type = pgrepr::Type::from(&ty);
+                    let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
+                    Some((entry.name().item.clone().into(), NameQuality::Low))
+                }
+            },
+            Expr::Case { else_result, .. } => {
+                match else_result
+                    .as_ref()
+                    .and_then(|else_result| invent(ecx, else_result))
+                {
+                    Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
+                    _ => Some(("case".into(), NameQuality::Low)),
+                }
+            }
+            Expr::FieldAccess { field, .. } => {
+                Some((normalize::column_name(field.clone()), NameQuality::High))
+            }
+            Expr::Exists { .. } => Some(("exists".into(), NameQuality::High)),
+            Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
+                invent(ecx, expr)
+            }
+            Expr::Subquery(query) | Expr::ListSubquery(query) => {
+                // A bit silly to have to plan the query here just to get its column
+                // name, since we throw away the planned expression, but fixing this
+                // requires a separate semantic analysis phase.
+                let (_expr, scope) =
+                    plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
+                scope
+                    .items
+                    .first()
+                    .map(|name| (name.column_name.clone(), NameQuality::High))
+            }
+            _ => None,
+        }
+    }
+
+    invent(ecx, expr).map(|(name, _quality)| name)
 }
 
 #[derive(Debug)]

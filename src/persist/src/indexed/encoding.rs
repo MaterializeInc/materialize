@@ -902,6 +902,7 @@ pub fn decode_trace_inline_meta(
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
+    use crate::indexed::columnar::ColumnarRecordsVec;
     use crate::workload::DataGenerator;
 
     use super::*;
@@ -962,7 +963,7 @@ mod tests {
     }
 
     fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> Vec<ColumnarRecords> {
-        vec![updates.iter().collect::<ColumnarRecords>()]
+        updates.iter().collect::<ColumnarRecordsVec>().into_inner()
     }
 
     impl From<(&'_ str, Id)> for StreamRegistration {

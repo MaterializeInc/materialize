@@ -19,4 +19,4 @@ INSERT INTO array_type VALUES ('{{1,2,3},{4,5,6},{7,8,9}}');
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.array_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
-Unsupported type in schema
+contains:Unsupported type in schema

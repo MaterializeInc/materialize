@@ -8,9 +8,9 @@ publish = false
 [dependencies]
 anyhow = "1.0.52"
 async-trait = "0.1.52"
-aws-config = { version = "0.4.1", default-features = false, features = ["native-tls"] }
-aws-types = { version = "0.4.0", features = ["hardcoded-credentials"] }
-aws-smithy-http = "0.34.0"
+aws-config = { version = "0.5.0", default-features = false, features = ["native-tls"] }
+aws-types = { version = "0.5.0", features = ["hardcoded-credentials"] }
+aws-smithy-http = "0.35.1"
 bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.2"
@@ -23,6 +23,7 @@ interchange = { path = "../interchange" }
 persist-types = { path = "../persist-types" }
 kafka-util = { path = "../kafka-util" }
 http = "0.2.6"
+http-serde = "1.0.3"
 tracing = "0.1.29"
 num_enum = "0.5.6"
 mz-aws-util = { path = "../aws-util" }

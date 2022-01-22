@@ -355,6 +355,7 @@ impl Action for IngestAction {
                     row,
                     &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
                     &None,
+                    false,
                 )?;
                 let mut row = row.as_bytes();
                 let key = match &key_transcoder {

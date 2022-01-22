@@ -35,7 +35,7 @@ goofus,gallant
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-unexpected parameters for CREATE SINK: badoption
+contains:unexpected parameters for CREATE SINK: badoption
 
 > SHOW SINKS
 name
@@ -51,13 +51,13 @@ name
 ! CREATE SINK bad_schema_registry FROM src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.kafka-addr}'
-cannot construct a CCSR client with a cannot-be-a-base URL
+contains:cannot construct a CCSR client with a cannot-be-a-base URL
 
 # Invalid in that the address is not for a schema registry
 ! CREATE SINK bad_schema_registry FROM src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://${testdrive.kafka-addr}'
-unable to publish value schema to registry in kafka sink
+contains:unable to publish value schema to registry in kafka sink
 
 > SHOW SINKS
 name

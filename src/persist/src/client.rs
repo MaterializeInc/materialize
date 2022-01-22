@@ -22,7 +22,7 @@ use timely::progress::Antichain;
 
 use crate::error::Error;
 use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
-use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::{ListenEvent, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
@@ -231,7 +231,8 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
         match self.id {
             Ok(id) => {
                 let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
-                self.runtime.write(vec![(id, updates.finish())], tx);
+                let updates = updates.finish().into_iter().map(|x| (id, x)).collect();
+                self.runtime.write(updates, tx);
             }
             Err(ref e) => {
                 tx.fill(Err(e.clone()));
@@ -291,15 +292,15 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
 /// A handle to construct a [ColumnarRecords] from a vector of records for writes.
 #[derive(Debug)]
 pub struct WriteReqBuilder<K: Codec, V: Codec> {
-    records: ColumnarRecordsBuilder,
+    records: ColumnarRecordsVecBuilder,
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
     _phantom: PhantomData<(K, V)>,
 }
 
 impl<K: Codec, V: Codec> WriteReqBuilder<K, V> {
-    /// Finalize a write request into [ColumnarRecords].
-    pub fn finish(&mut self) -> ColumnarRecords {
+    /// Finalize a write request into [Vec<ColumnarRecords>].
+    pub fn finish(&mut self) -> Vec<ColumnarRecords> {
         std::mem::take(&mut self.records).finish()
     }
 }
@@ -310,7 +311,7 @@ impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReq
         let size_hint = iter.size_hint();
 
         let mut builder = WriteReqBuilder {
-            records: ColumnarRecordsBuilder::default(),
+            records: ColumnarRecordsVecBuilder::default(),
             key_buf: Vec::new(),
             val_buf: Vec::new(),
             _phantom: PhantomData,
@@ -412,9 +413,9 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
         }
         let updates = updates
             .iter()
-            .map(|(id, updates)| {
+            .flat_map(|(id, updates)| {
                 let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
-                (*id, updates.finish())
+                updates.finish().into_iter().map(|x| (*id, x))
             })
             .collect();
         self.runtime.write(updates, tx);

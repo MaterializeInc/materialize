@@ -98,7 +98,7 @@ def workflow_testdrive_redpanda_ci(c: Composition) -> None:
     """Run testdrive against files known to be supported by Redpanda."""
 
     # https://github.com/vectorizedio/redpanda/issues/2397
-    KNOWN_FAILURES = {"./kafka-time-offset.td"}
+    KNOWN_FAILURES = {"kafka-time-offset.td"}
 
     files = set(
         # NOTE(benesch): invoking the shell like this to filter testdrive files is

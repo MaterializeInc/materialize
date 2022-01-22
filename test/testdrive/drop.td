@@ -19,6 +19,6 @@
 # https://github.com/MaterializeInc/materialize/issues/5272
 > CREATE VIEW v2 AS SELECT 1
 ! CREATE OR REPLACE VIEW v2 AS SELECT * FROM v2
-cannot replace view materialize.public.v2: depended upon by new materialize.public.v2 definition
+contains:cannot replace view materialize.public.v2: depended upon by new materialize.public.v2 definition
 ! CREATE OR REPLACE MATERIALIZED VIEW v2 AS SELECT * FROM v2
-cannot replace view materialize.public.v2: depended upon by new materialize.public.v2 definition
+contains:cannot replace view materialize.public.v2: depended upon by new materialize.public.v2 definition

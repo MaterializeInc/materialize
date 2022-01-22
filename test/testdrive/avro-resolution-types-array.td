@@ -28,4 +28,4 @@ $ kafka-ingest format=avro topic=resolution-arrays schema=${array-double} publis
 {"f1": [ 234.345 ] }
 
 ! SELECT f1[0] FROM resolution_arrays
-Schemas don't match: Double, Int
+contains:Schemas don't match: Double, Int

@@ -39,7 +39,7 @@
 22
 
 ! INSERT INTO vt VALUES ('това е текст това е текст');
-value too long for type character varying(20)
+contains:value too long for type character varying(20)
 
 ! INSERT INTO ct VALUES ('това е текст това е текст');
-value too long for type character(20)
+contains:value too long for type character(20)
