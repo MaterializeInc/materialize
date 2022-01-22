@@ -243,6 +243,23 @@ pub struct TimestampedUpdate {
     pub timestamp_offset: u64,
 }
 
+enum TimestampStatus<T> {
+    /// A new timestamp was generated that was in advance of the previous
+    /// timestamp, it is stored.
+    Advanced(T),
+    /// The generated timestamp was not in advance of the previous timestamp. The
+    /// previous timestamp is stored.
+    DidNotAdvance(T),
+}
+
+impl<T: Copy> TimestampStatus<T> {
+    fn unwrap_ignore_status(&self) -> T {
+        match self {
+            TimestampStatus::Advanced(t) | TimestampStatus::DidNotAdvance(t) => *t,
+        }
+    }
+}
+
 /// Configures dataflow worker logging.
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
@@ -310,13 +327,16 @@ where
     ///
     /// Indirectly, this value aims to represent the Coordinator's desired value
     /// for `upper` for table frontiers, as long as we know it is open.
-    last_open_local_ts: Timestamp,
+    last_open_local_ts: TimestampStatus<Timestamp>,
     /// Whether or not we have written at the open timestamp.
     writes_at_open_ts: bool,
     /// Whether or not we have read the writes that have occurred at the open
     /// timestamp. When this is `true`, it signals we need to open a new
     /// timestamp to support future writes.
     read_writes_at_open_ts: bool,
+    /// Commiting write transactions that have requested a write timestamp, but
+    /// none was available. These are dequed once a timestamp is available.
+    writes_waiting_for_timestamp: Vec<(ClientTransmitter<ExecuteResponse>, Session)>,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -410,41 +430,59 @@ where
     /// simplicity's sake and to open as few new timestamps as possible.
     fn get_local_read_ts(&mut self) -> Timestamp {
         if self.writes_at_open_ts {
+            // If the previous timestamp didn't advance, a write should not have occurred.
+            assert!(!matches!(
+                self.last_open_local_ts,
+                TimestampStatus::DidNotAdvance(_)
+            ));
+
             // If you have pending writes, you will need to read those writes,
             // which happened at the last known open time. This also means you
             // will need to advance to those writes, i.e. close over
             // `last_open_local_ts`.
             self.read_writes_at_open_ts = true;
-            self.last_open_local_ts
+            self.last_open_local_ts.unwrap_ignore_status()
         } else {
             // If there are no writes at the open timestamp, we know we can read
             // at one unit of time less than the open time (which will always be
-            // closed).
-            self.last_open_local_ts - 1
+            // closed). If the timestamp did not advance, then the timestamp after it was
+            // closed, so do not read at one unit less.
+            match self.last_open_local_ts {
+                TimestampStatus::Advanced(ts) => ts - 1,
+                TimestampStatus::DidNotAdvance(ts) => ts,
+            }
         }
     }
 
     /// Assign a timestamp for a write to a local input. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
-    fn get_local_write_ts(&mut self) -> Timestamp {
-        // This assert is valid because:
-        // - Whenever a write precedes a read, the read sets
-        //   `read_writes_at_open_ts = true`, which will advance the
-        //   `last_open_local_ts`.
-        // - The Coordinator always has the opportunity to check the state of
-        //   `read_writes_at_open_ts` after a read, even in the case of
-        //   `ReadThenWrite` plans, which dictates when we advance the
-        //   timestamp.
-        // - Advancing the timestamp sets `read_writes_at_open_ts = false`.
-        assert!(
-            !self.read_writes_at_open_ts,
-            "do not perform writes at time where tables want to read"
-        );
+    ///
+    /// An error is returned if there is no available write timestamp. It is up
+    /// to callers to decide on a policy for how to handle this (drop the writes,
+    /// delay and retry the writes, return the error).
+    fn get_local_write_ts(&mut self) -> Option<Timestamp> {
+        match self.last_open_local_ts {
+            TimestampStatus::Advanced(t) => {
+                // This assert is valid because:
+                // - Whenever a write precedes a read, the read sets
+                //   `read_writes_at_open_ts = true`, which will advance the
+                //   `last_open_local_ts`.
+                // - The Coordinator always has the opportunity to check the state of
+                //   `read_writes_at_open_ts` after a read, even in the case of
+                //   `ReadThenWrite` plans, which dictates when we advance the
+                //   timestamp.
+                // - Advancing the timestamp sets `read_writes_at_open_ts = false`.
+                assert!(
+                    !self.read_writes_at_open_ts,
+                    "do not perform writes at time where tables want to read"
+                );
 
-        self.writes_at_open_ts = true;
-
-        self.last_open_local_ts
+                self.writes_at_open_ts = true;
+                Some(t)
+            }
+            TimestampStatus::DidNotAdvance(_) => None,
+        }
     }
 
     /// Opens a new timestamp for local inputs at which writes may occur, and
@@ -455,17 +493,38 @@ where
         // things the coordinator did without being related to the real dimension.
         let ts = (self.catalog.config().now)();
 
-        // We cannot depend on `self.catalog.config().now`'s value to increase
-        // (in addition to the normal considerations around clocks in computers,
-        // this feature enables us to drive the Coordinator's time when using a
-        // test harness). Instead, we must manually increment
-        // `last_open_local_ts` if `now` appears non-increasing.
-        self.last_open_local_ts = std::cmp::max(ts, self.last_open_local_ts + 1);
-
         // Opening a new timestamp means that there cannot be new writes at the
         // open timestamp.
         self.writes_at_open_ts = false;
         self.read_writes_at_open_ts = false;
+
+        // We cannot depend on `self.catalog.config().now`'s value to increase
+        // (in addition to the normal considerations around clocks in computers,
+        // this feature enables us to drive the Coordinator's time when using a
+        // test harness).
+        let last_open_local_ts = self.last_open_local_ts.unwrap_ignore_status();
+        self.last_open_local_ts = if ts > last_open_local_ts {
+            // Deque waiting writes since we now have a timestamp. We can safely dequeue
+            // all of them at once because multiple writes in a row will all share a
+            // timestamp.
+            if !self.writes_waiting_for_timestamp.is_empty() {
+                for (tx, session) in self.writes_waiting_for_timestamp.drain(..) {
+                    self.internal_cmd_tx
+                        .send(Message::Command(Command::Commit {
+                            action: EndTransactionAction::Commit,
+                            tx: tx.take(),
+                            session,
+                        }))
+                        .expect("sending to internal_cmd_tx cannot fail");
+                }
+            }
+
+            TimestampStatus::Advanced(ts)
+        } else {
+            // The clock has not advanced (perhaps it went backward or we have fetched it
+            // within the same millisecond).
+            TimestampStatus::DidNotAdvance(last_open_local_ts)
+        }
     }
 
     fn now_datetime(&self) -> DateTime<Utc> {
@@ -761,8 +820,13 @@ where
     async fn advance_local_inputs(&mut self) {
         self.open_new_local_ts();
 
-        // Close the stream up to the newly opened timestamp.
-        let advance_to = self.last_open_local_ts;
+        // Close the stream up to the current timestamp. If a new timestamp was
+        // not able to be made, we can still close up to and including the previous
+        // timestamp.
+        let advance_to = match self.last_open_local_ts {
+            TimestampStatus::Advanced(ts) => ts,
+            TimestampStatus::DidNotAdvance(ts) => ts + 1,
+        };
 
         if let Some(persist_multi) = self.catalog.persist_multi_details() {
             // Close out the timestamp for persisted tables.
@@ -1632,6 +1696,16 @@ where
             {
                 let ready = self.write_lock_wait_group.remove(idx).unwrap();
                 ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
+            }
+
+            // Cancel timestamp waiters. There is at most one pending waiter per session.
+            if let Some(idx) = self
+                .writes_waiting_for_timestamp
+                .iter()
+                .position(|(_tx, session)| session.conn_id() == conn_id)
+            {
+                let (tx, session) = self.writes_waiting_for_timestamp.remove(idx);
+                tx.send(Ok(ExecuteResponse::Canceled), session);
             }
 
             // Inform the target session (if it asks) about the cancellation.
@@ -2757,6 +2831,11 @@ where
                 ..
             } = txn
             {
+                // If we need a timestamp but none is available, enqueue ourselves.
+                if !matches!(self.last_open_local_ts, TimestampStatus::Advanced(_)) {
+                    self.writes_waiting_for_timestamp.push((tx, session));
+                    return;
+                }
                 guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
             }
         }
@@ -2817,7 +2896,11 @@ where
                         // Although the transaction has a wall_time in its pcx, we use a new
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
-                        let timestamp = self.get_local_write_ts();
+                        //
+                        // sequence_end_transaction checks that for write transactions we have a valid
+                        // write timestamp, so we can always unwrap it here.
+                        let timestamp =
+                            self.get_local_write_ts().expect("invalid timestamp status");
 
                         // Separate out which updates were to tables we are
                         // persisting. In practice, we don't enable/disable this
@@ -4040,7 +4123,11 @@ where
         // message so we can persist a record and its future retraction
         // atomically. Otherwise, we may end up with permanent orphans if a
         // restart/crash happens at the wrong time.
-        let timestamp_base = self.get_local_write_ts();
+        let timestamp_base = match self.get_local_write_ts() {
+            Some(ts) => ts,
+            // If no write timestamp can be produced, drop this set of updates.
+            None => return,
+        };
         let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
         for tu in updates.into_iter() {
             let timestamp = timestamp_base + tu.timestamp_offset;
@@ -4546,9 +4633,10 @@ where
                 ts_tx,
                 _timestamper_thread_handle: timestamper_thread_handle,
                 metric_scraper,
-                last_open_local_ts: 1,
+                last_open_local_ts: TimestampStatus::Advanced(1),
                 writes_at_open_ts: false,
                 read_writes_at_open_ts: false,
+                writes_waiting_for_timestamp: Vec::new(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 txn_reads: HashMap::new(),
