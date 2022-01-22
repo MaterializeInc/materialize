@@ -31,6 +31,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::error::Error;
+use crate::gen::persist::ProtoMeta;
 use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot, TraceSnapshot};
 use crate::indexed::background::{CompactTraceReq, CompactTraceRes, Maintainer};
 use crate::indexed::cache::BlobCache;
@@ -681,6 +682,66 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
         }
         true
     }
+
+    /// WIP
+    pub fn meta(&mut self, meta_res: Result<ProtoMeta, Error>) {
+        debug_assert_eq!(self.validate_pending_empty(), Ok(()));
+
+        let new_meta = match meta_res {
+            Err(_) => {
+                // WIP inc a metric
+                return;
+            }
+            Ok(new_meta) => new_meta,
+        };
+        let new_state = AppliedState::new(new_meta.into());
+        let diffs = diff_metas(&self.state, &new_state, &self.blob);
+
+        for (id, event) in diffs {
+            if let Some(listeners) = self.listeners.get(&id) {
+                if listeners.len() == 1 {
+                    if let Err(crossbeam_channel::SendError(_)) = listeners[0].send(event) {}
+                } else {
+                    for listener in listeners.iter() {
+                        if let Err(crossbeam_channel::SendError(_)) = listener.send(event.clone()) {
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn diff_metas<B: BlobRead>(
+    old: &AppliedState,
+    new: &AppliedState,
+    blob: &BlobCache<B>,
+) -> Vec<(Id, ListenEvent)> {
+    if new.saved_seqno <= old.saved_seqno {
+        return vec![];
+    }
+
+    let mut events = Vec::new();
+    for (id, new_arrangement) in new.arrangements.iter() {
+        let old_seal = old.arrangements.get(id).map_or(0, |x| x.get_seal()[0]);
+        let new_seal = new_arrangement.get_seal()[0];
+        if new_seal <= old_seal {
+            continue;
+        }
+        // TODO: We, of course, can't iterate all the data for any real
+        // usages. The batches should help us filter this though.
+        let snap = new_arrangement
+            .snapshot(new.saved_seqno, &blob)
+            .expect("WIP");
+        for x in snap.into_iter() {
+            let (kv, ts, diff) = x.expect("WIP");
+            if ts < new_seal && ts >= old_seal {
+                events.push((*id, ListenEvent::Records(vec![(kv, ts, diff)])));
+            }
+        }
+        events.push((*id, ListenEvent::Sealed(new_seal)));
+    }
+    events
 }
 
 impl AppliedState {

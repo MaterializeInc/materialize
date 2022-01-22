@@ -285,7 +285,7 @@ impl<P: AsRef<Path>> From<P> for FileBlobConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FileBlobCore {
     base_dir: Option<PathBuf>,
 }
@@ -356,7 +356,7 @@ impl FileBlobCore {
 }
 
 /// Implementation of [BlobRead] backed by files.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileBlobRead {
     core: FileBlobCore,
 }

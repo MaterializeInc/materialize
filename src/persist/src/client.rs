@@ -27,7 +27,7 @@ use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::{Cmd, CmdRead, ListenEvent, Snapshot};
 use crate::pfuture::PFuture;
-use crate::runtime::{RuntimeCmd, RuntimeHandle, RuntimeId};
+use crate::runtime::{RuntimeCmd, RuntimeHandle, RuntimeId, RuntimeReadCmd};
 use crate::storage::SeqNo;
 
 /// A clone-able handle to the persistence runtime.
@@ -168,7 +168,7 @@ impl Eq for RuntimeReadClient {}
 impl RuntimeReadClient {
     pub(crate) fn new(
         handle: RuntimeHandle,
-        tx: crossbeam_channel::Sender<CmdRead>,
+        tx: crossbeam_channel::Sender<RuntimeReadCmd>,
         metrics: Arc<Metrics>,
     ) -> Self {
         let runtime_id = handle.id();
@@ -898,7 +898,7 @@ enum CmdReadSender {
     Full(RuntimeCmdSender),
     Read {
         metrics: Arc<Metrics>,
-        tx: crossbeam_channel::Sender<CmdRead>,
+        tx: crossbeam_channel::Sender<RuntimeReadCmd>,
     },
 }
 
@@ -908,7 +908,9 @@ impl CmdReadSender {
             CmdReadSender::Full(x) => x.send_cmd_read(cmd),
             CmdReadSender::Read { metrics, tx } => {
                 metrics.cmd_queue_in.inc();
-                if let Err(crossbeam_channel::SendError(cmd)) = tx.send(cmd) {
+                if let Err(crossbeam_channel::SendError(cmd)) =
+                    tx.send(RuntimeReadCmd::CmdRead(cmd))
+                {
                     // According to the docs, a SendError can only happen if the
                     // receiver has hung up, which in this case only happens if the
                     // thread has exited. The thread only exits if we send it a

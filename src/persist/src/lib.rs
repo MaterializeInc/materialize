@@ -28,6 +28,7 @@ pub mod indexed;
 pub mod mem;
 pub mod operators;
 pub mod pfuture;
+pub mod poll;
 pub mod runtime;
 pub mod s3;
 pub mod storage;

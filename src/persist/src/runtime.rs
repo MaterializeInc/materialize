@@ -16,6 +16,8 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crossbeam_channel::SendError;
+use futures_executor::block_on;
 use mz_build_info::BuildInfo;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
@@ -24,12 +26,12 @@ use tokio::time;
 
 use crate::client::{RuntimeClient, RuntimeReadClient};
 use crate::error::{Error, ErrorLog};
+use crate::gen::persist::ProtoMeta;
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::{Cmd, CmdRead, Indexed};
-use crate::storage::{Blob, BlobRead, Log};
-use futures_executor::block_on;
+use crate::storage::{Blob, BlobRead, BlobTail, BlobTailMetaStream, Log};
 
 pub(crate) enum RuntimeCmd {
     /// A command passed directly to [Indexed] for application.
@@ -45,6 +47,23 @@ impl RuntimeCmd {
         match self {
             RuntimeCmd::IndexedCmd(cmd) => cmd.fill_err_runtime_shutdown(),
             RuntimeCmd::Tick => {}
+        }
+    }
+}
+
+pub(crate) enum RuntimeReadCmd {
+    /// WIP
+    CmdRead(CmdRead),
+    /// WIP
+    Meta(Result<ProtoMeta, Error>),
+}
+
+impl RuntimeReadCmd {
+    /// Fills self's response, if applicable, with Error::RuntimeShutdown.
+    pub fn fill_err_runtime_shutdown(self) {
+        match self {
+            RuntimeReadCmd::CmdRead(cmd) => cmd.fill_err_runtime_shutdown(),
+            RuntimeReadCmd::Meta(_) => {}
         }
     }
 }
@@ -137,7 +156,7 @@ where
         id,
         impl_handle,
         ticker_handle,
-        ticker_async_runtime: async_runtime,
+        async_runtime,
     });
 
     Ok(RuntimeClient::new(handles, tx, metrics))
@@ -163,14 +182,14 @@ where
 // NB: This is pretty duplicative of start, but that's okay. It's already fairly
 // different and it's only going to get more so. DRYing this up wouldn't really
 // decrease the chance of bugs but it would decrease readability.
-pub fn start_read<L, B>(
+pub fn start_read<B>(
     blob: B,
     build: BuildInfo,
     reg: &MetricsRegistry,
     async_runtime: Option<Arc<AsyncRuntime>>,
 ) -> Result<RuntimeReadClient, Error>
 where
-    B: BlobRead + Send + 'static,
+    B: BlobRead + BlobTail + Send + 'static,
 {
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -181,15 +200,39 @@ where
         None => Arc::new(AsyncRuntime::new()?),
     };
 
+    // Register interest in changes in META.
+    let mut stream = blob.tail_meta()?;
+    let meta_tx = tx.clone();
+    let tail_meta_handle = async_runtime.spawn_named(|| "persist_tail_meta", async move {
+        loop {
+            let new_meta = stream.next().await;
+            eprintln!("new_meta {:?}", new_meta);
+            if let Err(SendError(_)) = meta_tx.send(RuntimeReadCmd::Meta(new_meta)) {
+                return;
+            }
+        }
+    });
+
     // Start up the runtime.
-    let blob = BlobCache::new(build, Arc::clone(&metrics), async_runtime, blob, None);
+    let blob = BlobCache::new(
+        build,
+        Arc::clone(&metrics),
+        Arc::clone(&async_runtime),
+        blob,
+        None,
+    );
     let indexed = Indexed::new(ErrorLog, blob, Arc::clone(&metrics))?;
     let mut runtime = RuntimeReadImpl::new(indexed, rx, Arc::clone(&metrics));
     let id = RuntimeId::new();
     let impl_handle = thread::Builder::new()
         .name("persist:runtime-read".into())
         .spawn(move || while runtime.work() {})?;
-    let handle = RuntimeHandle(RuntimeHandleInner::Read { id, impl_handle });
+    let handle = RuntimeHandle(RuntimeHandleInner::Read {
+        id,
+        impl_handle,
+        tail_meta_handle,
+        async_runtime,
+    });
 
     Ok(RuntimeReadClient::new(handle, tx, metrics))
 }
@@ -216,11 +259,13 @@ enum RuntimeHandleInner {
         id: RuntimeId,
         impl_handle: JoinHandle<()>,
         ticker_handle: tokio::task::JoinHandle<()>,
-        ticker_async_runtime: Arc<AsyncRuntime>,
+        async_runtime: Arc<AsyncRuntime>,
     },
     Read {
         id: RuntimeId,
         impl_handle: JoinHandle<()>,
+        tail_meta_handle: tokio::task::JoinHandle<()>,
+        async_runtime: Arc<AsyncRuntime>,
     },
 }
 
@@ -243,7 +288,7 @@ impl RuntimeHandle {
                 id: _id,
                 impl_handle,
                 ticker_handle,
-                ticker_async_runtime,
+                async_runtime,
             }) => {
                 if let Err(_) = impl_handle.join() {
                     // If the thread panic'd, then by definition it has been
@@ -258,11 +303,13 @@ impl RuntimeHandle {
                 // Thread a copy of the Arc<AsyncRuntime> being used to drive
                 // ticker_handle to make sure the runtime doesn't shut down before
                 // ticker_handle has a chance to finish cleanly.
-                drop(ticker_async_runtime);
+                drop(async_runtime);
             }
             RuntimeHandle(RuntimeHandleInner::Read {
                 id: _id,
                 impl_handle,
+                tail_meta_handle,
+                async_runtime,
             }) => {
                 if let Err(_) = impl_handle.join() {
                     // If the thread panic'd, then by definition it has been
@@ -271,6 +318,20 @@ impl RuntimeHandle {
                     // really a way to put the panic message in this log.
                     tracing::error!("persist runtime thread panic'd");
                 }
+                // It'd be nice if we could find a nicer way to cancel this. I'm
+                // not sure how to apply the standard "drop the future means
+                // cancellation" advice given that we intentionally ran this in
+                // a task.
+                tail_meta_handle.abort();
+                if let Err(err) = block_on(tail_meta_handle) {
+                    if !err.is_cancelled() {
+                        tracing::error!("persist tail_meta task error'd: {:?}", err);
+                    }
+                }
+                // Thread a copy of the Arc<AsyncRuntime> being used to drive
+                // tail_meta_handle to make sure the runtime doesn't shut down
+                // before tail_meta_handle has a chance to finish cleanly.
+                drop(async_runtime);
             }
         }
     }
@@ -477,14 +538,14 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
 struct RuntimeReadImpl<L: Log, B: BlobRead> {
     indexed: Indexed<L, B>,
-    rx: crossbeam_channel::Receiver<CmdRead>,
+    rx: crossbeam_channel::Receiver<RuntimeReadCmd>,
     metrics: Arc<Metrics>,
 }
 
 impl<L: Log, B: BlobRead> RuntimeReadImpl<L, B> {
     fn new(
         indexed: Indexed<L, B>,
-        rx: crossbeam_channel::Receiver<CmdRead>,
+        rx: crossbeam_channel::Receiver<RuntimeReadCmd>,
         metrics: Arc<Metrics>,
     ) -> Self {
         RuntimeReadImpl {
@@ -510,8 +571,15 @@ impl<L: Log, B: BlobRead> RuntimeReadImpl<L, B> {
         let mut more_work = true;
 
         let run_start = Instant::now();
-        if !self.indexed.apply_read(cmd) {
-            more_work = false;
+        match cmd {
+            RuntimeReadCmd::CmdRead(cmd) => {
+                if !self.indexed.apply_read(cmd) {
+                    more_work = false;
+                }
+            }
+            RuntimeReadCmd::Meta(meta_res) => {
+                self.indexed.meta(meta_res);
+            }
         }
         self.metrics.cmd_run_count.inc();
         self.metrics
@@ -524,16 +592,20 @@ impl<L: Log, B: BlobRead> RuntimeReadImpl<L, B> {
 
 #[cfg(test)]
 mod tests {
+    use mz_persist_types::Codec;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, OkErr, Probe};
     use timely::dataflow::ProbeHandle;
     use timely::progress::Antichain;
 
     use crate::client::{MultiWriteHandle, StreamWriteHandle};
-    use crate::indexed::SnapshotExt;
+    use crate::file::FileBlob;
+    use crate::indexed::{ListenEvent, SnapshotExt};
     use crate::mem::{MemMultiRegistry, MemRegistry};
     use crate::operators::source::PersistedSource;
     use crate::operators::split_ok_err;
+    use crate::poll::PollingBlob;
+    use crate::storage::LockInfo;
 
     use super::*;
 
@@ -905,6 +977,80 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter().map(|(_, _, diff)| diff))
             .sum();
         assert_eq!(diff_sum, 0);
+
+        Ok(())
+    }
+
+    // A basic end-to-end test of a read-only runtime.
+    #[test]
+    fn runtime_read() -> Result<(), Error> {
+        let temp_dir = tempfile::tempdir()?;
+
+        let (write, read_rx) = {
+            let blob = FileBlob::open_exclusive(
+                temp_dir.path().into(),
+                LockInfo::new_no_reentrance("".into()),
+            )?;
+            let runtime = start(
+                RuntimeConfig::for_tests(),
+                ErrorLog,
+                blob,
+                mz_build_info::DUMMY_BUILD_INFO,
+                &MetricsRegistry::new(),
+                None,
+            )?;
+            let (write, read) = runtime.create_or_load::<String, ()>("runtime_read");
+            let (read_tx, read_rx) = crossbeam_channel::unbounded();
+            let _ = read.listen(read_tx)?;
+            (write, read_rx)
+        };
+
+        // Write and seal some data before we start up the read-only runtime.
+        write.write(&[(("before".into(), ()), 1, 1)]).recv()?;
+        write.seal(2).recv()?;
+
+        // Wait for the seal to make it out of the listener.
+        loop {
+            match read_rx.recv() {
+                Ok(ListenEvent::Sealed(2)) => break,
+                _ => {}
+            }
+        }
+
+        let read = {
+            let blob = FileBlob::open_read(temp_dir.path().into())?;
+            let blob = PollingBlob::new(blob, Duration::from_millis(1));
+            let runtime = start_read(
+                blob,
+                mz_build_info::DUMMY_BUILD_INFO,
+                &MetricsRegistry::new(),
+                None,
+            )?;
+            runtime.load::<String, ()>("runtime_read")
+        };
+
+        // Install a listener in the read-only runtime. The returned snapshot
+        // should have the data and seal written before this runtime started up.
+        let (read_tx, read_rx) = crossbeam_channel::unbounded();
+        let snap = read.listen(read_tx)?;
+        assert_eq!(snap.ts_upper, Antichain::from_elem(2));
+        assert_eq!(
+            snap.read_to_end()?,
+            vec![(("before".as_bytes().to_owned(), vec![]), 1, 1)]
+        );
+
+        // The listener will get any future writes and seals.
+        write.write(&[(("after".to_string(), ()), 2, 1)]).recv()?;
+        write.seal(3).recv()?;
+
+        let actual = read_rx.iter().take(2).collect::<Vec<_>>();
+        let mut after_encoded = Vec::new();
+        String::from("after").encode(&mut after_encoded);
+        let expected = vec![
+            ListenEvent::Records(vec![((after_encoded, vec![]), 2, 1)]),
+            ListenEvent::Sealed(3),
+        ];
+        assert_eq!(actual, expected);
 
         Ok(())
     }

@@ -165,6 +165,25 @@ pub trait BlobRead: Send + 'static {
     async fn close(&mut self) -> Result<bool, Error>;
 }
 
+/// WIP
+#[async_trait]
+pub trait BlobTailMetaStream: Send {
+    /// WIP
+    async fn next(&mut self) -> Result<ProtoMeta, Error>;
+}
+
+/// WIP
+pub trait BlobTail {
+    /// WIP
+    //
+    // TODO: This could also be futures::Stream<Item=Result<ProtoMeta, Error>>
+    // but I couldn't figure out how to make that work.
+    type Stream: BlobTailMetaStream;
+
+    /// WIP
+    fn tail_meta(&self) -> Result<Self::Stream, Error>;
+}
+
 /// An abstraction over read-write access to a `bytes key`->`bytes value` store.
 ///
 /// Blob and BlobRead impls are allowed to be concurrently opened for the same
