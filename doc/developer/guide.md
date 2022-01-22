@@ -62,7 +62,7 @@ package manager is likely too old to build Materialize.
 
 ### Editors and IDEs
 
-In principle, any text editor can be used to edit Rust code, including Materialize.
+In principle, any text editor can be used to edit Rust code. There is nothing special about Materialize's codebase: any general Rust development setup should work fine.
 
 By default, we recomend that developers without a strong preference of editor use
 Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
