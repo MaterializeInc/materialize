@@ -131,7 +131,10 @@ impl DataGenerator {
             0,
         );
         for record_idx in batch_start..batch_end {
-            batch.push(self.gen_record(record_idx));
+            assert!(
+                batch.push(self.gen_record(record_idx)),
+                "generator exceeded batch size; smaller batches needed"
+            );
         }
         Some(batch.finish())
     }

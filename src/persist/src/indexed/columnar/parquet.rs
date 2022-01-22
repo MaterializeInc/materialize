@@ -26,7 +26,7 @@ use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::arrow::{
     decode_arrow_batch_kvtd, encode_arrow_batch_kvtd, SCHEMA_ARROW_KVTD,
 };
-use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVec};
 use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
@@ -53,11 +53,12 @@ pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Resu
         .updates
         .iter()
         .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), *t, *d))
-        .collect();
+        .collect::<ColumnarRecordsVec>()
+        .into_inner();
     encode_parquet_kvtd(
         w,
         encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKvtd),
-        &[updates],
+        &updates,
     )
 }
 

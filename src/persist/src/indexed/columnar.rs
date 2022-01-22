@@ -10,8 +10,8 @@
 //! A columnar representation of ((Key, Val), Time, Diff) data suitable for in-memory
 //! reads and persistent storage.
 
-use std::fmt;
 use std::iter::FromIterator;
+use std::{cmp, fmt};
 
 use arrow2::buffer::{Buffer, MutableBuffer};
 use arrow2::types::Index;
@@ -19,6 +19,25 @@ use ore::cast::CastFrom;
 
 pub mod arrow;
 pub mod parquet;
+
+/// The maximum allowed amount of total key data (similarly val data) in a
+/// single ColumnarBatch.
+///
+/// Note that somewhat counter-intuitively, this also includes offsets (counting
+/// as 4 bytes each) in the definition of "key/val data".
+///
+/// TODO: The limit on the amount of {key,val} data is because we use i32
+/// offsets in parquet; this won't change. However, we include the offsets in
+/// the size because the parquet library we use currently maps each Array 1:1
+/// with a parquet "page" (so for a "binary" column this is both the offsets and
+/// the data). The parquet format internally stores the size of a page in an
+/// i32, so if this gets too big, our library overflows it and writes bad data.
+/// There's no reason it needs to map an Array 1:1 to a page (it could instead
+/// be 1:1 with a "column chunk", which contains 1 or more pages). For now, we
+/// work around it.
+pub const KEY_VAL_DATA_MAX_LEN: usize = i32::MAX as usize;
+
+const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 
 /// A set of ((Key, Val), Time, Diff) records stored in a columnar
 /// representation.
@@ -32,11 +51,13 @@ pub mod parquet;
 ///
 /// Invariants:
 /// - len < usize::MAX (so len+1 can fit in a usize)
+/// - key_offsets.len() * BYTES_PER_KEY_VAL_OFFSET + key_data.len() <= KEY_VAL_DATA_MAX_LEN
 /// - key_offsets.len() == len + 1
 /// - key_offsets are non-decreasing
 /// - Each key_offset is <= key_data.len()
 /// - key_offsets.first().unwrap() == 0
 /// - key_offsets.last().unwrap() == key_data.len()
+/// - val_offsets.len() * BYTES_PER_KEY_VAL_OFFSET + val_data.len() <= KEY_VAL_DATA_MAX_LEN
 /// - val_offsets.len() == len + 1
 /// - val_offsets are non-decreasing
 /// - Each val_offset is <= val_data.len()
@@ -88,7 +109,7 @@ impl ColumnarRecords {
 }
 
 // TODO: deduplicate this with the other FromIterator implementation.
-impl<'a, K, V> FromIterator<&'a ((K, V), u64, isize)> for ColumnarRecords
+impl<'a, K, V> FromIterator<&'a ((K, V), u64, isize)> for ColumnarRecordsVec
 where
     K: AsRef<[u8]> + 'a,
     V: AsRef<[u8]> + 'a,
@@ -97,7 +118,7 @@ where
         let iter = iter.into_iter();
         let size_hint = iter.size_hint();
 
-        let mut builder = ColumnarRecordsBuilder::default();
+        let mut builder = ColumnarRecordsVecBuilder::default();
         for record in iter {
             let ((key, val), ts, diff) = record;
             let (key, val) = (key.as_ref(), val.as_ref());
@@ -109,13 +130,13 @@ where
                 let additional = usize::saturating_add(lower, 1);
                 builder.reserve(additional, key.len(), val.len());
             }
-            builder.push(((key, val), *ts, *diff));
+            builder.push(((key, val), *ts, *diff))
         }
-        builder.finish()
+        ColumnarRecordsVec(builder.finish())
     }
 }
 
-impl<K, V> FromIterator<((K, V), u64, isize)> for ColumnarRecords
+impl<K, V> FromIterator<((K, V), u64, isize)> for ColumnarRecordsVec
 where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
@@ -124,7 +145,7 @@ where
         let iter = iter.into_iter();
         let size_hint = iter.size_hint();
 
-        let mut builder = ColumnarRecordsBuilder::default();
+        let mut builder = ColumnarRecordsVecBuilder::default();
         for record in iter {
             let ((key, val), ts, diff) = record;
             let (key, val) = (key.as_ref(), val.as_ref());
@@ -138,7 +159,7 @@ where
             }
             builder.push(((key, val), ts, diff));
         }
-        builder.finish()
+        ColumnarRecordsVec(builder.finish())
     }
 }
 
@@ -162,6 +183,13 @@ impl<'a> fmt::Debug for ColumnarRecordsRef<'a> {
 
 impl<'a> ColumnarRecordsRef<'a> {
     fn validate(&self) -> Result<(), String> {
+        let key_data_size = self.key_offsets.len() * BYTES_PER_KEY_VAL_OFFSET + self.key_data.len();
+        if key_data_size > KEY_VAL_DATA_MAX_LEN {
+            return Err(format!(
+                "expected encoded key offsets and data size to be less than or equal to {} got {}",
+                KEY_VAL_DATA_MAX_LEN, key_data_size
+            ));
+        }
         if self.key_offsets.len() != self.len + 1 {
             return Err(format!(
                 "expected {} key_offsets got {}",
@@ -185,6 +213,13 @@ impl<'a> ColumnarRecordsRef<'a> {
                     self.key_data.len()
                 ));
             }
+        }
+        let val_data_size = self.val_offsets.len() * BYTES_PER_KEY_VAL_OFFSET + self.val_data.len();
+        if val_data_size > KEY_VAL_DATA_MAX_LEN {
+            return Err(format!(
+                "expected encoded val offsets and data size to be less than or equal to {} got {}",
+                KEY_VAL_DATA_MAX_LEN, val_data_size
+            ));
         }
         if self.val_offsets.len() != self.len + 1 {
             return Err(format!(
@@ -366,27 +401,59 @@ impl ColumnarRecordsBuilder {
     /// too small, the underlying buffers will be resized.
     pub fn reserve(&mut self, additional: usize, key_size_guess: usize, val_size_guess: usize) {
         self.key_offsets.reserve(additional);
-        self.key_data.reserve(additional * key_size_guess);
+        self.key_data
+            .reserve(cmp::min(additional * key_size_guess, KEY_VAL_DATA_MAX_LEN));
         self.val_offsets.reserve(additional);
-        self.val_data.reserve(additional * val_size_guess);
+        self.val_data
+            .reserve(cmp::min(additional * val_size_guess, KEY_VAL_DATA_MAX_LEN));
         self.timestamps.reserve(additional);
         self.diffs.reserve(additional);
         debug_assert_eq!(self.borrow().validate(), Ok(()));
     }
 
+    /// Returns if the given key_offsets+key_data or val_offsets+val_data fits
+    /// in the limits imposed by ColumnarRecords.
+    ///
+    /// Note that limit is always [KEY_VAL_DATA_MAX_LEN] in production. It's
+    /// only override-able here for testing.
+    pub fn can_fit(&self, key: &[u8], val: &[u8], limit: usize) -> bool {
+        let key_data_size = (self.key_offsets.len() + 1) * BYTES_PER_KEY_VAL_OFFSET
+            + self.key_data.len()
+            + key.len();
+        let val_data_size = (self.val_offsets.len() + 1) * BYTES_PER_KEY_VAL_OFFSET
+            + self.val_data.len()
+            + val.len();
+        key_data_size <= limit && val_data_size <= limit
+    }
+
     /// Add a record to Self.
-    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, isize)) {
+    ///
+    /// Returns whether the record was successfully added. A record will not a
+    /// added if it exceeds the size limitations of ColumnarBatch. This method
+    /// is atomic, if it fails, no partial data will have been added.
+    #[must_use]
+    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, isize)) -> bool {
         let ((key, val), ts, diff) = record;
+
+        // Check size invariants ahead of time so we stay atomic when we can't
+        // add the record.
+        if !self.can_fit(key, val, KEY_VAL_DATA_MAX_LEN) {
+            return false;
+        }
+
+        // NB: We should never hit the following expects because we check them
+        // above.
         self.key_data.extend_from_slice(key);
         self.key_offsets
-            .push(i32::try_from(self.key_data.len()).expect("batch is smaller than 2GB"));
+            .push(i32::try_from(self.key_data.len()).expect("key_data is smaller than 2GB"));
         self.val_data.extend_from_slice(val);
         self.val_offsets
-            .push(i32::try_from(self.val_data.len()).expect("batch is smaller than 2GB"));
+            .push(i32::try_from(self.val_data.len()).expect("val_data is smaller than 2GB"));
         self.timestamps.push(ts);
         self.diffs.push(i64::cast_from(diff));
         self.len += 1;
         debug_assert_eq!(self.borrow().validate(), Ok(()));
+        true
     }
 
     /// Finalize constructing a [ColumnarRecords].
@@ -401,6 +468,103 @@ impl ColumnarRecordsBuilder {
             diffs: Buffer::from(self.diffs),
         };
         debug_assert_eq!(ret.borrow().validate(), Ok(()));
+        ret
+    }
+}
+
+/// A new-type so we can impl FromIterator for Vec<ColumnarRecords>.
+#[derive(Debug)]
+pub struct ColumnarRecordsVec(pub Vec<ColumnarRecords>);
+
+impl ColumnarRecordsVec {
+    /// Unwraps this ColumnarRecordsVec, returning the underlying
+    /// Vec<ColumnarRecords>.
+    pub fn into_inner(self) -> Vec<ColumnarRecords> {
+        self.0
+    }
+}
+
+/// A wrapper around ColumnarRecordsBuilder that chunks as necessary to keep
+/// each ColumnarRecords within the required size bounds.
+#[derive(Debug)]
+pub struct ColumnarRecordsVecBuilder {
+    current: ColumnarRecordsBuilder,
+    filled: Vec<ColumnarRecords>,
+    // Defaults to the KEY_VAL_DATA_MAX_LEN const but override-able for testing.
+    key_val_data_max_len: usize,
+}
+
+impl Default for ColumnarRecordsVecBuilder {
+    fn default() -> Self {
+        Self {
+            current: ColumnarRecordsBuilder::default(),
+            filled: Vec::with_capacity(1),
+            key_val_data_max_len: KEY_VAL_DATA_MAX_LEN,
+        }
+    }
+}
+
+impl ColumnarRecordsVecBuilder {
+    #[cfg(test)]
+    fn new_with_len(key_val_data_max_len: usize) -> Self {
+        assert!(key_val_data_max_len <= KEY_VAL_DATA_MAX_LEN);
+        ColumnarRecordsVecBuilder {
+            current: ColumnarRecordsBuilder::default(),
+            filled: Vec::with_capacity(1),
+            key_val_data_max_len,
+        }
+    }
+
+    /// The number of (potentially duplicated) ((Key, Val), Time, Diff) records
+    /// stored in Self.
+    pub fn len(&self) -> usize {
+        self.current.len() + self.filled.iter().map(|x| x.len()).sum::<usize>()
+    }
+
+    /// Reserve space for `additional` more records, based on `key_size_guess` and
+    /// `val_size_guess`.
+    ///
+    /// The guesses for key and val sizes are best effort, and if they end up being
+    /// too small, the underlying buffers will be resized.
+    pub fn reserve(&mut self, additional: usize, key_size_guess: usize, val_size_guess: usize) {
+        // TODO: This logic very much breaks down if we do end up having to
+        // return multiple batches. Tune this later.
+        //
+        // In particular, it can break down in at least the following ways:
+        // - Only the batch currently being built is pre-sized. This can be
+        //   fixed by keeping track on `self` of how much of our reservation (if
+        //   any) didn't fit in the current ColumnarRecords and rolling it over
+        //   to future one if/when we hit them.
+        // - The reservation is blindly truncated at the ColumnarRecords size
+        //   limit. This means that whichever of key or val is smaller will
+        //   likely end up over-reserving. This can be fixed with some more math
+        //   inside reserve.
+        self.current
+            .reserve(additional, key_size_guess, val_size_guess)
+    }
+
+    /// Add a record to Self.
+    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, isize)) {
+        let ((key, val), ts, diff) = record;
+        if !self.current.can_fit(key, val, self.key_val_data_max_len) {
+            // We don't have room in this ColumnarRecords, finish it up and
+            // try in a fresh one.
+            let prev = std::mem::take(&mut self.current);
+            self.filled.push(prev.finish());
+        }
+        // If it fails now, this individual record is too big to fit
+        // in a ColumnarRecords by itself. The limits are big, so this
+        // is a pretty extreme case that we intentionally don't handle
+        // right now.
+        assert!(self.current.push(((key, val), ts, diff)));
+    }
+
+    /// Finalize constructing a [Vec<ColumnarRecords>].
+    pub fn finish(self) -> Vec<ColumnarRecords> {
+        let mut ret = self.filled;
+        if self.current.len > 0 {
+            ret.push(self.current.finish());
+        }
         ret
     }
 }
@@ -428,7 +592,7 @@ mod tests {
         ];
         let mut builder = ColumnarRecordsBuilder::default();
         for ((key, val), time, diff) in updates.iter() {
-            builder.push(((key, val), *time, *diff));
+            assert!(builder.push(((key, val), *time, *diff)));
         }
 
         let records = builder.finish();
@@ -437,5 +601,58 @@ mod tests {
             .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
             .collect();
         assert_eq!(reads, updates);
+    }
+
+    #[test]
+    fn vec_builder() {
+        fn testcase(
+            max_len: usize,
+            kv: (&str, &str),
+            num_records: usize,
+            expected_num_columnar_records: usize,
+        ) {
+            let (key, val) = kv;
+            let expected = (0..num_records)
+                .map(|x| ((key.as_bytes(), val.as_bytes()), u64::cast_from(x), 1))
+                .collect::<Vec<_>>();
+            let mut builder = ColumnarRecordsVecBuilder::new_with_len(max_len);
+            // Call reserve once at the beginning to match the usage in the
+            // FromIterator impls.
+            builder.reserve(num_records, key.len(), 0);
+            for (idx, x) in expected.iter().enumerate() {
+                builder.push(*x);
+                assert_eq!(builder.len(), idx + 1);
+            }
+            let columnar = builder.finish();
+            assert_eq!(columnar.len(), expected_num_columnar_records);
+            let actual = columnar.iter().flat_map(|x| x.iter()).collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+
+        let ten_k = "kkkkkkkkkk";
+        let ten_v = "vvvvvvvvvv";
+
+        let k_record_size = ten_k.len() + BYTES_PER_KEY_VAL_OFFSET;
+        let v_record_size = ten_v.len() + BYTES_PER_KEY_VAL_OFFSET;
+        // We use `len + 1` offsets to store `len` records.
+        let extra_offset = BYTES_PER_KEY_VAL_OFFSET;
+
+        // Tests for the production value. We intentionally don't make a 2GB
+        // alloc in unit tests, the rollover edge cases are tested below.
+        testcase(KEY_VAL_DATA_MAX_LEN, ("", ""), 0, 0);
+        testcase(KEY_VAL_DATA_MAX_LEN, (ten_k, ""), 10, 1);
+        testcase(KEY_VAL_DATA_MAX_LEN, ("", ten_v), 10, 1);
+
+        // Tests for exactly filling ColumnarRecords
+        testcase(k_record_size + extra_offset, (ten_k, ""), 1, 1);
+        testcase(v_record_size + extra_offset, ("", ten_v), 1, 1);
+        testcase(k_record_size + extra_offset, (ten_k, ""), 10, 10);
+        testcase(v_record_size + extra_offset, ("", ten_v), 10, 10);
+        testcase(10 * k_record_size + extra_offset, (ten_k, ""), 10, 1);
+        testcase(10 * v_record_size + extra_offset, ("", ten_v), 10, 1);
+
+        // Tests for not exactly filling ColumnarRecords
+        testcase(40, (ten_k, ""), 23, 12);
+        testcase(40, ("", ten_v), 23, 12);
     }
 }

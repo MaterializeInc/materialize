@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::error::Error;
 use crate::indexed::background::{CompactTraceReq, Maintainer};
 use crate::indexed::cache::BlobCache;
-use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{
     ArrangementMeta, BlobTraceBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
@@ -421,18 +421,19 @@ impl Arrangement {
     ) -> Result<UnsealedBatchMeta, Error> {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.trace_ts_upper().less_equal(&batch.ts_upper));
-        let updates = ColumnarRecords::from_iter(
+        let updates = ColumnarRecordsVec::from_iter(
             blob.get_unsealed_batch_async(&batch.key)
                 .recv()?
                 .updates
                 .iter()
                 .flat_map(|u| u.iter())
                 .filter(|(_, ts, _)| self.trace_ts_upper().less_equal(ts)),
-        );
+        )
+        .into_inner();
         debug_assert!(updates.len() != 0);
         let new_batch = BlobUnsealedBatch {
             desc: batch.desc,
-            updates: vec![updates],
+            updates,
         };
 
         self.unsealed_write_batch(new_batch, blob)
@@ -901,6 +902,7 @@ mod tests {
     use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::gen::persist::ProtoBatchFormat;
+    use crate::indexed::columnar::ColumnarRecords;
     use crate::indexed::encoding::Id;
     use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
@@ -925,8 +927,8 @@ mod tests {
     }
 
     // Generate a ColumnarRecords containing the provided updates
-    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> ColumnarRecords {
-        updates.iter().collect()
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> Vec<ColumnarRecords> {
+        updates.iter().collect::<ColumnarRecordsVec>().into_inner()
     }
 
     // Generate an unsealed batch spanning the specified sequence numbers with
@@ -934,7 +936,7 @@ mod tests {
     fn unsealed_batch(lower: u64, upper: u64, update_times: Vec<u64>) -> BlobUnsealedBatch {
         BlobUnsealedBatch {
             desc: SeqNo(lower)..SeqNo(upper),
-            updates: vec![columnar_records(unsealed_updates(update_times))],
+            updates: columnar_records(unsealed_updates(update_times)),
         }
     }
 
@@ -1022,7 +1024,7 @@ mod tests {
         // ts < trace_ts_upper is disallowed
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(vec![(("k".into(), "v".into()), 1, 1)])],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 1, 1)]),
         };
         assert_eq!(
             f.unsealed_append(batch, &mut blob),
@@ -1034,7 +1036,7 @@ mod tests {
         // ts == trace_ts_upper is allowed
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(vec![(("k".into(), "v".into()), 2, 1)])],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 2, 1)]),
         };
         assert_eq!(f.unsealed_append(batch, &mut blob), Ok(()));
 
@@ -1060,10 +1062,10 @@ mod tests {
         // Construct a unsealed batch where the updates are not sorted by time.
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(vec![
+            updates: columnar_records(vec![
                 (("k".into(), "v".into()), 3, 1),
                 (("k".into(), "v".into()), 2, 1),
-            ])],
+            ]),
         };
 
         assert_eq!(f.unsealed_append(batch, &mut blob), Ok(()));
@@ -1172,7 +1174,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: vec![columnar_records(updates.clone())],
+            updates: columnar_records(updates.clone()),
         };
 
         f.unsealed_append(batch, &mut blob)?;
@@ -1227,7 +1229,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: vec![columnar_records(updates.clone())],
+            updates: columnar_records(updates.clone()),
         };
 
         f.unsealed_append(batch, &mut blob)?;
@@ -1510,7 +1512,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(unsealed_updates)],
+            updates: columnar_records(unsealed_updates),
         };
 
         t.unsealed_append(batch, &mut blob)?;
