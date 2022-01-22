@@ -82,6 +82,18 @@ is CLion along with its Rust plugin. This is a good choice for developers who pr
 the JetBrains ecosystem, but we no longer recommend it by default, since
 Rust-Analyzer has long since caught up to it in maturity.
 
+### Debugging
+
+The standard debuggers for Rust code are `rust-lldb` on macOS, and `rust-gdb` on GNU/Linux.
+(It is also possible to run `rust-lldb` on GNU/Linux if necessary for whatever reason).
+These are wrappers around `lldb` and `gdb`, respectively, that endow them with slightly
+improved capabilities for pretty-printing Rust data structures.
+
+Unfortunately, you will soon find that these programs work less well than the equivalent
+tools for some other mainstream programming languages. In particular, inspecting
+complex data structures is often tedious and difficult. For this reason, most developers routinely use
+`println!` statements for debugging, in addition to (or instead of) these standard debuggers.
+
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
