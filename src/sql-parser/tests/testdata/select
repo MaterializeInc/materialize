@@ -127,6 +127,20 @@ SELECT
 ----
 SELECT
 
+parse-statement
+SELECT (SELECT)
+----
+SELECT (SELECT)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Subquery(Query { ctes: [], body: Select(Select { distinct: None, projection: [], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT )
+----
+error: Expected end of statement, found right parenthesis
+SELECT )
+       ^
+
 parse-statement roundtrip
 SELECT LIMIT 1
 ----
