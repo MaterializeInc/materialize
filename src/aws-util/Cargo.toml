@@ -6,7 +6,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
 aws-config = { version = "0.5.0", default-features = false, features = ["native-tls"] }
 aws-smithy-client = { version = "0.35.1", default-features = false }
 aws-smithy-http = "0.35.1"
@@ -15,7 +14,6 @@ aws-sdk-s3 = { version = "0.5.0", default-features = false, features = ["native-
 aws-sdk-sqs = { version = "0.5.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sts = { version = "0.5.0", default-features = false, features = ["native-tls"], optional = true }
 aws-types = { version = "0.5.0" }
-hyper = "0.14.16"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 
 [features]

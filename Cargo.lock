@@ -3025,7 +3025,6 @@ dependencies = [
 name = "mz-aws-util"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "aws-config",
  "aws-sdk-kinesis",
  "aws-sdk-s3",
@@ -3034,7 +3033,6 @@ dependencies = [
  "aws-smithy-client",
  "aws-smithy-http",
  "aws-types",
- "hyper",
  "mz-http-proxy",
 ]
 
