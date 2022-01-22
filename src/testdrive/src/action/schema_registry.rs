@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use anyhow::{bail, Context as _};
 use async_trait::async_trait;
 
 use ccsr::{SchemaReference, SchemaType};
@@ -24,13 +25,13 @@ pub struct PublishAction {
     references: Vec<String>,
 }
 
-pub fn build_publish(mut cmd: BuiltinCommand) -> Result<PublishAction, String> {
+pub fn build_publish(mut cmd: BuiltinCommand) -> Result<PublishAction, anyhow::Error> {
     let subject = cmd.args.string("subject")?;
     let schema_type = match cmd.args.string("schema-type")?.as_str() {
         "avro" => SchemaType::Avro,
         "json" => SchemaType::Json,
         "protobuf" => SchemaType::Protobuf,
-        s => return Err(format!("unknown schema type: {}", s)),
+        s => bail!("unknown schema type: {}", s),
     };
     let references = match cmd.args.opt_string("references") {
         None => vec![],
@@ -46,18 +47,18 @@ pub fn build_publish(mut cmd: BuiltinCommand) -> Result<PublishAction, String> {
 
 #[async_trait]
 impl Action for PublishAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let mut references = vec![];
         for reference in &self.references {
             let subject = state
                 .ccsr_client
                 .get_subject(reference)
                 .await
-                .map_err(|e| format!("fetching reference {}: {}", reference, e))?;
+                .with_context(|| format!("fetching reference {}", reference))?;
             references.push(SchemaReference {
                 name: subject.name,
                 subject: reference.clone(),
@@ -68,7 +69,7 @@ impl Action for PublishAction {
             .ccsr_client
             .publish_schema(&self.subject, &self.schema, self.schema_type, &references)
             .await
-            .map_err(|e| format!("publishing schema: {}", e))?;
+            .context("publishing schema")?;
         Ok(())
     }
 }
@@ -78,7 +79,10 @@ pub struct WaitSchemaAction {
     context: Context,
 }
 
-pub fn build_wait(mut cmd: BuiltinCommand, context: Context) -> Result<WaitSchemaAction, String> {
+pub fn build_wait(
+    mut cmd: BuiltinCommand,
+    context: Context,
+) -> Result<WaitSchemaAction, anyhow::Error> {
     let schema = cmd.args.string("schema")?;
     cmd.args.done()?;
     Ok(WaitSchemaAction { schema, context })
@@ -86,11 +90,11 @@ pub fn build_wait(mut cmd: BuiltinCommand, context: Context) -> Result<WaitSchem
 
 #[async_trait]
 impl Action for WaitSchemaAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)
@@ -100,7 +104,7 @@ impl Action for WaitSchemaAction {
                     .ccsr_client
                     .get_schema_by_subject(&self.schema)
                     .await
-                    .map_err(|e| format!("fetching schema: {}", e))
+                    .context("fetching schema")
                     .and(Ok(()))
             })
             .await

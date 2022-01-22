@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use aws_sdk_kinesis::{Blob, SdkError};
 use rand::distributions::Alphanumeric;
@@ -22,11 +23,11 @@ pub struct IngestAction {
     rows: Vec<String>,
 }
 
-pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
+pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Error> {
     let stream_prefix = format!("testdrive-{}", cmd.args.string("stream")?);
     match cmd.args.string("format")?.as_str() {
         "bytes" => (),
-        f => return Err(format!("unsupported message format for Kinesis: {}", f)),
+        f => bail!("unsupported message format for Kinesis: {}", f),
     }
     cmd.args.done()?;
 
@@ -38,11 +39,11 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
 
 #[async_trait]
 impl Action for IngestAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let stream_name = format!("{}-{}", self.stream_prefix, state.seed);
 
         for row in &self.rows {
@@ -73,13 +74,13 @@ impl Action for IngestAction {
                         Err(SdkError::ServiceError { err, .. })
                             if err.is_resource_not_found_exception() =>
                         {
-                            Err(format!("resource not found: {}", err))
+                            bail!("resource not found: {}", err)
                         }
-                        Err(err) => Err(format!("unable to put Kinesis record: {}", err)),
+                        Err(err) => Err(err).context("putting Kinesis record"),
                     }
                 })
                 .await
-                .map_err(|e| format!("trying to put Kinesis record: {}", e))?;
+                .context("putting Kinesis record")?;
         }
         Ok(())
     }

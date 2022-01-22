@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
-
 use tokio::process::Command;
 
 use ore::option::OptionExt;
@@ -22,7 +22,7 @@ pub struct ExecuteAction {
     expected_output: String,
 }
 
-pub fn build_execute(mut cmd: BuiltinCommand) -> Result<ExecuteAction, String> {
+pub fn build_execute(mut cmd: BuiltinCommand) -> Result<ExecuteAction, anyhow::Error> {
     let command = cmd.args.string("command")?;
     Ok(ExecuteAction {
         command,
@@ -32,11 +32,11 @@ pub fn build_execute(mut cmd: BuiltinCommand) -> Result<ExecuteAction, String> {
 
 #[async_trait]
 impl Action for ExecuteAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let output = Command::new("psql")
             .args(&[
                 "--pset",
@@ -50,18 +50,18 @@ impl Action for ExecuteAction {
             ])
             .output()
             .await
-            .map_err(|e| format!("execution of `psql` failed: {}", e))?;
+            .context("execution of `psql` failed")?;
         if !output.status.success() {
-            return Err(format!(
+            bail!(
                 "psql reported failure with exit code {}: {}",
                 output.status.code().display_or("unknown"),
                 String::from_utf8_lossy(&output.stderr),
-            ));
+            );
         }
         let stdout = text::trim_trailing_space(&String::from_utf8_lossy(&output.stdout));
         if self.expected_output != stdout {
             text::print_diff(&self.expected_output, &*stdout);
-            return Err("psql returned unexpected output (diff above)".into());
+            bail!("psql returned unexpected output (diff above)");
         }
         Ok(())
     }
