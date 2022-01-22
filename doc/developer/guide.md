@@ -60,6 +60,28 @@ We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
 
+### Editors and IDEs
+
+In principle, any text editor can be used to edit Rust code, including Materialize.
+
+By default, we recomend that developers without a strong preference of editor use
+Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
+setup for developing Materialize, and the one for which you are the most likely
+to be able to get help if something goes wrong. It's important to note that you
+**should not** install Microsoft's official Rust plugin, as it is known to
+conflict with Rust-Analyzer; the latter has far more advanced code navigation
+features and is the de-facto standard for developing Rust.
+
+If you prefer to use another editor, such as Vim or Emacs, we recommend that
+you install an LSP plugin with Rust-Analyzer. How to do so is beyond the scope
+of this document; if you have any issues, ask in one of the engineering channels
+on Slack.
+
+Besides Rust-Analyzer, the only other known tool with good code navigation features
+is CLion along with its Rust plugin. This is a good choice for developers who prefer
+the JetBrains ecosystem, but we no longer recommend it by default, since
+Rust-Analyzer has long since caught up to it in maturity.
+
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
