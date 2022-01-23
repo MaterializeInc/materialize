@@ -16,7 +16,9 @@ Field | Use
 ------|-----
 _query_ | The [`SELECT`](/sql/select) or [`TAIL`](/sql/tail) query to send
 
-Supported `option` values:
+### `WITH` options
+
+The following option is valid within the `WITH` clause.
 
 Name | Value
 -----|-------

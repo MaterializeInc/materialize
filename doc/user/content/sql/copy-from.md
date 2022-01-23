@@ -17,7 +17,9 @@ Field | Use
 _table_name_ | Copy values to this table.
 **(**_column_...**)** | Correlate the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>Without a column list, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
 
-Supported `option` values:
+### `WITH` options
+
+The following options are valid within the `WITH` clause.
 
 Name | Permitted values| Default value | Description
 -----|-----------------|---------------|------------
