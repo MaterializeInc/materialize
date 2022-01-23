@@ -31,7 +31,7 @@ ore = { path = "../ore" }
 persist = { path = "../persist" }
 regex = "1.5.4"
 repr = { path = "../repr" }
-serde = { version = "1.0.133", features = ["derive"] }
+serde = { version = "1.0.135", features = ["derive"] }
 serde_regex = "1.1.0"
 serde_json = "1.0.75"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

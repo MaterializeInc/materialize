@@ -43,7 +43,7 @@ parquet2 = { version = "0.8.1", default-features = false }
 persist-types = { path = "../persist-types" }
 prost = "0.9.0"
 semver = { version = "1.0.4" }
-serde = { version = "1.0.133", features = ["derive"] }
+serde = { version = "1.0.135", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.15.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
 uuid = { version = "0.8.2", features = ["v4"] }
