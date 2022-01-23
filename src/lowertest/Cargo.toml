@@ -4,7 +4,7 @@ description = "Utilities for testing lower layers of the Materialize stack"
 version = "0.0.0"
 edition = "2021"
 publish = false
-rust-version = "1.58.0"
+rust-version = "THE_NEW_VERSION"
 
 [dependencies]
 lowertest-derive = {path = "../lowertest-derive"}

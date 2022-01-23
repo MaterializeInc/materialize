@@ -4,7 +4,7 @@ description = "Translations for various data serialization formats."
 version = "0.0.0"
 edition = "2021"
 publish = false
-rust-version = "1.58.0"
+rust-version = "THE_NEW_VERSION"
 
 [[bench]]
 name = "interchange-bench"
