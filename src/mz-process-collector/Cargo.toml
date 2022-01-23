@@ -3,7 +3,7 @@ name = "mz-process-collector"
 version = "0.0.0"
 edition = "2021"
 publish = false
-rust-version = "THE_NEW_VERSION"
+rust-version = "1.58.0"
 
 [dependencies]
 lazy_static = "1.4.0"

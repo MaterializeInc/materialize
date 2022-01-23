@@ -4,7 +4,7 @@ description = "Types for the persist crate."
 version = "0.0.0"
 edition = "2021"
 publish = false
-rust-version = "THE_NEW_VERSION"
+rust-version = "1.58.0"
 
 # NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.

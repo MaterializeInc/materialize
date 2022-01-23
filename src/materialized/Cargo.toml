@@ -8,7 +8,7 @@ edition = "2021"
 publish = false
 default-run = "materialized"
 build = "build/main.rs"
-rust-version = "THE_NEW_VERSION"
+rust-version = "1.58.0"
 
 [package.metadata.deb]
 assets = [

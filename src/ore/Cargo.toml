@@ -5,7 +5,7 @@ version = "0.0.0"
 license = "Apache-2.0"
 edition = "2021"
 publish = false
-rust-version = "THE_NEW_VERSION"
+rust-version = "1.58.0"
 
 [features]
 default = ["network", "chrono", "cli", "metrics", "stack", "test"]
