@@ -36,7 +36,7 @@ use ore::display::DisplayExt;
 use ore::retry::Retry;
 
 use crate::error::PosError;
-use crate::parser::{Command, PosCommand, SqlErrorMatchType, SqlOutput};
+use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
 
 mod avro_ocf;
@@ -94,7 +94,9 @@ pub struct Config {
     /// Backoff factor to use when retrying
     pub backoff_factor: f64,
 
-    /// `--arg-var` values provied to the cli
+    /// Arguments for the testdrive script to expose as variables.
+    ///
+    /// Entries will be provided to testrive scripts as the variable named `arg.KEY`
     pub arg_vars: BTreeMap<String, String>,
 
     /// A random number to distinguish each run of a testdrive script.
@@ -408,8 +410,9 @@ pub(crate) async fn build(
         vars.insert(format!("env.{}", key), value);
     }
 
-    for (key, value) in state.arg_vars.iter().map(|(k, v)| (k.clone(), v.clone())) {
-        vars.insert(format!("arg.{}", key), value);
+    for (key, value) in &state.arg_vars {
+        validate_ident(key)?;
+        vars.insert(format!("arg.{}", key), value.to_string());
     }
 
     for cmd in cmds {

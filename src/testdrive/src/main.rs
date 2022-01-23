@@ -28,7 +28,7 @@ use walkdir::WalkDir;
 use mz_aws_util::config::AwsConfig;
 use ore::path::PathExt;
 
-use testdrive::{validate_var_name, Config};
+use testdrive::Config;
 
 macro_rules! die {
     ($($e:expr),*) => {{
@@ -124,10 +124,10 @@ struct Args {
 
     /// CLI arguments that are converted to testdrive variables.
     ///
-    /// Passing: `--arg-var foo=bar` will create a variable named 'arg.foo' with the value 'bar'.
+    /// Passing: `--var foo=bar` will create a variable named 'arg.foo' with the value 'bar'.
     /// Can be specified multiple times to set multiple variables.
-    #[clap(long)]
-    arg_var: Vec<String>,
+    #[clap(long, value_name = "NAME=VALUE")]
+    var: Vec<String>,
 
     // === Positional arguments. ===
     /// Glob patterns of testdrive scripts to run.
@@ -194,28 +194,19 @@ async fn main() {
         args.max_errors
     );
 
-    let arg_vars: Result<BTreeMap<String, String>, String> = args
-        .arg_var
-        .iter()
-        .map(|arg| {
-            let mut parts = arg.splitn(2, '=');
-            let name = parts
-                .next()
-                .ok_or_else(|| "No key for --arg-var".to_string())?;
-            validate_var_name(name)?;
-            let val = parts
-                .next()
-                .ok_or_else(|| format!("No =value for --arg-var {}", name))?;
-            Ok((name.to_string(), val.to_string()))
-        })
-        .collect();
-    let arg_vars = match arg_vars {
-        Ok(args) => args,
-        Err(e) => {
-            println!("{}", e);
-            process::exit(1)
-        }
-    };
+    let mut arg_vars = BTreeMap::new();
+    for arg in &args.var {
+        let mut parts = arg.splitn(2, '=');
+        let name = parts.next().expect("Clap ensures all --vars get a value");
+        let val = match parts.next() {
+            Some(val) => val,
+            None => {
+                println!("No =VALUE for --var {}", name);
+                process::exit(1)
+            }
+        };
+        arg_vars.insert(name.to_string(), val.to_string());
+    }
 
     let config = Config {
         kafka_addr: args.kafka_addr,

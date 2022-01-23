@@ -123,7 +123,7 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
                 });
             }
         };
-        validate_var_name(pieces[0]).map_err(|e| PosError::new(e, pos))?;
+        validate_ident(pieces[0]).map_err(|e| PosError::new(e, pos))?;
 
         if let Some(original) = args.insert(pieces[0].to_owned(), pieces[1].to_owned()) {
             return Err(PosError {
@@ -140,7 +140,7 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
 }
 
 /// Validate that the string is an allowed variable name (lowercase letters, numbers and dashes)
-pub fn validate_var_name(name: &str) -> Result<(), anyhow::Error> {
+pub fn validate_ident(name: &str) -> Result<(), anyhow::Error> {
     lazy_static! {
         static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
     }
