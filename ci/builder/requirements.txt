@@ -12,6 +12,6 @@ prettytable==3.0.0
 PyMySQL==1.0.2
 pyyaml==6.0
 requests==2.27.1
-semver==3.0.0-dev.2
+semver==3.0.0.dev3
 sqlparse==0.4.2
 toml==0.10.2
