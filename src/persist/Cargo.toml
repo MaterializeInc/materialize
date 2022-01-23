@@ -4,6 +4,7 @@ description = "Abstraction for Materialize dataplane persistence."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [[bench]]
 name = "writer"

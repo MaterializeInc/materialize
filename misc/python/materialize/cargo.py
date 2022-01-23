@@ -54,6 +54,9 @@ class Crate:
                     for name, c in config[dep_type].items()
                     if "path" in c
                 )
+        self.rust_version = None
+        if "package" in config:
+            self.rust_version = config["package"].get("rust-version")
         self.bins = []
         if "bin" in config:
             for bin in config["bin"]:

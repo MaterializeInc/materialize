@@ -4,6 +4,7 @@ description = "An API client for Metabase."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [dependencies]
 reqwest = "0.11.9"

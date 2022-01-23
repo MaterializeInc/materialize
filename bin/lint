@@ -89,6 +89,7 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         echo "hint: run bin/pyfmt" >&2
     fi
     try bin/mzcompose lint
+    try bin/lint-cargo
 fi
 
 try_finish
