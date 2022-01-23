@@ -107,6 +107,9 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Fix parsing of nested empty `SELECT` statements, as in
+  `SELECT * FROM (SELECT)` {{% gh 8723 %}}.
+
 - Detect and reject multiple materializations of sources that would silently
   lose data when materialized more than once. This enables safe use of
   unmaterialized PostgreSQL and S3 with SQS notifications sources. {{% gh 8203
