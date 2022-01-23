@@ -22,7 +22,7 @@ test = ["anyhow", "ctor", "tracing-subscriber"]
 # dependencies and is widely considered to be basically part of the stdlib.
 [dependencies]
 async-trait = { version = "0.1.52", optional = true }
-anyhow = { version = "1.0.52", optional = true }
+anyhow = { version = "1.0.53", optional = true }
 bytes = { version = "1.1.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
 clap = { version = "3.0.10", optional = true }

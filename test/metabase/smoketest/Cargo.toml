@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.53"
 itertools = "0.10.3"
 tracing = "0.1.29"
 metabase = { path = "../../../src/metabase" }

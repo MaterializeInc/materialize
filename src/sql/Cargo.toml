@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.53"
 aws-arn = "0.2.0"
 build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }

@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.53"
 async-trait = "0.1.52"
 clap = { version = "3.0.10", features = ["derive", "env"] }
 dataflow-types = { path = "../dataflow-types" }

@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.53"
 futures = "0.3.19"
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
 native-tls = "0.2.8"
