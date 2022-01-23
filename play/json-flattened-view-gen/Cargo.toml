@@ -9,6 +9,6 @@ publish = false
 [dependencies]
 anyhow = "1.0.52"
 clap = { version = "3.0.10", features = ["derive"] }
-serde = "1.0.133"
+serde = "1.0.135"
 serde_json = "1.0.75"
 ore = { path = "../../src/ore" }
