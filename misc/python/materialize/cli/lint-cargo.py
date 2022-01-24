@@ -10,7 +10,6 @@
 """Check our set of Cargo.toml files for issues"""
 
 import sys
-from pathlib import Path
 from pprint import pprint
 from typing import Dict, List, Optional
 
