@@ -42,7 +42,9 @@ class Benchmark:
         shared = self._scenario.SHARED
         if self._mz_id == 0 and shared is not None:
             print(f"Running the SHARED section for {name} ...")
-            shared.run(executor=self._executor, measure=False)
+
+            for shared_item in shared if isinstance(shared, list) else [shared]:
+                shared_item.run(executor=self._executor, measure=False)
             print("SHARED done")
 
         # Run the SHARED section once for each Mz

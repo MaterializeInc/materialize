@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
+from typing import List, Optional, Union
 
 from materialize.feature_benchmark.measurement_source import (
     Assert,
@@ -16,11 +16,21 @@ from materialize.feature_benchmark.measurement_source import (
 )
 
 
-class Scenario:
+class RootScenario:
     __name__: str
 
-    SHARED: Optional[MeasurementSource] = None
+    SHARED: Optional[Union[MeasurementSource, List[MeasurementSource]]] = None
     INIT: Optional[MeasurementSource] = None
 
     BEFORE: MeasurementSource = Dummy()
     BENCHMARK: MeasurementSource = Assert()
+
+
+# Used for benchmarks that are expected to run by default, e.g. in CI
+class Scenario(RootScenario):
+    pass
+
+
+# Used for scenarios that need to be explicitly run from the command line using --root-scenario ScenarioBig
+class ScenarioBig(RootScenario):
+    pass
