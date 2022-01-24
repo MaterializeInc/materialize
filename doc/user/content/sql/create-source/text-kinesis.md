@@ -22,7 +22,7 @@ Kinesis stream.
 
 #### `with_options`
 
-{{< diagram "with-options.svg" >}}
+{{< diagram "with-options-aws.svg" >}}
 
 {{% create-source/syntax-details connector="kinesis" formats="text bytes" envelopes="append-only" keyConstraint=false %}}
 

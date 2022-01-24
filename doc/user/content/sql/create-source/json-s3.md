@@ -17,7 +17,7 @@ contain multiple records serialized as JSON, separated by newlines.
 
 #### `with_options`
 
-{{< diagram "with-options.svg" >}}
+{{< diagram "with-options-aws.svg" >}}
 
 {{% create-source/syntax-details connector="s3" formats="text bytes" envelopes="append-only" keyConstraint=false %}}
 

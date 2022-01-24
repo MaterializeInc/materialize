@@ -21,7 +21,7 @@ contain multiple records serialized as CSV, separated by newlines.
 
 #### `with_options`
 
-{{< diagram "with-options.svg" >}}
+{{< diagram "with-options-aws.svg" >}}
 
 {{% create-source/syntax-details connector="s3" formats="csv" envelopes="append-only" keyConstraint=true %}}
 

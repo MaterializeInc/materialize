@@ -21,7 +21,7 @@ contain multiple byte- or text-encoded records, separated by newlines.
 
 #### `with_options`
 
-{{< diagram "with-options.svg" >}}
+{{< diagram "with-options-aws.svg" >}}
 
 {{% create-source/syntax-details connector="s3" formats="regex text bytes" envelopes="append-only" keyConstraint=true %}}
 

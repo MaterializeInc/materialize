@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="943" height="407">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="58" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">WITH</text>
+   <rect x="109" y="3" width="26" height="32" rx="10"/>
+   <rect x="107"
+         y="1"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="117" y="21">(</text>
+   <rect x="65" y="85" width="120" height="32" rx="10"/>
+   <rect x="63"
+         y="83"
+         width="120"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="73" y="103">access_key_id</text>
+   <rect x="205" y="85" width="28" height="32" rx="10"/>
+   <rect x="203"
+         y="83"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="213" y="103">=</text>
+   <rect x="253" y="85" width="38" height="32"/>
+   <rect x="251" y="83" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="261" y="103">val</text>
+   <rect x="311" y="85" width="24" height="32" rx="10"/>
+   <rect x="309"
+         y="83"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="319" y="103">,</text>
+   <rect x="355" y="85" width="152" height="32" rx="10"/>
+   <rect x="353"
+         y="83"
+         width="152"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="363" y="103">secret_access_key</text>
+   <rect x="547" y="117" width="28" height="32" rx="10"/>
+   <rect x="545"
+         y="115"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="555" y="135">=</text>
+   <rect x="595" y="117" width="38" height="32"/>
+   <rect x="593" y="115" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="603" y="135">val</text>
+   <rect x="653" y="117" width="24" height="32" rx="10"/>
+   <rect x="651"
+         y="115"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="661" y="135">,</text>
+   <rect x="697" y="117" width="58" height="32" rx="10"/>
+   <rect x="695"
+         y="115"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="705" y="135">token</text>
+   <rect x="65" y="161" width="110" height="32" rx="10"/>
+   <rect x="63"
+         y="159"
+         width="110"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="73" y="179">profile_name</text>
+   <rect x="815" y="85" width="28" height="32" rx="10"/>
+   <rect x="813"
+         y="83"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="823" y="103">=</text>
+   <rect x="863" y="85" width="38" height="32"/>
+   <rect x="861" y="83" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="871" y="103">val</text>
+   <rect x="229" y="243" width="76" height="32" rx="10"/>
+   <rect x="227"
+         y="241"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="237" y="261">role_arn</text>
+   <rect x="325" y="243" width="28" height="32" rx="10"/>
+   <rect x="323"
+         y="241"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="333" y="261">=</text>
+   <rect x="373" y="243" width="38" height="32"/>
+   <rect x="371" y="241" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="381" y="261">val</text>
+   <rect x="451" y="275" width="24" height="32" rx="10"/>
+   <rect x="449"
+         y="273"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="459" y="293">,</text>
+   <rect x="495" y="275" width="96" height="32" rx="10"/>
+   <rect x="493"
+         y="273"
+         width="96"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="503" y="293">external_id</text>
+   <rect x="611" y="275" width="28" height="32" rx="10"/>
+   <rect x="609"
+         y="273"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="619" y="293">=</text>
+   <rect x="659" y="275" width="38" height="32"/>
+   <rect x="657" y="273" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="667" y="293">val</text>
+   <rect x="679" y="373" width="64" height="32" rx="10"/>
+   <rect x="677"
+         y="371"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="687" y="391">region</text>
+   <rect x="763" y="373" width="28" height="32" rx="10"/>
+   <rect x="761"
+         y="371"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="771" y="391">=</text>
+   <rect x="811" y="373" width="38" height="32"/>
+   <rect x="809" y="371" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="819" y="391">val</text>
+   <rect x="889" y="341" width="26" height="32" rx="10"/>
+   <rect x="887"
+         y="339"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="897" y="359">)</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m58 0 h10 m0 0 h10 m26 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-154 50 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h866 m-896 0 h20 m876 0 h20 m-916 0 q10 0 10 10 m896 0 q0 -10 10 -10 m-906 10 v12 m896 0 v-12 m-896 12 q0 10 10 10 m876 0 q10 0 10 -10 m-866 10 h10 m120 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m0 0 h10 m24 0 h10 m0 0 h10 m152 0 h10 m20 0 h10 m0 0 h218 m-248 0 h20 m228 0 h20 m-268 0 q10 0 10 10 m248 0 q0 -10 10 -10 m-258 10 v12 m248 0 v-12 m-248 12 q0 10 10 10 m228 0 q10 0 10 -10 m-238 10 h10 m28 0 h10 m0 0 h10 m38 0 h10 m0 0 h10 m24 0 h10 m0 0 h10 m58 0 h10 m-730 -32 h20 m730 0 h20 m-770 0 q10 0 10 10 m750 0 q0 -10 10 -10 m-760 10 v56 m750 0 v-56 m-750 56 q0 10 10 10 m730 0 q10 0 10 -10 m-740 10 h10 m110 0 h10 m0 0 h600 m20 -76 h10 m28 0 h10 m0 0 h10 m38 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-756 158 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h498 m-528 0 h20 m508 0 h20 m-548 0 q10 0 10 10 m528 0 q0 -10 10 -10 m-538 10 v12 m528 0 v-12 m-528 12 q0 10 10 10 m508 0 q10 0 10 -10 m-518 10 h10 m76 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m20 0 h10 m0 0 h256 m-286 0 h20 m266 0 h20 m-306 0 q10 0 10 10 m286 0 q0 -10 10 -10 m-296 10 v12 m286 0 v-12 m-286 12 q0 10 10 10 m266 0 q10 0 10 -10 m-276 10 h10 m24 0 h10 m0 0 h10 m96 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m42 -64 l2 0 m2 0 l2 0 m2 0 l2 0 m-122 130 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h180 m-210 0 h20 m190 0 h20 m-230 0 q10 0 10 10 m210 0 q0 -10 10 -10 m-220 10 v12 m210 0 v-12 m-210 12 q0 10 10 10 m190 0 q10 0 10 -10 m-200 10 h10 m64 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m20 -32 h10 m26 0 h10 m3 0 h-3"/>
+   <polygon points="933 355 941 351 941 359"/>
+   <polygon points="933 355 925 351 925 359"/>
+</svg>

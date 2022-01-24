@@ -1,4 +1,6 @@
-{{ partial (printf "aws-credentials-with-options") . -}}
+`timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
+
+{{ partial (printf "specifying-aws-credentials") . -}}
 
 For details about the IAM account whose details you provide, see [Kinesis source
 details](#kinesis-source-details).
