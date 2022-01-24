@@ -15,21 +15,22 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use persist_types::Codec;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map, OkErr, UnorderedInput};
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 
+use persist::client::StreamWriteHandle;
 use persist::operators::source::PersistedSource;
 use persist::operators::stream::{AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
+use persist_types::Codec;
 
 use dataflow_types::sources::{encoding::*, persistence::*, *};
 use dataflow_types::*;
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use ore::now::NowFn;
 use ore::result::ResultExt;
-use repr::{RelationDesc, Row, ScalarType, Timestamp};
+use repr::{Diff, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -518,12 +519,10 @@ where
                                 let (upsert_ok, upsert_err) = if let Some(source_persist_config) =
                                     source_persist_config
                                 {
-                                    let sealed_upsert = upsert_ok.conditional_seal(
-                                        &source_name,
-                                        &ts_bindings,
-                                        source_persist_config.upsert_config.write_handle,
-                                        source_persist_config.bindings_config.write_handle,
-                                    );
+                                    let bindings_handle =
+                                        source_persist_config.bindings_config.write_handle.clone();
+                                    let upsert_state_handle =
+                                        source_persist_config.upsert_config.write_handle;
 
                                     // Don't send data forward to "dataflow" until the frontier
                                     // tells us that we both persisted and sealed it.
@@ -532,7 +531,13 @@ where
                                     // control, an alternatie would be to not hold data but
                                     // only hold the frontier (which is what the persist/seal
                                     // operators do).
-                                    let sealed_upsert = sealed_upsert.await_frontier(&source_name);
+                                    let sealed_upsert = seal_and_await(
+                                        &upsert_ok,
+                                        &ts_bindings,
+                                        upsert_state_handle,
+                                        bindings_handle,
+                                        &source_name,
+                                    );
 
                                     (sealed_upsert, upsert_err)
                                 } else {
@@ -722,6 +727,39 @@ fn get_persist_config(
     let upsert_config = PersistentUpsertConfig::new(data_seal_ts, data_read, data_write);
 
     PersistentSourceConfig::new(bindings_config, upsert_config)
+}
+
+/// Seals both the main stream and the stream of timestamp bindings, allows compaction on
+/// underlying persistent streams, and awaits the seal frontier before passing on updates.
+fn seal_and_await<G, D1, D2, K1, V1, K2, V2>(
+    stream: &Stream<G, (D1, Timestamp, Diff)>,
+    bindings_stream: &Stream<G, (D2, Timestamp, Diff)>,
+    write: StreamWriteHandle<K1, V1>,
+    bindings_write: StreamWriteHandle<K2, V2>,
+    source_name: &str,
+) -> Stream<G, (D1, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
+    D1: timely::Data,
+    D2: timely::Data,
+    K1: Codec + timely::Data,
+    V1: Codec + timely::Data,
+    K2: Codec + timely::Data,
+    V2: Codec + timely::Data,
+{
+    let sealed_stream =
+        stream.conditional_seal(&source_name, bindings_stream, write, bindings_write);
+
+    // Don't send data forward to "dataflow" until the frontier
+    // tells us that we both persisted and sealed it.
+    //
+    // This is the most pessimistic style of concurrency
+    // control, an alternatie would be to not hold data but
+    // only hold the frontier (which is what the persist/seal
+    // operators do).
+    let sealed_stream = sealed_stream.await_frontier(&source_name);
+
+    sealed_stream
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience
