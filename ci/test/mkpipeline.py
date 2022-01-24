@@ -104,7 +104,6 @@ def trim_pipeline(pipeline: Any) -> None:
     no other untrimmed steps that depend on it.
     """
     repo = mzbuild.Repository(Path("."))
-    images = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
     for config in pipeline["steps"]:
@@ -128,8 +127,8 @@ def trim_pipeline(pipeline: Any) -> None:
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
                         composition = mzcompose.Composition(repo, name)
-                        for image in composition.images:
-                            step.image_dependencies.add(images[image.name])
+                        for dep in composition.dependencies:
+                            step.image_dependencies.add(dep)
                         step.extra_inputs.add(str(repo.compositions[name]))
         steps[step.id] = step
 
