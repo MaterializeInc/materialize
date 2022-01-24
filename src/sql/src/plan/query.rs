@@ -1631,6 +1631,7 @@ fn plan_view_select(
         let mut group_exprs = vec![];
         let mut group_scope = Scope::empty();
         let mut select_all_mapping = BTreeMap::new();
+
         for group_expr in &s.group_by {
             let (group_expr, expr) = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();

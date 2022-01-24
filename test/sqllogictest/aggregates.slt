@@ -78,6 +78,13 @@ SELECT a, sum(b) AS a FROM t GROUP BY a
 2 3
 3 1
 
+query I
+SELECT a FROM t GROUP BY t.a, t.a
+----
+1
+2
+3
+
 # Smoke test to make sure multiple accumulable and hierarchical reductions work
 query IIIII rowsort
 SELECT a, count(b), min(b), sum(b), max(b) FROM t GROUP BY a
