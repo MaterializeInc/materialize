@@ -11,6 +11,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 
 use ore::id_gen::Gen;
 
@@ -77,6 +78,44 @@ pub struct Model {
     quantifiers: HashMap<QuantifierId, Box<RefCell<Quantifier>>>,
     /// Used for assigning unique IDs to quantifiers.
     quantifier_id_gen: Gen<QuantifierId>,
+}
+
+/// A mutable reference to an object of type `T` (a [`QueryBox`] or a [`Quantifier`])
+/// bound to a specific [`Model`].
+#[derive(Debug)]
+pub struct BoundRef<'a, T> {
+    model: &'a Model,
+    r#ref: Ref<'a, T>,
+}
+
+impl<T> Deref for BoundRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.r#ref.deref()
+    }
+}
+
+/// A mutable reference to an object of type `T` (a [`QueryBox`] or a [`Quantifier`])
+/// bound to a specific [`Model`].
+#[derive(Debug)]
+pub struct BoundRefMut<'a, T> {
+    model: &'a mut Model,
+    r#ref: RefMut<'a, T>,
+}
+
+impl<T> Deref for BoundRefMut<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.r#ref.deref()
+    }
+}
+
+impl<T> DerefMut for BoundRefMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.r#ref.deref_mut()
+    }
 }
 
 /// A semantic operator within a Query Graph.
