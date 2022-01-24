@@ -69,5 +69,5 @@ def run_test(c: Composition, materialized: str, env: Dict[str, str]) -> None:
         "dbt-test",
         "pytest",
         "dbt-materialize/test",
-        env=env,
+        env_extra=env,
     )
