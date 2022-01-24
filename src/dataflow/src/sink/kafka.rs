@@ -296,7 +296,7 @@ impl KafkaTxProducer {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
         task::spawn_blocking(move || self_producer.flush(self_timeout))
-            .map_err(|_| KafkaError::Canceled)
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
     fn in_flight_count(&self) -> i32 {
