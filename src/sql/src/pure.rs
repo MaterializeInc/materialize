@@ -830,6 +830,10 @@ async fn compile_proto(
 async fn validate_aws_credentials(config: &AwsConfig) -> Result<(), anyhow::Error> {
     let config = config.load().await;
     let sts_client = mz_aws_util::sts::client(&config);
-    let _ = sts_client.get_caller_identity().send().await?;
+    let _ = sts_client
+        .get_caller_identity()
+        .send()
+        .await
+        .context("Unable to validate AWS credentials")?;
     Ok(())
 }
