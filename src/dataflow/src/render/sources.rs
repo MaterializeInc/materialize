@@ -356,7 +356,7 @@ where
                         .as_collection(),
                 );
 
-                let (stream, errors) = {
+                let (ok_collection, errors_collection) = {
                     let (key_desc, _) = encoding.desc().expect("planning has verified this");
                     let (key_encoding, value_encoding) = match encoding {
                         SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
@@ -466,9 +466,10 @@ where
                                     }),
                                 };
 
-                                let (stream, errors) = results.ok_err(ResultExt::err_into);
-                                let stream = stream.pass_through("decode-ok").as_collection();
-                                let errors = errors.pass_through("decode-errors").as_collection();
+                                let (oks, errors) = results.ok_err(ResultExt::err_into);
+                                let ok_collection = oks.pass_through("decode-ok").as_collection();
+                                let errors_collection =
+                                    errors.pass_through("decode-errors").as_collection();
 
                                 let dbz_key_indices = if let Some(key_desc) = key_desc {
                                     let fields =
@@ -484,8 +485,8 @@ where
                                     None
                                 };
 
-                                let stream = dedupe_strategy.clone().render(
-                                    stream,
+                                let ok_collection = dedupe_strategy.clone().render(
+                                    ok_collection,
                                     dataflow_debug_name.to_string(),
                                     scope.index(),
                                     // Debezium decoding has produced two extra fields, with the
@@ -494,7 +495,7 @@ where
                                     dbz_key_indices,
                                 );
 
-                                (stream, Some(errors))
+                                (ok_collection, Some(errors_collection))
                             }
                             SourceEnvelope::Upsert(_key_envelope) => {
                                 // TODO: use the key envelope to figure out when to add keys.
@@ -621,12 +622,31 @@ where
                     }
                 };
 
-                if let Some(errors) = errors {
+                if let Some(errors) = errors_collection {
                     error_collections.push(errors);
                 }
 
-                (stream, capability)
+                (ok_collection, capability)
             };
+
+            // This is the end of the "source pipeline", in as far as, this
+            // collection is expected to be definite, and return the same data
+            // at the same timestamps (modulo compaction) across restarts.
+            //
+            // Beyond this point, there may be source-instance specific computation
+            // that gets pushed to the source, which could affect the computed
+            // uppers in a source-instance specific manner (e.g. with temporal
+            // filters).
+            let mut upper_probe: ProbeHandle<Timestamp> = ProbeHandle::new();
+            collection.probe_with(&mut upper_probe);
+            let upper_probe_token = Rc::new(upper_probe);
+            additional_tokens.push(upper_probe_token.clone());
+
+            storage_state
+                .source_uppers
+                .entry(orig_id)
+                .or_insert_with(Vec::new)
+                .push(Rc::downgrade(&upper_probe_token));
 
             // Force a shuffling of data in case sources are not uniformly distributed.
             use timely::dataflow::operators::Exchange;
@@ -696,16 +716,6 @@ where
             // Consolidate the results, as there may now be cancellations.
             use differential_dataflow::operators::consolidate::ConsolidateStream;
             collection = collection.consolidate_stream();
-            let mut upper_probe: ProbeHandle<Timestamp> = ProbeHandle::new();
-            collection.probe_with(&mut upper_probe);
-            let upper_probe_token = Rc::new(upper_probe);
-            additional_tokens.push(upper_probe_token.clone());
-
-            storage_state
-                .source_uppers
-                .entry(orig_id)
-                .or_insert_with(Vec::new)
-                .push(Rc::downgrade(&upper_probe_token));
 
             // Introduce the stream by name, as an unarranged collection.
             let collection_bundle =
