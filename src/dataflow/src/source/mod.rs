@@ -1619,39 +1619,15 @@ where
             consistency_info.propose(&mut timestamp_histories);
 
             // Emit any new timestamp bindings that we might have since we last emitted.
-            if let Some(timestamp_bindings_updater) = timestamp_bindings_updater.as_mut() {
-                let changes = timestamp_bindings_updater.update(timestamp_histories);
-
-                // Emit required changes downstream.
-                let to_emit = changes
-                    .into_iter()
-                    .filter(|((source_ts, _assigned_ts), _diff)| {
-                        consistency_info.responsible_for(&source_ts.partition)
-                    })
-                    .map(|(binding, diff)| {
-                        (
-                            binding,
-                            bindings_cap.time().clone(),
-                            diff.try_into()
-                                .expect("could not convert i64 diff to isize"),
-                        )
-                    });
-
-                // We're collecting into a Vec because we want to log and emit. This is a bit
-                // wasteful but we don't expect large numbers of bindings.
-                let mut to_emit = to_emit.collect::<Vec<_>>();
-
-                tracing::trace!(
-                    "In {} (worker {}), emitting new timestamp bindings: {:?}, cap: {:?}",
-                    name.clone(),
-                    worker_id,
-                    to_emit,
-                    bindings_cap
-                );
-
-                let mut session = bindings_output.session(bindings_cap);
-                session.give_vec(&mut to_emit);
-            }
+            maybe_emit_timestamp_bindings(
+                &name,
+                worker_id,
+                &mut timestamp_bindings_updater,
+                timestamp_histories,
+                &consistency_info,
+                bindings_cap,
+                bindings_output,
+            );
 
             // Downgrade capability (if possible) before exiting
             consistency_info.downgrade_capability(cap, &mut timestamp_histories);
@@ -1897,6 +1873,67 @@ impl<K: Codec, V: Codec> PersistentTimestampBindingsConfig<K, V> {
             write_handle,
         }
     }
+}
+
+/// Updates the given `timestamp_bindings_updater` with any changes from the given
+/// `timestamp_histories` and emits updates to `bindings_output` if there are in fact any changes.
+///
+/// The updates emitted from this can be used to re-construct the state of a `TimestampBindingRc`
+/// at any given time by reading and applying (and consolidating, if neccessary) the stream of
+/// changes.
+fn maybe_emit_timestamp_bindings(
+    source_name: &str,
+    worker_id: usize,
+    timestamp_bindings_updater: &mut Option<TimestampBindingUpdater>,
+    timestamp_histories: &mut TimestampBindingRc,
+    consistency_info: &ConsistencyInfo,
+    bindings_cap: &Capability<u64>,
+    bindings_output: &mut OutputHandle<
+        u64,
+        ((SourceTimestamp, AssignedTimestamp), u64, isize),
+        Tee<u64, ((SourceTimestamp, AssignedTimestamp), u64, isize)>,
+    >,
+) {
+    let timestamp_bindings_updater = match timestamp_bindings_updater.as_mut() {
+        Some(updater) => updater,
+        None => {
+            return;
+        }
+    };
+
+    let changes = timestamp_bindings_updater.update(timestamp_histories);
+
+    // Emit required changes downstream.
+    let to_emit = changes
+        .into_iter()
+        .filter(|((source_ts, assigned_ts), _diff)| {
+            if !consistency_info.responsible_for(&source_ts.partition) {
+                panic!(
+                    "unexpected binding on worker {} of {}: ({:?}, {:?})",
+                    consistency_info.worker_id,
+                    consistency_info.worker_count,
+                    source_ts,
+                    assigned_ts
+                );
+            }
+            true
+        })
+        .map(|(binding, diff)| (binding, bindings_cap.time().clone(), isize::cast_from(diff)));
+
+    // We're collecting into a Vec because we want to log and emit. This is a bit
+    // wasteful but we don't expect large numbers of bindings.
+    let mut to_emit = to_emit.collect::<Vec<_>>();
+
+    tracing::trace!(
+        "In {} (worker {}), emitting new timestamp bindings: {:?}, cap: {:?}",
+        source_name,
+        worker_id,
+        to_emit,
+        bindings_cap
+    );
+
+    let mut session = bindings_output.session(bindings_cap);
+    session.give_vec(&mut to_emit);
 }
 
 /// Take `message` and assign it the appropriate timestamps and push it into the
