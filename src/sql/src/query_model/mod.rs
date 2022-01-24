@@ -717,7 +717,7 @@ impl QueryBox {
     ) {
         // TODO: handle errors.
         self.visit_expressions_mut(&mut |expr: &mut BoxScalarExpr| -> Result<(), ()> {
-            expr.visit_mut(&mut |expr| {
+            expr.visit_mut_post(&mut |expr| {
                 if let BoxScalarExpr::ColumnReference(c) = expr {
                     if let Some(new_quantifier) = updated_quantifier_ids.get(&c.quantifier_id) {
                         c.quantifier_id = *new_quantifier;
@@ -725,7 +725,8 @@ impl QueryBox {
                 }
             });
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 }
 

@@ -133,7 +133,7 @@ impl fmt::Display for BoxScalarExpr {
 }
 
 impl BoxScalarExpr {
-    pub fn visit1<'a, F>(&'a self, mut f: F)
+    pub fn visit_children<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
     {
@@ -177,12 +177,12 @@ impl BoxScalarExpr {
                 e.visit_pre_post(pre, post);
             }
         } else {
-            self.visit1(|e| e.visit_pre_post(pre, post));
+            self.visit_children(|e| e.visit_pre_post(pre, post));
         }
         post(self);
     }
 
-    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    pub fn visit_mut_children<'a, F>(&'a mut self, mut f: F)
     where
         F: FnMut(&'a mut Self),
     {
@@ -210,11 +210,11 @@ impl BoxScalarExpr {
         }
     }
 
-    pub fn visit_mut<F>(&mut self, f: &mut F)
+    pub fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
-        self.visit1_mut(|e| e.visit_mut(f));
+        self.visit_mut_children(|e| e.visit_mut_post(f));
         f(self);
     }
 
