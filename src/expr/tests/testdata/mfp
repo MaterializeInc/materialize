@@ -8,13 +8,13 @@
 # by the Apache License, Version 2.0.
 
 # The syntax for an mfp test is `<input_arity> [<commands>]`
-# The syntax for a command is `<name_of_command> [<args>]`
+# The syntax for a command is `(<name_of_command> [<args>])`
 
 mfp
 1
-map [(call_binary add_int64 #0 1) (call_binary add_int64 (call_binary add_int64 #0 1) 1)]
-filter [(call_binary eq #2 3)]
-project [0 1 2]
+(map [(call_binary add_int64 #0 1) (call_binary add_int64 (call_binary add_int64 #0 1) 1)])
+(filter [(call_binary eq #2 3)])
+(project [0 1 2])
 optimize
 ----
 [(#0 + 1) (#1 + 1)]
@@ -23,9 +23,9 @@ optimize
 
 mfp
 1
-map [(call_binary add_int64 #0 1) (call_binary add_int64 (call_binary add_int64 #0 1) 1)]
-filter [(call_binary eq #2 3)]
-project [2]
+(map [(call_binary add_int64 #0 1) (call_binary add_int64 (call_binary add_int64 #0 1) 1)])
+(filter [(call_binary eq #2 3)])
+(project [2])
 optimize
 ----
 [((#0 + 1) + 1)]
@@ -34,9 +34,9 @@ optimize
 
 mfp
 1
-map [(call_binary add_int64 #0 1) (call_binary add_int64 (call_binary add_int64 #0 1) 1)]
-filter [(call_binary eq #1 3)]
-project [2]
+(map [(call_binary add_int64 #0 1) (call_binary add_int64 (call_binary add_int64 #0 1) 1)])
+(filter [(call_binary eq #1 3)])
+(project [2])
 optimize
 ----
 [(#0 + 1) (#1 + 1)]

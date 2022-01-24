@@ -11,9 +11,11 @@ mod test {
     use mz_expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
     use mz_expr::{MapFilterProject, MirScalarExpr};
     use mz_expr_test_util::*;
-    use mz_lowertest::{deserialize, tokenize};
+    use mz_lowertest::{deserialize, deserialize_optional, tokenize, MzReflect, ReflectedTypeInfo};
     use mz_ore::str::separated;
     use mz_repr::RelationType;
+
+    use serde::{Deserialize, Serialize};
 
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {
         let mut input_stream = tokenize(&s)?.into_iter();
@@ -63,35 +65,35 @@ mod test {
         }
     }
 
+    #[derive(Deserialize, Serialize, MzReflect)]
+    enum MFPTestCommand {
+        Map(Vec<MirScalarExpr>),
+        Filter(Vec<MirScalarExpr>),
+        Project(Vec<usize>),
+        Optimize,
+    }
+
     /// Builds a [MapFilterProject] of a certain arity, then modifies it.
     /// The test syntax is `<input_arity> [<commands>]`
     /// The syntax for a command is `<name_of_command> [<args>]`
     fn test_mfp(s: &str) -> Result<MapFilterProject, String> {
         let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
+        let mut rti = ReflectedTypeInfo::default();
         let input_arity: usize = deserialize(&mut input_stream, "usize", &RTI, &mut ctx)?;
         let mut mfp = MapFilterProject::new(input_arity);
-        while let Some(proc_macro2::TokenTree::Ident(ident)) = input_stream.next() {
-            match &ident.to_string()[..] {
-                "map" => {
-                    let map: Vec<MirScalarExpr> =
-                        deserialize(&mut input_stream, "Vec<MirScalarExpr>", &RTI, &mut ctx)?;
-                    mfp = mfp.map(map);
-                }
-                "filter" => {
-                    let filter: Vec<MirScalarExpr> =
-                        deserialize(&mut input_stream, "Vec<MirScalarExpr>", &RTI, &mut ctx)?;
-                    mfp = mfp.filter(filter);
-                }
-                "project" => {
-                    let project: Vec<usize> =
-                        deserialize(&mut input_stream, "Vec<usize>", &RTI, &mut ctx)?;
-                    mfp = mfp.project(project);
-                }
-                "optimize" => mfp.optimize(),
-                unsupported => {
-                    return Err(format!("Unsupport MFP command {}", unsupported));
-                }
+        MFPTestCommand::add_to_reflected_type_info(&mut rti);
+        while let Some(command) = deserialize_optional::<MFPTestCommand, _, _>(
+            &mut input_stream,
+            "MFPTestCommand",
+            &rti,
+            &mut ctx,
+        )? {
+            match command {
+                MFPTestCommand::Map(map) => mfp = mfp.map(map),
+                MFPTestCommand::Filter(filter) => mfp = mfp.filter(filter),
+                MFPTestCommand::Project(project) => mfp = mfp.project(project),
+                MFPTestCommand::Optimize => mfp.optimize(),
             }
         }
         Ok(mfp)
