@@ -607,6 +607,56 @@ impl QueryBox {
         self.columns.append(&mut all_input_columns);
     }
 }
+
+/// Immutable [`QueryBox`] methods that depend on their enclosing [`Model`].
+impl<'a> BoundRef<'a, QueryBox> {
+    /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
+    pub fn input_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+        self.deref().input_quantifiers(self.model)
+    }
+
+    /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
+    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+        self.deref().ranging_quantifiers(self.model)
+    }
+}
+
+/// Mutable [`QueryBox`] methods that depend on their enclosing [`Model`].
+impl<'a> BoundRefMut<'a, QueryBox> {
+    /// Add all columns from the non-subquery input quantifiers of the box to the
+    /// projection of the box.
+    pub fn add_all_input_columns(&mut self) {
+        let mut all_input_columns = vec![];
+        for quantifier_id in self.quantifiers.iter() {
+            let q = self.model.get_quantifier(*quantifier_id);
+            if !q.quantifier_type.is_subquery() {
+                let input_box = self.model.get_box(q.input_box);
+                for (position, c) in input_box.columns.iter().enumerate() {
+                    let expr = BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: *quantifier_id,
+                        position,
+                    });
+                    all_input_columns.push(Column {
+                        expr,
+                        alias: c.alias.clone(),
+                    });
+                }
+            }
+        }
+        self.columns.append(&mut all_input_columns);
+    }
+
+    /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
+    pub fn input_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+        self.deref().input_quantifiers(self.model)
+    }
+
+    /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
+    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+        self.deref().ranging_quantifiers(self.model)
+    }
+}
+
 impl BoxType {
     pub fn get_box_type_str(&self) -> &'static str {
         match self {
