@@ -16,7 +16,7 @@ Field | Use
 ------|-----
 _query_ | The [`SELECT`](/sql/select) or [`TAIL`](/sql/tail) query to send
 
-### `WITH` options
+### `WITH` option
 
 The following option is valid within the `WITH` clause.
 

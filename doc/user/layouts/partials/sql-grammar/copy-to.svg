@@ -1,86 +1,89 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="441" height="195">
-   <polygon points="9 17 1 13 1 21"/>
-   <polygon points="17 17 9 13 9 21"/>
-   <rect x="31" y="3" width="60" height="32" rx="10"/>
-   <rect x="29"
+<svg xmlns="http://www.w3.org/2000/svg" width="479" height="195">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="60" height="32" rx="10"/>
+   <rect x="31"
          y="1"
          width="60"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="39" y="21">COPY</text>
-   <rect x="111" y="3" width="26" height="32" rx="10"/>
-   <rect x="109"
+   <text class="terminal" x="41" y="21">COPY</text>
+   <rect x="113" y="3" width="26" height="32" rx="10"/>
+   <rect x="111"
          y="1"
          width="26"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="119" y="21">(</text>
-   <rect x="157" y="3" width="58" height="32"/>
-   <rect x="155" y="1" width="58" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="165" y="21">query</text>
-   <rect x="235" y="3" width="26" height="32" rx="10"/>
-   <rect x="233"
+   <text class="terminal" x="121" y="21">(</text>
+   <rect x="159" y="3" width="58" height="32"/>
+   <rect x="157" y="1" width="58" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="167" y="21">query</text>
+   <rect x="237" y="3" width="26" height="32" rx="10"/>
+   <rect x="235"
          y="1"
          width="26"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="243" y="21">)</text>
-   <rect x="281" y="3" width="40" height="32" rx="10"/>
-   <rect x="279"
+   <text class="terminal" x="245" y="21">)</text>
+   <rect x="283" y="3" width="40" height="32" rx="10"/>
+   <rect x="281"
          y="1"
          width="40"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="289" y="21">TO</text>
-   <rect x="341" y="3" width="78" height="32" rx="10"/>
-   <rect x="339"
+   <text class="terminal" x="291" y="21">TO</text>
+   <rect x="343" y="3" width="78" height="32" rx="10"/>
+   <rect x="341"
          y="1"
          width="78"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="349" y="21">STDOUT</text>
-   <rect x="101" y="145" width="58" height="32" rx="10"/>
-   <rect x="99"
+   <text class="terminal" x="351" y="21">STDOUT</text>
+   <rect x="65" y="145" width="58" height="32" rx="10"/>
+   <rect x="63"
          y="143"
          width="58"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="109" y="163">WITH</text>
-   <rect x="199" y="113" width="26" height="32" rx="10"/>
-   <rect x="197"
+   <text class="terminal" x="73" y="163">WITH</text>
+   <rect x="163" y="113" width="26" height="32" rx="10"/>
+   <rect x="161"
          y="111"
          width="26"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="207" y="131">(</text>
-   <rect x="265" y="113" width="62" height="32"/>
-   <rect x="263" y="111" width="62" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="273" y="131">option</text>
-   <rect x="265" y="69" width="24" height="32" rx="10"/>
-   <rect x="263"
+   <text class="terminal" x="171" y="131">(</text>
+   <rect x="229" y="113" width="62" height="32"/>
+   <rect x="227" y="111" width="62" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="237" y="131">name</text>
+   <rect x="311" y="113" width="54" height="32"/>
+   <rect x="309" y="111" width="54" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="319" y="131">value</text>
+   <rect x="229" y="69" width="24" height="32" rx="10"/>
+   <rect x="227"
          y="67"
          width="24"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="273" y="87">,</text>
-   <rect x="367" y="113" width="26" height="32" rx="10"/>
-   <rect x="365"
+   <text class="terminal" x="237" y="87">,</text>
+   <rect x="405" y="113" width="26" height="32" rx="10"/>
+   <rect x="403"
          y="111"
          width="26"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="375" y="131">)</text>
+   <text class="terminal" x="413" y="131">)</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m60 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m58 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m40 0 h10 m0 0 h10 m78 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-402 110 l2 0 m2 0 l2 0 m2 0 l2 0 m42 0 h10 m0 0 h68 m-98 0 h20 m78 0 h20 m-118 0 q10 0 10 10 m98 0 q0 -10 10 -10 m-108 10 v12 m98 0 v-12 m-98 12 q0 10 10 10 m78 0 q10 0 10 -10 m-88 10 h10 m58 0 h10 m20 -32 h10 m26 0 h10 m20 0 h10 m62 0 h10 m-102 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m82 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-82 0 h10 m24 0 h10 m0 0 h38 m20 44 h10 m26 0 h10 m-352 0 h20 m332 0 h20 m-372 0 q10 0 10 10 m352 0 q0 -10 10 -10 m-362 10 v46 m352 0 v-46 m-352 46 q0 10 10 10 m332 0 q10 0 10 -10 m-342 10 h10 m0 0 h322 m23 -66 h-3"/>
-   <polygon points="431 127 439 123 439 131"/>
-   <polygon points="431 127 423 123 423 131"/>
+         d="m19 17 h2 m0 0 h10 m60 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m58 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m40 0 h10 m0 0 h10 m78 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-440 110 l2 0 m2 0 l2 0 m2 0 l2 0 m42 0 h10 m0 0 h68 m-98 0 h20 m78 0 h20 m-118 0 q10 0 10 10 m98 0 q0 -10 10 -10 m-108 10 v12 m98 0 v-12 m-98 12 q0 10 10 10 m78 0 q10 0 10 -10 m-88 10 h10 m58 0 h10 m20 -32 h10 m26 0 h10 m20 0 h10 m62 0 h10 m0 0 h10 m54 0 h10 m-176 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m156 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-156 0 h10 m24 0 h10 m0 0 h112 m20 44 h10 m26 0 h10 m-426 0 h20 m406 0 h20 m-446 0 q10 0 10 10 m426 0 q0 -10 10 -10 m-436 10 v46 m426 0 v-46 m-426 46 q0 10 10 10 m406 0 q10 0 10 -10 m-416 10 h10 m0 0 h396 m23 -66 h-3"/>
+   <polygon points="469 127 477 123 477 131"/>
+   <polygon points="469 127 461 123 461 131"/>
 </svg>
