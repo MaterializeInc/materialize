@@ -403,49 +403,6 @@ impl Model {
 }
 
 impl QueryBox {
-    /// Resolve the input quantifiers of this box as an iterator of immutable
-    /// references.
-    fn input_quantifiers<'a>(
-        &'a self,
-        model: &'a Model,
-    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
-        self.quantifiers
-            .iter()
-            .map(|q_id| model.get_quantifier(*q_id))
-    }
-
-    /// Resolve the quantifiers ranging over this box as an iterator of immutable
-    /// references.
-    fn ranging_quantifiers<'a>(
-        &'a self,
-        model: &'a Model,
-    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
-        self.ranging_quantifiers
-            .iter()
-            .map(|q_id| model.get_quantifier(*q_id))
-    }
-
-    /// Add all columns from the non-subquery input quantifiers of the box to the
-    /// projection of the box.
-    fn add_all_input_columns(&mut self, model: &Model) {
-        for quantifier_id in self.quantifiers.iter() {
-            let q = model.get_quantifier(*quantifier_id);
-            if !q.quantifier_type.is_subquery() {
-                let input_box = model.get_box(q.input_box);
-                for (position, c) in input_box.columns.iter().enumerate() {
-                    let expr = BoxScalarExpr::ColumnReference(ColumnReference {
-                        quantifier_id: *quantifier_id,
-                        position,
-                    });
-                    self.columns.push(Column {
-                        expr,
-                        alias: c.alias.clone(),
-                    });
-                }
-            }
-        }
-    }
-
     /// Append the given expression as a new column without an explicit alias in
     /// the projection of the box.
     fn add_column(&mut self, expr: BoxScalarExpr) -> usize {
@@ -551,6 +508,56 @@ impl QueryBox {
     }
 }
 
+/// [`Model`]-dependent methods.
+///
+/// Publicly visible delegates to these methods are defined for
+/// `BoundRef<'_, QueryBox>` and `BoundRefMut<'_, QueryBox>`.
+impl QueryBox {
+    /// Resolve the input quantifiers of this box as an iterator of immutable
+    /// bound references.
+    fn input_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+        self.quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
+    /// Resolve the quantifiers ranging over this box as an iterator of immutable
+    /// bound references.
+    fn ranging_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+        self.ranging_quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
+    /// Add all columns from the non-subquery input quantifiers of the box to the
+    /// projection of the box.
+    pub fn add_all_input_columns<'a>(&'a mut self, model: &'a Model) {
+        let mut all_input_columns = vec![];
+        for quantifier_id in self.quantifiers.iter() {
+            let q = model.get_quantifier(*quantifier_id);
+            if !q.quantifier_type.is_subquery() {
+                let input_box = model.get_box(q.input_box);
+                for (position, c) in input_box.columns.iter().enumerate() {
+                    let expr = BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: *quantifier_id,
+                        position,
+                    });
+                    all_input_columns.push(Column {
+                        expr,
+                        alias: c.alias.clone(),
+                    });
+                }
+            }
+        }
+        self.columns.append(&mut all_input_columns);
+    }
+}
 impl BoxType {
     pub fn get_box_type_str(&self) -> &'static str {
         match self {
