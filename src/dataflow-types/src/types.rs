@@ -575,6 +575,7 @@ pub mod sources {
         #[derive(Debug, Clone, Serialize, Deserialize)]
         pub enum EnvelopePersistDesc {
             Upsert,
+            None,
         }
 
         /// Description of a single persistent stream.
