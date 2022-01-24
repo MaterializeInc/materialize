@@ -6,10 +6,9 @@ menu:
     parent: 'sql'
 ---
 
-{{< warning >}} This is an advanced feature of Materialized; most users will not
-need to manually create indexes to maximize the value Materialize offers, as
-running `CREATE MATERIALIZED SOURCE` or `CREATE MATERIALIZED VIEW` automatically
-creates an index which will eagerly materialize that source or view. {{< /warning >}}
+{{< warning >}} This is an advanced feature. Running `CREATE MATERIALIZED VIEW` automatically
+creates an index which will eagerly materialize a view, so most users **will not**
+need to manually create indexes. {{< /warning >}}
 
 `CREATE INDEX` creates an in-memory index on a source or view.
 
@@ -38,7 +37,7 @@ You might want to create indexes when...
 
 Field | Use
 ------|-----
-**DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view) or [**CREATE MATERIALIZED SOURCE**](/sql/create-source). This provides a simple method to convert a non-materialized object to a materialized one.
+**DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view). This provides a simple method to convert a non-materialized object to a materialized one.
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source or view on which you want to create an index.
 _col&lowbar;ref_**...** | The columns to use as the key into the index.
@@ -50,13 +49,11 @@ The `WITH (field = val, ...)` clause was added to allow setting index options
 when creating the index.
 {{</ version-changed >}}
 
-### `WITH` option
+### `WITH` options
 
-The following option is valid within the `WITH` clause.
+The following option is valid within the `WITH` clause:
 
-Name | Permitted values | Default value | Description
-----------------------------|--------|--------|--------
-`logical_compaction_window` | SQL [interval](/sql/types/interval/) string | '1ms' | Overrides the [logical compaction window](/ops/memory#compaction) for the data stored in this index. The default value is controlled by the [`--logical-compaction-window`](/cli/#compaction-window) command-line option.
+{{% index-with-options %}}
 
 ## Details
 
@@ -77,7 +74,7 @@ Name | Permitted values | Default value | Description
 
 ### Structure
 
-Indexes in Materialize have the following structure for each unique row.
+Indexes in Materialize have the following structure for each unique row:
 
 ```nofmt
 ((tuple of indexed columns), (tuple of the row, i.e. stored columns))
@@ -105,8 +102,8 @@ When creating your own indexes, you can choose the indexed columns.
 The in-memory sizes of indexes are proportional to the current size of the source
 or view they represent. The actual amount of memory required depends on several
 details related to the rate of compaction and the representation of the types of
-data in the source or view. We are working on [a feature to let you see the size
-each index consumes](https://github.com/MaterializeInc/materialize/issues/1532).
+data in the source or view. We are working on a feature to let you see the size
+each index consumes {{% gh 1532 %}}.
 
 Creating an index may also force the first materialization of a view, which may
 cause Materialize to install a dataflow to determine and maintain the results of
@@ -117,7 +114,7 @@ of the index.
 
 ### Optimizing joins with indexes
 
-We can optimize the performance of `JOIN` on two relations by ensuring their
+You can optimize the performance of `JOIN` on two relations by ensuring their
 join keys are the key columns in an index.
 
 ```sql

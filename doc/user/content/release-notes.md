@@ -911,7 +911,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Restore the `-D` command-line option as the short form of the
   [`--data-directory`](/cli/#data-directory) option.
 
-- Allow setting [index parameters](/sql/alter-index/#available-parameters) when
+- Allow setting [index parameters](/sql/create-index/#with-options) when
   creating an index via the new `WITH` clause to [`CREATE INDEX`]. In older
   versions, setting these parameters required a separate call to [`ALTER
   INDEX`](/sql/alter-index).
@@ -1360,7 +1360,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 {{% version-header v0.4.3 %}}
 
 - Permit adjusting the logical compaction window on a per-index basis via the
-  [`logical_compaction_window`](/sql/alter-index/#available-parameters)
+  [`logical_compaction_window`](/sql/alter-index/#setreset-options)
   parameter to the new [`ALTER INDEX`](/sql/alter-index) statement.
 
 - Add the [`uuid`](/sql/types/uuid) type to efficiently represent

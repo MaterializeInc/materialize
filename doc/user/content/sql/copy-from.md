@@ -23,7 +23,7 @@ _val_ | The value for the option.
 
 The following options are valid within the `WITH` clause.
 
-Name | Permitted values | Default value | Description
+Name | Value type | Default value | Description
 -----|-----------------|---------------|------------
 `FORMAT` | `TEXT`, `CSV` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
 `DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.
@@ -68,15 +68,15 @@ except that:
 ## Example
 
 ```sql
-COPY t FROM STDIN WITH (DELIMITER '|')
+COPY t FROM STDIN WITH (DELIMITER '|');
 ```
 
 ```sql
-COPY t FROM STDIN (FORMAT CSV)
+COPY t FROM STDIN (FORMAT CSV);
 ```
 
 ```sql
-COPY t FROM STDIN (DELIMITER '|')
+COPY t FROM STDIN (DELIMITER '|');
 ```
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
