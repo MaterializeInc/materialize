@@ -35,7 +35,7 @@ use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
 use persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
-use persist::indexed::Indexed;
+use persist::indexed::{Cmd, Indexed};
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};
 use persist::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
@@ -146,7 +146,7 @@ fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B:
 ) -> Result<T, Error> {
     let (tx, rx) = PFuture::new();
     f(index, tx);
-    index.step()?;
+    index.step_or_log();
     rx.recv()
 }
 
@@ -180,7 +180,10 @@ fn bench_write<L: Log, B: Blob>(
                 .into_iter()
                 .map(|x| (id, x))
                 .collect();
-            block_on_drain(index, |i, handle| i.write(updates, handle)).unwrap();
+            block_on_drain(index, |i, handle| {
+                i.apply(Cmd::Write(updates, handle));
+            })
+            .unwrap();
         }
         start.elapsed()
     })
@@ -230,7 +233,9 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
 
     g.throughput(Throughput::Bytes(data.goodput_bytes()));
 
-    let id = block_on(|res| index.register("0", "()", "()", res))?;
+    let id = block_on(|res| {
+        index.apply(Cmd::Register("0".into(), ("()".into(), "()".into()), res));
+    })?;
     g.bench_with_input(
         BenchmarkId::new(&format!("{}_sorted", name), data.goodput_pretty()),
         &sorted_updates,

@@ -155,6 +155,7 @@ mod tests {
     use crate::error::Error;
     use crate::mem::MemRegistry;
     use crate::operators::split_ok_err;
+    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -362,9 +363,10 @@ mod tests {
 
     #[test]
     fn initial_error_handling() -> Result<(), Error> {
-        let p = MemRegistry::new().runtime_no_reentrance()?;
-        let err = Err(Error::String("ciao".to_owned()));
-        let read: StreamReadHandle<(), ()> = StreamReadHandle::new("test_name".to_string(), err, p);
+        let mut unreliable = UnreliableHandle::default();
+        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
+        unreliable.make_unavailable();
+        let (_, read) = p.create_or_load::<(), ()>("test_name");
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
@@ -381,7 +383,11 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter())
             .collect::<Vec<_>>();
 
-        let expected = vec![(Err("replaying persisted data: ciao".to_string()), 0, 1)];
+        let expected = vec![(
+            Err("replaying persisted data: unavailable: blob set".to_string()),
+            0,
+            1,
+        )];
         assert_eq!(actual, expected);
 
         Ok(())

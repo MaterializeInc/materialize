@@ -22,7 +22,7 @@ use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
 use crate::pfuture::PFuture;
-use crate::storage::Blob;
+use crate::storage::{Blob, BlobRead};
 
 /// A request to merge two trace batches and write the results to blob storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub struct CompactTraceRes {
 // TODO: Add migrating records from unsealed to trace as well as deletion of
 // batches.
 #[derive(Debug)]
-pub struct Maintainer<B: Blob> {
+pub struct Maintainer<B> {
     // TODO: It feels like a smell to wrap BlobCache in an Arc when most of its
     // internals are already wrapped in Arcs. As of when this was written, the
     // only exception is prev_meta_len, which really is only used from a single
@@ -59,7 +59,7 @@ pub struct Maintainer<B: Blob> {
     async_runtime: Arc<AsyncRuntime>,
 }
 
-impl<B: Blob> Maintainer<B> {
+impl<B: BlobRead> Maintainer<B> {
     /// Returns a new [Maintainer].
     pub fn new(blob: BlobCache<B>, async_runtime: Arc<AsyncRuntime>) -> Self {
         Maintainer {
@@ -67,7 +67,9 @@ impl<B: Blob> Maintainer<B> {
             async_runtime,
         }
     }
+}
 
+impl<B: Blob> Maintainer<B> {
     /// Asynchronously runs the requested compaction on the work pool provided
     /// at construction time.
     pub fn compact_trace(&self, req: CompactTraceReq) -> PFuture<CompactTraceRes> {
