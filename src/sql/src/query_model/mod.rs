@@ -296,6 +296,16 @@ impl Model {
         self.make_box(BoxType::Select(Select::default()))
     }
 
+    /// An iterator over immutable references to the [`QueryBox`] instances in this [`Model`].
+    fn boxes_iter(&self) -> impl Iterator<Item = Ref<'_, QueryBox>> {
+        self.boxes.keys().map(|box_id| {
+            self.boxes
+                .get(&box_id)
+                .expect("a valid box identifier")
+                .borrow()
+        })
+    }
+
     /// Get an immutable reference to the box identified by `box_id`.
     fn get_box(&self, box_id: BoxId) -> Ref<'_, QueryBox> {
         self.boxes
@@ -518,7 +528,7 @@ impl QueryBox {
     fn input_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
         self.quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -529,7 +539,7 @@ impl QueryBox {
     fn ranging_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
         self.ranging_quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))

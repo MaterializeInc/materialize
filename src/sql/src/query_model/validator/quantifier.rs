@@ -212,7 +212,7 @@ impl Validator for QuantifierConstraintValidator {
     fn validate(&self, model: &Model) -> ValidationResult {
         let mut errors = vec![];
 
-        for b in model.boxes.values().map(|b| b.borrow()) {
+        for b in model.boxes_iter() {
             use constants::*;
             use BoxType::*;
             match b.box_type {
