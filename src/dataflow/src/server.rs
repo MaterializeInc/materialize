@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
@@ -144,6 +145,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 local_inputs: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
+                source_uppers: HashMap::default(),
                 sink_write_frontiers: HashMap::new(),
                 metrics,
                 persist: None,
@@ -550,13 +552,22 @@ where
             }
         }
 
-        for (id, history) in self.storage_state.ts_histories.iter() {
+        for (id, source_probes) in self.storage_state.source_uppers.iter() {
             // Read the upper frontier and compare to what we've reported.
-            history.read_upper(&mut new_frontier);
             let prev_frontier = self
                 .reported_frontiers
                 .get_mut(&id)
                 .expect("Source frontier missing!");
+            let mut new_frontier = prev_frontier.clone();
+            for probe in source_probes.iter() {
+                let probe = match probe.upgrade() {
+                    Some(probe) => probe,
+                    None => continue,
+                };
+                let source_frontier =
+                    probe.with_frontier(|frontier| Antichain::from(frontier.to_vec()));
+                new_frontier.join_assign(&source_frontier);
+            }
             assert!(<_ as PartialOrder>::less_equal(
                 prev_frontier,
                 &new_frontier
@@ -959,12 +970,12 @@ where
 
                     let prev = self.storage_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
-                    self.reported_frontiers.insert(id, Antichain::from_elem(0));
                     self.reported_bindings_frontiers
                         .insert(id, Antichain::from_elem(0));
                 } else {
                     assert!(bindings.is_empty());
                 }
+                self.reported_frontiers.insert(id, Antichain::from_elem(0));
             }
             StorageCommand::AdvanceSourceTimestamp { id, update } => {
                 if let Some(history) = self.storage_state.ts_histories.get_mut(&id) {
@@ -1003,6 +1014,7 @@ where
                 }
             }
             StorageCommand::DropSourceTimestamping { id } => {
+                self.storage_state.source_uppers.remove(&id);
                 let prev = self.storage_state.ts_histories.remove(&id);
 
                 if prev.is_none() {

@@ -17,7 +17,7 @@ use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, UnorderedInput};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{ProbeHandle, Scope, Stream};
 
 use persist::client::StreamWriteHandle;
 use persist::operators::source::PersistedSource;
@@ -696,6 +696,16 @@ where
             // Consolidate the results, as there may now be cancellations.
             use differential_dataflow::operators::consolidate::ConsolidateStream;
             collection = collection.consolidate_stream();
+            let mut upper_probe: ProbeHandle<Timestamp> = ProbeHandle::new();
+            collection.probe_with(&mut upper_probe);
+            let upper_probe_token = Rc::new(upper_probe);
+            additional_tokens.push(upper_probe_token.clone());
+
+            storage_state
+                .source_uppers
+                .entry(orig_id)
+                .or_insert_with(Vec::new)
+                .push(Rc::downgrade(&upper_probe_token));
 
             // Introduce the stream by name, as an unarranged collection.
             let collection_bundle =

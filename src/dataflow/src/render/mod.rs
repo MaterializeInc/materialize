@@ -111,6 +111,7 @@ use persist::client::RuntimeClient;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
+use timely::dataflow::ProbeHandle;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
@@ -168,6 +169,8 @@ pub struct StorageState {
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
+    /// Upper frontier of rendered sources.
+    pub source_uppers: HashMap<GlobalId, Vec<Weak<ProbeHandle<Timestamp>>>>,
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
     /// Frontier of sink writes (all subsequent writes will be at times at or
