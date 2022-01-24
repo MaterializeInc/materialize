@@ -6,6 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+anyhow = "1.0.53"
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
 async-trait = "0.1.52"
 aws-config = { version = "0.5.0", default-features = false, features = ["native-tls"] }

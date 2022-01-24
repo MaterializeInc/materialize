@@ -11,6 +11,7 @@ use std::env;
 use std::iter;
 use std::path::{self, PathBuf};
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio::process::Command;
 
@@ -24,7 +25,7 @@ pub struct CompileDescriptorsAction {
 
 pub fn build_compile_descriptors(
     mut cmd: BuiltinCommand,
-) -> Result<CompileDescriptorsAction, String> {
+) -> Result<CompileDescriptorsAction, anyhow::Error> {
     let inputs: Vec<String> = cmd
         .args
         .string("inputs")?
@@ -35,7 +36,7 @@ pub fn build_compile_descriptors(
     for path in inputs.iter().chain(iter::once(&output)) {
         if path.contains(path::MAIN_SEPARATOR) {
             // The goal isn't security, but preventing mistakes.
-            return Err("separators in paths are forbidden".into());
+            bail!("separators in paths are forbidden");
         }
     }
     Ok(CompileDescriptorsAction { inputs, output })
@@ -43,13 +44,13 @@ pub fn build_compile_descriptors(
 
 #[async_trait]
 impl Action for CompileDescriptorsAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         // Files are written to a fresh temporary directory, so no need to
         // explicitly remove the file here.
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let protoc = match env::var_os("PROTOC") {
             None => protobuf_src::protoc(),
             Some(protoc) => PathBuf::from(protoc),
@@ -63,9 +64,9 @@ impl Action for CompileDescriptorsAction {
             .args(&self.inputs)
             .status()
             .await
-            .map_err(|e| format!("invoking protoc failed: {}", e))?;
+            .context("invoking protoc failed")?;
         if !status.success() {
-            return Err(format!("protoc exited unsuccessfully"));
+            bail!("protoc exited unsuccessfully");
         }
         Ok(())
     }

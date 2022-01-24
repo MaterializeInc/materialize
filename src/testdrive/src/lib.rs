@@ -15,7 +15,12 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
-use self::error::InputError;
+use anyhow::{anyhow, Context};
+use itertools::Itertools;
+
+use ore::display::DisplayExt;
+
+use self::error::{ErrorLocation, PosError};
 use self::parser::LineReader;
 
 mod action;
@@ -25,14 +30,15 @@ mod parser;
 mod util;
 
 pub use self::action::Config;
-pub use self::error::{Error, ResultExt};
+pub use self::error::Error;
 
 /// Runs a testdrive script stored in a file.
 pub async fn run_file(config: &Config, filename: &Path) -> Result<(), Error> {
-    let mut file = File::open(filename).err_ctx(format!("opening {}", filename.display()))?;
+    let mut file =
+        File::open(filename).with_context(|| format!("opening {}", filename.display()))?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)
-        .err_ctx(format!("reading {}", filename.display()))?;
+        .with_context(|| format!("reading {}", filename.display()))?;
     run_string(config, filename, &contents).await
 }
 
@@ -41,7 +47,7 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
     let mut contents = String::new();
     io::stdin()
         .read_to_string(&mut contents)
-        .err_ctx("reading <stdin>")?;
+        .context("reading <stdin>")?;
     run_string(config, Path::new("<stdin>"), &contents).await
 }
 
@@ -56,10 +62,19 @@ pub async fn run_string(config: &Config, filename: &Path, contents: &str) -> Res
     let mut line_reader = LineReader::new(contents);
     run_line_reader(config, &mut line_reader)
         .await
-        .map_err(|e| e.with_input_details(&filename, &contents, &line_reader))
+        .map_err(|e| {
+            let location = e.pos.map(|pos| {
+                let (line, col) = line_reader.line_col(pos);
+                ErrorLocation::new(filename, contents, line, col)
+            });
+            Error::new(e.source, location)
+        })
 }
 
-async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> Result<(), Error> {
+async fn run_line_reader(
+    config: &Config,
+    line_reader: &mut LineReader<'_>,
+) -> Result<(), PosError> {
     // TODO(benesch): consider sharing state between files, to avoid
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
@@ -93,13 +108,13 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
 
             for a in actions.iter().rev() {
                 let undo = a.action.undo(&mut state);
-                undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+                undo.await.map_err(|e| PosError::new(e, a.pos))?
             }
         }
 
         for a in &actions {
             let redo = a.action.redo(&mut state);
-            redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+            redo.await.map_err(|e| PosError::new(e, a.pos))?
         }
 
         if config.reset {
@@ -123,11 +138,12 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
             }
 
             if !errors.is_empty() {
-                return Err(Error::General {
-                    ctx: "Failed to clean up state at shut down".into(),
-                    causes: errors.into_iter().map(Into::into).collect(),
-                    hints: Vec::new(),
-                });
+                return Err(anyhow!(
+                    "cleanup failed: {} errors: {}",
+                    errors.len(),
+                    errors.into_iter().map(|e| e.to_string_alt()).join("\n"),
+                )
+                .into());
             }
         }
     }
