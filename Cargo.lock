@@ -3035,6 +3035,7 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "mz-http-proxy",
+ "openssl-sys",
 ]
 
 [[package]]

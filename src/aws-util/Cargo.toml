@@ -15,6 +15,10 @@ aws-sdk-s3 = { version = "0.5.0", default-features = false, features = ["native-
 aws-sdk-sqs = { version = "0.5.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sts = { version = "0.5.0", default-features = false, features = ["native-tls"], optional = true }
 aws-types = { version = "0.5.0" }
+# Make sure the "vendored" feature makes it into the transitive dep graph of
+# every aws user, so that we don't attempt to link against the system OpenSSL
+# library.
+openssl-sys = { version = "0.9.72", features = ["vendored"] }
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 
 [features]
