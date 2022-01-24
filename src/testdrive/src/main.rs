@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -122,6 +122,13 @@ struct Args {
     #[clap(long)]
     temp_dir: Option<String>,
 
+    /// CLI arguments that are converted to testdrive variables.
+    ///
+    /// Passing: `--var foo=bar` will create a variable named 'arg.foo' with the value 'bar'.
+    /// Can be specified multiple times to set multiple variables.
+    #[clap(long, value_name = "NAME=VALUE")]
+    var: Vec<String>,
+
     // === Positional arguments. ===
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
@@ -187,6 +194,20 @@ async fn main() {
         args.max_errors
     );
 
+    let mut arg_vars = BTreeMap::new();
+    for arg in &args.var {
+        let mut parts = arg.splitn(2, '=');
+        let name = parts.next().expect("Clap ensures all --vars get a value");
+        let val = match parts.next() {
+            Some(val) => val,
+            None => {
+                println!("No =VALUE for --var {}", name);
+                process::exit(1)
+            }
+        };
+        arg_vars.insert(name.to_string(), val.to_string());
+    }
+
     let config = Config {
         kafka_addr: args.kafka_addr,
         kafka_opts: args.kafka_option,
@@ -201,6 +222,7 @@ async fn main() {
         default_timeout: args.default_timeout,
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
+        arg_vars,
         seed: args.seed,
         temp_dir: args.temp_dir,
     };

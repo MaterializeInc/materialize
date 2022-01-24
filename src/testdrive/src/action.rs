@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::future::Future;
@@ -36,7 +36,7 @@ use ore::display::DisplayExt;
 use ore::retry::Retry;
 
 use crate::error::PosError;
-use crate::parser::{Command, PosCommand, SqlErrorMatchType, SqlOutput};
+use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
 
 mod avro_ocf;
@@ -94,6 +94,11 @@ pub struct Config {
     /// Backoff factor to use when retrying
     pub backoff_factor: f64,
 
+    /// Arguments for the testdrive script to expose as variables.
+    ///
+    /// Entries will be provided to testrive scripts as the variable named `arg.KEY`
+    pub arg_vars: BTreeMap<String, String>,
+
     /// A random number to distinguish each run of a testdrive script.
     pub seed: Option<u32>,
     /// Force the use of a specific temporary directory
@@ -120,6 +125,7 @@ pub struct State {
     aws_config: AwsConfig,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
+    arg_vars: BTreeMap<String, String>,
     s3_client: S3Client,
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
@@ -402,6 +408,11 @@ pub(crate) async fn build(
 
     for (key, value) in env::vars() {
         vars.insert(format!("env.{}", key), value);
+    }
+
+    for (key, value) in &state.arg_vars {
+        validate_ident(key)?;
+        vars.insert(format!("arg.{}", key), value.to_string());
     }
 
     for cmd in cmds {
@@ -748,6 +759,7 @@ pub async fn create_state(
         seed,
         temp_path,
         _tempfile_handle,
+        arg_vars: config.arg_vars.clone(),
         materialized_catalog_path,
         materialized_addr,
         materialized_user,
