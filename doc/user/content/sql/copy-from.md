@@ -16,6 +16,8 @@ Field | Use
 ------|-----
 _table_name_ | Copy values to this table.
 **(**_column_...**)** | Correlate the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>Without a column list, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
+_field_ | The name of the option you want to set.
+_val_ | The value for the option.
 
 ### `WITH` options
 

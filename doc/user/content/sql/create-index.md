@@ -42,15 +42,15 @@ Field | Use
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source or view on which you want to create an index.
 _col&lowbar;ref_**...** | The columns to use as the key into the index.
-_field_ | The name of the parameter you want to set.
-_val_ | The new value for the parameter.
+_field_ | The name of the option you want to set.
+_val_ | The value for the option.
 
 {{< version-changed v0.7.1 >}}
-The `WITH (field = val, ...)` clause was added to allow setting index parameters
+The `WITH (field = val, ...)` clause was added to allow setting index options
 when creating the index.
 {{</ version-changed >}}
 
-### `WITH` options
+### `WITH` option
 
 The following option is valid within the `WITH` clause.
 

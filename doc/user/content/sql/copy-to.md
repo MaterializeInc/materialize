@@ -15,6 +15,8 @@ menu:
 Field | Use
 ------|-----
 _query_ | The [`SELECT`](/sql/select) or [`TAIL`](/sql/tail) query to send
+_field_ | The name of the option you want to set.
+_val_ | The value for the option.
 
 ### `WITH` option
 

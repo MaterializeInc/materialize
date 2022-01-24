@@ -18,8 +18,8 @@ Field | Use
 ------|-----
 _name_ | The identifier of the index you want to alter.
 **ENABLED** | [Enable](#enabling-indexes) the index, which lets Materialize use it again after being [disabled](/cli/#disable-user-indexes).
-_field_ | The name of the parameter you want to alter. See [`CREATE INDEX`](/sql/create-index) for available parameters.
-_val_ | The new value for the parameter.
+_field_ | The name of the option you want to alter. See [`CREATE INDEX`](/sql/create-index) for available options.
+_val_ | The new value for the option.
 
 ## Details
 
