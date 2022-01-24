@@ -13,7 +13,6 @@ function [`EXTRACT`](../extract). For PostgreSQL compatibility, `date_part` retu
 
 ## Signatures
 
-TODO: this svg doesn't exist
 {{< diagram "func-date-part.svg" >}}
 
 Parameter | Type                                                                                                                                                          | Description

@@ -8,7 +8,7 @@ menu:
 
 `EXTRACT` returns some time component from a time-based value, such as the year from a Timestamp.
 
-See [`date_part`](../date_part) for the traditional Ingres equivalent function.
+See [`date_part`](../date-part) for the traditional Ingres equivalent function.
 
 ## Signatures
 
