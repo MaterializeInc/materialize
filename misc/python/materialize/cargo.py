@@ -16,7 +16,7 @@ necessary to support this repository are implemented.
 """
 
 from pathlib import Path
-from typing import Set
+from typing import Dict, Optional, Set
 
 import semver
 import toml
@@ -37,6 +37,7 @@ class Crate:
     Attributes:
         name: The name of the crate.
         version: The version of the crate.
+        rust_version: The minimum Rust version declared in the crate, if any.
     """
 
     def __init__(self, root: Path, path: Path):
@@ -54,6 +55,9 @@ class Crate:
                     for name, c in config[dep_type].items()
                     if "path" in c
                 )
+        self.rust_version: Optional[str] = None
+        if "package" in config:
+            self.rust_version = config["package"].get("rust-version")
         self.bins = []
         if "bin" in config:
             for bin in config["bin"]:
@@ -102,13 +106,16 @@ class Workspace:
 
     Args:
         root: The path to the root of the workspace.
+
+    Attributes:
+        crates: A mapping from name to crate definition.
     """
 
     def __init__(self, root: Path):
         with open(root / "Cargo.toml") as f:
             config = toml.load(f)
 
-        self.crates = {}
+        self.crates: Dict[str, Crate] = {}
         for path in config["workspace"]["members"]:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate

@@ -53,9 +53,6 @@ Install Rust via [rustup]:
 curl https://sh.rustup.rs -sSf | sh
 ```
 
-Rustup will automatically select the correct toolchain version specified in
-[rust-toolchain.toml](/rust-toolchain.toml).
-
 We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
