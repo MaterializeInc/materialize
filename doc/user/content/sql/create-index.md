@@ -50,11 +50,13 @@ The `WITH (field = val, ...)` clause was added to allow setting index parameters
 when creating the index.
 {{</ version-changed >}}
 
-### Available parameters
+### `WITH` options
 
-Name                        | Meaning
-----------------------------|--------
-`logical_compaction_window` | Overrides the [logical compaction window](/ops/memory#compaction) for the data stored in this index. The default value is controlled by the [`--logical-compaction-window`](/cli/#compaction-window) command-line option.
+The following option is valid within the `WITH` clause.
+
+Name | Permitted values | Default value | Description
+----------------------------|--------|--------|--------
+`logical_compaction_window` | SQL [interval](/sql/types/interval/) string | '1ms' | Overrides the [logical compaction window](/ops/memory#compaction) for the data stored in this index. The default value is controlled by the [`--logical-compaction-window`](/cli/#compaction-window) command-line option.
 
 ## Details
 

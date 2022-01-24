@@ -21,7 +21,7 @@ _table_name_ | Copy values to this table.
 
 The following options are valid within the `WITH` clause.
 
-Name | Permitted values| Default value | Description
+Name | Permitted values | Default value | Description
 -----|-----------------|---------------|------------
 `FORMAT` | `TEXT`, `CSV` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
 `DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.

@@ -40,12 +40,6 @@ the table's primary index, which was created at the same time as the table
 itself. Only after enabling the primary index can you enable any secondary
 indexes.
 
-### Available parameters
-
-Name                        | Meaning
-----------------------------|--------
-`logical_compaction_window` | Overrides the [logical compaction window](/ops/memory#compaction) for the data stored in this index. The default value is controlled by the [`--logical-compaction-window`](/cli/#compaction-window) command-line option.
-
 ## Examples
 
 To adjust the logical compaction window for the index named `some_primary_idx`:
