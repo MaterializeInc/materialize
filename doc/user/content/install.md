@@ -84,6 +84,8 @@ tools:
 
   * A C compiler that supports C11
 
+  * A C++ compiler that supports C++11
+
   * CMake v3.2+
 
   * Rust v{{< rust-version >}}+

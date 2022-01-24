@@ -25,8 +25,9 @@ better availability and durability story.
 
 ### C components
 
-Materialize depends on several components that are written in C, so you'll need
-a working C compiler. You'll also need to install the [CMake] build system.
+Materialize depends on several components that are written in C and C++, so
+you'll need a working C and C++ toolchain. You'll also need to install the
+[CMake] build system.
 
 On macOS, if you install [Homebrew], you'll be guided through the process of
 installing Apple's developer tools, which includes a C compiler. Then it's a
