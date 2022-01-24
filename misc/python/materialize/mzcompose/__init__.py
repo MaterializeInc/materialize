@@ -513,6 +513,14 @@ class Composition:
         """
         self.invoke("up", *(["--detach"] if detach else []), *services)
 
+    def stop(self, *services: str) -> None:
+        """Stop the docker containers for the named services.
+
+        Args:
+            services: The names of services in the composition.
+        """
+        self.invoke("stop", *services)
+
     def kill(self, *services: str, signal: str = "SIGKILL") -> None:
         """Force stop service containers.
 
