@@ -19,7 +19,7 @@ Field | Use
 _count_ | The number of rows to retrieve. Defaults to `1` if unspecified.
 _cursor&lowbar;name_ | The name of an open cursor.
 
-### `WITH` options
+### `WITH` option
 
 The following option is valid within the `WITH` clause.
 
