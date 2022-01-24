@@ -336,29 +336,44 @@ impl Model {
     }
 
     /// An iterator over immutable references to the [`QueryBox`] instances in this [`Model`].
-    fn boxes_iter(&self) -> impl Iterator<Item = Ref<'_, QueryBox>> {
-        self.boxes.keys().map(|box_id| {
-            self.boxes
+    fn boxes_iter(&self) -> impl Iterator<Item = BoundRef<'_, QueryBox>> {
+        self.boxes.keys().map(|box_id| BoundRef {
+            model: self,
+            r#ref: self
+                .boxes
                 .get(&box_id)
                 .expect("a valid box identifier")
-                .borrow()
+                .borrow(),
         })
     }
 
-    /// Get an immutable reference to the box identified by `box_id`.
-    fn get_box(&self, box_id: BoxId) -> Ref<'_, QueryBox> {
-        self.boxes
-            .get(&box_id)
-            .expect("a valid box identifier")
-            .borrow()
+    /// Get an immutable reference to the box identified by `box_id` bound to this [`Model`].
+    fn get_box(&self, box_id: BoxId) -> BoundRef<'_, QueryBox> {
+        BoundRef {
+            model: self,
+            r#ref: self
+                .boxes
+                .get(&box_id)
+                .expect("a valid box identifier")
+                .borrow(),
+        }
     }
 
-    /// Get a mutable reference to the box identified by `box_id`.
-    fn get_mut_box(&self, box_id: BoxId) -> RefMut<'_, QueryBox> {
-        self.boxes
-            .get(&box_id)
-            .expect("a valid box identifier")
-            .borrow_mut()
+    /// Get a mutable reference to the box identified by `box_id` bound to this [`Model`].
+    fn get_mut_box(&mut self, box_id: BoxId) -> BoundRefMut<'_, QueryBox> {
+        let model_ptr = self as *mut Self;
+        unsafe {
+            let reference = (*model_ptr)
+                .boxes
+                .get(&box_id)
+                .expect("a valid box identifier")
+                .borrow_mut();
+
+            BoundRefMut {
+                model: &mut *model_ptr,
+                r#ref: reference,
+            }
+        }
     }
 
     /// Create a new quantifier and adds it to the parent box
@@ -382,21 +397,34 @@ impl Model {
         id
     }
 
-    /// Get an immutable reference to the box identified by `box_id`.
-    fn get_quantifier(&self, quantifier_id: QuantifierId) -> Ref<'_, Quantifier> {
-        self.quantifiers
-            .get(&quantifier_id)
-            .expect("a valid quantifier identifier")
-            .borrow()
+    /// Get an immutable reference to the box identified by `box_id` bound to this [`Model`].
+    fn get_quantifier(&self, quantifier_id: QuantifierId) -> BoundRef<'_, Quantifier> {
+        BoundRef {
+            model: self,
+            r#ref: self
+                .quantifiers
+                .get(&quantifier_id)
+                .expect("a valid quantifier identifier")
+                .borrow(),
+        }
     }
 
-    /// Get a mutable reference to the box identified by `box_id`.
+    /// Get a mutable reference to the box identified by `box_id` bound to this [`Model`].
     #[allow(dead_code)]
-    fn get_mut_quantifier(&self, quantifier_id: QuantifierId) -> RefMut<'_, Quantifier> {
-        self.quantifiers
-            .get(&quantifier_id)
-            .expect("a valid quantifier identifier")
-            .borrow_mut()
+    fn get_mut_quantifier(&mut self, quantifier_id: QuantifierId) -> BoundRefMut<'_, Quantifier> {
+        let model_ptr = self as *mut Self;
+        unsafe {
+            let reference = (*model_ptr)
+                .quantifiers
+                .get(&quantifier_id)
+                .expect("a valid quantifier identifier")
+                .borrow_mut();
+
+            BoundRefMut {
+                model: &mut *model_ptr,
+                r#ref: reference,
+            }
+        }
     }
 
     /// Visit boxes in the query graph in pre-order starting from `self.top_box`.
@@ -567,7 +595,7 @@ impl QueryBox {
     fn input_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
+    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
         self.quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -578,7 +606,7 @@ impl QueryBox {
     fn ranging_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
+    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
         self.ranging_quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -611,12 +639,12 @@ impl QueryBox {
 /// Immutable [`QueryBox`] methods that depend on their enclosing [`Model`].
 impl<'a> BoundRef<'a, QueryBox> {
     /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
-    pub fn input_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+    pub fn input_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().input_quantifiers(self.model)
     }
 
     /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
-    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
     }
 }
@@ -647,12 +675,12 @@ impl<'a> BoundRefMut<'a, QueryBox> {
     }
 
     /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
-    pub fn input_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+    pub fn input_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().input_quantifiers(self.model)
     }
 
     /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
-    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = Ref<'_, Quantifier>> {
+    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
     }
 }

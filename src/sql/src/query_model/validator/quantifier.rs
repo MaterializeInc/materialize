@@ -70,7 +70,7 @@ impl RangeBounds<usize> for QuantifierConstraint {
 /// - All `quantifiers` with satisfied type also satisfy the quantifier box constraints.
 fn check_constraints<'a, const N: usize>(
     constraints: &[QuantifierConstraint; N],
-    quantifiers: impl Iterator<Item = Ref<'a, Quantifier>>,
+    quantifiers: impl Iterator<Item = BoundRef<'a, Quantifier>>,
     model: &'a Model,
     mut on_failure: impl FnMut(&QuantifierConstraint) -> (),
 ) {
@@ -218,29 +218,29 @@ impl Validator for QuantifierConstraintValidator {
             match b.box_type {
                 Get(..) | TableFunction(..) | Values(..) => {
                     let constraints = [ZERO_ARBITRARY];
-                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                    check_constraints(&constraints, b.input_quantifiers(), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     })
                 }
                 Union | Except | Intersect => {
                     let constraints = [ONE_OR_MORE_FOREACH, ZERO_NOT_FOREACH];
-                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                    check_constraints(&constraints, b.input_quantifiers(), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     })
                 }
                 Grouping(..) => {
                     let constraints = [ONE_FOREACH_INPUT_SELECT, ZERO_NOT_FOREACH];
-                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                    check_constraints(&constraints, b.input_quantifiers(), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     });
                     let constraints = [ONE_FOREACH_PARENT_SELECT, ZERO_NOT_FOREACH];
-                    check_constraints(&constraints, b.ranging_quantifiers(model), model, |c| {
+                    check_constraints(&constraints, b.ranging_quantifiers(), model, |c| {
                         errors.push(ValidationError::InvalidRangingQuantifiers(b.id, c.clone()))
                     });
                 }
                 Select(..) => {
                     let constraints = [ONE_OR_MORE_NOT_PRES_FOREACH, ZERO_PRESERVED_FOREACH];
-                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                    check_constraints(&constraints, b.input_quantifiers(), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     });
                 }
@@ -251,7 +251,7 @@ impl Validator for QuantifierConstraintValidator {
                         TWO_OUTER_JOIN_INPUTS,
                         ZERO_NOT_OUTER_JOIN_INPUTS,
                     ];
-                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                    check_constraints(&constraints, b.input_quantifiers(), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     });
                 }
