@@ -1634,35 +1634,27 @@ fn plan_view_select(
         for group_expr in &s.group_by {
             let (group_expr, expr) = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();
-            // Repeated expressions in GROUP BY confuse name resolution later,
-            // and dropping them doesn't change the result.
-            if group_exprs
-                .iter()
-                .find(|existing_expr| **existing_expr == expr)
-                .is_none()
+            let scope_item = if let HirScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: old_column,
+            }) = &expr
             {
-                let scope_item = if let HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: old_column,
-                }) = &expr
-                {
-                    // If we later have `SELECT foo.*` then we have to find all
-                    // the `foo` items in `from_scope` and figure out where they
-                    // ended up in `group_scope`. This is really hard to do
-                    // right using SQL name resolution, so instead we just track
-                    // the movement here.
-                    select_all_mapping.insert(*old_column, new_column);
-                    let mut scope_item = ecx.scope.items[*old_column].clone();
-                    scope_item.expr = group_expr.cloned();
-                    scope_item
-                } else {
-                    ScopeItem::from_expr(group_expr.cloned())
-                };
+                // If we later have `SELECT foo.*` then we have to find all
+                // the `foo` items in `from_scope` and figure out where they
+                // ended up in `group_scope`. This is really hard to do
+                // right using SQL name resolution, so instead we just track
+                // the movement here.
+                select_all_mapping.insert(*old_column, new_column);
+                let mut scope_item = ecx.scope.items[*old_column].clone();
+                scope_item.expr = group_expr.cloned();
+                scope_item
+            } else {
+                ScopeItem::from_expr(group_expr.cloned())
+            };
 
-                group_key.push(from_scope.len() + group_exprs.len());
-                group_exprs.push(expr);
-                group_scope.items.push(scope_item);
-            }
+            group_key.push(from_scope.len() + group_exprs.len());
+            group_exprs.push(expr);
+            group_scope.items.push(scope_item);
         }
 
         // Plan aggregates.
