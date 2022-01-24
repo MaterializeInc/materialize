@@ -16,9 +16,16 @@ aws-smithy-client = { version = "0.36.0", default-features = false }
 aws-smithy-http = "0.36.0"
 aws-types = "0.6.0"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
+openssl-sys = { version = "0.9.72", features = ["vendored"] }
 
 [features]
 kinesis = ["aws-sdk-kinesis"]
 sqs = ["aws-sdk-sqs"]
 s3 = ["aws-sdk-s3"]
 sts = ["aws-sdk-sts"]
+
+[package.metadata.cargo-udeps.ignore]
+# Make sure the "vendored" feature makes it into the transitive dep graph of
+# every aws user, so that we don't attempt to link against the system OpenSSL
+# library.
+normal = ["openssl-sys"]
