@@ -330,7 +330,6 @@ impl Plan {
             input_mfp,
         } = self
         {
-            assert!(&forms == old_collections);
             forms.raw |= collections.raw;
             forms.arranged.extend(collections.arranged.into_iter());
             forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
