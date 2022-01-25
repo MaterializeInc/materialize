@@ -559,6 +559,18 @@ impl KafkaSinkState {
         Err(last_error)
     }
 
+    async fn flush(&self) -> KafkaResult<()> {
+        let self_producer = self.producer.clone();
+        Retry::default()
+            // Because we only expect to receive timeout errors, we should clamp fairly low.
+            .clamp_backoff(Duration::from_secs(60))
+            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
+            // addressing error strategy holistically.
+            .max_tries(usize::MAX)
+            .retry_async(|_| self_producer.flush())
+            .await
+    }
+
     async fn send_consistency_record(
         &self,
         transaction_id: &str,
@@ -981,7 +993,7 @@ where
                     bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
                 };
 
-                bail_err!(s.retry_on_txn_error(|p| p.flush()).await);
+                bail_err!(s.flush().await);
 
                 // sanity check for the continuous updating
                 // of the write frontier below
@@ -1015,7 +1027,7 @@ where
             }
 
             // Make sure that everything is flushed (e.g. from `maybe_emit_progress`) before returning
-            bail_err!(s.retry_on_txn_error(|p| p.flush()).await);
+            bail_err!(s.flush().await);
             debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
 
             if !s.pending_rows.is_empty() {
