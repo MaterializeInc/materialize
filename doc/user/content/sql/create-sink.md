@@ -68,6 +68,8 @@ Field                | Value type | Description
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 `retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.
 `retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default.
+`avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`.
+`avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`.
 
 {{< version-changed v0.9.7 >}}
 The `retention_ms` and `retention_bytes` options were added.
@@ -125,11 +127,10 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 - Materialize currently only supports the following [sink formats](#sink_format_spec):
     - Avro-formatted sinks that write to either a topic or an Avro object container file.
     - JSON-formatted sinks that write to a topic.
-- For most sinks, Materialize creates new, distinct topics and files for each sink on restart.
-- A beta feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#exactly-once-sinks-with-topic-reuse-after-restart).
+- For most sinks, Materialize creates new, distinct topics and files for each sink on restart. A beta feature enables the use of the same topic after restart. For details, see [Exactly-once sinks](#exactly-once-sinks-with-topic-reuse-after-restart).
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
-- For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink.
-- Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction id information inline with the data, and adds a separate transaction metadata topic.
+- For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `avro_key_fullname` and `avro_value_fullname` options.
+- Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction information inline with the data, and adds a separate transaction metadata topic.
 
 ### Debezium envelope details
 
@@ -275,9 +276,9 @@ The generated [diff envelope](#debezium-envelope-details) schema used for data m
     }
 }
 ```
-Each message sent to Kafka has a `transaction` field and a `transaction_id`, in addition to it's regular `before` / `after` data fields. The `transaction_id` is equivalent to the Materialize timestamp for this record.
+Each message sent to Kafka has a `transaction` field and a transaction `id`, in addition to it's regular `before` / `after` data fields. The transaction `id` is equivalent to the Materialize timestamp for this record.
 
-In addition to the inline information, Materialize creates an additional consistency topic that stores counts of how many changes were generated per `transaction_id`. The name of the consistency topic uses the following convention:
+In addition to the inline information, Materialize creates an additional consistency topic that stores counts of how many changes were generated per transaction `id`. The name of the consistency topic uses the following convention:
 
 ```nofmt
 {consistency_topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
@@ -340,14 +341,14 @@ Each message in the consistency topic has the schema below.
 Field | Use
 ------|-----
 _id_ | The transaction `id` this record refers to.
-_status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and it sends a `END` record after it has written all data messages for `id`.
+_status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and an `END` record after it has written all data messages for `id`.
 _event&lowbar;count_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
 _data&lowbar;collections_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id` and collection.
 
 ##### Consistency information details
 - Materialize writes consistency output to a different topic per sink.
-- There are no ordering guarantees on `transaction_id` in the consistency topic.
-- Multiple transactions can be interleaved in the consistency topic. In other words, there can be multiple `transaction_id` that have a `BEGIN` record but no corresponding `END` record simultaneously.
+- There are no ordering guarantees on transaction `id` in the consistency topic.
+- Multiple transactions can be interleaved in the consistency topic, so it's possible that some `ids` don't have a corresponding `BEGIN` or `END` record.
 
 ### Avro OCF sinks
 
