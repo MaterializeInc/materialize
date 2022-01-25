@@ -875,7 +875,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             let (permutation, thinning) = permutation_for_arrangement(&key, r#type.arity());
             arrangements
                 .entry(Id::Global(index_desc.on_id))
-                .or_insert_with(|| AvailableCollections::default())
+                .or_insert_with(AvailableCollections::default)
                 .arranged
                 .push((key, permutation, thinning));
         }
