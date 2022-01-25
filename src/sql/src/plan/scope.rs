@@ -62,9 +62,9 @@ pub struct ScopeItem {
     pub table_name: Option<PartialName>,
     /// The name of the column.
     pub column_name: ColumnName,
-    /// The expression from which this scope item is derived. Used by `GROUP
+    /// The expressions from which this scope item is derived. Used by `GROUP
     /// BY`.
-    pub expr: HashSet<Expr<Aug>>,
+    pub exprs: HashSet<Expr<Aug>>,
     /// Whether the column is the return value of a function that produces only
     /// a single column. This accounts for a strange PostgreSQL special case
     /// around whole-row expansion.
@@ -126,11 +126,11 @@ pub struct Scope {
 }
 
 impl ScopeItem {
-    fn empty() -> ScopeItem {
+    pub fn empty() -> ScopeItem {
         ScopeItem {
             table_name: None,
             column_name: "?column?".into(),
-            expr: HashSet::new(),
+            exprs: HashSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,
             lateral_error_if_referenced: false,
@@ -162,7 +162,7 @@ impl ScopeItem {
     pub fn from_expr(expr: impl Into<Option<Expr<Aug>>>) -> ScopeItem {
         let mut item = ScopeItem::empty();
         if let Some(expr) = expr.into() {
-            item.expr.insert(expr);
+            item.exprs.insert(expr);
         }
         item
     }
@@ -399,7 +399,7 @@ impl Scope {
         self.items
             .iter()
             .enumerate()
-            .find(|(_, item)| item.expr.contains(expr))
+            .find(|(_, item)| item.exprs.contains(expr))
             .map(|(i, _)| ColumnRef {
                 level: 0,
                 column: i,

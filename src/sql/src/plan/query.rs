@@ -1629,6 +1629,7 @@ fn plan_view_select(
         };
         let mut group_key = vec![];
         let mut group_exprs: HashMap<HirScalarExpr, ScopeItem> = HashMap::new();
+        let mut group_hir_exprs = vec![];
         let mut group_scope = Scope::empty();
         let mut select_all_mapping = BTreeMap::new();
 
@@ -1641,12 +1642,12 @@ fn plan_view_select(
                 // If we already have a ScopeItem for this HIR, we can add this
                 // next AST expression to its set
                 if let Some(existing_scope_item) = group_exprs.get_mut(&expr) {
-                    (*existing_scope_item).expr.insert(group_expr.clone());
+                    existing_scope_item.exprs.insert(group_expr.clone());
                     continue;
                 }
             }
 
-            let scope_item = if let HirScalarExpr::Column(ColumnRef {
+            let mut scope_item = if let HirScalarExpr::Column(ColumnRef {
                 level: 0,
                 column: old_column,
             }) = &expr
@@ -1657,23 +1658,26 @@ fn plan_view_select(
                 // right using SQL name resolution, so instead we just track
                 // the movement here.
                 select_all_mapping.insert(*old_column, new_column);
-                let mut scope_item = ecx.scope.items[*old_column].clone();
-                if let Some(group_expr) = group_expr.cloned() {
-                    scope_item.expr.insert(group_expr);
-                }
+                let scope_item = ecx.scope.items[*old_column].clone();
                 scope_item
             } else {
-                ScopeItem::from_expr(group_expr.cloned())
+                ScopeItem::empty()
             };
 
+            if let Some(group_expr) = group_expr.cloned() {
+                scope_item.exprs.insert(group_expr);
+            }
+
             group_key.push(from_scope.len() + group_exprs.len());
+            group_hir_exprs.push(expr.clone());
             group_exprs.insert(expr, scope_item);
         }
 
-        let mut group_hir_exprs: Vec<HirScalarExpr> = vec![];
-        for (expr, scope_item) in group_exprs.into_iter() {
-            group_hir_exprs.push(expr);
-            group_scope.items.push(scope_item);
+        assert_eq!(group_hir_exprs.len(), group_exprs.len());
+        for expr in &group_hir_exprs {
+            if let Some(scope_item) = group_exprs.remove(expr) {
+                group_scope.items.push(scope_item);
+            }
         }
 
         // Plan aggregates.

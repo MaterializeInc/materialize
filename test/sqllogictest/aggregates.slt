@@ -85,6 +85,13 @@ SELECT a FROM t GROUP BY t.a, t.a
 2
 3
 
+query I
+SELECT a FROM t GROUP BY t.a, public.t.a
+----
+1
+2
+3
+
 # Smoke test to make sure multiple accumulable and hierarchical reductions work
 query IIIII rowsort
 SELECT a, count(b), min(b), sum(b), max(b) FROM t GROUP BY a

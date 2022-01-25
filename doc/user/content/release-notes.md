@@ -110,7 +110,7 @@ changes that have not yet been documented.
 - Fix parsing of nested empty `SELECT` statements, as in
   `SELECT * FROM (SELECT)` {{% gh 8723 %}}.
 
-- Fix parsing of repeat constant expressions in a `GROUP BY` clause {{% gh 8302 %}}
+- Fix planning of repeat constant expressions in a `GROUP BY` clause {{% gh 8302 %}}
 
 - Detect and reject multiple materializations of sources that would silently
   lose data when materialized more than once. This enables safe use of
