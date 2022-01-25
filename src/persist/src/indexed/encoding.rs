@@ -199,11 +199,6 @@ pub struct BlobUnsealedBatch {
     /// Which updates are included in this batch.
     pub desc: Range<SeqNo>,
     /// The updates themselves.
-    ///
-    /// TODO: ideally, these would be a single ColumnarRecords instead of multiple.
-    /// We are keeping it this way for now because it is a optimization on the latency
-    /// sensitive fast path to avoid allocating one large ColumnarRecords and copying
-    /// everything into it.
     pub updates: Vec<ColumnarRecords>,
 }
 
@@ -235,12 +230,12 @@ pub struct BlobUnsealedBatch {
 /// put multiple small batches in a single blob but also break a very large
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
     /// The updates themselves.
-    pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    pub updates: Vec<ColumnarRecords>,
 }
 
 impl LogEntry {
@@ -569,11 +564,11 @@ impl BlobTraceBatch {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
-        let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, &u64)> = None;
-        for update in self.updates.iter() {
+        let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, u64)> = None;
+        for update in self.updates.iter().flat_map(|u| u.iter()) {
             let ((key, val), ts, diff) = update;
             // Check ts against desc.
-            if !self.desc.lower().less_equal(ts) {
+            if !self.desc.lower().less_equal(&ts) {
                 return Err(format!(
                     "timestamp {} is less than the batch lower: {:?}",
                     ts, self.desc
@@ -582,14 +577,14 @@ impl BlobTraceBatch {
             }
 
             if PartialOrder::less_than(self.desc.since(), self.desc.upper()) {
-                if self.desc.upper().less_equal(ts) {
+                if self.desc.upper().less_equal(&ts) {
                     return Err(format!(
                         "timestamp {} is greater than or equal to the batch upper: {:?}",
                         ts, self.desc
                     )
                     .into());
                 }
-            } else if self.desc.since().less_than(ts) {
+            } else if self.desc.since().less_than(&ts) {
                 return Err(format!(
                     "timestamp {} is greater than the batch since: {:?}",
                     ts, self.desc,
@@ -598,7 +593,7 @@ impl BlobTraceBatch {
             }
 
             // Check ordering.
-            let this = (PrettyBytes(key), PrettyBytes(val), ts);
+            let this = (PrettyBytes(&key), PrettyBytes(&val), ts);
             if let Some(prev) = prev {
                 match prev.cmp(&this) {
                     Ordering::Less => {} // Correct.
@@ -611,7 +606,7 @@ impl BlobTraceBatch {
             prev = Some(this);
 
             // Check data invariants.
-            if *diff == 0 {
+            if diff == 0 {
                 return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
             }
         }
@@ -651,7 +646,7 @@ impl fmt::Debug for PrettyBytes<'_> {
     }
 }
 
-struct PrettyRecord<'a>(&'a ((Vec<u8>, Vec<u8>), u64, isize));
+struct PrettyRecord<'a>(((&'a [u8], &'a [u8]), u64, isize));
 
 impl fmt::Debug for PrettyRecord<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1033,21 +1028,21 @@ mod tests {
         // Normal case
         let b = BlobTraceBatch {
             desc: u64_desc(0, 2),
-            updates: vec![update_with_key(0, "0"), update_with_key(1, "1")],
+            updates: columnar_records(vec![update_with_key(0, "0"), update_with_key(1, "1")]),
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
         let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 2),
-            updates: vec![],
+            updates: columnar_records(vec![]),
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Invalid desc
         let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(2, 0),
-            updates: vec![],
+            updates: columnar_records(vec![]),
         };
         assert_eq!(
             b.validate(),
@@ -1059,7 +1054,7 @@ mod tests {
         // Empty desc
         let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 0),
-            updates: vec![],
+            updates: columnar_records(vec![]),
         };
         assert_eq!(
             b.validate(),
@@ -1071,7 +1066,7 @@ mod tests {
         // Not sorted by key
         let b = BlobTraceBatch {
             desc: u64_desc(0, 2),
-            updates: vec![update_with_key(0, "1"), update_with_key(1, "0")],
+            updates: columnar_records(vec![update_with_key(0, "1"), update_with_key(1, "0")]),
         };
         assert_eq!(
             b.validate(),
@@ -1083,7 +1078,7 @@ mod tests {
         // Not consolidated
         let b = BlobTraceBatch {
             desc: u64_desc(0, 2),
-            updates: vec![update_with_key(0, "0"), update_with_key(0, "0")],
+            updates: columnar_records(vec![update_with_key(0, "0"), update_with_key(0, "0")]),
         };
         assert_eq!(
             b.validate(),
@@ -1093,42 +1088,42 @@ mod tests {
         // Update "before" desc
         let b = BlobTraceBatch {
             desc: u64_desc(1, 2),
-            updates: vec![update_with_key(0, "0")],
+            updates: columnar_records(vec![update_with_key(0, "0")]),
         };
         assert_eq!(b.validate(), Err(Error::from("timestamp 0 is less than the batch lower: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
 
         // Update "after" desc
         let b = BlobTraceBatch {
             desc: u64_desc(1, 2),
-            updates: vec![update_with_key(2, "0")],
+            updates: columnar_records(vec![update_with_key(2, "0")]),
         };
         assert_eq!(b.validate(), Err(Error::from("timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
 
         // Normal case: update "after" desc and within since
         let b = BlobTraceBatch {
             desc: u64_desc_since(1, 2, 4),
-            updates: vec![update_with_key(2, "0")],
+            updates: columnar_records(vec![update_with_key(2, "0")]),
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Normal case: update "after" desc and at since
         let b = BlobTraceBatch {
             desc: u64_desc_since(1, 2, 4),
-            updates: vec![update_with_key(4, "0")],
+            updates: columnar_records(vec![update_with_key(4, "0")]),
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Update "after" desc since
         let b = BlobTraceBatch {
             desc: u64_desc_since(1, 2, 4),
-            updates: vec![update_with_key(5, "0")],
+            updates: columnar_records(vec![update_with_key(5, "0")]),
         };
         assert_eq!(b.validate(), Err(Error::from("timestamp 5 is greater than the batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [4] } }")));
 
         // Invalid update
         let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 1),
-            updates: vec![(("0".into(), "0".into()), 0, 0)],
+            updates: columnar_records(vec![(("0".into(), "0".into()), 0, 0)]),
         };
         assert_eq!(
             b.validate(),
@@ -1589,7 +1584,7 @@ mod tests {
                     Antichain::from_elem(1),
                     Antichain::from_elem(0),
                 ),
-                updates: data.records().collect(),
+                updates: data.batches().collect(),
             };
             let (mut unsealed_buf, mut trace_buf) = (Vec::new(), Vec::new());
             unsealed.encode(&mut unsealed_buf);
@@ -1608,7 +1603,7 @@ mod tests {
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
             ),
-            "1/1=(481, 501) 25/1=(2229, 2249) 1000/1=(72468, 72488) 1000/100=(106557, 72488)"
+            "1/1=(481, 501) 25/1=(2229, 2249) 1000/1=(72468, 72488) 1000/100=(106557, 106577)"
         );
     }
 }
