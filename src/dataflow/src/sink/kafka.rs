@@ -329,42 +329,6 @@ impl KafkaTxProducer {
     }
 }
 
-// So users aren't able to manipulate the fields
-mod consistency_gate {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-    use repr::Timestamp;
-
-    #[derive(Debug)]
-    pub struct KafkaConsistencyGateTs {
-        ts: AtomicU64,
-        init: AtomicBool,
-    }
-
-    impl KafkaConsistencyGateTs {
-        pub fn new() -> Self {
-            Self {
-                ts: AtomicU64::new(0),
-                init: AtomicBool::new(false),
-            }
-        }
-
-        pub fn get_ts(&self) -> Option<Timestamp> {
-            if self.init.load(Ordering::Relaxed) {
-                Some(self.ts.load(Ordering::Relaxed))
-            } else {
-                None
-            }
-        }
-
-        pub fn set(&self, ts: Timestamp) {
-            self.ts.store(ts, Ordering::Relaxed);
-            self.init.store(true, Ordering::Relaxed);
-        }
-    }
-}
-use consistency_gate::KafkaConsistencyGateTs;
-
 #[derive(Debug, Clone)]
 struct KafkaConsistencyInitState {
     topic: String,
@@ -373,7 +337,7 @@ struct KafkaConsistencyInitState {
 }
 
 impl KafkaConsistencyInitState {
-    fn to_running(self, gate_ts: Rc<KafkaConsistencyGateTs>) -> KafkaConsistencyRunningState {
+    fn to_running(self, gate_ts: Rc<Cell<Option<Timestamp>>>) -> KafkaConsistencyRunningState {
         KafkaConsistencyRunningState {
             topic: self.topic,
             schema_id: self.schema_id,
@@ -386,7 +350,7 @@ impl KafkaConsistencyInitState {
 struct KafkaConsistencyRunningState {
     topic: String,
     schema_id: i32,
-    gate_ts: Rc<KafkaConsistencyGateTs>,
+    gate_ts: Rc<Cell<Option<Timestamp>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -409,7 +373,7 @@ impl KafkaSinkStateEnum {
     fn gate_ts(&self) -> Option<Timestamp> {
         match self {
             Self::Init(_) | Self::Running(None) => None,
-            Self::Running(Some(KafkaConsistencyRunningState { gate_ts, .. })) => gate_ts.get_ts(),
+            Self::Running(Some(KafkaConsistencyRunningState { gate_ts, .. })) => gate_ts.get(),
         }
     }
 }
@@ -1037,7 +1001,7 @@ where
 
     let stream = &collection.inner;
 
-    let shared_gate_ts = Rc::new(KafkaConsistencyGateTs::new());
+    let shared_gate_ts = Rc::new(Cell::new(None));
 
     let encoded_stream = match connector.published_schema_info {
         Some(PublishedSchemaInfo {
@@ -1104,7 +1068,7 @@ pub fn produce_to_kafka<G>(
     name: String,
     connector: KafkaSinkConnector,
     as_of: SinkAsOf,
-    shared_gate_ts: Rc<KafkaConsistencyGateTs>,
+    shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     source_timestamp_histories: Vec<TimestampBindingRc>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
@@ -1191,12 +1155,13 @@ where
                             return true;
                         }
                     };
+                    shared_gate_ts.set(latest_ts);
+
                     let consistency_state = init
                         .clone()
                         .map(|init| init.to_running(Rc::clone(&shared_gate_ts)));
 
                     if let Some(gate) = latest_ts {
-                        shared_gate_ts.set(gate);
                         s.maybe_update_progress(&gate);
                     }
 
@@ -1390,7 +1355,7 @@ where
 fn encode_stream<G>(
     input_stream: &Stream<G, ((Option<Row>, Option<Row>), Timestamp, Diff)>,
     as_of: SinkAsOf,
-    shared_gate_ts: Rc<KafkaConsistencyGateTs>,
+    shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     encoder: impl Encode + 'static,
     fuel: usize,
     name_prefix: String,
@@ -1434,7 +1399,7 @@ where
                 } else {
                     as_of.frontier.less_equal(&time)
                 };
-                let ts_gated = Some(time) <= shared_gate_ts.get_ts();
+                let ts_gated = Some(time) <= shared_gate_ts.get();
 
                 if !should_emit || ts_gated {
                     // Skip stale data for already published timestamps
