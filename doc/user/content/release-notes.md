@@ -118,6 +118,20 @@ changes that have not yet been documented.
   of `CREATE SOURCE` and `CREATE SINK` now reject unknown parameters.
   (Example: [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)).
 
+- **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
+  is called with a [`date`] value but a time-related field (e.g., `SECOND`).
+
+  Previous versions of Materialize would incorrectly return `0` in these cases.
+  The new behavior matches PostgreSQL.
+
+  [`date_part`](/sql/functions/date_part/) still returns a `0` in these cases,
+  which matches the PostgreSQL behavior.
+
+- **Breaking change.** Change the return type of [`extract`](/sql/functions/extract/)
+  from [`float`](/sql/types/float/) to [`numeric`](/sql/types/numeric/).
+
+  This new behavior matches PostgreSQL v14.
+
 {{< comment >}}
 Only add new release notes above this line.
 
@@ -163,22 +177,6 @@ boundary don't silently merge their release notes into the wrong place.
 - Fix a bug in the `ILIKE` operator where matching against a `char` value did
   not take trailing spaces into account {{% gh 10076 %}}. The new behavior
   matches the behavior of the `LIKE` operator.
-- **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
-  is called with a [`date`] value but a time-related field (e.g., `SECOND`).
-
-  Previous versions of Materialize would incorrectly return `0` in these cases.
-  The new behavior matches PostgreSQL.
-
-  [`date_part`](/sql/functions/date_part/) still returns a `0` in these cases,
-  which matches the PostgreSQL behavior.
-
-- **Breaking change.** Change the return type of [`extract`](/sql/functions/extract/)
-  from [`float`](/sql/types/float/) to [`numeric`](/sql/types/numeric/).
-
-  This new behavior matches PostgreSQL v14.
-
-{{< comment >}}
-Only add new release notes above this line.
 
 - Allow wildcards in `LIKE` patterns to match newline characters
   {{% gh 10077 %}}. The new behavior matches PostgreSQL.
