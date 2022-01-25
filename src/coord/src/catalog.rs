@@ -451,7 +451,7 @@ impl CatalogEntryMap {
                 _ => {}
             }
         }
-        MultiWriteHandle::new(&handles)
+        MultiWriteHandle::new_from_streams(handles.into_iter())
             .ok()
             .map(|write_handle| TablePersistMultiDetails {
                 all_table_ids,
