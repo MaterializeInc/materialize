@@ -38,7 +38,7 @@ use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
 use timely::dataflow::operators::{Capability, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
 use tracing::{debug, error, info};
 
@@ -495,7 +495,7 @@ impl KafkaSinkState {
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
             sink_state,
-            latest_progress_ts: Timestamp::MIN,
+            latest_progress_ts: Timestamp::minimum(),
             write_frontier,
         }
     }
@@ -715,8 +715,8 @@ impl KafkaSinkState {
     async fn determine_latest_consistency_record(
         &self,
     ) -> Result<Option<Timestamp>, anyhow::Error> {
-        // Return the list of partition ids associated with a specific topic
-        /// Polls a message from a Kafka Source
+        // Polls a message from a Kafka Source.  Blocking so should always be called on background
+        // thread.
         fn get_next_message(
             consumer: &mut BaseConsumer,
             timeout: Duration,
@@ -735,7 +735,8 @@ impl KafkaSinkState {
             }
         }
 
-        // Retrieves the latest committed timestamp from the consistency topic
+        // Retrieves the latest committed timestamp from the consistency topic.  Blocking so should
+        // always be called on background thread
         fn get_latest_ts(
             consistency_topic: &str,
             config: &ClientConfig,
@@ -832,7 +833,10 @@ impl KafkaSinkState {
             consistency_topic: &str,
         ) -> Result<Option<Timestamp>, anyhow::Error> {
             // The first 5 bytes are reserved for the schema id/schema registry information
-            let mut bytes = &bytes[5..];
+            let mut bytes = bytes.get(5..).ok_or_else(|| {
+                anyhow!("Malformed consistency topic message.  Shorter than 5 bytes.")
+            })?;
+
             let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
                 .context("Failed to decode consistency topic message")?;
 
@@ -1188,8 +1192,7 @@ where
                         }
                     };
                     let consistency_state = init
-                        .as_ref()
-                        .cloned()
+                        .clone()
                         .map(|init| init.to_running(Rc::clone(&shared_gate_ts)));
 
                     if let Some(gate) = latest_ts {
