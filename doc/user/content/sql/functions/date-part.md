@@ -52,23 +52,21 @@ day of year | `DOY`
 ### Extract second from timestamptz
 
 ```sql
-SELECT date_part('S', TIMESTAMP '2006-01-02 15:04:05.06')
-AS sec_extr;
+SELECT date_part('S', TIMESTAMP '2006-01-02 15:04:05.06');
 ```
 ```nofmt
- sec_extr
-----------
-     5.06
+ date_part
+-----------
+      5.06
 ```
 
 ### Extract century from date
 
 ```sql
-SELECT date_part('CENTURIES', DATE '2006-01-02')
-AS sec_extr;
+SELECT date_part('CENTURIES', DATE '2006-01-02');
 ```
 ```nofmt
- sec_extr
-----------
-      21
+ date_part
+-----------
+        21
 ```
