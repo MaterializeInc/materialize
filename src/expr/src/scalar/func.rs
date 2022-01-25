@@ -1719,18 +1719,13 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
     }
 }
 
-fn extract_interval(a: Datum, interval: Interval) -> Result<Datum, EvalError> {
+fn date_part_interval<'a, T>(a: Datum<'a>, interval: Interval) -> Result<Datum<'a>, EvalError>
+where
+    T: DecimalLike + Into<Datum<'static>>,
+{
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_interval_inner::<Numeric>(units, interval),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_part_interval(a: Datum, interval: Interval) -> Result<Datum, EvalError> {
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => date_part_interval_inner::<f64>(units, interval),
+        Ok(units) => date_part_interval_inner::<T>(units, interval),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -1770,24 +1765,14 @@ where
     }
 }
 
-fn extract_time<T>(a: Datum, time: T) -> Result<Datum, EvalError>
+fn date_part_time<'a, T, U>(a: Datum<'a>, time: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimeLike,
+    U: DecimalLike + Into<Datum<'a>>,
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_time_inner::<_, Numeric>(units, time),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_part_time<T>(a: Datum, time: T) -> Result<Datum, EvalError>
-where
-    T: TimeLike,
-{
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => date_part_time_inner::<_, f64>(units, time),
+        Ok(units) => date_part_time_inner::<_, U>(units, time),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -1828,24 +1813,14 @@ where
     }
 }
 
-fn extract_timestamp<T>(a: Datum, ts: T) -> Result<Datum, EvalError>
+fn date_part_timestamp<'a, T, U>(a: Datum<'a>, ts: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
+    U: DecimalLike + Into<Datum<'a>>,
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_timestamp_inner::<_, Numeric>(units, ts),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_part_timestamp<T>(a: Datum, ts: T) -> Result<Datum, EvalError>
-where
-    T: TimestampLike,
-{
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => date_part_timestamp_inner::<_, f64>(units, ts),
+        Ok(units) => date_part_timestamp_inner::<_, U>(units, ts),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -2437,31 +2412,31 @@ impl BinaryFunc {
                 ))
             }
             BinaryFunc::ExtractInterval => {
-                eager!(|a, b: Datum| extract_interval(a, b.unwrap_interval()))
+                eager!(|a, b: Datum| date_part_interval::<Numeric>(a, b.unwrap_interval()))
             }
             BinaryFunc::ExtractTime => {
-                eager!(|a, b: Datum| extract_time(a, b.unwrap_time()))
+                eager!(|a, b: Datum| date_part_time::<_, Numeric>(a, b.unwrap_time()))
             }
             BinaryFunc::ExtractTimestamp => {
-                eager!(|a, b: Datum| extract_timestamp(a, b.unwrap_timestamp()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamp()))
             }
             BinaryFunc::ExtractTimestampTz => {
-                eager!(|a, b: Datum| extract_timestamp(a, b.unwrap_timestamptz()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamptz()))
             }
             BinaryFunc::ExtractDate => {
                 eager!(|a, b: Datum| extract_date(a, b.unwrap_date()))
             }
             BinaryFunc::DatePartInterval => {
-                eager!(|a, b: Datum| date_part_interval(a, b.unwrap_interval()))
+                eager!(|a, b: Datum| date_part_interval::<f64>(a, b.unwrap_interval()))
             }
             BinaryFunc::DatePartTime => {
-                eager!(|a, b: Datum| date_part_time(a, b.unwrap_time()))
+                eager!(|a, b: Datum| date_part_time::<_, f64>(a, b.unwrap_time()))
             }
             BinaryFunc::DatePartTimestamp => {
-                eager!(|a, b: Datum| date_part_timestamp(a, b.unwrap_timestamp()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(a, b.unwrap_timestamp()))
             }
             BinaryFunc::DatePartTimestampTz => {
-                eager!(|a, b: Datum| date_part_timestamp(a, b.unwrap_timestamptz()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(a, b.unwrap_timestamptz()))
             }
             BinaryFunc::DateTruncTimestamp => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp()))
