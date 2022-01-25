@@ -150,6 +150,10 @@ changes that have not yet been documented.
     * Infer the name `case` for `CASE` expressions unless column name inference
       on the `ELSE` expression produces a preferred name.
 
+- Add the [`date_bin_hopping`](/sql/functions/date-bin-hopping) function, which
+  is an [experimental mode] function that provides a primitive to express what
+  other systems refer to as "hopping windows."
+
 {{< comment >}}
 Only add new release notes above this line.
 
@@ -1499,7 +1503,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   **Backwards-incompatible change.**
 
 - Add the `--experimental` command-line option to enable a new [experimental
-  mode](/cli/#experimental-mode), which grants access to experimental features
+  mode], which grants access to experimental features
   at the risk of compromising stability and backwards compatibility. Forthcoming
   features that require experimental mode will be marked as such in their
   documentation.
@@ -1891,6 +1895,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [compatibility function]: /sql/functions#postgresql-compatibility-func
 [`date`]: /sql/types/date
 [`double precision`]: /sql/types/float8
+[experimental mode]: /cli/#experimental-mode
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/
