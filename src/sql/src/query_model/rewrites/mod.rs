@@ -16,7 +16,7 @@ use std::collections::HashSet;
 pub(crate) trait Rule {
     fn name(&self) -> &'static str;
 
-    fn rule_type(&self) -> ApplyStrategy;
+    fn strategy(&self) -> ApplyStrategy;
 
     /// Determines how to rewrite the box.
     ///
@@ -69,13 +69,13 @@ pub fn rewrite_model(model: &mut Model) {
 fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn Rule>>) {
     let (top_box, other): (Vec<Box<dyn Rule>>, Vec<Box<dyn Rule>>) = rules
         .into_iter()
-        .partition(|r| matches!(r.rule_type(), ApplyStrategy::TopBox));
+        .partition(|r| matches!(r.strategy(), ApplyStrategy::TopBox));
     let (pre, post): (Vec<Box<dyn Rule>>, Vec<Box<dyn Rule>>) = other
         .into_iter()
-        .partition(|r| matches!(r.rule_type(), ApplyStrategy::AllBoxes(VisitOrder::Pre)));
+        .partition(|r| matches!(r.strategy(), ApplyStrategy::AllBoxes(VisitOrder::Pre)));
 
     for rule in &top_box {
-        apply_rule(&rule, model, model.top_box);
+        apply_rule(rule.as_ref(), model, model.top_box);
     }
 
     let mut rewritten = true;
@@ -85,7 +85,7 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn Rule>>) {
         rewritten |= apply_dft_rules(&pre, &post, model);
 
         for rule in &top_box {
-            rewritten |= apply_rule(&rule, model, model.top_box);
+            rewritten |= apply_rule(rule.as_ref(), model, model.top_box);
         }
     }
 }
@@ -93,7 +93,7 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn Rule>>) {
 /// Applies the rewrite rule corresponding to the `rule` to a box.
 ///
 /// Returns whether the box was rewritten.
-fn apply_rule(rule: &Box<dyn Rule>, model: &mut Model, box_id: BoxId) -> bool {
+fn apply_rule(rule: &dyn Rule, model: &mut Model, box_id: BoxId) -> bool {
     let rewrite = rule.check(model, box_id);
     if let Some(mut rewrite) = rewrite {
         rewrite.rewrite(model);
@@ -123,6 +123,7 @@ fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &
     // All nodes that have been exited.
     let mut exited = HashSet::new();
 
+    // In our current node, find the next child box, if any, that we have not entered.
     fn find_next_child_to_enter(
         model: &mut Model,
         entered: &mut Vec<(BoxId, usize)>,
@@ -130,8 +131,7 @@ fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &
     ) -> Option<BoxId> {
         let (box_id, traversed_quantifiers) = entered.last_mut().unwrap();
         let b = model.get_box(*box_id);
-        for q_id in b.quantifiers.iter().skip(*traversed_quantifiers) {
-            let q = model.get_quantifier(*q_id);
+        for q in b.input_quantifiers().skip(*traversed_quantifiers) {
             *traversed_quantifiers += 1;
             if !exited.contains(&q.input_box) {
                 return Some(q.input_box);
@@ -140,24 +140,39 @@ fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &
         return None;
     }
 
-    // Enter the top box.
-    for rule in pre {
-        rewritten |= apply_rule(&rule, model, model.top_box);
-    }
+    // Pseudocode for the recursive version of this function would look like:
+    // ```
+    // apply_preorder_rules()
+    // foreach quantifier:
+    //    recursive_call(quantifier.input_box)
+    // apply_postorder_rules()
+    // ```
+    // In this non-recursive implementation, you can think of the call stack as
+    // been replaced by `entered`. Every time an object is pushed into `entered`
+    // would have been a time you would have pushed a recursive call onto the
+    // call stack. Likewise, times an object is popped from `entered` would have
+    // been times when recursive calls leave the stack.
+
+    // Start from the top box.
     entered.push((model.top_box, 0));
+    for rule in pre {
+        rewritten |= apply_rule(rule.as_ref(), model, model.top_box);
+    }
     while !entered.is_empty() {
         if let Some(to_enter) = find_next_child_to_enter(model, &mut entered, &mut exited) {
-            for rule in pre {
-                rewritten |= apply_rule(&rule, model, to_enter);
-            }
             entered.push((to_enter, 0));
-        } else {
-            // If we can't descend any more, exit the current node we are in.
-            let (box_id, _) = entered.pop().unwrap();
-            for rule in post {
-                rewritten |= apply_rule(&rule, model, box_id);
+            for rule in pre {
+                rewritten |= apply_rule(rule.as_ref(), model, to_enter);
             }
-            exited.insert(box_id);
+        } else {
+            // If this box has no more children to descend into,
+            // run PostOrder rules and exit the current box.
+            let (box_id, _) = entered.last().unwrap();
+            for rule in post {
+                rewritten |= apply_rule(rule.as_ref(), model, *box_id);
+            }
+            exited.insert(*box_id);
+            entered.pop();
         }
     }
 
