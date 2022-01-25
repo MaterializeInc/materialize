@@ -704,7 +704,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Respect the [`no_proxy` environment variable](/cli/#http-proxies) to exclude
   certain hosts from the configured HTTP/HTTPS proxy, if any.
 
-- Add [`reuse_topic`](/sql/create-sink/#enabling-topic-reuse-after-restart-exactly-once-sinks) as
+- Add [`reuse_topic`](/sql/create-sink/#exactly-once-sinks-with-topic-reuse-after-restart) as
   a beta feature for Kafka Sinks. This allows re-using the output topic across
   restarts of Materialize.
 

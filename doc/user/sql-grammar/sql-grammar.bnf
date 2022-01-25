@@ -325,8 +325,7 @@ sink_format_spec ::=
   'JSON'
 consistency_format_spec ::=
   'AVRO USING' (
-        'CONFLUENT SCHEMA REGISTRY' url with_options? |
-        'SCHEMA' 'FILE' schema_file_path
+        'CONFLUENT SCHEMA REGISTRY' url with_options?
         )
 key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
