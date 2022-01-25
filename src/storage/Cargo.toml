@@ -9,6 +9,11 @@ rust-version = "1.58.0"
 [dependencies]
 tonic = "0.6.2"
 prost = { git = "https://github.com/MaterializeInc/prost.git" }
+dataflow = { path = "../dataflow" }
+dataflow-types = { path = "../dataflow-types" }
+expr = { path = "../expr" }
+repr = { path = "../repr" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 
 [build-dependencies]
 tonic-build = "0.6.2"

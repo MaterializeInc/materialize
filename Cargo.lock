@@ -3075,7 +3075,12 @@ dependencies = [
 name = "mz-storage"
 version = "0.0.0"
 dependencies = [
+ "dataflow",
+ "dataflow-types",
+ "expr",
  "prost",
+ "repr",
+ "timely",
  "tonic",
  "tonic-build",
 ]
