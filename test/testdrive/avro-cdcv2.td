@@ -123,12 +123,12 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
 # that restarted and emits previously emitted data at a compacted timestamp
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"array":[{"data":{"id":5,"price":{"int":10}},"time":9,"diff":1}]}
-{"array":[{"data":{"id":5,"price":{"int":12}},"time":9,"diff":1}]}
-{"array":[{"data":{"id":5,"price":{"int":12}},"time":9,"diff":-1}]}
+{"array":[{"data":{"id":5,"price":{"int":10}},"time":5,"diff":1}]}
+{"array":[{"data":{"id":5,"price":{"int":12}},"time":4,"diff":1}]}
+{"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"com.materialize.cdc.progress":{"lower":[0],"upper":[10],"counts":[{"time":9,"count":3}]}}
+{"com.materialize.cdc.progress":{"lower":[3],"upper":[6],"counts":[{"time":4,"count":1},{"time":5,"count":2}]}}
 
 > SELECT * FROM data_schema_inline
 
@@ -141,6 +141,19 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=5
 {"com.materialize.cdc.progress":{"lower":[10],"upper":[15],"counts":[{"time":10,"count":1}]}}
 
 > SELECT * FROM data_schema_inline
+id price
+--------
+6 10
+
+# Regression test for 9230.
+> CREATE SOURCE unmaterialized_source
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE MATERIALIZE
+
+> CREATE MATERIALIZED VIEW unmaterialized_source_view AS (SELECT * FROM unmaterialized_source)
+
+> SELECT * FROM unmaterialized_source_view
 id price
 --------
 6 10
