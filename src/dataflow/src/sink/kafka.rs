@@ -308,9 +308,10 @@ impl KafkaTxProducer {
     fn flush(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
-        task::spawn_blocking(|| format!("flush:{}", self.name), move || {
-            self_producer.flush(self_timeout)
-        })
+        task::spawn_blocking(
+            || format!("flush:{}", self.name),
+            move || self_producer.flush(self_timeout),
+        )
         .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
