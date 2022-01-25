@@ -178,3 +178,162 @@ fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &
 
     rewritten
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query_model::*;
+
+    #[test]
+    fn it_applies_a_simple_rule() {
+        let mut model = test_model();
+        let src_id = model.make_box(get_user_id(5).into());
+
+        let rules: Vec<Box<dyn Rule>> = vec![
+            // create E(src_id, curr_id) quantifiers in pre-visit
+            Box::new(ConnectAll::new(src_id, VisitOrder::Pre)),
+            // create A(src_id, curr_id) quantifiers in post-visit
+            Box::new(ConnectAll::new(src_id, VisitOrder::Post)),
+        ];
+
+        apply_rules_to_model(&mut model, rules);
+
+        let act_result = model
+            .get_box(src_id)
+            .ranging_quantifiers()
+            .map(|q| (q.parent_box, q.quantifier_type))
+            .collect::<Vec<_>>();
+
+        let exp_result = vec![
+            (BoxId(4), QuantifierType::Existential),
+            (BoxId(1), QuantifierType::Existential),
+            (BoxId(0), QuantifierType::Existential),
+            (BoxId(0), QuantifierType::All),
+            (BoxId(1), QuantifierType::All),
+            (BoxId(2), QuantifierType::Existential),
+            (BoxId(2), QuantifierType::All),
+            (BoxId(3), QuantifierType::Existential),
+            (BoxId(3), QuantifierType::All),
+            (BoxId(4), QuantifierType::All),
+        ];
+
+        assert_eq!(act_result, exp_result);
+    }
+
+    /// Create the following model of select boxes:
+    ///
+    /// ```
+    ///              --------------
+    ///             /              \
+    /// (b0) --- (b1) --- (b3) --- (b4)
+    ///    \              /         /
+    ///     ---- (b2) ----         /
+    ///            \              /
+    ///             --------------
+    /// ```
+    fn test_model() -> Model {
+        let mut model = Model::new();
+
+        // vertices
+        let b0 = model.make_box(Select::default().into());
+        let b1 = model.make_box(Select::default().into());
+        let b2 = model.make_box(Select::default().into());
+        let b3 = model.make_box(Select::default().into());
+        let b4 = model.make_box(Select::default().into());
+
+        // edges
+        model.make_quantifier(QuantifierType::Foreach, b0, b1);
+        model.make_quantifier(QuantifierType::Foreach, b0, b2);
+        model.make_quantifier(QuantifierType::Foreach, b1, b3);
+        model.make_quantifier(QuantifierType::Foreach, b2, b3);
+        model.make_quantifier(QuantifierType::Foreach, b1, b4);
+        model.make_quantifier(QuantifierType::Foreach, b1, b4);
+        model.make_quantifier(QuantifierType::Foreach, b2, b4);
+        model.make_quantifier(QuantifierType::Foreach, b3, b4);
+
+        // top box
+        model.top_box = b4;
+
+        model
+    }
+
+    fn get_user_id(id: u64) -> Get {
+        Get {
+            id: expr::GlobalId::User(id),
+        }
+    }
+
+    /// A test [`Rule`] that createse quantifiers between `src_id`
+    /// and all other nodes in the given [`VisitOrder`].
+    struct ConnectAll {
+        src_id: BoxId,
+        visit_order: VisitOrder,
+    }
+
+    impl ConnectAll {
+        fn new(src_id: BoxId, visit_order: VisitOrder) -> ConnectAll {
+            ConnectAll {
+                src_id,
+                visit_order,
+            }
+        }
+
+        fn quantifier_type(&self) -> QuantifierType {
+            match self.visit_order {
+                VisitOrder::Pre => QuantifierType::Existential,
+                VisitOrder::Post => QuantifierType::All,
+            }
+        }
+
+        fn matches_quantifer(&self, quantifier_type: QuantifierType) -> bool {
+            match self.visit_order {
+                VisitOrder::Pre => matches!(quantifier_type, QuantifierType::Existential),
+                VisitOrder::Post => matches!(quantifier_type, QuantifierType::All),
+            }
+        }
+
+        fn connected(&self, model: &Model, tgt_id: BoxId) -> bool {
+            model.quantifiers.values().any(|q| {
+                let q = q.borrow();
+                self.matches_quantifer(q.quantifier_type)
+                    && (q.input_box == self.src_id && q.parent_box == tgt_id)
+            })
+        }
+    }
+
+    impl Rule for ConnectAll {
+        fn name(&self) -> &'static str {
+            "connect-all"
+        }
+
+        fn strategy(&self) -> ApplyStrategy {
+            ApplyStrategy::AllBoxes(self.visit_order)
+        }
+
+        fn check(&self, model: &Model, box_id: BoxId) -> Option<Box<dyn Rewrite>> {
+            if box_id != self.src_id && !self.connected(model, box_id) {
+                Some(Box::new(Connect {
+                    src_id: self.src_id,
+                    tgt_id: box_id,
+                    quantifier_type: self.quantifier_type(),
+                }))
+            } else {
+                None
+            }
+        }
+    }
+
+    /// A test [`Rewrite`] that creates the specified quantifier.
+    struct Connect {
+        src_id: BoxId,
+        tgt_id: BoxId,
+        quantifier_type: QuantifierType,
+    }
+
+    impl Rewrite for Connect {
+        fn rewrite(&mut self, model: &mut Model) {
+            // println!("{}:{}⇒{}", self.quantifier_type, self.src_id, self.tgt_id);
+            model.make_quantifier(self.quantifier_type, self.src_id, self.tgt_id);
+        }
+    }
+}
