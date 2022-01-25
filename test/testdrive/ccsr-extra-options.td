@@ -37,7 +37,7 @@ $ kafka-ingest format=avro key-format=avro topic=input schema=${schema} key-sche
   WITH (
     gus = "gus"
   )
-unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
+exact:unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
 
 ! CREATE MATERIALIZED SOURCE input_bad
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
@@ -46,4 +46,4 @@ unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
     gus = "gus"
   )
   ENVELOPE UPSERT
-unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
+exact:unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus

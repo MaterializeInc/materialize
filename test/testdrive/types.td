@@ -308,4 +308,4 @@ true
 
 # Ensure we don't allow unknown options
 ! CREATE TYPE whatever AS LIST (element_type=int4, gus=int4);
-unexpected parameters for CREATE TYPE: gus
+exact:unexpected parameters for CREATE TYPE: gus
