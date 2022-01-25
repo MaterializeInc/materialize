@@ -22,7 +22,7 @@ use reduce::{KeyValPlan, ReducePlan};
 use threshold::ThresholdPlan;
 use top_k::TopKPlan;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::DataflowDescription;
 use expr::{
@@ -34,6 +34,20 @@ use repr::{Datum, Diff, Row};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+// This function exists purely to convert the HashMap into a BTreeMap,
+// so that the value will be stable, for the benefit of tests
+// that print out the physical plan.
+fn serialize_arranged<S: Serializer>(
+    arranged: &Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    let to_serialize = arranged.iter().map(|(key, permutation, thinning)| {
+        let permutation = permutation.iter().collect::<BTreeMap<_, _>>();
+        (key, permutation, thinning)
+    });
+    s.collect_seq(to_serialize)
+}
 
 /// The forms in which an operator's output is available;
 /// it can be considered the plan-time equivalent of
@@ -78,6 +92,7 @@ pub struct AvailableCollections {
     pub raw: bool,
     /// The set of arrangements of the collection, along with a
     /// column permutation mapping
+    #[serde(serialize_with = "serialize_arranged")]
     pub arranged: Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
 }
 

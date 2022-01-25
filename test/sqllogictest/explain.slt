@@ -331,8 +331,8 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
             }
           ],
           {
-            "1": 1,
-            "0": 0
+            "0": 0,
+            "1": 1
           },
           []
         ]
@@ -386,8 +386,8 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
             }
           ],
           {
-            "1": 1,
-            "0": 0
+            "0": 0,
+            "1": 1
           },
           []
         ]
@@ -547,8 +547,8 @@ EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
                     }
                   ],
                   {
-                    "1": 1,
-                    "0": 0
+                    "0": 0,
+                    "1": 1
                   },
                   []
                 ]
@@ -645,8 +645,8 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
             }
           ],
           {
-            "1": 1,
-            "0": 0
+            "0": 0,
+            "1": 1
           },
           []
         ]
@@ -702,8 +702,8 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIM
             }
           ],
           {
-            "1": 1,
-            "0": 0
+            "0": 0,
+            "1": 1
           },
           []
         ]
