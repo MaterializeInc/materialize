@@ -16,11 +16,19 @@ from pathlib import Path
 import boto3
 import humanize
 
-from materialize import git
+from materialize import ROOT, cargo, git
 from materialize.xcompile import Arch
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
+
+
+def materialized_rust_version() -> str:
+    rust_version = cargo.Workspace(ROOT).crates["materialized"].rust_version
+    assert (
+        rust_version is not None
+    ), "materialized crate missing rust version configuration"
+    return rust_version
 
 
 def apt_materialized_path(arch: Arch, version: str) -> str:

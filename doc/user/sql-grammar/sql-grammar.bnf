@@ -25,10 +25,10 @@ connector_spec ::=
   'KAFKA BROKER' host 'TOPIC' topic?
 copy_to ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
-  ( 'WITH'? '(' option ( ',' option )* ')' )?
+  ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 copy_from ::=
   'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
-  ( 'WITH'? '(' option ( ',' option )* ')' )?
+  ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
@@ -325,8 +325,7 @@ sink_format_spec ::=
   'JSON'
 consistency_format_spec ::=
   'AVRO USING' (
-        'CONFLUENT SCHEMA REGISTRY' url with_options? |
-        'SCHEMA' 'FILE' schema_file_path
+        'CONFLUENT SCHEMA REGISTRY' url with_options?
         )
 key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
@@ -341,6 +340,8 @@ func_date_bin ::=
   'date_bin' '(' stride ',' source ',' origin ')'
 func_date_bin_experimental ::=
   'date_bin' '(' stride ',' source (',' origin)? ')'
+func_date_bin_hopping ::=
+  'date_bin_hopping' '(' hop ',' width ',' source (',' origin)? ')'
 func_date_trunc ::=
   'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'
 func_extract ::=

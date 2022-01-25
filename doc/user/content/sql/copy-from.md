@@ -16,10 +16,14 @@ Field | Use
 ------|-----
 _table_name_ | Copy values to this table.
 **(**_column_...**)** | Correlate the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>Without a column list, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
+_field_ | The name of the option you want to set.
+_val_ | The value for the option.
 
-Supported `option` values:
+### `WITH` options
 
-Name | Permitted values| Default value | Description
+The following options are valid within the `WITH` clause.
+
+Name | Value type | Default value | Description
 -----|-----------------|---------------|------------
 `FORMAT` | `TEXT`, `CSV` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
 `DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.
@@ -64,15 +68,15 @@ except that:
 ## Example
 
 ```sql
-COPY t FROM STDIN WITH (DELIMITER '|')
+COPY t FROM STDIN WITH (DELIMITER '|');
 ```
 
 ```sql
-COPY t FROM STDIN (FORMAT CSV)
+COPY t FROM STDIN (FORMAT CSV);
 ```
 
 ```sql
-COPY t FROM STDIN (DELIMITER '|')
+COPY t FROM STDIN (DELIMITER '|');
 ```
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html

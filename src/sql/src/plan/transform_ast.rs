@@ -22,7 +22,6 @@ use sql_parser::ast::{
     TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
 
-use crate::func::Func;
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -49,7 +48,7 @@ where
     f(&mut func_rewriter, ast);
     func_rewriter.status?;
 
-    let mut desugarer = Desugarer::new(scx);
+    let mut desugarer = Desugarer::new();
     f(&mut desugarer, ast);
     desugarer.status
 }
@@ -296,29 +295,24 @@ impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
 ///
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
-struct Desugarer<'a> {
-    scx: &'a StatementContext<'a>,
+struct Desugarer {
     status: Result<(), PlanError>,
     recursion_guard: RecursionGuard,
 }
 
-impl<'a> CheckedRecursion for Desugarer<'a> {
+impl CheckedRecursion for Desugarer {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
 }
 
-impl<'ast> VisitMut<'ast, Raw> for Desugarer<'_> {
+impl<'ast> VisitMut<'ast, Raw> for Desugarer {
     fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
         self.visit_internal(Self::visit_expr_mut_internal, expr);
     }
-
-    fn visit_select_mut(&mut self, node: &'ast mut Select<Raw>) {
-        self.visit_internal(Self::visit_select_mut_internal, node);
-    }
 }
 
-impl<'a> Desugarer<'a> {
+impl Desugarer {
     fn visit_internal<F, X>(&mut self, f: F, x: X)
     where
         F: Fn(&mut Self, X) -> Result<(), PlanError>,
@@ -333,57 +327,11 @@ impl<'a> Desugarer<'a> {
         }
     }
 
-    fn new(scx: &'a StatementContext<'a>) -> Desugarer {
+    fn new() -> Desugarer {
         Desugarer {
-            scx,
             status: Ok(()),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
-    }
-
-    fn visit_select_mut_internal(&mut self, node: &mut Select<Raw>) -> Result<(), PlanError> {
-        // `SELECT .., $table_func, .. FROM x`
-        // =>
-        // `SELECT .., table_func, .. FROM x, LATERAL $table_func`
-        //
-        // Table functions in SELECT projections are supported by rewriting them to a
-        // FROM LATERAL, which is limited to a single table function. After we find a
-        // table function, if we find another identical to it, they are all rewritten
-        // to the same identifier. A second unique table function will cause an error.
-        //
-        // See: https://www.postgresql.org/docs/14/xfunc-sql.html#XFUNC-SQL-FUNCTIONS-RETURNING-SET
-        // See: https://www.postgresql.org/docs/14/queries-table-expressions.html#QUERIES-FROM
-
-        // Look for table function in SELECT projections. We use a unique
-        // TableFuncRewriter per SELECT, which allows differing table functions to
-        // exist in the same statement, as long as they are in other SELECTs.
-        let mut tf = TableFuncRewriter::new(self.scx);
-        for item in node.projection.iter_mut() {
-            visit_mut::visit_select_item_mut(&mut tf, item);
-        }
-        tf.status?;
-
-        if let Some((func, name)) = tf.table_func {
-            // We have a table func in a select item's position, add it to FROM.
-            node.from.push(TableWithJoins {
-                relation: TableFactor::Function {
-                    function: TableFunction {
-                        name: func.name,
-                        args: func.args,
-                    },
-                    alias: Some(TableAlias {
-                        name,
-                        columns: vec![],
-                        strict: false,
-                    }),
-                    with_ordinality: false,
-                },
-                joins: vec![],
-            });
-        }
-
-        visit_mut::visit_select_mut(self, node);
-        Ok(())
     }
 
     fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
@@ -624,108 +572,6 @@ impl<'a> Desugarer<'a> {
         }
 
         visit_mut::visit_expr_mut(self, expr);
-        Ok(())
-    }
-}
-
-// A VisitMut that replaces table functions with the function name as an
-// Identifier. After calls to visit_mut, if table_func is Some, it holds the
-// extracted table function, which should be added as a FROM clause. Query
-// nodes (and thus any subquery Expr) are ignored.
-struct TableFuncRewriter<'a> {
-    scx: &'a StatementContext<'a>,
-    disallowed_context: Vec<&'static str>,
-    table_func: Option<(Function<Raw>, Ident)>,
-    status: Result<(), PlanError>,
-}
-
-impl<'ast> VisitMut<'ast, Raw> for TableFuncRewriter<'_> {
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
-        self.visit_internal(Self::visit_expr_mut_internal, expr);
-    }
-
-    fn visit_query_mut(&mut self, _node: &'ast mut Query<Raw>) {
-        // Do not descend into Query nodes so subqueries can have their own table
-        // functions rewritten.
-    }
-}
-
-impl<'a> TableFuncRewriter<'a> {
-    fn new(scx: &'a StatementContext<'a>) -> TableFuncRewriter<'a> {
-        TableFuncRewriter {
-            scx,
-            disallowed_context: Vec::new(),
-            table_func: None,
-            status: Ok(()),
-        }
-    }
-
-    fn visit_internal<F, X>(&mut self, f: F, x: X)
-    where
-        F: Fn(&mut Self, X) -> Result<(), PlanError>,
-    {
-        if self.status.is_ok() {
-            // self.status could have changed from a deeper call, so don't blindly
-            // overwrite it with the result of this call.
-            let status = f(self, x);
-            if self.status.is_ok() {
-                self.status = status;
-            }
-        }
-    }
-
-    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
-        // This block does two things:
-        // - Check if expr is a context where table functions are disallowed.
-        // - Check if expr is a table function, and attempt to replace if so.
-        let disallowed_context = match expr {
-            Expr::Case { .. } => Some("CASE"),
-            Expr::Coalesce { .. } => Some("COALESCE"),
-            Expr::Function(func) => {
-                if let Ok(item) = self.scx.resolve_function(func.name.clone()) {
-                    match item.func()? {
-                        Func::Aggregate(_) => Some("aggregate function calls"),
-                        Func::Table(_) => {
-                            if let Some(context) = self.disallowed_context.last() {
-                                sql_bail!("table functions are not allowed in {}", context);
-                            }
-                            let name = Ident::new(item.name().item.clone());
-                            let ident = Expr::Identifier(vec![name.clone()]);
-                            match self.table_func.as_mut() {
-                                None => {
-                                    self.table_func = Some((func.clone(), name));
-                                }
-                                Some((table_func, _)) => {
-                                    if func != table_func {
-                                        bail_unsupported!(
-                                            1546,
-                                            "multiple table functions in select projections"
-                                        );
-                                    }
-                                }
-                            }
-                            *expr = ident;
-                            None
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-
-        if let Some(context) = disallowed_context {
-            self.disallowed_context.push(context);
-        }
-
-        visit_mut::visit_expr_mut(self, expr);
-
-        if disallowed_context.is_some() {
-            self.disallowed_context.pop();
-        }
-
         Ok(())
     }
 }

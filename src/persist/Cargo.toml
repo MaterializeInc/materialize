@@ -4,6 +4,7 @@ description = "Abstraction for Materialize dataplane persistence."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [[bench]]
 name = "writer"
@@ -43,7 +44,7 @@ parquet2 = { version = "0.8.1", default-features = false }
 persist-types = { path = "../persist-types" }
 prost = "0.9.0"
 semver = { version = "1.0.4" }
-serde = { version = "1.0.133", features = ["derive"] }
+serde = { version = "1.0.135", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.15.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
 uuid = { version = "0.8.2", features = ["v4"] }
@@ -56,4 +57,4 @@ criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 ore = { path = "../ore", default-features = false, features = ["test"] }
 rand = { version = "0.8.4", features = [ "small_rng" ] }
 tempfile = "3.2.0"
-serde_json = "1.0.75"
+serde_json = "1.0.78"

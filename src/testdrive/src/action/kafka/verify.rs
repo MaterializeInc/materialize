@@ -11,9 +11,9 @@ use std::cmp;
 use std::str;
 use std::time::Duration;
 
+use anyhow::{bail, Context as _};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use ore::result::ResultExt;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::pin;
@@ -42,18 +42,21 @@ pub struct VerifyAction {
     partial_search: Option<usize>,
 }
 
-pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyAction, String> {
+pub fn build_verify(
+    mut cmd: BuiltinCommand,
+    context: Context,
+) -> Result<VerifyAction, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => SinkFormat::Avro,
         "json" => SinkFormat::Json {
             key: cmd.args.parse("key")?,
         },
-        f => return Err(format!("unknown format: {}", f)),
+        f => bail!("unknown format: {}", f),
     };
     let sink = cmd.args.string("sink")?;
     let consistency = match cmd.args.opt_string("consistency").as_deref() {
         Some("debezium") => Some(SinkConsistencyFormat::Debezium),
-        Some(s) => return Err(format!("unknown sink consistency format {}", s)),
+        Some(s) => bail!("unknown sink consistency format {}", s),
         None => None,
     };
 
@@ -62,9 +65,7 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
     if expected_messages.len() == 0 {
         // verify with 0 messages doesn't check that no messages have been written -
         // it 'verifies' 0 messages and trivially returns true
-        return Err(String::from(
-            "kafka-verify requires a non-empty list of expected messages",
-        ));
+        bail!("kafka-verify requires a non-empty list of expected messages");
     }
     let partial_search = cmd.args.opt_parse("partial-search")?;
     cmd.args.done()?;
@@ -82,47 +83,50 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
 fn avro_from_bytes(
     schema: &mz_avro::Schema,
     mut bytes: &[u8],
-) -> Result<mz_avro::types::Value, String> {
+) -> Result<mz_avro::types::Value, anyhow::Error> {
     if bytes.len() < 5 {
-        return Err(format!(
+        bail!(
             "avro datum is too few bytes: expected at least 5 bytes, got {}",
             bytes.len()
-        ));
+        );
     }
     let magic = bytes[0];
     let _schema_id = BigEndian::read_i32(&bytes[1..5]);
     bytes = &bytes[5..];
 
     if magic != 0 {
-        return Err(format!(
+        bail!(
             "wrong avro serialization magic: expected 0, got {}",
             bytes[0]
-        ));
+        );
     }
 
-    let datum = avro::from_avro_datum(schema, &mut bytes)
-        .map_err(|e| format!("from_avro_datum: {:#}", e))?;
+    let datum = avro::from_avro_datum(schema, &mut bytes).context("decoding avro datum")?;
     Ok(datum)
 }
 
-async fn get_topic(sink: &str, topic_field: &str, state: &mut State) -> Result<String, String> {
+async fn get_topic(
+    sink: &str,
+    topic_field: &str,
+    state: &mut State,
+) -> Result<String, anyhow::Error> {
     let query = format!("SELECT {} FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1", topic_field);
     let result = state
         .pgclient
         .query_one(query.as_str(), &[&sink])
         .await
-        .map_err(|e| format!("retrieving topic name: {}", e))?
+        .context("retrieving topic name")?
         .get(topic_field);
     Ok(result)
 }
 
 #[async_trait]
 impl Action for VerifyAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let topic: String = match self.consistency {
             None => get_topic(&self.sink, "topic", state).await?,
             Some(SinkConsistencyFormat::Debezium) => {
@@ -135,12 +139,10 @@ impl Action for VerifyAction {
         let mut config = state.kafka_config.clone();
         config.set("enable.auto.offset.store", "false");
 
-        let consumer: StreamConsumer = config
-            .create()
-            .map_err(|e| format!("creating kafka consumer: {:#}", e))?;
+        let consumer: StreamConsumer = config.create().context("creating kafka consumer")?;
         consumer
             .subscribe(&[&topic])
-            .map_err(|e| format!("subscribing: {:#}", e))?;
+            .context("subscribing to kafka topic")?;
 
         let (stream_size, stream_timeout) = match self.partial_search {
             Some(size) => (size, state.default_timeout),
@@ -162,10 +164,10 @@ impl Action for VerifyAction {
         loop {
             match message_stream.next().await {
                 Some(Ok(message)) => {
-                    let message = message.map_err_to_string()?;
+                    let message = message?;
                     consumer
                         .store_offset_from_message(&message)
-                        .map_err(|e| format!("storing message offset: {:#}", e))?;
+                        .context("storing message offset")?;
                     actual_bytes.push((
                         message.key().and_then(|bytes| Some(bytes.to_owned())),
                         message.payload().and_then(|bytes| Some(bytes.to_owned())),
@@ -187,7 +189,7 @@ impl Action for VerifyAction {
                     .ccsr_client
                     .get_schema_by_subject(&format!("{}-value", topic))
                     .await
-                    .map_err(|e| format!("fetching schema: {}", e))?
+                    .context("fetching schema")?
                     .raw;
 
                 let key_schema = state
@@ -196,13 +198,12 @@ impl Action for VerifyAction {
                     .await
                     .ok()
                     .map(|key_schema| {
-                        avro::parse_schema(&key_schema.raw)
-                            .map_err(|e| format!("parsing avro schema: {}", e))
+                        avro::parse_schema(&key_schema.raw).context("parsing avro schema")
                     })
                     .transpose()?;
 
-                let value_schema = avro::parse_schema(&value_schema)
-                    .map_err(|e| format!("parsing avro schema: {}", e))?;
+                let value_schema =
+                    avro::parse_schema(&value_schema).context("parsing avro schema")?;
                 let value_schema = &value_schema;
 
                 let mut actual_messages = vec![];
@@ -212,7 +213,7 @@ impl Action for VerifyAction {
                         .map(|key_schema| {
                             let bytes = match key {
                                 Some(key) => key,
-                                None => return Err("empty message key".into()),
+                                None => bail!("empty message key"),
                             };
                             avro_from_bytes(key_schema, &bytes)
                         })
@@ -247,17 +248,15 @@ impl Action for VerifyAction {
                 for (key, value) in actual_bytes {
                     let key_datum = match key {
                         None => None,
-                        Some(bytes) => Some(
-                            serde_json::from_slice(&bytes)
-                                .map_err(|e| format!("converting bytes to JSON {}", e))?,
-                        ),
+                        Some(bytes) => {
+                            Some(serde_json::from_slice(&bytes).context("decoding json")?)
+                        }
                     };
                     let value_datum = match value {
                         None => None,
-                        Some(bytes) => Some(
-                            serde_json::from_slice(&bytes)
-                                .map_err(|e| format!("converting bytes to JSON {}", e))?,
-                        ),
+                        Some(bytes) => {
+                            Some(serde_json::from_slice(&bytes).context("decoding json")?)
+                        }
                     };
 
                     actual_messages.push((key_datum, value_datum));
@@ -286,20 +285,20 @@ pub struct VerifySchemaAction {
     expected_value_schema: String,
 }
 
-pub fn build_verify_schema(mut cmd: BuiltinCommand) -> Result<VerifySchemaAction, String> {
+pub fn build_verify_schema(mut cmd: BuiltinCommand) -> Result<VerifySchemaAction, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => SinkFormat::Avro,
         "json" => SinkFormat::Json {
             key: cmd.args.parse("key")?,
         },
-        f => return Err(format!("unknown format: {}", f)),
+        f => bail!("unknown format: {}", f),
     };
     let sink = cmd.args.string("sink")?;
 
-    let (key, value): (Option<String>, String) = match &cmd.input[..] {
+    let (key, value) = match &cmd.input[..] {
         [value] => (None, value.clone()),
         [key, value] => (Some(key.clone()), value.clone()),
-        _ => return Err(String::from("unable to read key/value schema inputs")),
+        _ => bail!("unable to read key/value schema inputs"),
     };
 
     cmd.args.done()?;
@@ -313,11 +312,11 @@ pub fn build_verify_schema(mut cmd: BuiltinCommand) -> Result<VerifySchemaAction
 
 #[async_trait]
 impl Action for VerifySchemaAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let topic = get_topic(&self.sink, "topic", state).await?;
 
         match &self.format {
@@ -326,7 +325,7 @@ impl Action for VerifySchemaAction {
                     .ccsr_client
                     .get_schema_by_subject(&format!("{}-value", topic))
                     .await
-                    .map_err(|e| format!("fetching schema: {}", e))?
+                    .context("fetching schema")?
                     .raw;
 
                 let generated_key_schema = state
@@ -335,44 +334,43 @@ impl Action for VerifySchemaAction {
                     .await
                     .ok()
                     .map(|key_schema| {
-                        avro::parse_schema(&key_schema.raw)
-                            .map_err(|e| format!("parsing avro schema: {}", e))
+                        avro::parse_schema(&key_schema.raw).context("parsing avro schema")
                     })
                     .transpose()?;
 
                 let generated_value_schema = avro::parse_schema(&generated_value_schema)
-                    .map_err(|e| format!("parsing generated avro schema: {}", e))?;
+                    .context("parsing generated avro schema")?;
                 let expected_value_schema = avro::parse_schema(&self.expected_value_schema)
-                    .map_err(|e| format!("parsing expected avro schema: {}", e))?;
+                    .context("parsing expected avro schema")?;
 
                 if expected_value_schema.ne(&generated_value_schema) {
-                    return Err(format!(
+                    bail!(
                         "value schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
-                        expected_value_schema, generated_value_schema
-                    ));
+                        expected_value_schema,
+                        generated_value_schema
+                    );
                 }
 
                 if let Some(expected_key_schema) = &self.expected_key_schema {
                     let expected_key_schema = avro::parse_schema(expected_key_schema)
-                        .map_err(|e| format!("parsing expected avro schema: {}", e))?;
+                        .context("parsing expected avro schema")?;
 
                     if generated_key_schema.is_none() {
-                        return Err(String::from("empty generated key schema"));
+                        bail!("empty generated key schema");
                     }
 
                     let generated_key_schema = generated_key_schema.unwrap();
                     if expected_key_schema.ne(&generated_key_schema) {
-                        return Err(format!(
+                        bail!(
                             "key schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
-                            expected_key_schema, generated_key_schema
-                        ));
+                            expected_key_schema,
+                            generated_key_schema
+                        );
                     }
                 }
             }
             _ => {
-                return Err(String::from(
-                    "kafka-verify-schema is only supported for Avro sinks",
-                ))
+                bail!("kafka-verify-schema is only supported for Avro sinks")
             }
         }
 

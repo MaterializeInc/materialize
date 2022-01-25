@@ -3564,7 +3564,7 @@ impl<'a> Parser<'a> {
             // An empty target list is permissible to match PostgreSQL, which
             // permits these for symmetry with zero column tables.
             Some(Token::Keyword(kw)) if kw.is_reserved() => vec![],
-            Some(Token::Semicolon) | None => vec![],
+            Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
             _ => self.parse_comma_separated(Parser::parse_select_item)?,
         };
 

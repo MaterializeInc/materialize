@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::bail;
 use async_trait::async_trait;
 
 use coord::catalog::Catalog;
 use coord::session::Session;
 use ore::now::NOW_ZERO;
-use ore::result::ResultExt;
 use ore::retry::Retry;
 use sql::catalog::SessionCatalog;
 use sql::names::PartialName;
@@ -24,28 +24,20 @@ use sql::names::PartialName;
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
-pub struct VerifyTimestampsAction {
+pub struct VerifyTimestampCompactionAction {
     source: String,
     max_size: usize,
     permit_progress: bool,
 }
 
-pub fn build_verify_timestamp_compaction(
+pub fn build_verify_timestamp_compaction_action(
     mut cmd: BuiltinCommand,
-) -> Result<VerifyTimestampsAction, String> {
+) -> Result<VerifyTimestampCompactionAction, anyhow::Error> {
     let source = cmd.args.string("source")?;
-    let max_size = cmd
-        .args
-        .opt_string("max-size")
-        .map(|s| s.parse::<usize>().expect("unable to parse usize"))
-        .unwrap_or(3);
-    let permit_progress = cmd
-        .args
-        .opt_bool("permit-progress")
-        .expect("require valid bool if specified")
-        .unwrap_or(false);
+    let max_size = cmd.args.opt_parse("max-size")?.unwrap_or(3);
+    let permit_progress = cmd.args.opt_bool("permit-progress")?.unwrap_or(false);
     cmd.args.done()?;
-    Ok(VerifyTimestampsAction {
+    Ok(VerifyTimestampCompactionAction {
         source,
         max_size,
         permit_progress,
@@ -53,13 +45,13 @@ pub fn build_verify_timestamp_compaction(
 }
 
 #[async_trait]
-impl Action for VerifyTimestampsAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+impl Action for VerifyTimestampCompactionAction {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         // Can't undo a verification.
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         if let Some(path) = &state.materialized_catalog_path {
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));
             Retry::default()
@@ -69,20 +61,16 @@ impl Action for VerifyTimestampsAction {
                     let initial_highest = initial_highest_base.clone();
                     async move {
                         let mut catalog = Catalog::open_debug(path, NOW_ZERO.clone())
-                            .await
-                            .map_err_to_string()?;
+                            .await?;
                         let item_id = catalog
                             .for_session(&Session::dummy())
                             .resolve_item(&PartialName {
                                 database: None,
                                 schema: None,
                                 item: self.source.clone(),
-                            })
-                            .map_err_to_string()?
+                            })?
                             .id();
-                        let bindings = catalog
-                            .load_timestamp_bindings(item_id)
-                            .map_err_to_string()?;
+                        let bindings = catalog.load_timestamp_bindings(item_id)?;
 
                         // We consider progress to be eventually compacting at least up to the original highest
                         // timestamp binding.
@@ -109,11 +97,11 @@ impl Action for VerifyTimestampsAction {
                         if bindings.len() <= self.max_size || progress {
                             Ok(())
                         } else {
-                            Err(format!(
+                            bail!(
                                 "There are {:?} bindings compared to max size {:?}",
                                 bindings.len(),
                                 self.max_size,
-                            ))
+                            );
                         }
                     }
                 }).await

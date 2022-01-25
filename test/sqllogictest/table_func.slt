@@ -727,8 +727,13 @@ jsonb_each
 (1,2)
 (3,4)
 
-query error multiple table functions in select projections not yet supported
-SELECT 1, jsonb_object_keys('{"1":2,"3":4}'::JSONB), jsonb_object_keys('{"1":2,"3":4,"5":6}'::JSONB) ORDER BY 1
+query ITT colnames
+SELECT 1, jsonb_object_keys('{"1":2,"3":4}'::JSONB), jsonb_object_keys('{"1":2,"3":4,"5":6}'::JSONB) ORDER BY 3
+----
+?column? jsonb_object_keys jsonb_object_keys
+1  1  1
+1  3  3
+1  NULL  5
 
 query T colnames
 SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3) ORDER BY 1
@@ -743,13 +748,17 @@ SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb
 {"a":1,"c":3} {"a":1,"c":3}
 {"b":1,"c":3} {"b":1,"c":3}
 
-query error multiple table functions in select projections not yet supported
-SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2}'), 1, 'c', 3);
+# TODO: query error argument 1: key must not be null
+query TT
+SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2}'), 1, 'c', 3)
+----
+{"b":1,"c":3}  NULL
+{"a":1,"c":3}  {"a":1,"c":3}
 
-query error multiple table functions in select projections not yet supported
+query error table functions are not allowed in other table functions
 SELECT jsonb_array_elements(jsonb_array_elements('[[1,2],[3,4]]')), jsonb_array_elements(jsonb_array_elements('[[1],[3,4,5]]')) ORDER BY 1
 
-query error multiple table functions in select projections not yet supported
+query error table functions are not allowed in other table functions
 SELECT jsonb_array_elements(jsonb_array_elements('[[1,2],[3,4]]')), jsonb_array_elements('[7,8,9]') ORDER BY 1
 
 # Postgres explicitly disallows table funcs (although it uses "set-returning
@@ -1123,20 +1132,82 @@ x y
 1 1
 2 2
 
+query II
+SELECT generate_series(1, 1), generate_series(2, 2)
+----
+1 2
+
 query IT colnames
 SELECT (information_schema._pg_expandarray(array[10])).x, information_schema._pg_expandarray(array[10])
 ----
 x _pg_expandarray
 10 (10,1)
 
-query error multiple table functions in select projections not yet supported
-SELECT generate_series(1, 1), generate_series(2, 2)
+query IIITITT colnames
+SELECT
+    (information_schema._pg_expandarray(ARRAY[100])).*,
+    (information_schema._pg_expandarray(ARRAY[100])).x,
+    information_schema._pg_expandarray(ARRAY[100])::text,
+    generate_series(1, 2),
+    jsonb_array_elements('[3]'),
+    jsonb_array_elements('[4,5]')
+ORDER BY generate_series
+----
+x n x _pg_expandarray generate_series jsonb_array_elements jsonb_array_elements
+100 1 100 (100,1) 1 3 4
+NULL NULL NULL NULL 2 NULL 5
+
+query error column reference "generate_series" is ambiguous
+SELECT
+    generate_series(1, 2),
+    generate_series(1, 3)
+ORDER BY generate_series
+
+# Duplicate, identical table functions are not ambiguous.
+query II
+SELECT
+    generate_series(1, 2),
+    generate_series(1, 2)
+ORDER BY generate_series
+----
+1 1
+2 2
+
+query IIIT colnames,rowsort
+SELECT generate_series(1, 2), (information_schema._pg_expandarray(ARRAY[100])).*, jsonb_array_elements('[3]')::text ORDER BY 1
+----
+generate_series x n jsonb_array_elements
+1 100 1 3
+2 NULL NULL NULL
+
+query ITI colnames,rowsort
+SELECT generate_series(1, 2), information_schema._pg_expandarray(ARRAY[100])::text, generate_series(1, 3) ORDER BY 3
+----
+generate_series _pg_expandarray generate_series
+1 (100,1) 1
+2 NULL 2
+NULL NULL 3
+
+# Some error cases
+
+query error table functions are not allowed in WHERE clause
+SELECT 1 FROM t WHERE generate_series(1, 1) = 1
+
+# TODO: This error should complain about the DISTINCT.
+query error table functions are not allowed in SELECT clause
+SELECT generate_series(DISTINCT 1, 1)
 
 # Subqueries avoid the uniqueness check.
 query II
 SELECT generate_series(1, 1), (SELECT generate_series(2, 2))
 ----
 1 2
+
+query error type integer is not composite
+SELECT (generate_series(1, 1)).*
+
+query error not a composite type
+SELECT (generate_series(1, 1)).generate_series
 
 # GENERATE_SUBSCRIPTS
 
@@ -1184,8 +1255,8 @@ SELECT generate_subscripts('{1,2,3,4}'::int[], 12345) AS s;
 query error parsing multi-dimensional arrays is not supported
 SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 1) AS s;
 
-query error multiple table functions in select projections not yet supported, see https://github.com/MaterializeInc/materialize/issues/1546 for more details
-SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series) AS s;
+query error table functions are not allowed in other table functions
+SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series(1, 1)) AS s
 
 # test lower bound, this should return indices 2,3,4
 # but currently we dont support this syntax

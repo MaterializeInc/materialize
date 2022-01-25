@@ -1,49 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="557" height="179">
-   <polygon points="11 17 3 13 3 21"/>
-   <polygon points="19 17 11 13 11 21"/>
-   <rect x="33" y="3" width="110" height="32" rx="10"/>
-   <rect x="31"
+<svg xmlns="http://www.w3.org/2000/svg" width="485" height="123">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="110" height="32" rx="10"/>
+   <rect x="29"
          y="1"
          width="110"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="41" y="21">AVRO USING</text>
-   <rect x="45" y="69" width="246" height="32" rx="10"/>
-   <rect x="43"
-         y="67"
+   <text class="terminal" x="39" y="21">AVRO USING</text>
+   <rect x="161" y="3" width="246" height="32" rx="10"/>
+   <rect x="159"
+         y="1"
          width="246"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="53" y="87">CONFLUENT SCHEMA REGISTRY</text>
-   <rect x="311" y="69" width="36" height="32"/>
-   <rect x="309" y="67" width="36" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="319" y="87">url</text>
-   <rect x="387" y="101" width="102" height="32"/>
-   <rect x="385" y="99" width="102" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="395" y="119">with_options</text>
-   <rect x="45" y="145" width="82" height="32" rx="10"/>
-   <rect x="43"
-         y="143"
-         width="82"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="53" y="163">SCHEMA</text>
-   <rect x="147" y="145" width="48" height="32" rx="10"/>
-   <rect x="145"
-         y="143"
-         width="48"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="155" y="163">FILE</text>
-   <rect x="215" y="145" width="132" height="32"/>
-   <rect x="213" y="143" width="132" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="223" y="163">schema_file_path</text>
+   <text class="terminal" x="169" y="21">CONFLUENT SCHEMA REGISTRY</text>
+   <rect x="427" y="3" width="36" height="32"/>
+   <rect x="425" y="1" width="36" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="435" y="21">url</text>
+   <rect x="335" y="89" width="102" height="32"/>
+   <rect x="333" y="87" width="102" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="343" y="107">with_options</text>
    <path class="line"
-         d="m19 17 h2 m0 0 h10 m110 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-162 66 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m246 0 h10 m0 0 h10 m36 0 h10 m20 0 h10 m0 0 h112 m-142 0 h20 m122 0 h20 m-162 0 q10 0 10 10 m142 0 q0 -10 10 -10 m-152 10 v12 m142 0 v-12 m-142 12 q0 10 10 10 m122 0 q10 0 10 -10 m-132 10 h10 m102 0 h10 m-484 -32 h20 m484 0 h20 m-524 0 q10 0 10 10 m504 0 q0 -10 10 -10 m-514 10 v56 m504 0 v-56 m-504 56 q0 10 10 10 m484 0 q10 0 10 -10 m-494 10 h10 m82 0 h10 m0 0 h10 m48 0 h10 m0 0 h10 m132 0 h10 m0 0 h162 m23 -76 h-3"/>
-   <polygon points="547 83 555 79 555 87"/>
-   <polygon points="547 83 539 79 539 87"/>
+         d="m17 17 h2 m0 0 h10 m110 0 h10 m0 0 h10 m246 0 h10 m0 0 h10 m36 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-192 54 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h112 m-142 0 h20 m122 0 h20 m-162 0 q10 0 10 10 m142 0 q0 -10 10 -10 m-152 10 v12 m142 0 v-12 m-142 12 q0 10 10 10 m122 0 q10 0 10 -10 m-132 10 h10 m102 0 h10 m23 -32 h-3"/>
+   <polygon points="475 71 483 67 483 75"/>
+   <polygon points="475 71 467 67 467 75"/>
 </svg>

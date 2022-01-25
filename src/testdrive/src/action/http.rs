@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::bail;
 use async_trait::async_trait;
-use ore::result::ResultExt;
+use reqwest::Method;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -17,51 +18,48 @@ use reqwest::header::CONTENT_TYPE;
 
 pub struct RequestAction {
     url: String,
-    method: String,
+    method: Method,
     content_type: Option<String>,
     body: String,
 }
 
-pub fn build_request(mut cmd: BuiltinCommand) -> Result<RequestAction, String> {
+pub fn build_request(mut cmd: BuiltinCommand) -> Result<RequestAction, anyhow::Error> {
     Ok(RequestAction {
         url: cmd.args.string("url")?,
-        method: cmd.args.string("method")?.to_ascii_uppercase(),
-        content_type: cmd.args.opt_parse("content-type")?,
+        method: cmd.args.parse("method")?,
+        content_type: cmd.args.opt_string("content-type"),
         body: cmd.input.join("\n"),
     })
 }
 
 #[async_trait]
 impl Action for RequestAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, _: &mut State) -> Result<(), String> {
+    async fn redo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         println!("$ http-request {} {}\n{}", self.method, self.url, self.body);
 
         let client = reqwest::Client::new();
 
-        let method = self
-            .method
-            .parse()
-            .or_else(|_| Err(format!("Unknown http method type: {}", self.method)))?;
-
-        let mut request = client.request(method, &self.url).body(self.body.clone());
+        let mut request = client
+            .request(self.method.clone(), &self.url)
+            .body(self.body.clone());
 
         if let Some(value) = &self.content_type {
             request = request.header(CONTENT_TYPE, value);
         }
 
-        let response = request.send().await.map_err_to_string()?;
+        let response = request.send().await?;
         let status = response.status();
 
-        println!("{}\n{}", status, response.text().await.map_err_to_string()?);
+        println!("{}\n{}", status, response.text().await?);
 
         if status.is_success() {
             Ok(())
         } else {
-            Err(format!("http-request returned code: {}", status))
+            bail!("http request returned failing status: {}", status)
         }
     }
 }

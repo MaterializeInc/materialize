@@ -42,12 +42,11 @@ copyright_files=$(grep -vE \
     -e '(^|/)\.github/dependabot.yml$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
-    -e '(^|/)(Cargo|askama|rust-toolchain)\.toml$' \
+    -e '(^|/)(Cargo|askama)\.toml$' \
     -e '^\.cargo/config$' \
     -e '^Cargo\.lock$' \
     -e '^deny\.toml$' \
     -e '^netlify\.toml$' \
-    -e '^rust-toolchain$' \
     -e '^rustfmt\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
@@ -89,6 +88,7 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         echo "hint: run bin/pyfmt" >&2
     fi
     try bin/mzcompose lint
+    try bin/lint-cargo
 fi
 
 try_finish

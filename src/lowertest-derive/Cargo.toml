@@ -4,11 +4,12 @@ description = "Macros to support unit testing of lower parts of the stack"
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [lib]
 proc-macro = true
 
 [dependencies]
 quote = "1.0.14"
-syn = {version="1.0.85", features=["extra-traits", "printing"]}
+syn = {version="1.0.86", features=["extra-traits", "printing"]}
 proc-macro2 = "1.0.36"

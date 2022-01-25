@@ -62,9 +62,9 @@ pub struct ScopeItem {
     pub table_name: Option<PartialName>,
     /// The name of the column.
     pub column_name: ColumnName,
-    /// The expression from which this scope item is derived. Used by `GROUP
+    /// The expressions from which this scope item is derived. Used by `GROUP
     /// BY`.
-    pub expr: Option<Expr<Aug>>,
+    pub exprs: HashSet<Expr<Aug>>,
     /// Whether the column is the return value of a function that produces only
     /// a single column. This accounts for a strange PostgreSQL special case
     /// around whole-row expansion.
@@ -88,6 +88,13 @@ pub struct ScopeItem {
     /// variables in outer scopes that would otherwise be valid to reference,
     /// but accessing them needs to produce an error.
     pub lateral_error_if_referenced: bool,
+    /// For table functions in scalar positions, this flag is true for the
+    /// ordinality column. If true, then this column represents an "exists" flag
+    /// for the entire row of the table function. In that case, this column must
+    /// be excluded from `*` expansion. If the corresponding datum is `NULL`, then
+    /// `*` expansion should yield a single `NULL` instead of a record with various
+    /// datums.
+    pub is_exists_column_for_a_table_function_that_was_in_the_target_list: bool,
     // Force use of the constructor methods.
     _private: (),
 }
@@ -119,14 +126,15 @@ pub struct Scope {
 }
 
 impl ScopeItem {
-    fn empty() -> ScopeItem {
+    pub fn empty() -> ScopeItem {
         ScopeItem {
             table_name: None,
             column_name: "?column?".into(),
-            expr: None,
+            exprs: HashSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,
             lateral_error_if_referenced: false,
+            is_exists_column_for_a_table_function_that_was_in_the_target_list: false,
             _private: (),
         }
     }
@@ -153,7 +161,9 @@ impl ScopeItem {
     /// Constructs a new scope item with no name from an expression.
     pub fn from_expr(expr: impl Into<Option<Expr<Aug>>>) -> ScopeItem {
         let mut item = ScopeItem::empty();
-        item.expr = expr.into();
+        if let Some(expr) = expr.into() {
+            item.exprs.insert(expr);
+        }
         item
     }
 
@@ -389,7 +399,7 @@ impl Scope {
         self.items
             .iter()
             .enumerate()
-            .find(|(_, item)| item.expr.as_ref() == Some(expr))
+            .find(|(_, item)| item.exprs.contains(expr))
             .map(|(i, _)| ColumnRef {
                 level: 0,
                 column: i,

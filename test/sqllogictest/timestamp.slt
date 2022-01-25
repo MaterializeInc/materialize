@@ -196,3 +196,91 @@ SELECT '99999-01-01'::TIMESTAMP + '162144 y';
 
 query error timestamp out of range
 SELECT '99999-01-01'::TIMESTAMP + '162145 y';
+
+# date_bin_hopping
+
+query T
+SELECT * FROM date_bin_hopping('45s', '1m', '2001-01-01 00:01:20');
+----
+2001-01-01 00:00:30+00
+2001-01-01 00:01:15+00
+
+statement ok
+CREATE TABLE t (ts timestamp, v int);
+
+statement ok
+INSERT INTO t VALUES
+  ('2021-01-01 01:05', 41),
+  ('2021-01-01 01:07', 21),
+  ('2021-01-01 01:09', 51),
+  ('2021-01-01 01:11', 31),
+  ('2021-01-01 01:13', 11),
+  ('2021-01-01 01:17', 61);
+
+# ts unix epoch origin
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts)
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00
+113
+2021-01-01 01:05:00
+155
+2021-01-01 01:10:00
+103
+2021-01-01 01:15:00
+61
+
+# tstz unix epoch origin
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts::timestamptz)
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00+00
+113
+2021-01-01 01:05:00+00
+155
+2021-01-01 01:10:00+00
+103
+2021-01-01 01:15:00+00
+61
+
+# ts
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts, '1970-01-01')
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00
+113
+2021-01-01 01:05:00
+155
+2021-01-01 01:10:00
+103
+2021-01-01 01:15:00
+61
+
+#tstz
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts::timestamptz, '1970-01-01')
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00+00
+113
+2021-01-01 01:05:00+00
+155
+2021-01-01 01:10:00+00
+103
+2021-01-01 01:15:00+00
+61

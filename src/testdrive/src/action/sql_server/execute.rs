@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+
+use ore::str::StrExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -17,7 +20,7 @@ pub struct ExecuteAction {
     queries: Vec<String>,
 }
 
-pub fn build_execute(mut cmd: BuiltinCommand) -> Result<ExecuteAction, String> {
+pub fn build_execute(mut cmd: BuiltinCommand) -> Result<ExecuteAction, anyhow::Error> {
     let name = cmd.args.string("name")?;
     cmd.args.done()?;
     Ok(ExecuteAction {
@@ -28,22 +31,22 @@ pub fn build_execute(mut cmd: BuiltinCommand) -> Result<ExecuteAction, String> {
 
 #[async_trait]
 impl Action for ExecuteAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let client = state
             .sql_server_clients
             .get_mut(&self.name)
-            .ok_or(format!("connection '{}' not found", &self.name))?;
+            .ok_or_else(|| anyhow!("connection {} not found", self.name.quoted()))?;
 
         for query in &self.queries {
             println!(">> {}", query);
             client
                 .execute(query, &[])
                 .await
-                .map_err(|e| format!("executing SQL Server query: {}", e))?;
+                .context("executing SQL Server query")?;
         }
 
         Ok(())

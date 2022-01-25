@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.feature_benchmark.measurement_source import Lambda, Td
-from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.measurement_source import Kgen, Lambda, Td
+from materialize.feature_benchmark.scenario import Scenario, ScenarioBig
 
 
 class Sleep(Scenario):
@@ -632,11 +632,11 @@ true
     )
 
 
-class KafkaScenario(Scenario):
+class Kafka(Scenario):
     pass
 
 
-class KafkaRaw(KafkaScenario):
+class KafkaRaw(Kafka):
     SHARED = Td(
         """
 $ set count=1000000
@@ -678,7 +678,37 @@ true
     )
 
 
-class KafkaUpsert(KafkaScenario):
+class KafkaEnvelopeNoneBytes(Kafka):
+    SHARED = Td(
+        """
+$ set count=1000000
+
+$ kafka-create-topic topic=kafka-envelope-none-bytes
+
+$ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat=${count}
+12345678901234567890123456789012345678901234567890
+"""
+    )
+    BENCHMARK = Td(
+        """
+$ set count=1000000
+
+> DROP SOURCE IF EXISTS s1;
+
+> CREATE MATERIALIZED SOURCE s1
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-envelope-none-bytes-${testdrive.seed}'
+  FORMAT BYTES
+  ENVELOPE NONE
+  /* A */
+
+> SELECT COUNT(*) = ${count} FROM s1
+  /* B */
+true
+"""
+    )
+
+
+class KafkaUpsert(Kafka):
     SHARED = Td(
         """
 $ set count=1000000
@@ -725,7 +755,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${keysc
     )
 
 
-class KafkaUpsertUnique(KafkaScenario):
+class KafkaUpsertUnique(Kafka):
     SHARED = Td(
         """
 $ set keyschema={"type": "record", "name": "Key", "fields": [ {"name": "f1", "type": "long"} ] }
@@ -753,7 +783,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${keys
     )
 
 
-class KafkaRecovery(KafkaScenario):
+class KafkaRecovery(Kafka):
     SHARED = Td(
         """
 $ set keyschema={
@@ -800,6 +830,74 @@ true
 1
 
 > /* B */ SELECT COUNT(*) = 10000000 FROM s1;
+true
+"""
+    )
+
+
+class KafkaRecoveryBig(ScenarioBig):
+    """Benchmark the ingestion of 100M records without constructing
+    a dataflow that would keep all of them in memory. For the purpose, we
+    emit a bunch of "EOF" records after the primary ingestion is complete
+    and consider that the source has caught up when all the EOF records have
+    been seen.
+    """
+
+    SHARED = [
+        Td("$ kafka-create-topic topic=kafka-recovery-big partitions=8"),
+        # Ingest 100M records
+        Kgen(
+            topic="kafka-recovery-big",
+            args=[
+                "--keys=random",
+                f"--num-records={100_000_000}",
+                "--values=bytes",
+                "--max-message-size=32",
+                "--min-message-size=32",
+                "--key-min=256",
+                f"--key-max={256+(100_000_000**2)}",
+            ],
+        ),
+        # Add 256 EOF markers with key values <= 256.
+        # This high number is chosen as to guarantee that there will be an EOF marker
+        # in each partition, even if the number of partitions is increased in the future.
+        Kgen(
+            topic="kafka-recovery-big",
+            args=[
+                "--keys=sequential",
+                "--num-records=256",
+                "--values=bytes",
+                "--min-message-size=32",
+                "--max-message-size=32",
+            ],
+        ),
+    ]
+
+    INIT = Td(
+        """
+> CREATE SOURCE s1
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}'
+  FORMAT BYTES
+  ENVELOPE UPSERT;
+
+# Confirm that all the EOF markers generated above have been processed
+> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1 WHERE key0 <= '\\x00000000000000ff'
+
+> SELECT * FROM s1_is_complete;
+true
+"""
+    )
+
+    BEFORE = Lambda(lambda e: e.RestartMz())
+
+    BENCHMARK = Td(
+        """
+> SELECT 1;
+  /* A */
+1
+
+> SELECT * FROM s1_is_complete
+  /* B */
 true
 """
     )

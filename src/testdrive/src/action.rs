@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::future::Future;
@@ -17,24 +17,26 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ::http::Uri;
+use anyhow::{anyhow, bail, Context as _};
 use async_trait::async_trait;
 use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
 use futures::future::FutureExt;
+use itertools::Itertools;
 use kafka_util::client::MzClientContext;
 use lazy_static::lazy_static;
-use ore::result::ResultExt as _;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
 use mz_aws_util::config::AwsConfig;
+use ore::display::DisplayExt;
 use ore::retry::Retry;
 
-use crate::error::{DynError, Error, InputError, ResultExt};
-use crate::parser::{Command, PosCommand, SqlErrorMatchType, SqlOutput};
+use crate::error::PosError;
+use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
 
 mod avro_ocf;
@@ -92,6 +94,11 @@ pub struct Config {
     /// Backoff factor to use when retrying
     pub backoff_factor: f64,
 
+    /// Arguments for the testdrive script to expose as variables.
+    ///
+    /// Entries will be provided to testrive scripts as the variable named `arg.KEY`
+    pub arg_vars: BTreeMap<String, String>,
+
     /// A random number to distinguish each run of a testdrive script.
     pub seed: Option<u32>,
     /// Force the use of a specific temporary directory
@@ -118,6 +125,7 @@ pub struct State {
     aws_config: AwsConfig,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
+    arg_vars: BTreeMap<String, String>,
     s3_client: S3Client,
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
@@ -155,17 +163,17 @@ impl State {
         self.aws_config.region().map(|r| r.as_ref()).unwrap_or("")
     }
 
-    pub async fn reset_materialized(&mut self) -> Result<(), Error> {
+    pub async fn reset_materialized(&mut self) -> Result<(), anyhow::Error> {
         for row in self
             .pgclient
             .query("SHOW DATABASES", &[])
             .await
-            .err_ctx("resetting materialized state: SHOW DATABASES")?
+            .context("resetting materialized state: SHOW DATABASES")?
         {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
             sql::print_query(&query);
-            self.pgclient.batch_execute(&query).await.err_ctx(format!(
+            self.pgclient.batch_execute(&query).await.context(format!(
                 "resetting materialized state: DROP DATABASE {}",
                 db_name,
             ))?;
@@ -173,7 +181,7 @@ impl State {
         self.pgclient
             .batch_execute("CREATE DATABASE materialize")
             .await
-            .err_ctx("resetting materialized state: CREATE DATABASE materialize")?;
+            .context("resetting materialized state: CREATE DATABASE materialize")?;
 
         // Attempt to remove all users but the current user. Old versions of
         // Materialize did not support roles, so this degrades gracefully if
@@ -186,7 +194,7 @@ impl State {
                 }
                 let query = format!("DROP ROLE {}", role_name);
                 sql::print_query(&query);
-                self.pgclient.batch_execute(&query).await.err_ctx(format!(
+                self.pgclient.batch_execute(&query).await.context(format!(
                     "resetting materialized state: DROP ROLE {}",
                     role_name,
                 ))?;
@@ -197,7 +205,7 @@ impl State {
     }
 
     /// Delete the Kinesis streams created for this run of testdrive.
-    pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
+    pub async fn reset_kinesis(&mut self) -> Result<(), anyhow::Error> {
         if self.kinesis_stream_names.is_empty() {
             return Ok(());
         }
@@ -212,22 +220,20 @@ impl State {
                 .stream_name(stream_name)
                 .send()
                 .await
-                .err_ctx(format!("deleting Kinesis stream: {}", stream_name))?;
+                .context(format!("deleting Kinesis stream: {}", stream_name))?;
         }
         Ok(())
     }
 
     /// Delete S3 buckets that were created in this run
-    pub async fn reset_s3(&mut self) -> Result<(), Error> {
-        let mut errors: Vec<DynError> = Vec::new();
+    pub async fn reset_s3(&mut self) -> Result<(), anyhow::Error> {
+        let mut errors: Vec<anyhow::Error> = Vec::new();
         for bucket in &self.s3_buckets_created {
             if let Err(e) = self.delete_bucket_objects(bucket.clone()).await {
-                errors.push(e.into());
+                errors.push(e);
             }
 
-            let res = self.s3_client.delete_bucket().bucket(bucket).send().await;
-
-            if let Err(e) = res {
+            if let Err(e) = self.s3_client.delete_bucket().bucket(bucket).send().await {
                 errors.push(e.into());
             }
         }
@@ -235,15 +241,15 @@ impl State {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(Error::General {
-                ctx: format!("deleting S3 buckets: {} errors", errors.len()),
-                causes: errors,
-                hints: Vec::new(),
-            })
+            bail!(
+                "deleting S3 buckets: {} errors: {}",
+                errors.len(),
+                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
+            );
         }
     }
 
-    async fn delete_bucket_objects(&self, bucket: String) -> Result<(), Error> {
+    async fn delete_bucket_objects(&self, bucket: String) -> Result<(), anyhow::Error> {
         Retry::default()
             .max_duration(self.default_timeout)
             .retry_async(|_| async {
@@ -257,7 +263,7 @@ impl State {
                         .set_continuation_token(continuation_token)
                         .send()
                         .await
-                        .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
+                        .with_context(|| format!("listing objects for bucket {}", bucket))?;
 
                     if let Some(objects) = response.contents {
                         for obj in objects {
@@ -267,7 +273,7 @@ impl State {
                                 .key(obj.key.as_ref().unwrap())
                                 .send()
                                 .await
-                                .with_err_ctx(|| {
+                                .with_context(|| {
                                     format!("deleting object {}/{}", bucket, obj.key.unwrap())
                                 })?;
                         }
@@ -282,7 +288,7 @@ impl State {
             .await
     }
 
-    pub async fn reset_sqs(&self) -> Result<(), Error> {
+    pub async fn reset_sqs(&self) -> Result<(), anyhow::Error> {
         Retry::default()
             .max_duration(self.default_timeout)
             .retry_async(|_| async {
@@ -292,7 +298,7 @@ impl State {
                         .queue_url(queue_url)
                         .send()
                         .await
-                        .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?;
+                        .with_context(|| format!("Deleting sqs queue: {}", queue_url))?;
                 }
 
                 Ok(())
@@ -308,13 +314,13 @@ pub struct PosAction {
 
 #[async_trait]
 pub trait Action {
-    async fn undo(&self, state: &mut State) -> Result<(), String>;
-    async fn redo(&self, state: &mut State) -> Result<(), String>;
+    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error>;
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error>;
 }
 
 pub trait SyncAction: Send + Sync {
-    fn undo(&self, state: &mut State) -> Result<(), String>;
-    fn redo(&self, state: &mut State) -> Result<(), String>;
+    fn undo(&self, state: &mut State) -> Result<(), anyhow::Error>;
+    fn redo(&self, state: &mut State) -> Result<(), anyhow::Error>;
 }
 
 #[async_trait]
@@ -322,16 +328,19 @@ impl<T> Action for T
 where
     T: SyncAction,
 {
-    async fn undo(&self, state: &mut State) -> Result<(), String> {
+    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         tokio::task::block_in_place(|| self.undo(state))
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         tokio::task::block_in_place(|| self.redo(state))
     }
 }
 
-pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
+pub(crate) async fn build(
+    cmds: Vec<PosCommand>,
+    state: &State,
+) -> Result<Vec<PosAction>, PosError> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
 
@@ -371,7 +380,7 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
             .aws_config
             .provide_credentials()
             .await
-            .err_ctx("fetching AWS credentials")?;
+            .context("fetching AWS credentials")?;
         vars.insert(
             "testdrive.aws-access-key-id".into(),
             aws_credentials.access_key_id().to_owned(),
@@ -401,9 +410,14 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
         vars.insert(format!("env.{}", key), value);
     }
 
+    for (key, value) in &state.arg_vars {
+        validate_ident(key)?;
+        vars.insert(format!("arg.{}", key), value.to_string());
+    }
+
     for cmd in cmds {
         let pos = cmd.pos;
-        let wrap_err = |e| InputError { msg: e, pos };
+        let wrap_err = |e| PosError::new(e, pos);
 
         // Substitute variables at startup except for the command-specific ones
         // Those will be substituted at runtime
@@ -509,9 +523,7 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                         } else {
                             // do not allow the timeout to be set below the default
                             context.timeout = cmp::max(
-                                repr::util::parse_duration(&duration)
-                                    .map_err_to_string()
-                                    .map_err(wrap_err)?,
+                                repr::util::parse_duration(&duration).map_err(wrap_err)?,
                                 state.default_timeout,
                             );
                         }
@@ -535,15 +547,16 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                         continue;
                     }
                     "verify-timestamp-compaction" => Box::new(
-                        verify_timestamp_compaction::build_verify_timestamp_compaction(builtin)
-                            .map_err(wrap_err)?,
+                        verify_timestamp_compaction::build_verify_timestamp_compaction_action(
+                            builtin,
+                        )
+                        .map_err(wrap_err)?,
                     ),
                     _ => {
-                        return Err(InputError {
-                            msg: format!("unknown built-in command {}", builtin.name),
-                            pos: cmd.pos,
-                        }
-                        .into());
+                        return Err(PosError::new(
+                            anyhow!("unknown built-in command {}", builtin.name),
+                            cmd.pos,
+                        ));
                     }
                 }
             }
@@ -583,7 +596,7 @@ fn substitute_vars(
     vars: &HashMap<String, String>,
     ignore_prefix: &Option<String>,
     regex_escape: bool,
-) -> Result<String, String> {
+) -> Result<String, anyhow::Error> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"\$\{([^}]+)\}").unwrap();
     }
@@ -604,7 +617,7 @@ fn substitute_vars(
                 val.to_string()
             }
         } else {
-            err = Some(format!("unknown variable: {}", name));
+            err = Some(anyhow!("unknown variable: {}", name));
             "#VAR-MISSING#".to_string()
         }
     });
@@ -623,18 +636,18 @@ fn substitute_vars(
 /// for the lack of `AsyncDrop` support in Rust.
 pub async fn create_state(
     config: &Config,
-) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
+) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
     let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
 
     let (_tempfile_handle, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
-            fs::create_dir_all(temp_dir).err_ctx("creating temporary directory")?;
+            fs::create_dir_all(temp_dir).context("creating temporary directory")?;
             (None, PathBuf::from(&temp_dir))
         }
         _ => {
             // Stash the tempfile object so that it does not go out of scope and delete
             // the tempdir prematurely
-            let tempfile_handle = tempfile::tempdir().err_ctx("creating temporary directory")?;
+            let tempfile_handle = tempfile::tempdir().context("creating temporary directory")?;
             let temp_path = tempfile_handle.path().to_path_buf();
             (Some(tempfile_handle), temp_path)
         }
@@ -643,12 +656,10 @@ pub async fn create_state(
     let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
         match fs::metadata(&path) {
             Ok(m) if !m.is_file() => {
-                return Err(Error::message(
-                    "materialized catalog path is not a regular file",
-                ))
+                bail!("materialized catalog path is not a regular file");
             }
             Ok(_) => Some(path.to_path_buf()),
-            Err(e) => return Err(e).err_ctx("opening materialized catalog path"),
+            Err(e) => return Err(e).context("opening materialized catalog path"),
         }
     } else {
         None
@@ -660,16 +671,10 @@ pub async fn create_state(
             .materialized_pgconfig
             .connect(tokio_postgres::NoTls)
             .await
-            .err_hint(
-                "opening SQL connection",
-                &[
-                    format!("connection string: {}", materialized_url),
-                    "are you running the materialized server?".into(),
-                ],
-            )?;
+            .with_context(|| format!("opening SQL connection: {}", materialized_url))?;
         let pgconn_task = tokio::spawn(pgconn).map(|join| {
             join.expect("pgconn_task unexpectedly canceled")
-                .err_ctx("running SQL connection")
+                .context("running SQL connection")
         });
 
         // Old versions of Materialize did not support `current_user`, so we
@@ -693,17 +698,14 @@ pub async fn create_state(
         let mut ccsr_config = ccsr::ClientConfig::new(schema_registry_url.clone());
 
         if let Some(cert_path) = &config.cert_path {
-            let cert = fs::read(cert_path)
-                .err_hint("reading cert", &[format!("is {} readable?", cert_path)])?;
+            let cert = fs::read(cert_path).context("reading cert")?;
             let pass = config.cert_pass.as_deref().unwrap_or("").to_owned();
-            let ident = ccsr::tls::Identity::from_pkcs12_der(cert, pass).err_hint(
-                "reading keystore file as pkcs12",
-                &[format!("is {} a valid pkcs12 file?", cert_path)],
-            )?;
+            let ident = ccsr::tls::Identity::from_pkcs12_der(cert, pass)
+                .context("reading keystore file as pkcs12")?;
             ccsr_config = ccsr_config.identity(ident);
         }
 
-        ccsr_config.build().err_ctx("Creating CCSR client")?
+        ccsr_config.build().context("Creating CCSR client")?
     };
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics, kafka_config) = {
@@ -726,19 +728,16 @@ pub async fn create_state(
             kafka_config.set(key, value);
         }
 
-        let admin: AdminClient<_> = kafka_config.create_with_context(MzClientContext).err_hint(
-            "opening Kafka connection",
-            &[format!("connection string: {}", config.kafka_addr)],
-        )?;
+        let admin: AdminClient<_> = kafka_config
+            .create_with_context(MzClientContext)
+            .with_context(|| format!("opening Kafka connection: {}", config.kafka_addr))?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
         kafka_config.set("message.max.bytes", "15728640");
-        let producer: FutureProducer<_> =
-            kafka_config.create_with_context(MzClientContext).err_hint(
-                "opening Kafka producer connection",
-                &[format!("connection string: {}", config.kafka_addr)],
-            )?;
+        let producer: FutureProducer<_> = kafka_config
+            .create_with_context(MzClientContext)
+            .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
 
         let topics = HashMap::new();
 
@@ -760,6 +759,7 @@ pub async fn create_state(
         seed,
         temp_path,
         _tempfile_handle,
+        arg_vars: config.arg_vars.clone(),
         materialized_catalog_path,
         materialized_addr,
         materialized_user,

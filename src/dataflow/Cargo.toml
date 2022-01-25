@@ -4,6 +4,7 @@ description = "Materialized's Timely and Differential Dataflow server."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [dependencies]
 anyhow = "1.0.52"
@@ -51,8 +52,8 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.5.4"
 repr = { path = "../repr" }
 scopeguard = "1.1"
-serde = { version = "1.0.133", features = ["derive"] }
-serde_json = "1.0.75"
+serde = { version = "1.0.135", features = ["derive"] }
+serde_json = "1.0.78"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 timely-util = { path = "../timely-util" }

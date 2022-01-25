@@ -4,12 +4,13 @@ description = "Generate S3 test data."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [dependencies]
 anyhow = "1.0.52"
 aws-sdk-s3 = { version = "0.5.0", default-features = false }
 bytefmt = "0.1.7"
-clap = { version = "3.0.10", features = ["derive"] }
+clap = { version = "3.0.12", features = ["derive"] }
 futures = "0.3.19"
 indicatif = "0.16.2"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }

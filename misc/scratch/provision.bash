@@ -28,7 +28,7 @@ touch /opt/provision/docker-installed
 
 # Step 3. Install Materialize build prerequisites. These are just a convenience
 # for manual debugging/development.
-apt-get install -y cmake
+apt-get install -y cmake g++
 sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y"
 touch /opt/provision/materialize-build-deps-installed
 

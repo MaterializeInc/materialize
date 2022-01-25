@@ -10,6 +10,7 @@
 use std::cmp;
 use std::time::Duration;
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use aws_sdk_kinesis::model::{ScalingType, StreamStatus};
 
@@ -23,7 +24,9 @@ pub struct UpdateShardCountAction {
     target_shard_count: i32,
 }
 
-pub fn build_update_shards(mut cmd: BuiltinCommand) -> Result<UpdateShardCountAction, String> {
+pub fn build_update_shards(
+    mut cmd: BuiltinCommand,
+) -> Result<UpdateShardCountAction, anyhow::Error> {
     let stream_name = format!("testdrive-{}", cmd.args.string("stream")?);
     let target_shard_count = cmd.args.parse("shards")?;
     cmd.args.done()?;
@@ -36,11 +39,11 @@ pub fn build_update_shards(mut cmd: BuiltinCommand) -> Result<UpdateShardCountAc
 
 #[async_trait]
 impl Action for UpdateShardCountAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!(
             "Updating Kinesis stream {} to have {} shards",
@@ -55,7 +58,7 @@ impl Action for UpdateShardCountAction {
             .target_shard_count(self.target_shard_count)
             .send()
             .await
-            .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
+            .with_context(|| format!("adding shards to stream {}", &stream_name))?;
 
         // Verify the current shard count.
         Retry::default()
@@ -68,14 +71,15 @@ impl Action for UpdateShardCountAction {
                     .stream_name(&stream_name)
                     .send()
                     .await
-                    .map_err(|e| format!("getting current shard count: {}", e))?
+                    .context("getting current shard count")?
                     .stream_description
                     .unwrap();
                 if description.stream_status != Some(StreamStatus::Active) {
-                    return Err(format!(
+                    bail!(
                         "stream {} is not active, is {:?}",
-                        stream_name, description.stream_status
-                    ));
+                        stream_name,
+                        description.stream_status
+                    );
                 }
 
                 let active_shards_len = i32::try_from(
@@ -93,12 +97,13 @@ impl Action for UpdateShardCountAction {
                         })
                         .count(),
                 )
-                .map_err(|e| format!("converting shard length to i32: {}", e))?;
+                .context("converting shard length to i32: {}")?;
                 if active_shards_len != self.target_shard_count {
-                    return Err(format!(
-                        "Expected {} shards, found {}",
-                        self.target_shard_count, active_shards_len
-                    ));
+                    bail!(
+                        "expected {} shards, found {}",
+                        self.target_shard_count,
+                        active_shards_len
+                    );
                 }
                 Ok(())
             })

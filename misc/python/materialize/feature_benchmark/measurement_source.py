@@ -80,6 +80,21 @@ class Lambda(MeasurementSource):
         return self._executor.Lambda(self._lambda)
 
 
+class Kgen(MeasurementSource):
+    def __init__(self, topic: str, args: List[str]) -> None:
+        self._topic: str = topic
+        self._args: List[str] = args
+        self._executor: Optional[Executor] = None
+
+    def run(
+        self, executor: Optional[Executor] = None, measure: bool = True
+    ) -> Optional[float]:
+        getattr((executor if executor else self._executor), "Kgen")(
+            topic=self._topic, args=self._args
+        )
+        return None
+
+
 class Td(MeasurementSource):
     """Use testdrive to run the queries under benchmark and extract the timing information
     out of the testdrive output. The output looks like this:

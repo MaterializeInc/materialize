@@ -78,6 +78,20 @@ SELECT a, sum(b) AS a FROM t GROUP BY a
 2 3
 3 1
 
+query I
+SELECT a FROM t GROUP BY t.a, t.a
+----
+1
+2
+3
+
+query I
+SELECT a FROM t GROUP BY t.a, public.t.a
+----
+1
+2
+3
+
 # Smoke test to make sure multiple accumulable and hierarchical reductions work
 query IIIII rowsort
 SELECT a, count(b), min(b), sum(b), max(b) FROM t GROUP BY a
@@ -137,6 +151,12 @@ SELECT pg_typeof(sum(b)) FROM t_bigint
 ----
 pg_typeof
 numeric
+
+query TT colnames
+SELECT pg_typeof(a) as a_type, pg_typeof(b) as b_type FROM t_bigint GROUP BY a_type, b_type
+----
+a_type b_type
+bigint bigint
 
 # Tests to make sure reduce elision works correctly
 

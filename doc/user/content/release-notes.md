@@ -107,6 +107,11 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Fix parsing of nested empty `SELECT` statements, as in
+  `SELECT * FROM (SELECT)` {{% gh 8723 %}}.
+
+- Fix planning of repeat constant expressions in a `GROUP BY` clause {{% gh 8302 %}}
+
 - Detect and reject multiple materializations of sources that would silently
   lose data when materialized more than once. This enables safe use of
   unmaterialized PostgreSQL and S3 with SQS notifications sources. {{% gh 8203
@@ -144,6 +149,10 @@ changes that have not yet been documented.
 
     * Infer the name `case` for `CASE` expressions unless column name inference
       on the `ELSE` expression produces a preferred name.
+
+- Add the [`date_bin_hopping`](/sql/functions/date-bin-hopping) function, which
+  is an [experimental mode] function that provides a primitive to express what
+  other systems refer to as "hopping windows."
 
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`date`] value but a time-related field (e.g., `SECOND`).
@@ -713,7 +722,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Respect the [`no_proxy` environment variable](/cli/#http-proxies) to exclude
   certain hosts from the configured HTTP/HTTPS proxy, if any.
 
-- Add [`reuse_topic`](/sql/create-sink/#enabling-topic-reuse-after-restart-exactly-once-sinks) as
+- Add [`reuse_topic`](/sql/create-sink/#exactly-once-sinks-with-topic-reuse-after-restart) as
   a beta feature for Kafka Sinks. This allows re-using the output topic across
   restarts of Materialize.
 
@@ -925,7 +934,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Restore the `-D` command-line option as the short form of the
   [`--data-directory`](/cli/#data-directory) option.
 
-- Allow setting [index parameters](/sql/alter-index/#available-parameters) when
+- Allow setting [index parameters](/sql/create-index/#with-options) when
   creating an index via the new `WITH` clause to [`CREATE INDEX`]. In older
   versions, setting these parameters required a separate call to [`ALTER
   INDEX`](/sql/alter-index).
@@ -1374,7 +1383,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 {{% version-header v0.4.3 %}}
 
 - Permit adjusting the logical compaction window on a per-index basis via the
-  [`logical_compaction_window`](/sql/alter-index/#available-parameters)
+  [`logical_compaction_window`](/sql/alter-index/#setreset-options)
   parameter to the new [`ALTER INDEX`](/sql/alter-index) statement.
 
 - Add the [`uuid`](/sql/types/uuid) type to efficiently represent
@@ -1508,7 +1517,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   **Backwards-incompatible change.**
 
 - Add the `--experimental` command-line option to enable a new [experimental
-  mode](/cli/#experimental-mode), which grants access to experimental features
+  mode], which grants access to experimental features
   at the risk of compromising stability and backwards compatibility. Forthcoming
   features that require experimental mode will be marked as such in their
   documentation.
@@ -1900,6 +1909,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [compatibility function]: /sql/functions#postgresql-compatibility-func
 [`date`]: /sql/types/date
 [`double precision`]: /sql/types/float8
+[experimental mode]: /cli/#experimental-mode
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/
