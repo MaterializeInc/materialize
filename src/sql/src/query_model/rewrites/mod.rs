@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Apply rewrites to the Query Graph Model.
+//! Apply rewrites to [`Model`] instances.
 
 use crate::query_model::{BoxId, Model};
 use std::collections::HashSet;
