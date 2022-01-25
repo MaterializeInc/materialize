@@ -125,9 +125,9 @@ fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &
 
     // In our current node, find the next child box, if any, that we have not entered.
     fn find_next_child_to_enter(
-        model: &mut Model,
+        model: &Model,
         entered: &mut Vec<(BoxId, usize)>,
-        exited: &mut HashSet<BoxId>,
+        exited: &HashSet<BoxId>,
     ) -> Option<BoxId> {
         let (box_id, traversed_quantifiers) = entered.last_mut().unwrap();
         let b = model.get_box(*box_id);
@@ -159,7 +159,7 @@ fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &
         rewritten |= apply_rule(rule.as_ref(), model, model.top_box);
     }
     while !entered.is_empty() {
-        if let Some(to_enter) = find_next_child_to_enter(model, &mut entered, &mut exited) {
+        if let Some(to_enter) = find_next_child_to_enter(model, &mut entered, &exited) {
             entered.push((to_enter, 0));
             for rule in pre {
                 rewritten |= apply_rule(rule.as_ref(), model, to_enter);
