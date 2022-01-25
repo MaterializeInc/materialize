@@ -46,7 +46,7 @@
 //!   session contained the string `<TEMP>`, it will be replaced with a
 //!   temporary directory.
 //! - `update-upper`: Sends a batch of
-//!   [`FrontierUppers`](dataflow_types::client::Response::FrontierUppers) to the
+//!   [`FrontierUppers`](dataflow_types::client::ComputeResponse::FrontierUppers) to the
 //!   Coordinator. Input is one update per line of the format
 //!   `database.schema.item N` where N is some numeric timestamp. No output.
 //! - `inc-timestamp`: Increments the timestamp by number in the input. No
@@ -66,6 +66,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use dataflow_types::client::{ComputeResponse, Response};
 use futures::future::FutureExt;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
@@ -225,13 +226,13 @@ impl CoordTest {
         let mut to_queue = vec![];
         for mut msg in self.queued_feedback.drain(..) {
             // Filter out requested ids.
-            if let dataflow_types::client::Response::FrontierUppers(uppers) = &mut msg {
+            if let Response::Compute(ComputeResponse::FrontierUppers(uppers)) = &mut msg {
                 // Requeue excluded uppers so future wait-sql directives don't always have to
                 // specify the same exclude list forever.
                 let mut requeue = uppers.clone();
                 requeue.retain(|(id, _data)| exclude_uppers.contains(id));
                 if !requeue.is_empty() {
-                    to_queue.push(dataflow_types::client::Response::FrontierUppers(requeue));
+                    to_queue.push(Response::Compute(ComputeResponse::FrontierUppers(requeue)));
                 }
                 uppers.retain(|(id, _data)| !exclude_uppers.contains(id));
             }
@@ -262,7 +263,7 @@ impl CoordTest {
         let mut to_send = vec![];
         let mut to_queue = vec![];
         for msg in self.queued_feedback.drain(..) {
-            if let dataflow_types::client::Response::PeekResponse(..) = msg {
+            if let Response::Compute(ComputeResponse::PeekResponse(..)) = msg {
                 to_send.push(msg);
             } else {
                 to_queue.push(msg);
@@ -492,9 +493,9 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                         batch.update(ts, 1);
                         updates.push((id, batch));
                     }
-                    ct.dataflow_client.forward_response(
-                        dataflow_types::client::Response::FrontierUppers(updates),
-                    );
+                    ct.dataflow_client.forward_response(Response::Compute(
+                        ComputeResponse::FrontierUppers(updates),
+                    ));
                     "".into()
                 }
                 "inc-timestamp" => {

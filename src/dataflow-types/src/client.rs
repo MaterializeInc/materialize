@@ -444,18 +444,34 @@ pub struct TimestampBindingFeedback {
     pub bindings: Vec<(GlobalId, PartitionId, Timestamp, MzOffset)>,
 }
 
-/// Responses the worker can provide back to the coordinator.
+/// Responses that the worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    /// A compute response.
+    Compute(ComputeResponse),
+    /// A storage response.
+    Storage(StorageResponse),
+}
+
+/// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ComputeResponse {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
-    /// Timestamp bindings and prior and new frontiers for those bindings for all
-    /// sources
-    TimestampBindings(TimestampBindingFeedback),
     /// The worker's response to a specified (by connection id) peek.
     PeekResponse(u32, PeekResponse),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse),
+}
+
+/// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StorageResponse {
+    /// A list of identifiers, with prior and new upper frontiers.
+    Frontiers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
+    /// Timestamp bindings and prior and new frontiers for those bindings for all
+    /// sources
+    TimestampBindings(TimestampBindingFeedback),
 }
 
 /// A client to a running dataflow server.
@@ -585,7 +601,7 @@ pub mod partitioned {
     use expr::GlobalId;
     use repr::Timestamp;
 
-    use super::Client;
+    use super::{Client, ComputeResponse, StorageResponse};
     use super::{Command, PeekResponse, Response};
 
     /// A client whose implementation is sharded across a number of other clients.
@@ -641,7 +657,7 @@ pub mod partitioned {
     /// This helper type unifies the responses of multiple partitioned
     /// workers in order to present as a single worker.
     pub struct PartitionedClientState {
-        /// Upper frontiers for sources and indexes.
+        /// Upper frontiers for indexes, sources, and sinks.
         uppers: HashMap<GlobalId, MutableAntichain<Timestamp>>,
         /// Pending responses for a peek; returnable once all are available.
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
@@ -688,43 +704,34 @@ pub mod partitioned {
         /// Absorbs a response, and produces response that should be emitted.
         pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
             match message {
-                Response::FrontierUppers(mut list) => {
-                    // Fold updates into the maintained antichain, and report
-                    // any net changes to the minimal antichain itself.
-                    let mut reactions = ChangeBatch::new();
-                    for (id, changes) in list.iter_mut() {
-                        // We may receive changes to identifiers that are no longer tracked;
-                        // do not worry about them in that case (a benign race condition).
-                        if let Some(frontier) = self.uppers.get_mut(id) {
-                            for (time, diff) in frontier.update_iter(changes.drain()) {
-                                reactions.update(time, diff);
-                            }
-                            std::mem::swap(changes, &mut reactions);
-                        } else {
-                            changes.clear();
-                        }
-                    }
-                    // The following block implements a `list.retain()` of non-empty change batches.
-                    // This is more verbose than `list.retain()` because that method cannot mutate
-                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                    let mut cursor = 0;
-                    while let Some((_id, changes)) = list.get_mut(cursor) {
-                        if changes.is_empty() {
-                            list.swap_remove(cursor);
-                        } else {
-                            cursor += 1;
-                        }
-                    }
+                Response::Compute(ComputeResponse::FrontierUppers(list)) => {
+                    let mut list = fold_changes(&mut self.uppers, list);
+
                     // Only produce a result if there are any changes to report.
                     if !list.is_empty() {
                         // Put changes in order of `id` for ease of understanding.
                         list.sort_by_key(|(id, _)| *id);
-                        Some(Response::FrontierUppers(list))
+                        Some(Response::Compute(ComputeResponse::FrontierUppers(list)))
                     } else {
                         None
                     }
                 }
-                Response::PeekResponse(connection, response) => {
+                // TODO: We could also split `self.uppers` into a `compute_uppers` and
+                // `storage_uppers`, but then we'd also have to change `frontier_tracking` to add
+                // tracking antichains to the right hash map.
+                Response::Storage(StorageResponse::Frontiers(list)) => {
+                    let mut list = fold_changes(&mut self.uppers, list);
+
+                    // Only produce a result if there are any changes to report.
+                    if !list.is_empty() {
+                        // Put changes in order of `id` for ease of understanding.
+                        list.sort_by_key(|(id, _)| *id);
+                        Some(Response::Storage(StorageResponse::Frontiers(list)))
+                    } else {
+                        None
+                    }
+                }
+                Response::Compute(ComputeResponse::PeekResponse(connection, response)) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -748,7 +755,9 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&connection);
-                        Some(Response::PeekResponse(connection, response))
+                        Some(Response::Compute(ComputeResponse::PeekResponse(
+                            connection, response,
+                        )))
                     } else {
                         None
                     }
@@ -760,6 +769,42 @@ pub mod partitioned {
                 }
             }
         }
+    }
+
+    /// Folds changes given in `list` into the matching `MutableAntichain`s in `frontiers`. Only
+    /// returns changes when any of the maintained `MutableAntichain` advances.
+    fn fold_changes(
+        frontiers: &mut HashMap<GlobalId, MutableAntichain<Timestamp>>,
+        mut list: Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+    ) -> Vec<(GlobalId, ChangeBatch<Timestamp>)> {
+        // Fold updates into the maintained antichain, and report
+        // any net changes to the minimal antichain itself.
+        let mut reactions = ChangeBatch::new();
+        for (id, changes) in list.iter_mut() {
+            // We may receive changes to identifiers that are no longer tracked;
+            // do not worry about them in that case (a benign race condition).
+            if let Some(frontier) = frontiers.get_mut(id) {
+                for (time, diff) in frontier.update_iter(changes.drain()) {
+                    reactions.update(time, diff);
+                }
+                std::mem::swap(changes, &mut reactions);
+            } else {
+                changes.clear();
+            }
+        }
+        // The following block implements a `list.retain()` of non-empty change batches.
+        // This is more verbose than `list.retain()` because that method cannot mutate
+        // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
+        let mut cursor = 0;
+        while let Some((_id, changes)) = list.get_mut(cursor) {
+            if changes.is_empty() {
+                list.swap_remove(cursor);
+            } else {
+                cursor += 1;
+            }
+        }
+
+        list
     }
 }
 

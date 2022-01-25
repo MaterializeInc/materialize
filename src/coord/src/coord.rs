@@ -107,8 +107,9 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use build_info::BuildInfo;
-use dataflow_types::client::TimestampBindingFeedback;
 use dataflow_types::client::{ComputeClient, StorageClient};
+use dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
+use dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{sinks::SinkAsOf, sources::Timeline};
 use dataflow_types::{
@@ -797,9 +798,9 @@ where
             .await;
     }
 
-    async fn message_worker(&mut self, message: dataflow_types::client::Response) {
+    async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            dataflow_types::client::Response::PeekResponse(conn_id, response) => {
+            DataflowResponse::Compute(ComputeResponse::PeekResponse(conn_id, response)) => {
                 // We expect exactly one peek response, which we forward.
                 self.pending_peeks
                     .remove(&conn_id)
@@ -807,7 +808,7 @@ where
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
-            dataflow_types::client::Response::TailResponse(sink_id, response) => {
+            DataflowResponse::Compute(ComputeResponse::TailResponse(sink_id, response)) => {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -818,16 +819,21 @@ where
                     }
                 }
             }
-            dataflow_types::client::Response::FrontierUppers(updates) => {
+            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
             }
-            dataflow_types::client::Response::TimestampBindings(TimestampBindingFeedback {
-                bindings,
-                changes,
-            }) => {
+            DataflowResponse::Storage(StorageResponse::Frontiers(updates)) => {
+                for (name, changes) in updates {
+                    self.update_upper(&name, changes);
+                }
+                self.maintenance().await;
+            }
+            DataflowResponse::Storage(StorageResponse::TimestampBindings(
+                TimestampBindingFeedback { bindings, changes },
+            )) => {
                 self.catalog
                     .insert_timestamp_bindings(
                         bindings
@@ -4250,6 +4256,7 @@ where
         for (source_id, _description) in dataflow.source_imports.iter() {
             // Extract `since` information about each source and apply here.
             if let Some(source_since) = self.sources.since_of(source_id) {
+                println!("Source since for {}: {:?}", source_id, source_since);
                 since.join_assign(&source_since);
             }
         }

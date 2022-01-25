@@ -32,7 +32,8 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use dataflow_types::client::{
-    Command, ComputeCommand, LocalClient, Response, StorageCommand, TimestampBindingFeedback,
+    Command, ComputeCommand, ComputeResponse, LocalClient, Response, StorageCommand,
+    StorageResponse, TimestampBindingFeedback,
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
@@ -473,7 +474,8 @@ where
             self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
-            self.report_frontiers();
+            self.report_compute_frontiers();
+            self.report_storage_frontiers();
             self.update_rt_timestamps();
             self.report_timestamp_bindings();
 
@@ -506,7 +508,7 @@ where
     }
 
     /// Send progress information to the coordinator.
-    fn report_frontiers(&mut self) {
+    fn report_compute_frontiers(&mut self) {
         fn add_progress(
             id: GlobalId,
             new_frontier: &Antichain<Timestamp>,
@@ -550,6 +552,35 @@ where
             }
         }
 
+        if !progress.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
+        }
+    }
+
+    /// Send progress information to the coordinator.
+    fn report_storage_frontiers(&mut self) {
+        fn add_progress(
+            id: GlobalId,
+            new_frontier: &Antichain<Timestamp>,
+            prev_frontier: &Antichain<Timestamp>,
+            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+        ) {
+            let mut changes = ChangeBatch::new();
+            for time in prev_frontier.elements().iter() {
+                changes.update(time.clone(), -1);
+            }
+            for time in new_frontier.elements().iter() {
+                changes.update(time.clone(), 1);
+            }
+            changes.compact();
+            if !changes.is_empty() {
+                progress.push((id, changes));
+            }
+        }
+
+        let mut new_frontier = Antichain::new();
+        let mut progress = Vec::new();
+
         for (id, history) in self.storage_state.ts_histories.iter() {
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
@@ -567,6 +598,7 @@ where
             }
         }
 
+        // TODO: We're lying here: sinks are not sources ...
         for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
@@ -584,7 +616,7 @@ where
         }
 
         if !progress.is_empty() {
-            self.send_response(Response::FrontierUppers(progress));
+            self.send_storage_response(StorageResponse::Frontiers(progress));
         }
     }
 
@@ -643,10 +675,9 @@ where
         }
 
         if !changes.is_empty() || !bindings.is_empty() {
-            self.send_response(Response::TimestampBindings(TimestampBindingFeedback {
-                changes,
-                bindings,
-            }));
+            self.send_storage_response(StorageResponse::TimestampBindings(
+                TimestampBindingFeedback { changes, bindings },
+            ));
         }
         self.last_bindings_feedback = Instant::now();
     }
@@ -1043,7 +1074,7 @@ where
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.send_response(Response::PeekResponse(peek.conn_id, response));
+        self.send_compute_response(ComputeResponse::PeekResponse(peek.conn_id, response));
 
         // Log responding to the peek request.
         if let Some(logger) = self.materialized_logger.as_mut() {
@@ -1055,15 +1086,22 @@ where
     fn process_tails(&mut self) {
         let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.send_response(Response::TailResponse(sink_id, response));
+            self.send_compute_response(ComputeResponse::TailResponse(sink_id, response));
         }
     }
 
     /// Send a response to the coordinator.
-    fn send_response(&self, response: Response) {
+    fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(response);
+        let _ = self.response_tx.send(Response::Compute(response));
+    }
+
+    /// Send a response to the coordinator.
+    fn send_storage_response(&self, response: StorageResponse) {
+        // Ignore send errors because the coordinator is free to ignore our
+        // responses. This happens during shutdown.
+        let _ = self.response_tx.send(Response::Storage(response));
     }
 }
 
