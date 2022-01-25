@@ -6,10 +6,10 @@ menu:
     parent: 'sql-functions'
 ---
 
-`date_part` is modeled on the traditional Ingres equivalent to the SQL-standard 
-function [`EXTRACT`](../extract). For PostgreSQL compatibility, `date_part` returns values of type
-[`float`](../../types/float). This can result in a loss of precision in certain uses. Using 
-[`EXTRACT`](../extract) is recommended instead.
+`date_part` returns some time component from a time-based value, such as the year from a Timestamp.
+It is mostly functionally equivalent to the function [`EXTRACT`](../extract), except to maintain 
+PostgreSQL compatibility, `date_part` returns values of type [`float`](../../types/float). This can 
+result in a loss of precision in certain uses. Using [`EXTRACT`](../extract) is recommended instead.
 
 ## Signatures
 
