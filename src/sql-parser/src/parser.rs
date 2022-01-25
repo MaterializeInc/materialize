@@ -810,8 +810,9 @@ impl<'a> Parser<'a> {
     ///   1. `INTERVAL '1' DAY`
     ///   2. `INTERVAL '1-1' YEAR TO MONTH`
     ///   3. `INTERVAL '1' SECOND`
-    ///   4. `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
-    ///   5. `INTERVAL '1.111' SECOND (2)`
+    ///   4. `INTERVAL '1:1' MINUTE TO SECOND
+    ///   5. `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
+    ///   6. `INTERVAL '1.111' SECOND (2)`
     ///
     fn parse_literal_interval(&mut self) -> Result<Expr<Raw>, ParserError> {
         // The first token in an interval is a string literal which specifies

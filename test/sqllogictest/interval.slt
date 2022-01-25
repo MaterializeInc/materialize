@@ -127,6 +127,26 @@ SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO HOUR;
 ----
 3 days 04:00:00
 
+query T
+SELECT INTERVAL '12:34';
+----
+12:34:00
+
+query T
+SELECT INTERVAL '12:34' MINUTE TO SECOND;
+----
+00:12:34
+
+query T
+SELECT INTERVAL '12:34' HOUR TO MINUTE;
+----
+12:34:00
+
+query T
+SELECT INTERVAL '12:34' HOUR TO SECOND;
+----
+12:34:00
+
 # Disallow ranges where trailing element is greater than lead.
 statement error
 SELECT INTERVAL '1-2 3 4:5:6.7' MINUTE TO MONTH;

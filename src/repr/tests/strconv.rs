@@ -365,7 +365,7 @@ fn test_parse_interval_durationlike() {
         d: DateTimeField,
         expected: Interval,
     ) {
-        let actual = strconv::parse_interval_w_disambiguator(s, d).unwrap();
+        let actual = strconv::parse_interval_w_disambiguator(s, None, d).unwrap();
         assert_eq!(actual, expected);
     }
 }
@@ -411,7 +411,7 @@ fn test_parse_interval_full() {
         assert_eq!(actual, expected);
     }
     fn run_test_parse_interval_full_from_sql(s: &str, d: DateTimeField, expected: Interval) {
-        let actual = strconv::parse_interval_w_disambiguator(s, d).unwrap();
+        let actual = strconv::parse_interval_w_disambiguator(s, None, d).unwrap();
         assert_eq!(actual, expected);
     }
 }

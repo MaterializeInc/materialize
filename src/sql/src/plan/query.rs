@@ -4056,8 +4056,14 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
             true => (Datum::True, ScalarType::Bool),
         },
         Value::Interval(iv) => {
+            let leading_precision = parser_datetimefield_to_adt(iv.precision_high);
             let mut i = strconv::parse_interval_w_disambiguator(
                 &iv.value,
+                match leading_precision {
+                    repr::adt::datetime::DateTimeField::Hour
+                    | repr::adt::datetime::DateTimeField::Minute => Some(leading_precision),
+                    _ => None,
+                },
                 parser_datetimefield_to_adt(iv.precision_low),
             )?;
             i.truncate_high_fields(parser_datetimefield_to_adt(iv.precision_high));
