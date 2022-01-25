@@ -11,6 +11,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 
 use ore::id_gen::Gen;
 
@@ -77,6 +78,44 @@ pub struct Model {
     quantifiers: HashMap<QuantifierId, Box<RefCell<Quantifier>>>,
     /// Used for assigning unique IDs to quantifiers.
     quantifier_id_gen: Gen<QuantifierId>,
+}
+
+/// A mutable reference to an object of type `T` (a [`QueryBox`] or a [`Quantifier`])
+/// bound to a specific [`Model`].
+#[derive(Debug)]
+pub struct BoundRef<'a, T> {
+    model: &'a Model,
+    r#ref: Ref<'a, T>,
+}
+
+impl<T> Deref for BoundRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.r#ref.deref()
+    }
+}
+
+/// A mutable reference to an object of type `T` (a [`QueryBox`] or a [`Quantifier`])
+/// bound to a specific [`Model`].
+#[derive(Debug)]
+pub struct BoundRefMut<'a, T> {
+    model: &'a mut Model,
+    r#ref: RefMut<'a, T>,
+}
+
+impl<T> Deref for BoundRefMut<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.r#ref.deref()
+    }
+}
+
+impl<T> DerefMut for BoundRefMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.r#ref.deref_mut()
+    }
 }
 
 /// A semantic operator within a Query Graph.
@@ -296,20 +335,45 @@ impl Model {
         self.make_box(BoxType::Select(Select::default()))
     }
 
-    /// Get an immutable reference to the box identified by `box_id`.
-    fn get_box(&self, box_id: BoxId) -> Ref<'_, QueryBox> {
-        self.boxes
-            .get(&box_id)
-            .expect("a valid box identifier")
-            .borrow()
+    /// An iterator over immutable references to the [`QueryBox`] instances in this [`Model`].
+    fn boxes_iter(&self) -> impl Iterator<Item = BoundRef<'_, QueryBox>> {
+        self.boxes.keys().map(|box_id| BoundRef {
+            model: self,
+            r#ref: self
+                .boxes
+                .get(&box_id)
+                .expect("a valid box identifier")
+                .borrow(),
+        })
     }
 
-    /// Get a mutable reference to the box identified by `box_id`.
-    fn get_mut_box(&self, box_id: BoxId) -> RefMut<'_, QueryBox> {
-        self.boxes
-            .get(&box_id)
-            .expect("a valid box identifier")
-            .borrow_mut()
+    /// Get an immutable reference to the box identified by `box_id` bound to this [`Model`].
+    fn get_box(&self, box_id: BoxId) -> BoundRef<'_, QueryBox> {
+        BoundRef {
+            model: self,
+            r#ref: self
+                .boxes
+                .get(&box_id)
+                .expect("a valid box identifier")
+                .borrow(),
+        }
+    }
+
+    /// Get a mutable reference to the box identified by `box_id` bound to this [`Model`].
+    fn get_mut_box(&mut self, box_id: BoxId) -> BoundRefMut<'_, QueryBox> {
+        let model_ptr = self as *mut Self;
+        unsafe {
+            let reference = (*model_ptr)
+                .boxes
+                .get(&box_id)
+                .expect("a valid box identifier")
+                .borrow_mut();
+
+            BoundRefMut {
+                model: &mut *model_ptr,
+                r#ref: reference,
+            }
+        }
     }
 
     /// Create a new quantifier and adds it to the parent box
@@ -333,21 +397,34 @@ impl Model {
         id
     }
 
-    /// Get an immutable reference to the box identified by `box_id`.
-    fn get_quantifier(&self, quantifier_id: QuantifierId) -> Ref<'_, Quantifier> {
-        self.quantifiers
-            .get(&quantifier_id)
-            .expect("a valid quantifier identifier")
-            .borrow()
+    /// Get an immutable reference to the box identified by `box_id` bound to this [`Model`].
+    fn get_quantifier(&self, quantifier_id: QuantifierId) -> BoundRef<'_, Quantifier> {
+        BoundRef {
+            model: self,
+            r#ref: self
+                .quantifiers
+                .get(&quantifier_id)
+                .expect("a valid quantifier identifier")
+                .borrow(),
+        }
     }
 
-    /// Get a mutable reference to the box identified by `box_id`.
+    /// Get a mutable reference to the box identified by `box_id` bound to this [`Model`].
     #[allow(dead_code)]
-    fn get_mut_quantifier(&self, quantifier_id: QuantifierId) -> RefMut<'_, Quantifier> {
-        self.quantifiers
-            .get(&quantifier_id)
-            .expect("a valid quantifier identifier")
-            .borrow_mut()
+    fn get_mut_quantifier(&mut self, quantifier_id: QuantifierId) -> BoundRefMut<'_, Quantifier> {
+        let model_ptr = self as *mut Self;
+        unsafe {
+            let reference = (*model_ptr)
+                .quantifiers
+                .get(&quantifier_id)
+                .expect("a valid quantifier identifier")
+                .borrow_mut();
+
+            BoundRefMut {
+                model: &mut *model_ptr,
+                r#ref: reference,
+            }
+        }
     }
 
     /// Visit boxes in the query graph in pre-order starting from `self.top_box`.
@@ -403,49 +480,6 @@ impl Model {
 }
 
 impl QueryBox {
-    /// Resolve the input quantifiers of this box as an iterator of immutable
-    /// references.
-    fn input_quantifiers<'a>(
-        &'a self,
-        model: &'a Model,
-    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
-        self.quantifiers
-            .iter()
-            .map(|q_id| model.get_quantifier(*q_id))
-    }
-
-    /// Resolve the quantifiers ranging over this box as an iterator of immutable
-    /// references.
-    fn ranging_quantifiers<'a>(
-        &'a self,
-        model: &'a Model,
-    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
-        self.ranging_quantifiers
-            .iter()
-            .map(|q_id| model.get_quantifier(*q_id))
-    }
-
-    /// Add all columns from the non-subquery input quantifiers of the box to the
-    /// projection of the box.
-    fn add_all_input_columns(&mut self, model: &Model) {
-        for quantifier_id in self.quantifiers.iter() {
-            let q = model.get_quantifier(*quantifier_id);
-            if !q.quantifier_type.is_subquery() {
-                let input_box = model.get_box(q.input_box);
-                for (position, c) in input_box.columns.iter().enumerate() {
-                    let expr = BoxScalarExpr::ColumnReference(ColumnReference {
-                        quantifier_id: *quantifier_id,
-                        position,
-                    });
-                    self.columns.push(Column {
-                        expr,
-                        alias: c.alias.clone(),
-                    });
-                }
-            }
-        }
-    }
-
     /// Append the given expression as a new column without an explicit alias in
     /// the projection of the box.
     fn add_column(&mut self, expr: BoxScalarExpr) -> usize {
@@ -548,6 +582,106 @@ impl QueryBox {
             }
         }
         correlation_info
+    }
+}
+
+/// [`Model`]-dependent methods.
+///
+/// Publicly visible delegates to these methods are defined for
+/// `BoundRef<'_, QueryBox>` and `BoundRefMut<'_, QueryBox>`.
+impl QueryBox {
+    /// Resolve the input quantifiers of this box as an iterator of immutable
+    /// bound references.
+    fn input_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+        self.quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
+    /// Resolve the quantifiers ranging over this box as an iterator of immutable
+    /// bound references.
+    fn ranging_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+        self.ranging_quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
+    /// Add all columns from the non-subquery input quantifiers of the box to the
+    /// projection of the box.
+    pub fn add_all_input_columns<'a>(&'a mut self, model: &'a Model) {
+        let mut all_input_columns = vec![];
+        for quantifier_id in self.quantifiers.iter() {
+            let q = model.get_quantifier(*quantifier_id);
+            if !q.quantifier_type.is_subquery() {
+                let input_box = model.get_box(q.input_box);
+                for (position, c) in input_box.columns.iter().enumerate() {
+                    let expr = BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: *quantifier_id,
+                        position,
+                    });
+                    all_input_columns.push(Column {
+                        expr,
+                        alias: c.alias.clone(),
+                    });
+                }
+            }
+        }
+        self.columns.append(&mut all_input_columns);
+    }
+}
+
+/// Immutable [`QueryBox`] methods that depend on their enclosing [`Model`].
+impl<'a> BoundRef<'a, QueryBox> {
+    /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
+    pub fn input_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+        self.deref().input_quantifiers(self.model)
+    }
+
+    /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
+    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+        self.deref().ranging_quantifiers(self.model)
+    }
+}
+
+/// Mutable [`QueryBox`] methods that depend on their enclosing [`Model`].
+impl<'a> BoundRefMut<'a, QueryBox> {
+    /// Add all columns from the non-subquery input quantifiers of the box to the
+    /// projection of the box.
+    pub fn add_all_input_columns(&mut self) {
+        let mut all_input_columns = vec![];
+        for quantifier_id in self.quantifiers.iter() {
+            let q = self.model.get_quantifier(*quantifier_id);
+            if !q.quantifier_type.is_subquery() {
+                let input_box = self.model.get_box(q.input_box);
+                for (position, c) in input_box.columns.iter().enumerate() {
+                    let expr = BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: *quantifier_id,
+                        position,
+                    });
+                    all_input_columns.push(Column {
+                        expr,
+                        alias: c.alias.clone(),
+                    });
+                }
+            }
+        }
+        self.columns.append(&mut all_input_columns);
+    }
+
+    /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
+    pub fn input_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+        self.deref().input_quantifiers(self.model)
+    }
+
+    /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
+    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+        self.deref().ranging_quantifiers(self.model)
     }
 }
 

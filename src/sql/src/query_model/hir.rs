@@ -309,9 +309,7 @@ impl FromHir {
                 self.add_predicate(join_box, predicate);
 
                 // Default projection
-                self.model
-                    .get_mut_box(join_box)
-                    .add_all_input_columns(&self.model);
+                self.model.get_mut_box(join_box).add_all_input_columns();
 
                 join_box
             }
@@ -326,8 +324,7 @@ impl FromHir {
         let select_id = self.model.make_select_box();
         self.model
             .make_quantifier(QuantifierType::Foreach, box_id, select_id);
-        let mut select_box = self.model.get_mut_box(select_id);
-        select_box.add_all_input_columns(&self.model);
+        self.model.get_mut_box(select_id).add_all_input_columns();
         select_id
     }
 
