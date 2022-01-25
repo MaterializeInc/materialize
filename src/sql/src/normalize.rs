@@ -416,12 +416,12 @@ macro_rules! with_option_type {
 /// `WITH` options are all real, used options
 pub(crate) fn ensure_empty_options<V>(
     with_options: &BTreeMap<String, V>,
-    r#for: &str,
+    context: &str,
 ) -> Result<(), anyhow::Error> {
     if !with_options.is_empty() {
         bail!(
             "unexpected parameters for {}: {}",
-            r#for,
+            context,
             with_options.keys().join(",")
         )
     }
