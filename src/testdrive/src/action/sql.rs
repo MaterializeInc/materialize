@@ -506,10 +506,41 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
         }
     }
 
+    /// This lets us:
+    /// - Continue using the default method of printing array elements while
+    /// preserving SQL-looking output w/ `dec::to_standard_notation_string`.
+    /// - Avoid upstreaming a complicated change to `rust-postgres-array`.
+    struct NumericStandardNotation(Numeric);
+
+    impl fmt::Display for NumericStandardNotation {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", self.0 .0 .0.to_standard_notation_string())
+        }
+    }
+
+    impl<'a> FromSql<'a> for NumericStandardNotation {
+        fn from_sql(
+            ty: &Type,
+            raw: &'a [u8],
+        ) -> Result<NumericStandardNotation, Box<dyn Error + Sync + Send>> {
+            Ok(NumericStandardNotation(Numeric::from_sql(ty, raw)?))
+        }
+
+        fn from_sql_null(
+            ty: &Type,
+        ) -> Result<NumericStandardNotation, Box<dyn Error + Sync + Send>> {
+            Ok(NumericStandardNotation(Numeric::from_sql_null(ty)?))
+        }
+
+        fn accepts(ty: &Type) -> bool {
+            Numeric::accepts(ty)
+        }
+    }
+
     let mut out = vec![];
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
-        let mut value = match *ty {
+        let mut value: String = match *ty {
             Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
             Type::BPCHAR | Type::TEXT | Type::VARCHAR => row.get::<_, Option<String>>(i),
             Type::TEXT_ARRAY => row
@@ -525,8 +556,8 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
             Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
             Type::OID => row.get::<_, Option<u32>>(i).map(|x| x.to_string()),
             Type::NUMERIC => row
-                .get::<_, Option<Numeric>>(i)
-                .map(|x| x.0 .0.to_standard_notation_string()),
+                .get::<_, Option<NumericStandardNotation>>(i)
+                .map(|x| x.to_string()),
             Type::FLOAT4 => row.get::<_, Option<f32>>(i).map(|x| x.to_string()),
             Type::FLOAT8 => row.get::<_, Option<f64>>(i).map(|x| x.to_string()),
             Type::TIMESTAMP => row
@@ -544,6 +575,51 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
             Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
             Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
             Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
+            Type::BOOL_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<bool>>>>(i)
+                .map(|a| a.to_string()),
+            Type::INT2_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<i16>>>>(i)
+                .map(|a| a.to_string()),
+            Type::INT4_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<i32>>>>(i)
+                .map(|a| a.to_string()),
+            Type::INT8_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<i64>>>>(i)
+                .map(|a| a.to_string()),
+            Type::OID_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<u32>>>>(i)
+                .map(|x| x.to_string()),
+            Type::NUMERIC_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<NumericStandardNotation>>>>(i)
+                .map(|x| x.to_string()),
+            Type::FLOAT4_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<f32>>>>(i)
+                .map(|x| x.to_string()),
+            Type::FLOAT8_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<f64>>>>(i)
+                .map(|x| x.to_string()),
+            Type::TIMESTAMP_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<chrono::NaiveDateTime>>>>(i)
+                .map(|x| x.to_string()),
+            Type::TIMESTAMPTZ_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<chrono::DateTime<chrono::Utc>>>>>(i)
+                .map(|x| x.to_string()),
+            Type::DATE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<chrono::NaiveDate>>>>(i)
+                .map(|x| x.to_string()),
+            Type::TIME_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<chrono::NaiveTime>>>>(i)
+                .map(|x| x.to_string()),
+            Type::INTERVAL_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Interval>>>>(i)
+                .map(|x| x.to_string()),
+            Type::JSONB_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Jsonb>>>>(i)
+                .map(|v| v.to_string()),
+            Type::UUID_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<uuid::Uuid>>>>(i)
+                .map(|v| v.to_string()),
             _ => match ty.oid() {
                 mz_pgrepr::oid::TYPE_UINT2_OID => {
                     row.get::<_, Option<Uint2>>(i).map(|x| x.0.to_string())

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::fmt;
 
 use bytes::{BufMut, BytesMut};
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
@@ -46,5 +47,11 @@ impl<'a> FromSql<'a> for Jsonb {
 
     fn accepts(ty: &Type) -> bool {
         matches!(*ty, Type::JSONB)
+    }
+}
+
+impl fmt::Display for Jsonb {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
