@@ -985,15 +985,15 @@ fn typecheck_debezium_dedup(
         }
     }
 
-    let source_projection = if let Some(((file, pos), row)) = mysql.0.zip(mysql.1).zip(mysql.2) {
+    let source_projection = if let (Some(file), Some(pos), Some(row)) = mysql {
         DebeziumSourceProjection::MySql { file, pos, row }
-    } else if let (sequence, Some(lsn)) = postgres {
-        DebeziumSourceProjection::Postgres { sequence, lsn }
-    } else if let Some((change_lsn, event_serial_no)) = sqlserver.0.zip(sqlserver.1) {
+    } else if let (Some(change_lsn), Some(event_serial_no)) = sqlserver {
         DebeziumSourceProjection::SqlServer {
             change_lsn,
             event_serial_no,
         }
+    } else if let (sequence, Some(lsn)) = postgres {
+        DebeziumSourceProjection::Postgres { sequence, lsn }
     } else {
         bail!("unknown type of upstream database")
     };

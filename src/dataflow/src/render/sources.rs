@@ -903,9 +903,9 @@ fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row), Deco
             (Err(e), _) => Some(Err(e)),
         },
         (None, None) => None,
-        // TODO(petrosagg): this is an envelope error
+        // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
         _ => Some(Err(DecodeError::Text(
-            "Key and/or Value are not present for message".to_string(),
+            "Key or Value are not present for message".to_string(),
         ))),
     }
 }

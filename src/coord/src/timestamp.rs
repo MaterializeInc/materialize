@@ -35,8 +35,8 @@ use tracing::{debug, error, info, warn};
 use dataflow_types::sources::{
     encoding::DataEncoding,
     persistence::{Consistency, TimestampSourceUpdate},
-    ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector,
-    MzOffset, S3SourceConnector, SourceConnector, SourceEnvelope,
+    DebeziumMode, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
+    KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector, SourceEnvelope,
 };
 use expr::{GlobalId, PartitionId};
 use kafka_util::client::MzClientContext;
@@ -503,10 +503,14 @@ fn parse_debezium(
 /// 2) any other file source with a Debezium envelope will expect an Avro consistency source
 /// that follows the TRX_METADATA_SCHEMA Avro spec outlined above
 fn identify_consistency_format(_enc: DataEncoding, env: SourceEnvelope) -> ConsistencyFormatting {
-    if let SourceEnvelope::Debezium(_) = env {
-        ConsistencyFormatting::DebeziumAvro
-    } else {
-        panic!("BYO timestamping for non-Debezium sources not supported!");
+    match env {
+        SourceEnvelope::Debezium(dbz_envelope) => match dbz_envelope.mode {
+            DebeziumMode::Upsert => {
+                panic!("BYO timestamping for Debezium Upsert sources not supported!")
+            }
+            _ => ConsistencyFormatting::DebeziumAvro,
+        },
+        _ => panic!("BYO timestamping for non-Debezium sources not supported!"),
     }
 }
 

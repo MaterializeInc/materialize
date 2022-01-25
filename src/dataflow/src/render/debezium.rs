@@ -47,7 +47,6 @@ pub(crate) fn render<G: Scope>(
                     let mut current_values = HashMap::new();
                     let mut data = vec![];
                     move |input, output| {
-                        gauge.set(current_values.len() as u64);
                         while let Some((cap, refmut_data)) = input.next() {
                             let mut session = output.session(&cap);
                             refmut_data.swap(&mut data);
@@ -68,7 +67,7 @@ pub(crate) fn render<G: Scope>(
                                             Some(Ok(row))
                                         }
                                         Datum::Null => None,
-                                        _ => panic!(),
+                                        d => panic!("type error: expected record, found {:?}", d),
                                     },
                                     Some(Err(err)) => Some(Err(DataflowError::from(err))),
                                     None => continue,
@@ -87,6 +86,7 @@ pub(crate) fn render<G: Scope>(
                                 }
                             }
                         }
+                        gauge.set(current_values.len() as u64);
                     }
                 })
                 .as_collection()
@@ -128,11 +128,19 @@ pub(crate) fn render<G: Scope>(
                             };
 
                             if should_use {
-                                if let Datum::List(l) = value.iter().nth(before_idx).unwrap() {
-                                    session.give((Ok(Row::pack(&l)), cap.time().clone(), -1));
+                                match value.iter().nth(before_idx).unwrap() {
+                                    Datum::List(l) => {
+                                        session.give((Ok(Row::pack(&l)), cap.time().clone(), -1))
+                                    }
+                                    Datum::Null => {}
+                                    d => panic!("type error: expected record, found {:?}", d),
                                 }
-                                if let Datum::List(l) = value.iter().nth(after_idx).unwrap() {
-                                    session.give((Ok(Row::pack(&l)), cap.time().clone(), 1));
+                                match value.iter().nth(after_idx).unwrap() {
+                                    Datum::List(l) => {
+                                        session.give((Ok(Row::pack(&l)), cap.time().clone(), 1))
+                                    }
+                                    Datum::Null => {}
+                                    d => panic!("type error: expected record, found {:?}", d),
                                 }
                             }
                         }
@@ -306,10 +314,6 @@ enum RowCoordinates {
 
 impl DebeziumDeduplicationState {
     fn new(envelope: DebeziumEnvelope) -> Option<Self> {
-        if matches!(envelope.mode, DebeziumMode::None) {
-            return None;
-        }
-
         let (full, projection) = match envelope.mode {
             DebeziumMode::Ordered(projection) => (None, projection),
             DebeziumMode::Full(projection) => (Some(TrackFull::from_keys()), projection),
@@ -322,7 +326,7 @@ impl DebeziumDeduplicationState {
                 Some(TrackFull::from_keys_in_range(start, end, pad_start)),
                 projection,
             ),
-            DebeziumMode::None | DebeziumMode::Upsert => unreachable!(),
+            DebeziumMode::None | DebeziumMode::Upsert => return None,
         };
         Some(DebeziumDeduplicationState {
             last_position_and_offset: None,
@@ -338,10 +342,10 @@ impl DebeziumDeduplicationState {
             Datum::List(l) => match l.iter().nth(self.projection.total_order_idx).unwrap() {
                 Datum::Int64(n) => Some(n),
                 Datum::Null => None,
-                d => panic!("unexpected datum type of transaction field: {:?}", d),
+                d => panic!("type error: expected bigint, found {:?}", d),
             },
             Datum::Null => None,
-            _ => panic!(),
+            d => panic!("type error: expected bigint[], found {:?}", d),
         }
     }
 
@@ -419,7 +423,7 @@ impl DebeziumDeduplicationState {
                 Some(coords)
             }
             Datum::Null => None,
-            _ => panic!(),
+            d => panic!("type error: expected record, found {:?}", d),
         }
     }
 
