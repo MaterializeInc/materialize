@@ -255,7 +255,9 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
         } else {
             return Err(PosError {
                 pos: Some(err_pos),
-                source: anyhow!("Query error must start with match specifier"),
+                source: anyhow!(
+                    "Query error must start with match specifier (`regex:`|`contains:`|`exact:`)"
+                ),
             });
         };
     Ok(FailSqlCommand {
