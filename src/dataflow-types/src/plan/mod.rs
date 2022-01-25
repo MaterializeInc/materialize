@@ -876,8 +876,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
             arrangements
                 .entry(Id::Global(index_desc.on_id))
                 .or_insert_with(|| {
-                    AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
-                });
+                    AvailableCollections::default()
+                }).arranged.push((key, permutation, thinning));
         }
         for (_source_desc, id) in desc.source_imports.values() {
             arrangements

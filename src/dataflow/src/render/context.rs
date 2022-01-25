@@ -531,7 +531,10 @@ where
         //
         // Note(btv): If we ever do that, we would then only need to make the raw collection here
         // if `collections.raw` is true.
-        if self.collection.is_none() {
+
+        // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
+        let form_raw_collection = collections.raw || collections.arranged.iter().any(|(key, _, _)| !self.arranged.contains_key(key));
+        if form_raw_collection {
             self.collection =
                 Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None))));
         }
