@@ -1,0 +1,11 @@
+[package]
+name = "mz-control"
+description = "The control layer of Materialize Platform."
+version = "0.0.0"
+edition = "2021"
+publish = false
+rust-version = "1.58.0"
+
+[dependencies]
+
+[dev-dependencies]

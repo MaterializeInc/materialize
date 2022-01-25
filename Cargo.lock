@@ -3039,6 +3039,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-compute"
+version = "0.0.0"
+
+[[package]]
+name = "mz-control"
+version = "0.0.0"
+
+[[package]]
 name = "mz-http-proxy"
 version = "0.1.0"
 dependencies = [
@@ -3061,6 +3069,15 @@ dependencies = [
  "ore",
  "procfs",
  "prometheus",
+]
+
+[[package]]
+name = "mz-storage"
+version = "0.0.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-build",
 ]
 
 [[package]]
