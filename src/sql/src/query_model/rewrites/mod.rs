@@ -31,7 +31,7 @@ pub(crate) trait Rewrite {
 
 /// Where and how a rule should be applied to boxes in the model.
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum ApplyStrategy {
     // Apply only to the top box.
     TopBox,
@@ -41,7 +41,7 @@ pub(crate) enum ApplyStrategy {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum VisitOrder {
     Pre,
     Post,
