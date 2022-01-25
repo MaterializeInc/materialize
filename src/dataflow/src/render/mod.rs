@@ -325,12 +325,12 @@ where
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 scope,
-                &format!("Index({}, {:?})", idx.on_id, idx.keys),
+                &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 scope,
-                &format!("ErrIndex({}, {:?})", idx.on_id, idx.keys),
+                &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
             );
             let ok_arranged = ok_arranged.enter(region);
@@ -338,7 +338,7 @@ where
             self.update_id(
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
-                    idx.keys.clone(),
+                    idx.key.clone(),
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                 ),
             );
@@ -395,7 +395,7 @@ where
                 Id::Global(idx_id)
             )
         });
-        match bundle.arrangement(&idx.keys) {
+        match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 compute_state.traces.set(
                     idx_id,
@@ -417,7 +417,7 @@ where
                 panic!(
                     "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
                     Id::Global(idx_id),
-                    &idx.keys
+                    &idx.key
                 );
             }
         };
@@ -477,9 +477,15 @@ where
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
                 if mfp.is_identity() {
                     // Assert that each of `keys` are present in `collection`.
-                    assert!(keys.iter().all(|key| collection.arranged.contains_key(key)));
+                    assert!(keys
+                        .arranged
+                        .iter()
+                        .all(|(key, _, _)| collection.arranged.contains_key(key)));
+                    assert!(keys.raw <= collection.collection.is_some());
                     // Retain only those keys we want to import.
-                    collection.arranged.retain(|key, _value| keys.contains(key));
+                    collection
+                        .arranged
+                        .retain(|key, _value| keys.arranged.iter().any(|(key2, _, _)| key2 == key));
                     collection
                 } else {
                     let (oks, errs) = collection.as_collection_core(mfp, key_val);
@@ -568,9 +574,14 @@ where
                 let errs = differential_dataflow::collection::concatenate(scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
-            Plan::ArrangeBy { input, keys, arity } => {
+            Plan::ArrangeBy {
+                input,
+                forms: keys,
+                input_key,
+                input_mfp,
+            } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                input.ensure_arrangements(keys, arity)
+                input.ensure_collections(keys, input_key, input_mfp)
             }
         }
     }

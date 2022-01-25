@@ -11,10 +11,8 @@
 //! dataflow.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::ops::DerefMut;
 
-use dataflow_types::plan::make_thinning_expression;
+use dataflow_types::plan::AvailableCollections;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
@@ -310,80 +308,6 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
-    /// Gets the raw ("unthinned") collection
-    /// represented by this bundle.
-    ///
-    /// This may require reading from an arrangement and
-    /// applying a permutation to each element. Thus,
-    /// to avoid duplicate work,
-    /// this should only be used sparingly, in the cases
-    /// where that operation cannot be folded into an immediately
-    /// following MFP.
-    pub fn as_unthinned_collection(
-        &self,
-        output_arity: usize,
-    ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
-        self.collection.clone().unwrap_or_else(|| {
-            let key = self
-                .arranged
-                .keys()
-                .next()
-                .expect("Invariant violated: CollectionBundle contains no collection.")
-                .clone();
-            let columns_in_key: HashMap<_, _> = key
-                .iter()
-                .enumerate()
-                .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
-                .collect();
-            let mut input_cursor = key.len();
-            let permutation: Vec<_> = (0..output_arity)
-                .map(|c| {
-                    if let Some(c) = columns_in_key.get(&c) {
-                        // Column is in key (and thus gone from the value
-                        // of the thinned representation)
-                        *c
-                    } else {
-                        // Column remains in value of the thinned representation
-                        input_cursor += 1;
-                        input_cursor - 1
-                    }
-                })
-                .collect();
-            let mut datum_vec = DatumVec::new();
-            let mut row_builder = Row::default();
-
-            match self.arranged[&key].clone() {
-                ArrangementFlavor::Local(ok, err) => {
-                    let ok = ok.as_collection(move |k, v| {
-                        let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                        let datums = borrow.deref_mut();
-                        let original_len = datums.len();
-                        for &p in &permutation {
-                            datums.push(datums[p]);
-                        }
-                        datums.drain(..original_len);
-                        row_builder.extend(&*borrow);
-                        row_builder.finish_and_reuse()
-                    });
-                    (ok, err.as_collection(|k, &()| k.clone()))
-                }
-                ArrangementFlavor::Trace(_, ok, err) => {
-                    let ok = ok.as_collection(move |k, v| {
-                        let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                        let datums = borrow.deref_mut();
-                        let original_len = datums.len();
-                        for &p in &permutation {
-                            datums.push(datums[p]);
-                        }
-                        datums.drain(..original_len);
-                        row_builder.extend(&*borrow);
-                        row_builder.finish_and_reuse()
-                    });
-                    (ok, err.as_collection(|k, &()| k.clone()))
-                }
-            }
-        })
-    }
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
     /// and returns the corresponding collection.
@@ -542,54 +466,6 @@ where
     pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, Row, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
-
-    /// Ensures that arrangements in `keys` are present, creating them if they do not exist.
-    pub fn ensure_arrangements<K: IntoIterator<Item = Vec<MirScalarExpr>>>(
-        mut self,
-        keys: K,
-        arity: usize,
-    ) -> Self {
-        for key in keys {
-            if !self.arranged.contains_key(&key) {
-                // TODO: Consider allowing more expressive names.
-                let name = format!("ArrangeBy[{:?}]", key);
-                let thinning = make_thinning_expression(&key, arity);
-                let key2 = key.clone();
-                if self.collection.is_none() {
-                    // Cache collection to avoid reforming it each time.
-                    // TODO(mcsherry): In theory this could be faster run out of another arrangement,
-                    // as the `map_fallible` that follows could be run against an arrangement itself.
-                    self.collection = Some(self.as_unthinned_collection(arity));
-                }
-                let (oks, errs) = self
-                    .collection
-                    .clone()
-                    .expect("Collection constructed above");
-
-                let mut row_packer = Row::default();
-
-                let mut datums = DatumVec::new();
-                let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
-                    // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
-                    let datums = datums.borrow_with(&row);
-                    let temp_storage = RowArena::new();
-                    row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    let key_row = row_packer.finish_and_reuse();
-                    row_packer.extend(thinning.iter().map(|c| datums[*c]));
-                    let val_row = row_packer.finish_and_reuse();
-                    Ok::<(Row, Row), DataflowError>((key_row, val_row))
-                });
-
-                let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
-                let errs = errs
-                    .concat(&errs_keyed)
-                    .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
-                self.arranged
-                    .insert(key, ArrangementFlavor::Local(oks, errs));
-            }
-        }
-        self
-    }
 }
 
 impl<S> CollectionBundle<S, repr::Row, repr::Timestamp>
@@ -602,7 +478,8 @@ where
     /// reduce the amount of data produced when `mfp` is non-trivial.
     ///
     /// The `key_val` argument, when present, indicates that a specific arrangement should
-    /// be used, and that we can seek to the supplied row.
+    /// be used, and if, in addition, the `val` component is present,
+    /// that we can seek to the supplied row.
     pub fn as_collection_core(
         &self,
         mut mfp: MapFilterProject,
@@ -637,6 +514,60 @@ where
         let oks = oks.as_collection();
         let errs = errs.as_collection();
         (oks, errors.concat(&errs))
+    }
+    pub fn ensure_collections(
+        mut self,
+        collections: AvailableCollections,
+        input_key: Option<Vec<MirScalarExpr>>,
+        input_mfp: MapFilterProject,
+    ) -> Self {
+        if collections == Default::default() {
+            return self;
+        }
+        // Cache collection to avoid reforming it each time.
+        //
+        // TODO(mcsherry): In theory this could be faster run out of another arrangement,
+        // as the `map_fallible` that follows could be run against an arrangement itself.
+        //
+        // Note(btv): If we ever do that, we would then only need to make the raw collection here
+        // if `collections.raw` is true.
+        if self.collection.is_none() {
+            self.collection =
+                Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None))));
+        }
+        for (key, _, thinning) in collections.arranged {
+            if !self.arranged.contains_key(&key) {
+                // TODO: Consider allowing more expressive names.
+                let name = format!("ArrangeBy[{:?}]", key);
+                let key2 = key.clone();
+                let (oks, errs) = self
+                    .collection
+                    .clone()
+                    .expect("Collection constructed above");
+
+                let mut row_packer = Row::default();
+
+                let mut datums = DatumVec::new();
+                let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
+                    // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
+                    let datums = datums.borrow_with(&row);
+                    let temp_storage = RowArena::new();
+                    row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+                    let key_row = row_packer.finish_and_reuse();
+                    row_packer.extend(thinning.iter().map(|c| datums[*c]));
+                    let val_row = row_packer.finish_and_reuse();
+                    Ok::<(Row, Row), DataflowError>((key_row, val_row))
+                });
+
+                let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
+                let errs = errs
+                    .concat(&errs_keyed)
+                    .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                self.arranged
+                    .insert(key, ArrangementFlavor::Local(oks, errs));
+            }
+        }
+        self
     }
 }
 

@@ -3172,7 +3172,7 @@ where
             index_id,
             IndexDesc {
                 on_id: view_id,
-                keys: key.clone(),
+                key: key.clone(),
             },
             typ,
         );
@@ -4841,7 +4841,7 @@ pub mod fast_path_peek {
     use dataflow_types::client::{ComputeClient, StorageClient};
 
     use crate::CoordError;
-    use expr::{EvalError, GlobalId, Id, MirScalarExpr};
+    use expr::{permutation_for_arrangement, EvalError, GlobalId, Id, MirScalarExpr};
     use repr::{Diff, Row};
 
     /// Possible ways in which the coordinator could produce the result for a goal view.
@@ -4906,7 +4906,7 @@ pub mod fast_path_peek {
                     // If `keys` is non-empty, that means we think one exists.
                     for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
                         if let Some((key, val)) = key_val {
-                            if Id::Global(desc.on_id) == *id && &desc.keys == key {
+                            if Id::Global(desc.on_id) == *id && &desc.key == key {
                                 // Indicate an early exit with a specific index and key_val.
                                 return Ok(Plan::PeekExisting(
                                     *index_id,
@@ -4999,9 +4999,16 @@ pub mod fast_path_peek {
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client.create_dataflows(vec![dataflow]).await;
 
+                    // TODO[btv]
+                    //
+                    // We should get these values from the same place
+                    // the key was created, rather than creating them here.
+                    let (permutation, thinning) =
+                        permutation_for_arrangement(&index_key, source_arity);
                     // Create an identity MFP operator.
-                    let map_filter_project = expr::MapFilterProject::new(source_arity)
-                        .permute_for_arrangement(&index_key)
+                    let mut map_filter_project = expr::MapFilterProject::new(source_arity);
+                    map_filter_project.permute(permutation, index_key.len() + thinning.len());
+                    let map_filter_project = map_filter_project
                         .into_plan()
                         .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
                         .into_nontemporal()

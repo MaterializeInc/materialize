@@ -17,9 +17,13 @@
 //! This implementation strategy allows us to re-use existing arrangements, and
 //! not create any new stateful operators.
 
+use std::collections::HashMap;
+
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
-use crate::plan::make_thinning_expression;
+use crate::plan::AvailableCollections;
+use expr::join_permutations;
+use expr::permutation_for_arrangement;
 use expr::JoinInputMapper;
 use expr::MapFilterProject;
 use expr::MirScalarExpr;
@@ -84,8 +88,12 @@ impl DeltaJoinPlan {
         join_orders: &[Vec<(usize, Vec<MirScalarExpr>)>],
         input_mapper: JoinInputMapper,
         map_filter_project: &mut MapFilterProject,
-    ) -> Self {
-        let number_of_inputs = join_orders.len();
+        available: &[AvailableCollections],
+    ) -> (Self, Vec<AvailableCollections>) {
+        let mut requested: Vec<AvailableCollections> =
+            vec![Default::default(); input_mapper.total_inputs()];
+        let number_of_inputs = input_mapper.total_inputs();
+        assert_eq!(number_of_inputs, join_orders.len());
 
         // Pick the "first" (by `Ord`) key for the source relation of each path.
         // (This matches the probably arbitrary historical practice from `mod render`.)
@@ -122,7 +130,12 @@ impl DeltaJoinPlan {
 
             let source_key = &source_keys[source_relation];
             // Initial action we can take on the source relation before joining.
-            let initial_closure = join_build_state.extract_closure(None, source_key);
+            let (initial_permutation, initial_thinning) =
+                permutation_for_arrangement(source_key, input_mapper.input_arity(source_relation));
+            let initial_closure = join_build_state.extract_closure(
+                initial_permutation,
+                source_key.len() + initial_thinning.len(),
+            );
 
             // Sequence of steps to apply.
             let mut stage_plans = Vec::with_capacity(number_of_inputs - 1);
@@ -135,7 +148,31 @@ impl DeltaJoinPlan {
 
             let mut unthinned_stream_arity = initial_closure.before.projection.len();
 
+            // TODO[btv] - Can we deduplicate this with the very similar code in `linear_join.rs` ?
             for (lookup_relation, lookup_key) in order.iter() {
+                let available = &available[*lookup_relation];
+                let (lookup_permutation, lookup_thinning) = available
+                    .arranged
+                    .iter()
+                    .find_map(|(key, permutation, thinning)| {
+                        if key == lookup_key {
+                            Some((permutation.clone(), thinning.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        let (permutation, thinning) = permutation_for_arrangement::<HashMap<_, _>>(
+                            lookup_key,
+                            input_mapper.input_arity(*lookup_relation),
+                        );
+                        requested[*lookup_relation].arranged.push((
+                            lookup_key.clone(),
+                            permutation.clone(),
+                            thinning.clone(),
+                        ));
+                        (permutation, thinning)
+                    });
                 // rebase the intended key to use global column identifiers.
                 let lookup_key_rebased = lookup_key
                     .iter()
@@ -158,15 +195,25 @@ impl DeltaJoinPlan {
                         bound_expr
                     })
                     .collect::<Vec<_>>();
-
-                let stream_thinning = make_thinning_expression(&stream_key, unthinned_stream_arity);
+                let (stream_permutation, stream_thinning) = permutation_for_arrangement::<
+                    HashMap<_, _>,
+                >(
+                    &stream_key, unthinned_stream_arity
+                );
+                let key_arity = stream_key.len();
+                let permutation = join_permutations(
+                    key_arity,
+                    stream_permutation.clone(),
+                    stream_thinning.len(),
+                    lookup_permutation.clone(),
+                );
 
                 // Introduce new columns and expressions they enable. Form a new closure.
                 let closure = join_build_state.add_columns(
                     input_mapper.global_columns(*lookup_relation),
                     &lookup_key_rebased,
-                    Some((&stream_key, stream_thinning.len())),
-                    &lookup_key,
+                    key_arity + stream_thinning.len() + lookup_thinning.len(),
+                    permutation,
                 );
                 unthinned_stream_arity = closure.before.projection.len();
 
@@ -202,6 +249,6 @@ impl DeltaJoinPlan {
         // assign the remaining temporal predicates to it, for the caller's use.
         *map_filter_project = temporal_mfp;
 
-        join_plan
+        (join_plan, requested)
     }
 }

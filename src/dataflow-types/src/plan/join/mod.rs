@@ -34,10 +34,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use expr::{
-    permutation_for_arrangement, permutation_for_joined_arrangements, MapFilterProject,
-    MirScalarExpr,
-};
+use expr::{MapFilterProject, MirScalarExpr};
 use repr::{Datum, Row, RowArena};
 
 pub use delta_join::DeltaJoinPlan;
@@ -101,8 +98,8 @@ impl JoinClosure {
         columns: &mut HashMap<usize, usize>,
         equivalences: &mut Vec<Vec<MirScalarExpr>>,
         mfp: &mut MapFilterProject,
-        stream_key_and_thinned_arity: Option<(&[MirScalarExpr], usize)>,
-        lookup_key: &[MirScalarExpr],
+        permutation: HashMap<usize, usize>,
+        thinned_arity_with_key: usize,
     ) -> Self {
         // First, determine which columns should be compared due to `equivalences`.
         let mut ready_equivalences = Vec::new();
@@ -132,24 +129,6 @@ impl JoinClosure {
             }
         }
         equivalences.retain(|e| e.len() > 1);
-        let columns_arity = columns
-            .values()
-            .cloned()
-            .max()
-            .map(|col| col + 1)
-            .unwrap_or(0);
-        let permutation: HashMap<_, _> =
-            if let Some((stream_key, thinned_stream_arity)) = stream_key_and_thinned_arity {
-                permutation_for_joined_arrangements(
-                    stream_key,
-                    thinned_stream_arity,
-                    lookup_key,
-                    columns_arity,
-                )
-                .0
-            } else {
-                permutation_for_arrangement(&lookup_key, columns_arity).0
-            };
         let permuted_columns = columns.iter().map(|(k, v)| (*k, permutation[v])).collect();
         // Update ready_equivalences to reference correct column locations.
         for exprs in ready_equivalences.iter_mut() {
@@ -219,12 +198,7 @@ impl JoinClosure {
             }
         }
 
-        // Absorb permutations in `before`
-        if let Some((stream_key, stream_arity)) = stream_key_and_thinned_arity {
-            before.permute_for_joined_arrangements(stream_key, stream_arity, lookup_key);
-        } else {
-            before = before.permute_for_arrangement(lookup_key);
-        }
+        before.permute(permutation, thinned_arity_with_key);
 
         // `before` should not be modified after this point.
         before.optimize();
@@ -297,8 +271,9 @@ impl JoinBuildState {
         &mut self,
         new_columns: std::ops::Range<usize>,
         bound_expressions: &[MirScalarExpr],
-        stream_key_and_thinned_arity: Option<(&[MirScalarExpr], usize)>,
-        lookup_key: &[MirScalarExpr],
+        thinned_arity_with_key: usize,
+        // The permutation to run on the join of the thinned collections
+        permutation: HashMap<usize, usize>,
     ) -> JoinClosure {
         // Remove each element of `bound_expressions` from `equivalences`, so that we
         // avoid redundant predicate work. This removal also paves the way for
@@ -313,7 +288,7 @@ impl JoinBuildState {
             self.column_map.insert(column, self.column_map.len());
         }
 
-        self.extract_closure(stream_key_and_thinned_arity, lookup_key)
+        self.extract_closure(permutation, thinned_arity_with_key)
     }
 
     /// Extract a final `MapFilterProject` once all columns are available.
@@ -354,15 +329,15 @@ impl JoinBuildState {
     /// consider using the `.is_identity()` method to determine non-triviality.
     fn extract_closure(
         &mut self,
-        stream_key_and_thinned_arity: Option<(&[MirScalarExpr], usize)>,
-        lookup_key: &[MirScalarExpr],
+        permutation: HashMap<usize, usize>,
+        thinned_arity_with_key: usize,
     ) -> JoinClosure {
         JoinClosure::build(
             &mut self.column_map,
             &mut self.equivalences,
             &mut self.mfp,
-            stream_key_and_thinned_arity,
-            lookup_key,
+            permutation,
+            thinned_arity_with_key,
         )
     }
 }

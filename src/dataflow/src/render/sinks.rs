@@ -18,8 +18,16 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::Scope;
 
+<<<<<<< HEAD
 use dataflow_types::sinks::*;
 use expr::GlobalId;
+||||||| parent of 8ab27655b (refactors)
+use dataflow_types::*;
+use expr::GlobalId;
+=======
+use dataflow_types::*;
+use expr::{permutation_for_arrangement, GlobalId, MapFilterProject};
+>>>>>>> 8ab27655b (refactors)
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use repr::{Datum, Diff, Row, Timestamp};
 
@@ -57,11 +65,29 @@ where
             }
         }
 
-        let arity = sink.from_desc.arity();
-        let (collection, _err_collection) = self
+        // TODO[btv] - We should determine the key and permutation to use during planning,
+        // rather than at runtime.
+        //
+        // This is basically an inlined version of the old `as_collection`.
+        let bundle = self
             .lookup_id(expr::Id::Global(sink.from))
-            .expect("Sink source collection not loaded")
-            .as_unthinned_collection(arity);
+            .expect("Sink source collection not loaded");
+        let collection = if let Some((collection, _err_collection)) = &bundle.collection {
+            collection.clone()
+        } else {
+            let (key, _arrangement) = bundle
+                .arranged
+                .iter()
+                .next()
+                .expect("Invariant violated: at least one collection must be present.");
+            let unthinned_arity = sink.from_desc.arity();
+            let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
+            let mut mfp = MapFilterProject::new(unthinned_arity);
+            mfp.permute(permutation, thinning.len() + key.len());
+            let (collection, _err_collection) =
+                bundle.as_collection_core(mfp, Some((key.clone(), None)));
+            collection
+        };
 
         let collection = apply_sink_envelope(sink, &sink_render, collection);
 

@@ -65,36 +65,13 @@ impl MapFilterProject {
         }
     }
 
-    /// Given an mfp for the (unthinned) output of a join,
-    /// make one that has the same effect accounting for the fact that the
-    /// input arrangements have been thinned.
-    pub fn permute_for_joined_arrangements(
-        &mut self,
-        stream_key: &[MirScalarExpr],
-        thinned_stream_arity: usize,
-        lookup_key: &[MirScalarExpr],
-    ) {
-        let (permutation, new_arity) = util::permutation_for_joined_arrangements(
-            stream_key,
-            thinned_stream_arity,
-            lookup_key,
-            self.input_arity,
-        );
-        self.permute(permutation, new_arity);
-    }
-
-    /// Given an mfp for an un-arranged collection,
-    /// make one that has the same effect on a collection
-    /// arranged by `key`.
-    ///
-    /// When arranging data, we remove columns from the value
-    /// that are duplicate of columns in the key.
-    /// The point of this function is to reverse that
-    /// transformation.
-    pub fn permute_for_arrangement(mut self, key: &[MirScalarExpr]) -> Self {
-        let (permutation, new_arity) = util::permutation_for_arrangement(key, self.input_arity);
-        self.permute(permutation, new_arity);
-        self
+    /// Given two mfps, return an mfp that applies one
+    /// followed by the other.
+    /// Note that the arguments are in the opposite order
+    /// from how function composition is usually written in mathematics.
+    pub fn compose(before: Self, after: Self) -> Self {
+        let (m, f, p) = after.into_map_filter_project();
+        before.map(m).filter(f).project(p)
     }
 
     /// True if the operator describes the identity transformation.
@@ -175,19 +152,22 @@ impl MapFilterProject {
         self
     }
 
+    /// Like [`MapFilterProject::as_map_filter_project`], but consumes `self` rather than cloning.
+    pub fn into_map_filter_project(self) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
+        let predicates = self
+            .predicates
+            .into_iter()
+            .map(|(_pos, predicate)| predicate)
+            .collect();
+        (self.expressions, predicates, self.projection)
+    }
+
     /// As the arguments to `Map`, `Filter`, and `Project` operators.
     ///
     /// In principle, this operator can be implemented as a sequence of
     /// more elemental operators, likely less efficiently.
     pub fn as_map_filter_project(&self) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
-        let map = self.expressions.clone();
-        let filter = self
-            .predicates
-            .iter()
-            .map(|(_pos, predicate)| predicate.clone())
-            .collect::<Vec<_>>();
-        let project = self.projection.clone();
-        (map, filter, project)
+        self.clone().into_map_filter_project()
     }
 
     /// Determines if a scalar expression must be equal to a literal datum.
@@ -1167,37 +1147,27 @@ pub mod util {
 
     use crate::MirScalarExpr;
 
-    /// Takes a permutation represented as an array
-    /// (where the `i`th column being `j` implies that column `i` in the original row
-    ///  corresponds to column `j` in the permuted row; see `dataflow::render::Permutation`)
-    /// and converts it to a column map along with the arity of the permuted representation
-    pub fn permutation_to_map_and_new_arity(
-        permutation: &[usize],
-    ) -> (HashMap<usize, usize>, usize) {
-        (
-            permutation.iter().cloned().enumerate().collect(),
-            permutation
-                .iter()
-                .cloned()
-                .max()
-                .map(|x| x + 1)
-                .unwrap_or(0),
-        )
-    }
     /// Return the map associating columns in the logical,
     /// unthinned representation of a collection to columns in the
     /// thinned representation of the arrangement corresponding to `key`.
+    ///
+    /// Returns the permutation and the thinning
+    /// expression that should be used to create the arrangement.
+    ///
+    /// The permutations and thinning expressions generated here will be tracked in
+    /// [`dataflow::plan::AvailableCollections`]; see the
+    /// documentation there for more details.
     pub fn permutation_for_arrangement<B: FromIterator<(usize, usize)>>(
         key: &[MirScalarExpr],
-        arity: usize,
-    ) -> (B, usize) {
+        unthinned_arity: usize,
+    ) -> (B, Vec<usize>) {
         let columns_in_key: HashMap<_, _> = key
             .iter()
             .enumerate()
             .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
             .collect();
         let mut input_cursor = key.len();
-        let permutation = (0..arity)
+        let permutation = (0..unthinned_arity)
             .map(|c| {
                 if let Some(c) = columns_in_key.get(&c) {
                     // Column is in key (and thus gone from the value
@@ -1211,50 +1181,51 @@ pub mod util {
             })
             .enumerate()
             .collect();
-        (permutation, input_cursor)
+        let thinning = (0..unthinned_arity)
+            .into_iter()
+            .filter(|c| !columns_in_key.contains_key(&c))
+            .collect();
+        (permutation, thinning)
     }
 
-    /// Return the map associating columns in the logical,
-    /// unthinned representation of the output of a join to columns in the
-    /// physical representation of the arrangement (where both of the inputs
-    /// are stored thinned in an arrangement).
-    pub fn permutation_for_joined_arrangements<B: FromIterator<(usize, usize)>>(
-        stream_key: &[MirScalarExpr],
+    /// Given the permutations (see [`permutation_for_arrangement`] and
+    /// ([`dataflow::plan::AvailableCollections`]) corresponding to two
+    /// collections with the same key arity,
+    /// computes the permutation for the result of joining them.
+    pub fn join_permutations(
+        key_arity: usize,
+        stream_permutation: HashMap<usize, usize>,
         thinned_stream_arity: usize,
-        lookup_key: &[MirScalarExpr],
-        arity: usize,
-    ) -> (B, usize) {
-        let total_stream_arity = stream_key
-            .iter()
-            .filter_map(|kcol| kcol.as_column())
-            .count()
-            + thinned_stream_arity;
-        assert!(stream_key.len() == lookup_key.len());
-        let columns_in_stream_key: HashMap<_, _> = stream_key
-            .iter()
-            .enumerate()
-            .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
-            .collect();
-        let columns_in_lookup_key: HashMap<_, _> = lookup_key
-            .iter()
-            .enumerate()
-            .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c + total_stream_arity, i)))
-            .collect();
-        let mut input_cursor = stream_key.len();
-        let permutation = (0..arity)
-            .map(|c| {
-                if let Some(c) = columns_in_stream_key.get(&c) {
-                    *c
-                } else if let Some(c) = columns_in_lookup_key.get(&c) {
-                    *c
+        lookup_permutation: HashMap<usize, usize>,
+    ) -> HashMap<usize, usize> {
+        let stream_arity = stream_permutation
+            .keys()
+            .cloned()
+            .max()
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let lookup_arity = lookup_permutation
+            .keys()
+            .cloned()
+            .max()
+            .map(|i| i + 1)
+            .unwrap_or(0);
+
+        (0..stream_arity + lookup_arity)
+            .map(|i| {
+                let location = if i < stream_arity {
+                    stream_permutation[&i]
                 } else {
-                    input_cursor += 1;
-                    input_cursor - 1
-                }
+                    let location_in_lookup = lookup_permutation[&(i - stream_arity)];
+                    if location_in_lookup < key_arity {
+                        location_in_lookup
+                    } else {
+                        location_in_lookup + thinned_stream_arity
+                    }
+                };
+                (i, location)
             })
-            .enumerate()
-            .collect();
-        (permutation, input_cursor)
+            .collect()
     }
 }
 
@@ -1269,8 +1240,6 @@ pub mod plan {
     };
     use repr::adt::numeric::Numeric;
     use repr::{Datum, Diff, Row, RowArena, ScalarType};
-
-    use super::util::permutation_to_map_and_new_arity;
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1386,24 +1355,6 @@ pub mod plan {
     }
 
     impl MfpPlan {
-        /// Prepares `self` to act on permuted input, according to the permutation array
-        /// `permutation` (see for example the documentation on `util::permutation_to_map_and_new_arity`
-        /// for a description of the input).
-        pub fn permute(&mut self, permutation: &[usize]) {
-            let (map, new_arity) = permutation_to_map_and_new_arity(permutation);
-            self.mfp.mfp.permute(map, new_arity);
-            let permutation = permutation
-                .iter()
-                .cloned()
-                .chain(new_arity..(new_arity + self.mfp.mfp.expressions.len()))
-                .collect::<Vec<_>>();
-            for lb in &mut self.lower_bounds {
-                lb.permute(&permutation);
-            }
-            for ub in &mut self.upper_bounds {
-                ub.permute(&permutation);
-            }
-        }
         /// Partitions `predicates` into non-temporal, and lower and upper temporal bounds.
         ///
         /// The first returned list is of predicates that do not contain `mz_logical_timestamp`.

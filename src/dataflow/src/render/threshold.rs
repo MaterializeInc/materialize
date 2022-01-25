@@ -56,29 +56,26 @@ where
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
 pub fn build_threshold_basic<G, T>(
     input: CollectionBundle<G, Row, T>,
-    arrangement: Vec<MirScalarExpr>,
+    key: Vec<MirScalarExpr>,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    let arity = arrangement.len();
-    let all_columns = arrangement.clone();
-    let input = input.ensure_arrangements(Some(arrangement), arity);
     let arrangement = input
-        .arrangement(&all_columns)
+        .arrangement(&key)
         .expect("Arrangement ensured to exist");
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold local", |count| *count > 0);
-            CollectionBundle::from_expressions(all_columns, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
             use differential_dataflow::operators::arrange::ArrangeBySelf;
             let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
-            CollectionBundle::from_expressions(all_columns, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }
 }
@@ -90,18 +87,15 @@ where
 /// which itself is not an arrangement.
 pub fn build_threshold_retractions<G, T>(
     input: CollectionBundle<G, Row, T>,
-    arrangement: Vec<MirScalarExpr>,
+    key: Vec<MirScalarExpr>,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    let arity = arrangement.len();
-    let all_columns = arrangement.clone();
-    let input = input.ensure_arrangements(Some(arrangement), arity);
     let arrangement = input
-        .arrangement(&all_columns)
+        .arrangement(&key)
         .expect("Arrangement ensured to exist");
     let negatives = match &arrangement {
         ArrangementFlavor::Local(oks, _) => {
@@ -134,10 +128,13 @@ where
     ) -> CollectionBundle<G, Row, T> {
         match threshold_plan {
             ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement }) => {
-                build_threshold_basic(input, ensure_arrangement)
+                // We do not need to apply the permutation here,
+                // since threshold doesn't inspect the values, but only
+                // their counts.
+                build_threshold_basic(input, ensure_arrangement.0)
             }
             ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement }) => {
-                build_threshold_retractions(input, ensure_arrangement)
+                build_threshold_retractions(input, ensure_arrangement.0)
             }
         }
     }

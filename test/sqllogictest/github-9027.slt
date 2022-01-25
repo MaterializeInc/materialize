@@ -74,58 +74,82 @@ WHERE
                       "User": 3
                     }
                   },
-                  "keys": [
-                    [
-                      {
-                        "Column": 0
-                      },
-                      {
-                        "Column": 1
-                      },
-                      {
-                        "Column": 2
-                      },
-                      {
-                        "Column": 3
-                      },
-                      {
-                        "Column": 4
-                      },
-                      {
-                        "Column": 5
-                      },
-                      {
-                        "Column": 6
-                      },
-                      {
-                        "Column": 7
-                      },
-                      {
-                        "Column": 8
-                      },
-                      {
-                        "Column": 9
-                      },
-                      {
-                        "Column": 10
-                      },
-                      {
-                        "Column": 11
-                      },
-                      {
-                        "Column": 12
-                      },
-                      {
-                        "Column": 13
-                      },
-                      {
-                        "Column": 14
-                      },
-                      {
-                        "Column": 15
-                      }
+                  "keys": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          },
+                          {
+                            "Column": 1
+                          },
+                          {
+                            "Column": 2
+                          },
+                          {
+                            "Column": 3
+                          },
+                          {
+                            "Column": 4
+                          },
+                          {
+                            "Column": 5
+                          },
+                          {
+                            "Column": 6
+                          },
+                          {
+                            "Column": 7
+                          },
+                          {
+                            "Column": 8
+                          },
+                          {
+                            "Column": 9
+                          },
+                          {
+                            "Column": 10
+                          },
+                          {
+                            "Column": 11
+                          },
+                          {
+                            "Column": 12
+                          },
+                          {
+                            "Column": 13
+                          },
+                          {
+                            "Column": 14
+                          },
+                          {
+                            "Column": 15
+                          }
+                        ],
+                        {
+                          "1": 1,
+                          "9": 9,
+                          "13": 13,
+                          "5": 5,
+                          "4": 4,
+                          "2": 2,
+                          "11": 11,
+                          "7": 7,
+                          "12": 12,
+                          "15": 15,
+                          "14": 14,
+                          "10": 10,
+                          "6": 6,
+                          "0": 0,
+                          "8": 8,
+                          "3": 3
+                        },
+                        []
+                      ]
                     ]
-                  ],
+                  },
                   "mfp": {
                     "expressions": [],
                     "predicates": [],
@@ -189,10 +213,29 @@ WHERE
                   ]
                 }
               },
-              "keys": [
-                []
-              ],
-              "arity": 1
+              "forms": {
+                "raw": true,
+                "arranged": [
+                  [
+                    [],
+                    {
+                      "0": 0
+                    },
+                    [
+                      0
+                    ]
+                  ]
+                ]
+              },
+              "input_key": null,
+              "input_mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0
+                ],
+                "input_arity": 1
+              }
             }
           },
           {
@@ -202,37 +245,54 @@ WHERE
                   "User": 1
                 }
               },
-              "keys": [
-                [
-                  {
-                    "Column": 0
-                  },
-                  {
-                    "Column": 1
-                  },
-                  {
-                    "Column": 2
-                  },
-                  {
-                    "Column": 3
-                  },
-                  {
-                    "Column": 4
-                  },
-                  {
-                    "Column": 5
-                  },
-                  {
-                    "Column": 6
-                  },
-                  {
-                    "Column": 7
-                  },
-                  {
-                    "Column": 8
-                  }
+              "keys": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      },
+                      {
+                        "Column": 1
+                      },
+                      {
+                        "Column": 2
+                      },
+                      {
+                        "Column": 3
+                      },
+                      {
+                        "Column": 4
+                      },
+                      {
+                        "Column": 5
+                      },
+                      {
+                        "Column": 6
+                      },
+                      {
+                        "Column": 7
+                      },
+                      {
+                        "Column": 8
+                      }
+                    ],
+                    {
+                      "5": 5,
+                      "1": 1,
+                      "4": 4,
+                      "0": 0,
+                      "3": 3,
+                      "2": 2,
+                      "6": 6,
+                      "8": 8,
+                      "7": 7
+                    },
+                    []
+                  ]
                 ]
-              ],
+              },
               "mfp": {
                 "expressions": [],
                 "predicates": [],
@@ -283,9 +343,8 @@ WHERE
               {
                 "lookup_relation": 0,
                 "stream_key": [],
-                "unthinned_stream_arity": 0,
+                "stream_thinning": [],
                 "lookup_key": [],
-                "unthinned_lookup_arity": 1,
                 "closure": {
                   "ready_equivalences": [],
                   "before": {
@@ -314,7 +373,10 @@ WHERE
               "id": {
                 "Local": 0
               },
-              "keys": [],
+              "keys": {
+                "raw": true,
+                "arranged": []
+              },
               "mfp": {
                 "expressions": [],
                 "predicates": [],
@@ -342,58 +404,82 @@ WHERE
                                     "User": 3
                                   }
                                 },
-                                "keys": [
-                                  [
-                                    {
-                                      "Column": 0
-                                    },
-                                    {
-                                      "Column": 1
-                                    },
-                                    {
-                                      "Column": 2
-                                    },
-                                    {
-                                      "Column": 3
-                                    },
-                                    {
-                                      "Column": 4
-                                    },
-                                    {
-                                      "Column": 5
-                                    },
-                                    {
-                                      "Column": 6
-                                    },
-                                    {
-                                      "Column": 7
-                                    },
-                                    {
-                                      "Column": 8
-                                    },
-                                    {
-                                      "Column": 9
-                                    },
-                                    {
-                                      "Column": 10
-                                    },
-                                    {
-                                      "Column": 11
-                                    },
-                                    {
-                                      "Column": 12
-                                    },
-                                    {
-                                      "Column": 13
-                                    },
-                                    {
-                                      "Column": 14
-                                    },
-                                    {
-                                      "Column": 15
-                                    }
+                                "keys": {
+                                  "raw": false,
+                                  "arranged": [
+                                    [
+                                      [
+                                        {
+                                          "Column": 0
+                                        },
+                                        {
+                                          "Column": 1
+                                        },
+                                        {
+                                          "Column": 2
+                                        },
+                                        {
+                                          "Column": 3
+                                        },
+                                        {
+                                          "Column": 4
+                                        },
+                                        {
+                                          "Column": 5
+                                        },
+                                        {
+                                          "Column": 6
+                                        },
+                                        {
+                                          "Column": 7
+                                        },
+                                        {
+                                          "Column": 8
+                                        },
+                                        {
+                                          "Column": 9
+                                        },
+                                        {
+                                          "Column": 10
+                                        },
+                                        {
+                                          "Column": 11
+                                        },
+                                        {
+                                          "Column": 12
+                                        },
+                                        {
+                                          "Column": 13
+                                        },
+                                        {
+                                          "Column": 14
+                                        },
+                                        {
+                                          "Column": 15
+                                        }
+                                      ],
+                                      {
+                                        "1": 1,
+                                        "9": 9,
+                                        "13": 13,
+                                        "5": 5,
+                                        "4": 4,
+                                        "2": 2,
+                                        "11": 11,
+                                        "7": 7,
+                                        "12": 12,
+                                        "15": 15,
+                                        "14": 14,
+                                        "10": 10,
+                                        "6": 6,
+                                        "0": 0,
+                                        "8": 8,
+                                        "3": 3
+                                      },
+                                      []
+                                    ]
                                   ]
-                                ],
+                                },
                                 "mfp": {
                                   "expressions": [],
                                   "predicates": [],
@@ -458,10 +544,32 @@ WHERE
                                 ]
                               }
                             },
-                            "keys": [
-                              []
-                            ],
-                            "arity": 2
+                            "forms": {
+                              "raw": true,
+                              "arranged": [
+                                [
+                                  [],
+                                  {
+                                    "1": 1,
+                                    "0": 0
+                                  },
+                                  [
+                                    0,
+                                    1
+                                  ]
+                                ]
+                              ]
+                            },
+                            "input_key": null,
+                            "input_mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0,
+                                1
+                              ],
+                              "input_arity": 2
+                            }
                           }
                         },
                         {
@@ -473,7 +581,10 @@ WHERE
                                     "id": {
                                       "Local": 0
                                     },
-                                    "keys": [],
+                                    "keys": {
+                                      "raw": true,
+                                      "arranged": []
+                                    },
                                     "mfp": {
                                       "expressions": [],
                                       "predicates": [],
@@ -509,14 +620,35 @@ WHERE
                                 "input_key": null
                               }
                             },
-                            "keys": [
-                              [
-                                {
-                                  "Column": 0
-                                }
+                            "forms": {
+                              "raw": false,
+                              "arranged": [
+                                [
+                                  [
+                                    {
+                                      "Column": 0
+                                    }
+                                  ],
+                                  {
+                                    "0": 0
+                                  },
+                                  []
+                                ]
                               ]
+                            },
+                            "input_key": [
+                              {
+                                "Column": 0
+                              }
                             ],
-                            "arity": 1
+                            "input_mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0
+                              ],
+                              "input_arity": 1
+                            }
                           }
                         },
                         {
@@ -528,37 +660,54 @@ WHERE
                                     "User": 1
                                   }
                                 },
-                                "keys": [
-                                  [
-                                    {
-                                      "Column": 0
-                                    },
-                                    {
-                                      "Column": 1
-                                    },
-                                    {
-                                      "Column": 2
-                                    },
-                                    {
-                                      "Column": 3
-                                    },
-                                    {
-                                      "Column": 4
-                                    },
-                                    {
-                                      "Column": 5
-                                    },
-                                    {
-                                      "Column": 6
-                                    },
-                                    {
-                                      "Column": 7
-                                    },
-                                    {
-                                      "Column": 8
-                                    }
+                                "keys": {
+                                  "raw": false,
+                                  "arranged": [
+                                    [
+                                      [
+                                        {
+                                          "Column": 0
+                                        },
+                                        {
+                                          "Column": 1
+                                        },
+                                        {
+                                          "Column": 2
+                                        },
+                                        {
+                                          "Column": 3
+                                        },
+                                        {
+                                          "Column": 4
+                                        },
+                                        {
+                                          "Column": 5
+                                        },
+                                        {
+                                          "Column": 6
+                                        },
+                                        {
+                                          "Column": 7
+                                        },
+                                        {
+                                          "Column": 8
+                                        }
+                                      ],
+                                      {
+                                        "5": 5,
+                                        "1": 1,
+                                        "4": 4,
+                                        "0": 0,
+                                        "3": 3,
+                                        "2": 2,
+                                        "6": 6,
+                                        "8": 8,
+                                        "7": 7
+                                      },
+                                      []
+                                    ]
                                   ]
-                                ],
+                                },
                                 "mfp": {
                                   "expressions": [],
                                   "predicates": [
@@ -623,14 +772,35 @@ WHERE
                                 ]
                               }
                             },
-                            "keys": [
-                              [
-                                {
-                                  "Column": 0
-                                }
+                            "forms": {
+                              "raw": true,
+                              "arranged": [
+                                [
+                                  [
+                                    {
+                                      "Column": 0
+                                    }
+                                  ],
+                                  {
+                                    "0": 0,
+                                    "1": 1
+                                  },
+                                  [
+                                    1
+                                  ]
+                                ]
                               ]
-                            ],
-                            "arity": 2
+                            },
+                            "input_key": null,
+                            "input_mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0,
+                                1
+                              ],
+                              "input_arity": 2
+                            }
                           }
                         }
                       ],
@@ -663,13 +833,12 @@ WHERE
                                   "Column": 0
                                 }
                               ],
-                              "unthinned_stream_arity": 1,
+                              "stream_thinning": [],
                               "lookup_key": [
                                 {
                                   "Column": 0
                                 }
                               ],
-                              "unthinned_lookup_arity": 2,
                               "closure": {
                                 "ready_equivalences": [],
                                 "before": {
@@ -688,9 +857,11 @@ WHERE
                             {
                               "lookup_relation": 0,
                               "stream_key": [],
-                              "unthinned_stream_arity": 2,
+                              "stream_thinning": [
+                                0,
+                                1
+                              ],
                               "lookup_key": [],
-                              "unthinned_lookup_arity": 2,
                               "closure": {
                                 "ready_equivalences": [],
                                 "before": {
@@ -833,14 +1004,35 @@ WHERE
                   "input_key": null
                 }
               },
-              "keys": [
-                [
-                  {
-                    "Column": 0
-                  }
+              "forms": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0
+                    },
+                    []
+                  ]
                 ]
+              },
+              "input_key": [
+                {
+                  "Column": 0
+                }
               ],
-              "arity": 1
+              "input_mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0
+                ],
+                "input_arity": 1
+              }
             }
           }
         ],
@@ -857,13 +1049,12 @@ WHERE
                     "Column": 0
                   }
                 ],
-                "unthinned_stream_arity": 1,
+                "stream_thinning": [],
                 "lookup_key": [
                   {
                     "Column": 0
                   }
                 ],
-                "unthinned_lookup_arity": 1,
                 "closure": {
                   "ready_equivalences": [],
                   "before": {

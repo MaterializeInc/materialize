@@ -11,7 +11,6 @@
 //!
 //! Consult [LinearJoinPlan] documentation for details.
 
-use dataflow_types::plan::make_thinning_expression;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -117,7 +116,7 @@ where
         };
 
         // progress through stages, updating partial results and errors.
-        for (th, stage_plan) in linear_plan.stage_plans.into_iter().enumerate() {
+        for stage_plan in linear_plan.stage_plans.into_iter() {
             // Different variants of `joined` implement this differently,
             // and the logic is centralized there.
             let stream = self.differential_join(
@@ -125,7 +124,6 @@ where
                 inputs[stage_plan.lookup_relation].clone(),
                 stage_plan,
                 &mut errors,
-                th,
             );
             // Update joined results and capture any errors.
             joined = JoinedFlavor::Collection(stream);
@@ -174,25 +172,20 @@ where
         lookup_relation: CollectionBundle<G, Row, T>,
         LinearStagePlan {
             stream_key,
-            unthinned_stream_arity,
+            stream_thinning,
             lookup_key,
-            unthinned_lookup_arity,
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
         errors: &mut Vec<Collection<G, DataflowError>>,
-        th: usize,
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let stream_thinning = make_thinning_expression(&stream_key, unthinned_stream_arity);
             let mut row_packer = Row::default();
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
-                    let row_len = row.iter().collect::<Vec<_>>().len();
-                    assert_eq!(row_len, unthinned_stream_arity, "th: {}", th);
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
                     row_packer.try_extend(
@@ -212,10 +205,6 @@ where
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }
-
-        // Ensure that the correct arrangement exists.
-        let lookup_relation =
-            lookup_relation.ensure_arrangements(Some(lookup_key.clone()), unthinned_lookup_arity);
 
         // Demultiplex the four different cross products of arrangement types we might have.
         let arrangement = lookup_relation

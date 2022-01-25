@@ -16,6 +16,7 @@ pub mod reduce;
 pub mod threshold;
 pub mod top_k;
 
+use expr::permutation_for_arrangement;
 use join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use reduce::{KeyValPlan, ReducePlan};
 use threshold::ThresholdPlan;
@@ -36,6 +37,88 @@ use std::collections::HashSet;
 
 use self::join::delta_join::DeltaPathPlan;
 use self::join::delta_join::DeltaStagePlan;
+
+/// The forms in which an operator's output is available;
+/// it can be considered the plan-time equivalent of
+/// [`render::context::CollectionBundle`].
+///
+/// These forms are either "raw", representing an unarranged collection,
+/// or "arranged", representing one that has been arranged by some key.
+///
+/// The raw collection, if it exists, may be consumed directly.
+///
+/// The arranged collections are slightly more complicated:
+/// Each key here is attached to a description of how the corresponding
+/// arrangement is permuted to remove value columns
+/// that are redundant with key columns. Thus, the first element in each
+/// tuple of `arranged` is the arrangement key; the second is the map of
+/// logical output columns to columns in the key or value of the deduplicated
+/// representation, and the third is a "thinning expression",
+/// or list of columns to include in the value
+/// when arranging.
+///
+/// For example, assume a 5-column collection is to be arranged by the key
+/// `[Column(2), Column(0) + Column(3), Column(1)]`.
+/// Then `Column(1)` and `Column(2)` in the value are redundant with the key, and
+/// only columns 0, 3, and 4 need to be stored separately.
+/// The thinning expression will then be `[0, 3, 4]`.
+///
+/// The permutation represents how to recover the
+/// original values (logically `[Column(0), Column(1), Column(2), Column(3), Column(4)]`)
+/// from the key and value of the arrangement, logically
+/// `[Column(2), Column(0) + Column(3), Column(1), Column(0), Column(3), Column(4)]`.
+/// Thus, the permutation in this case should be `{0: 3, 1: 2, 2: 0, 3: 4, 4: 5}`.
+///
+/// Note that this description, while true at the time of writing, is merely illustrative;
+/// users of this struct should not rely on the exact strategy used for generating
+/// the permutations. As long as clients apply the thinning expression
+/// when creating arrangements, and permute by the hashmap when reading them,
+/// the contract of the function where they are generated (`expr::permutation_for_arrangement`)
+/// ensures that the correct values will be read.
+#[derive(Default, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AvailableCollections {
+    /// Whether the collection exists in unarranged form.
+    pub raw: bool,
+    /// The set of arrangements of the collection, along with a
+    /// column permutation mapping
+    pub arranged: Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+}
+
+impl AvailableCollections {
+    /// Represent a collection that has no arrangements.
+    pub fn new_raw() -> Self {
+        Self {
+            raw: true,
+            arranged: Vec::new(),
+        }
+    }
+
+    /// Represent a collection that is arranged in the
+    /// specified ways.
+    pub fn new_arranged(
+        arranged: Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+    ) -> Self {
+        assert!(
+            !arranged.is_empty(),
+            "Invariant violated: at least one collection must exist"
+        );
+        Self {
+            raw: false,
+            arranged,
+        }
+    }
+
+    /// Get some arrangement, if one exists.
+    pub fn arbitrary_arrangement(
+        &self,
+    ) -> Option<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> {
+        assert!(
+            self.raw || !self.arranged.is_empty(),
+            "Invariant violated: at least one collection must exist"
+        );
+        self.arranged.get(0)
+    }
+}
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,7 +144,7 @@ pub enum Plan {
         // although one can always produce it from an arrangement, and it
         // seems generally advantageous to do that instead (to avoid cloning
         // rows, by using `mfp` first on borrowed data).
-        keys: Vec<Vec<MirScalarExpr>>,
+        keys: AvailableCollections,
         /// Any linear operator work to apply as part of producing the data.
         ///
         /// This logic allows us to efficiently extract collections from data
@@ -207,16 +290,64 @@ pub enum Plan {
     ArrangeBy {
         /// The input collection.
         input: Box<Plan>,
-        /// A list of arrangement keys that will be added to those of the input.
+        /// A list of arrangement keys, and possibly a raw collection,
+        /// that will be added to those of the input.
         ///
-        /// If any of these keys are already present in the input, they have no effect.
-        keys: Vec<Vec<MirScalarExpr>>,
-        /// The arity of the collection
-        arity: usize,
+        /// If any of these collection forms are already present in the input, they have no effect.
+        forms: AvailableCollections,
+        /// The key that must be used to access the input.
+        input_key: Option<Vec<MirScalarExpr>>,
+        /// The MFP that must be applied to the input.
+        input_mfp: MapFilterProject,
     },
 }
 
 impl Plan {
+    /// Replace the plan with another one
+    /// that has the collection in some additional forms.
+    pub fn arrange_by(
+        self,
+        collections: AvailableCollections,
+        old_collections: &AvailableCollections,
+        arity: usize,
+    ) -> Self {
+        let new_self = if let Self::ArrangeBy {
+            input,
+            mut forms,
+            input_key,
+            input_mfp,
+        } = self
+        {
+            assert!(&forms == old_collections);
+            forms.raw |= collections.raw;
+            forms.arranged.extend(collections.arranged.into_iter());
+            forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
+            forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
+            Self::ArrangeBy {
+                input,
+                forms,
+                input_key,
+                input_mfp,
+            }
+        } else {
+            let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
+                old_collections.arbitrary_arrangement()
+            {
+                let mut mfp = MapFilterProject::new(arity);
+                mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                (Some(input_key.clone()), mfp)
+            } else {
+                (None, MapFilterProject::new(arity))
+            };
+            Self::ArrangeBy {
+                input: Box::new(self),
+                forms: collections,
+                input_key,
+                input_mfp,
+            }
+        };
+        new_self
+    }
     /// This method converts a MirRelationExpr into a plan that can be directly rendered.
     ///
     /// The rough structure is that we repeatedly extract map/filter/project operators
@@ -236,8 +367,8 @@ impl Plan {
     /// be assumed to exist.
     pub fn from_mir(
         expr: &MirRelationExpr,
-        arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
-    ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
+        arrangements: &mut BTreeMap<Id, AvailableCollections>,
+    ) -> Result<(Self, AvailableCollections), ()> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
         // is to use [`ore::stack::RecursionGuard`] to additionally limit the stack
@@ -252,8 +383,8 @@ impl Plan {
 
     fn from_mir_inner(
         expr: &MirRelationExpr,
-        arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
-    ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
+        arrangements: &mut BTreeMap<Id, AvailableCollections>,
+    ) -> Result<(Self, AvailableCollections), ()> {
         // let output_arity = expr.arity();
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
@@ -286,39 +417,47 @@ impl Plan {
                     }),
                 };
                 // The plan, not arranged in any way.
-                (plan, Vec::new())
+                (plan, AvailableCollections::new_raw())
             }
             MirRelationExpr::Get { id, typ: _ } => {
                 // This stage can absorb arbitrary MFP operators.
                 let mut mfp = mfp.take();
                 // If `mfp` is the identity, we can surface all imported arrangements.
                 // Otherwise, we apply `mfp` and promise no arrangements.
-                let mut in_keys = arrangements.get(id).cloned().unwrap_or_else(Vec::new);
+                let mut in_keys = arrangements
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(AvailableCollections::new_raw);
 
                 // Seek out an arrangement key that might be constrained to a literal.
                 // TODO: Improve key selection heuristic.
                 let key_val = in_keys
+                    .arranged
                     .iter()
                     .filter_map(|key| {
-                        mfp.literal_constraints(key)
+                        mfp.literal_constraints(&key.0)
                             .map(|val| (key.clone(), Some(val)))
                     })
-                    .max_by_key(|(key, _val)| key.len())
-                    .or_else(|| in_keys.iter().next().map(|key| (key.clone(), None)));
+                    .max_by_key(|(key, _val)| key.0.len())
+                    .or_else(|| {
+                        in_keys
+                            .arbitrary_arrangement()
+                            .map(|key| (key.clone(), None))
+                    });
 
-                if let Some((key, _)) = &key_val {
-                    mfp = mfp.permute_for_arrangement(&*key);
+                if let Some(((key, permutation, thinning), _)) = &key_val {
+                    mfp.permute(permutation.clone(), thinning.len() + key.len());
                 }
 
                 let out_keys = if mfp.is_identity() {
                     in_keys.clone()
                 } else {
-                    Vec::new()
+                    AvailableCollections::new_raw()
                 };
 
                 // If we discover a literal constraint, we can discard other arrangements.
                 if let Some((key, Some(_))) = &key_val {
-                    in_keys = vec![key.clone()];
+                    in_keys.arranged = vec![key.clone()];
                 }
                 // Return the plan, and any keys if an identity `mfp`.
                 (
@@ -326,7 +465,7 @@ impl Plan {
                         id: id.clone(),
                         keys: in_keys,
                         mfp,
-                        key_val,
+                        key_val: key_val.map(|((key, _, _), val)| (key, val)),
                     },
                     out_keys,
                 )
@@ -358,9 +497,18 @@ impl Plan {
             MirRelationExpr::FlatMap { input, func, exprs } => {
                 let (input, keys) = Plan::from_mir(input, arrangements)?;
                 // This stage can absorb arbitrary MFP instances.
-                let mut mfp = mfp.take();
-                let input_key = if let Some(k) = keys.get(0) {
-                    mfp = mfp.permute_for_arrangement(&*k);
+                let mfp = mfp.take();
+                let mut exprs = exprs.clone();
+                let input_key = if let Some((k, permutation, _)) = keys.arbitrary_arrangement() {
+                    // We don't permute the MFP here, because it runs _after_ the table function,
+                    // whose output is in a fixed order.
+                    //
+                    // We _do_, however, need to permute the `expr`s that provide input to the
+                    // `func`.
+                    for expr in &mut exprs {
+                        expr.permute_map(permutation);
+                    }
+
                     Some(k.clone())
                 } else {
                     None
@@ -374,7 +522,7 @@ impl Plan {
                         mfp,
                         input_key,
                     },
-                    Vec::new(),
+                    AvailableCollections::new_raw(),
                 )
             }
             MirRelationExpr::Join {
@@ -389,91 +537,73 @@ impl Plan {
                 // be used as part of join planning / to validate the existing
                 // plans / to aid in indexed seeding of update streams.
                 let mut plans = Vec::new();
-                let mut input_keys = Vec::<HashSet<_>>::new();
+                let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
                 for input in inputs.iter() {
                     let arity = input.arity();
                     let (plan, keys) = Plan::from_mir(input, arrangements)?;
+                    input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys.into_iter().collect());
                     input_arities.push(arity);
                 }
 
                 // Extract temporal predicates as joins cannot currently absorb them.
-                let plan = match implementation {
+                let (plan, missing) = match implementation {
                     expr::JoinImplementation::Differential((start, _start_arr), order) => {
-                        let source_key = input_keys[*start].get(0).cloned();
-                        JoinPlan::Linear(LinearJoinPlan::create_from(
+                        let source_arrangement = input_keys[*start].arbitrary_arrangement();
+                        let (ljp, missing) = LinearJoinPlan::create_from(
                             *start,
-                            source_key,
+                            source_arrangement,
                             equivalences,
                             order,
                             input_mapper,
                             &mut mfp,
-                        ))
+                            &input_keys,
+                        );
+                        (JoinPlan::Linear(ljp), missing)
                     }
                     expr::JoinImplementation::DeltaQuery(orders) => {
-                        JoinPlan::Delta(DeltaJoinPlan::create_from(
+                        let (djp, missing) = DeltaJoinPlan::create_from(
                             equivalences,
                             &orders[..],
                             input_mapper,
                             &mut mfp,
-                        ))
+                            &input_keys,
+                        );
+                        (JoinPlan::Delta(djp), missing)
                     }
                     // Other plans are errors, and should be reported as such.
                     _ => return Err(()),
                 };
-                let mut required_arrangements = vec![HashSet::new(); inputs.len()];
-                // Delta joins should only be planned if a particular set of arrangements exists.
-                // Empirically, we've found that there are sometimes bugs causing them to be planned
-                // anyway. If this is the case, we need to create the arrangements, so we do so here,
-                // and complain with an error message.
-                if let JoinPlan::Delta(DeltaJoinPlan { path_plans }) = &plan {
-                    for DeltaPathPlan { stage_plans, .. } in path_plans {
-                        for DeltaStagePlan {
-                            lookup_relation,
-                            lookup_key,
-                            ..
-                        } in stage_plans
-                        {
-                            required_arrangements[*lookup_relation].insert(lookup_key.clone());
-                        }
-                    }
-                } else {
-                    // Linear joins handle rendering all the arrangements they need.
-                }
-                for (((arrangements, plan), required_arrangements), &arity) in input_keys
-                    .iter()
-                    .zip(plans.iter_mut())
-                    .zip(required_arrangements.iter())
-                    .zip(input_arities.iter())
+                // The renderer will expect certain arrangements to exist; if any of those are not available, the join planning functions above should have returned them in
+                // `missing`. We thus need to plan them here so they'll exist.
+                let is_delta = matches!(plan, JoinPlan::Delta(_));
+                for (((input_plan, input_keys), missing), arity) in plans
+                    .iter_mut()
+                    .zip(input_keys.iter())
+                    .zip(missing.into_iter())
+                    .zip(input_arities.iter().cloned())
                 {
-                    let missing: Vec<_> = required_arrangements
-                        .difference(arrangements)
-                        .cloned()
-                        .collect();
-                    if !missing.is_empty() {
-                        tracing::error!("Arrangements depended on by delta join alarmingly absent: {:?}
+                    if missing != Default::default() {
+                        if is_delta {
+                            // join_implementation.rs produced a sub-optimal plan here;
+                            // we shouldn't plan delta joins at all if not all of the required arrangements
+                            // are available. Print an error message, to increase the chances that
+                            // the user will tell us about this.
+                            log::error!("Arrangements depended on by delta join alarmingly absent: {:?}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing);
-                        let new_ensure_arrangements = missing.into_iter().map(|key| {
-                            let (permutation, thinning_expression) =
-                                Permutation::construct_from_expr(&key, arity);
-                            (key, permutation, thinning_expression)
-                        });
-                        if let Plan::ArrangeBy {
-                            ensure_arrangements,
-                            ..
-                        } = plan
-                        {
-                            ensure_arrangements.extend(new_ensure_arrangements);
                         } else {
-                            let base_plan =
-                                std::mem::replace(plan, Plan::Constant { rows: Ok(vec![]) });
-                            *plan = Plan::ArrangeBy {
-                                input: Box::new(base_plan),
-                                ensure_arrangements: new_ensure_arrangements.collect(),
-                            }
+                            // It's fine and expected that linear joins don't have all their arrangements available up front,
+                            // so no need to print an error here.
                         }
+                        let raw_plan = std::mem::replace(
+                            input_plan,
+                            Plan::Constant {
+                                rows: Ok(Vec::new()),
+                            },
+                        );
+                        *input_plan = raw_plan.arrange_by(missing, input_keys, arity);
                     }
                 }
                 // Return the plan, and no arrangements.
@@ -482,7 +612,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         inputs: plans,
                         plan,
                     },
-                    Vec::new(),
+                    AvailableCollections::new_raw(),
                 )
             }
             MirRelationExpr::Reduce {
@@ -493,13 +623,30 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let input_arity = input.arity();
+                let output_arity = group_key.len() + aggregates.len();
                 let (input, keys) = Self::from_mir(input, arrangements)?;
-                let input_key = keys.get(0).map(|k| k.clone());
-                let key_val_plan =
-                    KeyValPlan::new(input_arity, group_key, aggregates, input_key.as_deref());
+                let (input_key, permutation_and_new_arity) = if let Some((
+                    input_key,
+                    permutation,
+                    thinning,
+                )) = keys.arbitrary_arrangement()
+                {
+                    (
+                        Some(input_key.clone()),
+                        Some((permutation.clone(), thinning.len() + input_key.len())),
+                    )
+                } else {
+                    (None, None)
+                };
+                let key_val_plan = KeyValPlan::new(
+                    input_arity,
+                    group_key,
+                    aggregates,
+                    permutation_and_new_arity,
+                );
                 let reduce_plan =
                     ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-                let output_keys = reduce_plan.keys(group_key.len());
+                let output_keys = reduce_plan.keys(group_key.len(), output_arity);
                 // Return the plan, and the keys it produces.
                 (
                     Plan::Reduce {
@@ -531,16 +678,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     *monotonic,
                 );
 
-                // We don't have an MFP here -- install one to permute the
+                // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
-                let input_key = keys.get(0).map(|k| k.clone());
-                let input = if let Some(input_key) = input_key {
-                    let mfp = MapFilterProject::new(arity).permute_for_arrangement(&*input_key);
-                    Plan::Mfp {
-                        input: Box::new(input),
-                        mfp,
-                        input_key_val: Some((input_key, None)),
-                    }
+                let input = if !keys.raw {
+                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     input
                 };
@@ -550,23 +691,17 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input: Box::new(input),
                         top_k_plan,
                     },
-                    Vec::new(),
+                    AvailableCollections::new_raw(),
                 )
             }
             MirRelationExpr::Negate { input } => {
                 let arity = input.arity();
                 let (input, keys) = Self::from_mir(input, arrangements)?;
 
-                // We don't have an MFP here -- install one to permute the
+                // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
-                let input_key = keys.get(0).map(|k| k.clone());
-                let input = if let Some(input_key) = input_key {
-                    let mfp = MapFilterProject::new(arity).permute_for_arrangement(&*input_key);
-                    Plan::Mfp {
-                        input: Box::new(input),
-                        mfp,
-                        input_key_val: Some((input_key, None)),
-                    }
+                let input = if !keys.raw {
+                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     input
                 };
@@ -575,26 +710,35 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::Negate {
                         input: Box::new(input),
                     },
-                    Vec::new(),
+                    AvailableCollections::new_raw(),
                 )
             }
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
                 let (input, keys) = Self::from_mir(input, arrangements)?;
-                // We don't have an MFP here -- install one to permute the
+                // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
-                let input_key = keys.get(0).map(|k| k.clone());
-                let input = if let Some(input_key) = input_key {
-                    let mfp = MapFilterProject::new(arity).permute_for_arrangement(&*input_key);
-                    Plan::Mfp {
-                        input: Box::new(input),
-                        mfp,
-                        input_key_val: Some((input_key, None)),
-                    }
+                let input = if !keys.raw {
+                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     input
                 };
-                let threshold_plan = ThresholdPlan::create_from(arity, false);
+                let (threshold_plan, required_arrangement) =
+                    ThresholdPlan::create_from(arity, false);
+                let input = if !keys
+                    .arranged
+                    .iter()
+                    .any(|(key, _, _)| key == &required_arrangement.0)
+                {
+                    input.arrange_by(
+                        AvailableCollections::new_arranged(vec![required_arrangement]),
+                        &keys,
+                        arity,
+                    )
+                } else {
+                    input
+                };
+
                 let output_keys = threshold_plan.keys();
                 // Return the plan, and any produced keys.
                 (
@@ -606,7 +750,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 )
             }
             MirRelationExpr::Union { base, inputs } => {
-                let input_arity = base.arity();
+                let arity = base.arity();
                 let mut plans_keys = Vec::with_capacity(1 + inputs.len());
                 let (plan, keys) = Self::from_mir(base, arrangements)?;
                 plans_keys.push((plan, keys));
@@ -617,17 +761,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let plans = plans_keys
                     .into_iter()
                     .map(|(plan, keys)| {
-                        // We don't have an MFP here -- install one to permute the
+                        // We don't have an MFP here -- install an operator to permute the
                         // input, if necessary.
-                        let input_key = keys.get(0).map(|k| k.clone());
-                        if let Some(input_key) = input_key {
-                            let mfp = MapFilterProject::new(input_arity)
-                                .permute_for_arrangement(&*input_key);
-                            Plan::Mfp {
-                                input: Box::new(plan),
-                                mfp,
-                                input_key_val: Some((input_key, None)),
-                            }
+                        if !keys.raw {
+                            plan.arrange_by(AvailableCollections::new_raw(), &keys, arity)
                         } else {
                             plan
                         }
@@ -635,21 +772,35 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .collect();
                 // Return the plan and no arrangements.
                 let plan = Plan::Union { inputs: plans };
-                (plan, Vec::new())
+                (plan, AvailableCollections::new_raw())
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
                 let (input, mut input_keys) = Self::from_mir(input, arrangements)?;
-                input_keys.extend(keys.iter().cloned());
-                input_keys.sort();
-                input_keys.dedup();
+                let keys = keys.iter().cloned().map(|k| {
+                    let (permutation, thinning) = permutation_for_arrangement(&k, arity);
+                    (k, permutation, thinning)
+                });
+                let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
+                    input_keys.arbitrary_arrangement()
+                {
+                    let mut mfp = MapFilterProject::new(arity);
+                    mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                    (Some(input_key.clone()), mfp)
+                } else {
+                    (None, MapFilterProject::new(arity))
+                };
+                input_keys.arranged.extend(keys);
+                input_keys.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
+                input_keys.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
 
                 // Return the plan and extended keys.
                 (
                     Plan::ArrangeBy {
                         input: Box::new(input),
-                        keys: keys.clone(),
-                        arity,
+                        forms: input_keys.clone(),
+                        input_key,
+                        input_mfp,
                     },
                     input_keys,
                 )
@@ -659,39 +810,28 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
         // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.
         if !mfp.is_identity() {
-            // Normally the next node up would
-            // permute its input, but in this case the arrangement will be
-            // hidden by this MFP node, so we need to apply that permutation here.
-            //
-            // In order to do so, we need to decide which of the possibly multiple
-            // input arrangements we will be using, which can be influenced by the
-            // existence of a valid `key_val`.
-            let permuted_mfps: Vec<_> = keys
-                .iter()
-                .map(|k| {
-                    let mfp = mfp.clone();
-                    mfp.permute_for_arrangement(&*k)
-                })
-                .collect();
-
             // Seek out an arrangement key that might be constrained to a literal.
             // TODO: Improve key selection heuristic.
-            let key_val_index = keys
+            let key_val = keys
+                .arranged
                 .iter()
-                .enumerate()
-                .filter_map(|(i, key)| {
-                    permuted_mfps[i]
-                        .literal_constraints(key)
-                        .map(|val| (i, key.clone(), val))
+                .filter_map(|(key, permutation, thinning)| {
+                    let mut mfp = mfp.clone();
+                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.literal_constraints(key)
+                        .map(|val| (key.clone(), permutation, thinning, val))
                 })
-                .max_by_key(|(_i, key, _val)| key.len());
+                .max_by_key(|(key, _, _, _)| key.len());
 
-            let (input_key_val, mfp) = if let Some((i, k, v)) = key_val_index {
-                (Some((k, Some(v))), permuted_mfps[i].clone())
-            } else if let Some(k) = keys.get(0) {
-                (Some((k.clone(), None)), permuted_mfps[0].clone())
+            let input_key_val = if let Some((key, permutation, thinning, val)) = key_val {
+                mfp.permute(permutation.clone(), thinning.len() + key.len());
+
+                Some((key, Some(val)))
+            } else if let Some((key, permutation, thinning)) = keys.arbitrary_arrangement() {
+                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                Some((key.clone(), None))
             } else {
-                (None, mfp)
+                None
             };
 
             plan = Plan::Mfp {
@@ -699,7 +839,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 mfp,
                 input_key_val,
             };
-            keys = Vec::new();
+            keys = AvailableCollections::new_raw();
         }
 
         Ok((plan, keys))
@@ -713,11 +853,27 @@ This is not expected to cause incorrect results, but could indicate a performanc
         let mut arrangements = BTreeMap::new();
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
-        for (index_desc, _type) in desc.index_imports.values() {
+        for (index_desc, r#type) in desc.index_imports.values() {
+            let key = index_desc.key.clone();
+            // TODO[btv] - We should be told the permutation by
+            // `index_desc`, and it should have been generated
+            // at the same point the thinning logic was.
+            //
+            // We should for sure do that soon, but it requires
+            // a bit of a refactor, so for now we just
+            // _assume_ that they were both generated by `permutation_for_arrangement`,
+            // and recover it here.
+            let (permutation, thinning) = permutation_for_arrangement(&key, r#type.arity());
             arrangements
                 .entry(Id::Global(index_desc.on_id))
-                .or_insert_with(Vec::new)
-                .push(index_desc.keys.clone());
+                .or_insert_with(|| {
+                    AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
+                });
+        }
+        for (_source_desc, id) in desc.source_imports.values() {
+            arrangements
+                .entry(Id::Global(*id))
+                .or_insert_with(AvailableCollections::new_raw);
         }
         // Build each object in order, registering the arrangements it forms.
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
@@ -908,13 +1064,19 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .map(|inputs| Plan::Union { inputs })
                         .collect()
                 }
-                Plan::ArrangeBy { input, keys, arity } => input
+                Plan::ArrangeBy {
+                    input,
+                    forms: keys,
+                    input_key,
+                    input_mfp,
+                } => input
                     .partition_among(parts)
                     .into_iter()
                     .map(|input| Plan::ArrangeBy {
                         input: Box::new(input),
-                        keys: keys.clone(),
-                        arity,
+                        forms: keys.clone(),
+                        input_key: input_key.clone(),
+                        input_mfp: input_mfp.clone(),
                     })
                     .collect(),
             }
