@@ -12,7 +12,13 @@ First, make sure your python environment is up to speed:
 bin/pyactivate --dev
 ```
 
-To run all benchmarks:
+The `--help` option can be used to show supported options:
+
+```
+./mzcompose run feature-benchmark --help
+```
+
+To run the default benchmark scenarios:
 ```
 cd test/feature-benchmark
 ./mzcompose run feature-benchmark --other-tag unstable
@@ -20,7 +26,7 @@ cd test/feature-benchmark
 
 This is going to benchmark the current source against the `materialize/materialized:unstable` container from DockerHub.
 
-To run one benchmark or a named subset:
+To run one benchmark scenario or a named subset:
 
 ```
 ./mzcompose run feature-benchmark --root-scenario=FastPath
@@ -59,6 +65,12 @@ Update                    |       0.781 |       0.803 | about the same -2.7%
 ```
 
 The table is printed periodically as new rows arrive so that the information is not lost in case of failure.
+
+# Available scenarios
+
+The `test/feature-benchmark/scenarios.py` file contains the definitive list of scenarios. Scenarios follow a hierarchical structure.
+
+The default scenarios derive from the `Scenario` class, those that take longer to execute derive from the `ScenarioBig` class.
 
 # Features
 
@@ -101,6 +113,8 @@ The code currently assumes that the data follows a normal distribution, which is
 techniques for massaging the numbers may be required in the future. In particular, there is some evidence that the distribution of values is multi-modal with: A) one peak for all operations that completed
 within some "tick" (either the kernel rescheduling some thread, or e.g. the timestamper thread kicking in): B) one peak for operations that completed immediately after the "tick" and C) extreme outliers that were particularily unlucky.
 
+To limit the maximum number of executions at the expense of accuracy, use the `--max-runs N` option.
+
 ## Aggregation policy
 
 The aggregation policy decides how to compute the definitive performance value out of the measurements.
@@ -131,8 +145,9 @@ of the `feature-benchmark_testdrive_*` container that exited most recently and t
 Benchmark scenarios live in `test/feature-benchmark/scenarios.py` and follow the following format:
 
 ```
-class SomeClass(SomeBenchmarkFamily):
-    SHARED = Td("""
+class NewBenchmark(Scenario):
+    def shared(self) -> Action:
+        return TdAction("""
 #
 # Place here the testdrive commands that need to be run only once for both Mz instances under test
 # and that prepare resources that will be common for both Mz instances.
@@ -141,7 +156,8 @@ class SomeClass(SomeBenchmarkFamily):
 #
 """)
 
-    INIT = Td("""
+    def init(self) -> Action:
+        return TdAction("""
 #
 # Place here any testdrive commands that need to be run once for each Mz instance before
 # starting the respective benchmark.
@@ -152,23 +168,26 @@ class SomeClass(SomeBenchmarkFamily):
 #
 """)
 
-    BEFORE = ...
+    def before(self) -> Action:
+        return ...
 
-# The BEFORE section is reserved for actions that need to happen immediately prior to the
+# The before() section is reserved for actions that need to happen immediately prior to the
 # queries being benchmarked, for example, restarting Mz in order to force a recovery
 
-
-    BENCHMARK = Td("""
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
 #
 # Place here all queries that need to be repeated at each iteration of the benchmark, including
 # the queries that will be benchmarked themselves. The execution time between the *end* of the
 # query marked with /* A */ and the end of the query marked with /* B */ will be measured
 #
-> /* A */ SELECT 1;
+>  SELECT 1
+   /* A */
 1
 
-> /* B */ SELECT COUNT(*) FROM t1;
-1000
+>  SELECT COUNT(*) FROM t1
+   /* B */
+{self.n()}
 
 #
 # Make sure you delete any database objects created in this section
@@ -178,6 +197,33 @@ class SomeClass(SomeBenchmarkFamily):
 
 """)
 ```
+
+## Scale and `N`
+
+The benchmarks are parameterized on their scale, that is, one can create scenarios that run with some default size which can then be overwritten:
+
+```
+class ReallyReallyLargeBenchmark(ScenarioBig):
+    SCALE = 10
+```
+
+From `SCALE`, the framework calculates `N`, which is `10^SCALE` and makes them available within the scenario as `self.scale()` and `self.n()` respectively.
+
+The default `SCALE` is 6 , that is, any benchmark scenario that is properly parameterized will run benchmark 1M of the thing being benchmarked.
+
+To force the framework to run with a specific scale, use the `--scale N` option. If `N` is prefixed by `+` or `-`, it is interpreted as a relative adjustment to apply to the default scale.
+
+## Actions vs. Measurements
+
+The `shared()`, `init()`, and `before()` sections of the benchmark must return an `Action` object or a list of `Action` objects (usually `TdAction`) while the `benchmark()` section
+must return a `MeasurementSource` object (currently, only `Td` is supported).
+
+Available `Action`s:
+
+* `TdAction(...)` - executes the testdrive fragment provided
+* `Kgen(...)` - executes the `Kgen` to ingest data into a Kafka topic (see the KafkaRecoveryBig scenario for an example)
+* `Lambda(lambda e: e.RestartMz())` - restarts the Mz service
+
 
 ## Caveats and considerations
 

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import sys
-from typing import List, Tuple
+from typing import List, Optional, Tuple, Type
 
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator
@@ -22,12 +22,14 @@ class Benchmark:
     def __init__(
         self,
         mz_id: int,
-        scenario: Scenario,
+        scenario: Type[Scenario],
         executor: Executor,
         filter: Filter,
         termination_conditions: List[TerminationCondition],
         aggregation: Aggregation,
+        scale: Optional[str] = None,
     ) -> None:
+        self._scale = scale
         self._mz_id = mz_id
         self._scenario = scenario
         self._executor = executor
@@ -36,30 +38,49 @@ class Benchmark:
         self._aggregation = aggregation
 
     def run(self) -> Tuple[float, int]:
-        name = self._scenario.__name__
+        scale = self._scenario.SCALE
 
-        # Run the SHARED section once for both Mzs under measurement
-        shared = self._scenario.SHARED
+        if self._scale:
+            if self._scale.startswith("+"):
+                scale = scale + float(self._scale.lstrip("+"))
+            elif self._scale.startswith("-"):
+                scale = scale - float(self._scale.lstrip("-"))
+            elif float(self._scale) > 0:
+                scale = float(self._scale)
+
+        scenario_class = self._scenario
+        scenario = scenario_class(scale=scale)
+        name = scenario.name()
+
+        print(
+            f"Sizing in effect for scenario {name}: scale = {scenario.scale()} , N = {scenario.n()}"
+        )
+
+        # Run the shared() section once for both Mzs under measurement
+        shared = scenario.shared()
         if self._mz_id == 0 and shared is not None:
-            print(f"Running the SHARED section for {name} ...")
+            print(f"Running the shared() section for {name} ...")
 
             for shared_item in shared if isinstance(shared, list) else [shared]:
-                shared_item.run(executor=self._executor, measure=False)
-            print("SHARED done")
+                shared_item.run(executor=self._executor)
 
-        # Run the SHARED section once for each Mz
-        init = self._scenario.INIT
+            print("shared() done")
+
+        # Run the init() section once for each Mz
+        init = scenario.init()
         if init is not None:
-            print(f"Running the INIT section for {name} ...")
-            init.run(executor=self._executor, measure=False)
-            print("INIT done")
+            print(f"Running the init() section for {name} ...")
 
-        before = self._scenario.BEFORE(executor=self._executor)
-        benchmark = self._scenario.BENCHMARK(executor=self._executor)
+            for init_item in init if isinstance(init, list) else [init]:
+                init_item.run(executor=self._executor)
 
-        # Use zip() to run both the BEFORE and the BENCHMARK sections
+            print("init() done")
+
+        # Use zip() to run both the before() and the benchmark() sections
         for i, _before_result, measurement in zip(
-            range(sys.maxsize), before, benchmark
+            range(sys.maxsize),
+            scenario.before()(executor=self._executor),
+            scenario.benchmark()(executor=self._executor),
         ):
             if self._filter and getattr(self._filter, "filter")(measurement):
                 continue

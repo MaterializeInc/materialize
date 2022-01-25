@@ -21,7 +21,7 @@ class Aggregation:
         self._data.append(measurement)
 
     def aggregate(self) -> Any:
-        return self.func()(*self._data)
+        return self.func()([*self._data])
 
     def func(self) -> Callable:
         assert False
@@ -52,3 +52,8 @@ class StdDevAggregation(Aggregation):
 class NormalDistributionAggregation(Aggregation):
     def aggregate(self) -> statistics.NormalDist:
         return statistics.NormalDist(mu=np.mean(self._data), sigma=np.std(self._data))
+
+
+class NoAggregation(Aggregation):
+    def aggregate(self) -> Any:
+        return self._data[0]

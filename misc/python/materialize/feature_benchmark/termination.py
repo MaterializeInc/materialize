@@ -15,7 +15,9 @@ from scipy import stats  # type: ignore
 
 
 class TerminationCondition:
-    pass
+    def __init__(self, threshold: float) -> None:
+        self._threshold = threshold
+        self._data: List[float] = []
 
     def terminate(self, measurement: float) -> bool:
         assert False
@@ -25,9 +27,8 @@ class NormalDistributionOverlap(TerminationCondition):
     """Signal termination if the overlap between the two distributions is above the threshold"""
 
     def __init__(self, threshold: float) -> None:
-        self._threshold = threshold
-        self._data: List[float] = []
         self._last_fit: Optional[statistics.NormalDist] = None
+        super().__init__(threshold=threshold)
 
     def terminate(self, measurement: float) -> bool:
         self._data.append(measurement)
@@ -51,10 +52,6 @@ class ProbForMin(TerminationCondition):
     has dropped below the threshold
     """
 
-    def __init__(self, threshold: float) -> None:
-        self._threshold = threshold
-        self._data: List[float] = []
-
     def terminate(self, measurement: float) -> bool:
         self._data.append(measurement)
 
@@ -70,3 +67,10 @@ class ProbForMin(TerminationCondition):
                 return False
         else:
             return False
+
+
+class RunAtMost(TerminationCondition):
+    def terminate(self, measurement: float) -> bool:
+        self._data.append(measurement)
+
+        return len(self._data) >= self._threshold
