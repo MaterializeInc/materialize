@@ -16,29 +16,17 @@ use std::collections::HashSet;
 pub(crate) trait Rule {
     fn name(&self) -> &'static str;
 
-    fn rule_type() -> ApplyStrategy
-    where
-        Self: Sized;
+    fn rule_type(&self) -> ApplyStrategy;
 
-    /// Checks whether the given box should be rewritten.
+    /// Determines how to rewrite the box.
     ///
-    /// This method is not allowed to modify the model in any way.
-    ///
-    /// If this method should return true, the rule instance should be modified
-    /// to store information about how the box model should be rewritten to avoid
-    /// duplicating work.
-    ///
-    /// If this method returns false, the rewrite rule instance will be
-    /// destroyed immediately.
-    fn check(&mut self, model: &Model, box_id: BoxId) -> bool;
+    /// Returns None if the box does not need to be rewritten.
+    fn check(&self, model: &Model, box_id: BoxId) -> Option<Box<dyn Rewrite>>;
+}
 
-    /// Rewrite the box according to the rule.
-    ///
-    /// Invoked immediately after [Rule::check] if it returned true.
-    ///
-    /// The rewrite rule instance will be destroyed immediately after this
-    /// call.
-    fn rewrite(&mut self, model: &mut Model, box_id: BoxId);
+/// Trait for something that modifies a Query Graph Model.
+pub(crate) trait Rewrite {
+    fn rewrite(&mut self, model: &mut Model);
 }
 
 /// Where and how a rule should be applied to boxes in the model.
@@ -66,27 +54,9 @@ impl Default for VisitOrder {
     }
 }
 
-/// Generates blank instances of a rule.
-#[allow(missing_debug_implementations)]
-struct RuleGenerator {
-    /// The type of the rule.
-    pub typ: ApplyStrategy,
-    /// Function that creates a blank instance of the rule.
-    pub generate: Box<dyn Fn() -> Box<dyn Rule>>,
-}
-
-/// Create a RuleGenerator that generates blank instances of `R`.
-#[allow(dead_code)]
-fn make_generator<R: 'static + Rule + Default>() -> RuleGenerator {
-    RuleGenerator {
-        typ: R::rule_type(),
-        generate: Box::new(|| Box::new(R::default())),
-    }
-}
-
 /// Apply all available rewrite rules to the model.
 pub fn rewrite_model(model: &mut Model) {
-    let rules: Vec<RuleGenerator> = vec![];
+    let rules: Vec<Box<dyn Rule>> = vec![];
     apply_rules_to_model(model, rules);
     model.garbage_collect();
 
@@ -96,13 +66,13 @@ pub fn rewrite_model(model: &mut Model) {
 }
 
 /// Transform the model by applying a list of rewrite rules.
-fn apply_rules_to_model(model: &mut Model, rules: Vec<RuleGenerator>) {
-    let (top_box, other): (Vec<RuleGenerator>, Vec<RuleGenerator>) = rules
+fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn Rule>>) {
+    let (top_box, other): (Vec<Box<dyn Rule>>, Vec<Box<dyn Rule>>) = rules
         .into_iter()
-        .partition(|r| matches!(r.typ, ApplyStrategy::TopBox));
-    let (pre, post): (Vec<RuleGenerator>, Vec<RuleGenerator>) = other
+        .partition(|r| matches!(r.rule_type(), ApplyStrategy::TopBox));
+    let (pre, post): (Vec<Box<dyn Rule>>, Vec<Box<dyn Rule>>) = other
         .into_iter()
-        .partition(|r| matches!(r.typ, ApplyStrategy::AllBoxes(VisitOrder::Pre)));
+        .partition(|r| matches!(r.rule_type(), ApplyStrategy::AllBoxes(VisitOrder::Pre)));
 
     for rule in &top_box {
         apply_rule(&rule, model, model.top_box);
@@ -120,17 +90,17 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<RuleGenerator>) {
     }
 }
 
-/// Applies the rewrite rule corresponding to the `rule_generator` to a box.
+/// Applies the rewrite rule corresponding to the `rule` to a box.
 ///
 /// Returns whether the box was rewritten.
-fn apply_rule(rule_generator: &RuleGenerator, model: &mut Model, box_id: BoxId) -> bool {
-    // Create a fresh instance of the rule.
-    let mut rule = (*rule_generator.generate)();
+fn apply_rule(rule: &Box<dyn Rule>, model: &mut Model, box_id: BoxId) -> bool {
     let rewrite = rule.check(model, box_id);
-    if rewrite {
-        rule.rewrite(model, box_id);
+    if let Some(mut rewrite) = rewrite {
+        rewrite.rewrite(model);
+        true
+    } else {
+        false
     }
-    rewrite
 }
 
 /// Traverse the model depth-first, applying rules to each box.
@@ -144,7 +114,7 @@ fn apply_rule(rule_generator: &RuleGenerator, model: &mut Model, box_id: BoxId) 
 /// exit-time.
 ///
 /// Returns whether any box was rewritten.
-fn apply_dft_rules(pre: &Vec<RuleGenerator>, post: &Vec<RuleGenerator>, model: &mut Model) -> bool {
+fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &mut Model) -> bool {
     let mut rewritten = false;
 
     // All nodes that have been entered but not exited. Last node in the vec is
