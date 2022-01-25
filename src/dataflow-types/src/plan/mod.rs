@@ -35,9 +35,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use self::join::delta_join::DeltaPathPlan;
-use self::join::delta_join::DeltaStagePlan;
-
 /// The forms in which an operator's output is available;
 /// it can be considered the plan-time equivalent of
 /// [`render::context::CollectionBundle`].
@@ -540,12 +537,10 @@ impl Plan {
                 let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
                 for input in inputs.iter() {
-                    let arity = input.arity();
                     let (plan, keys) = Plan::from_mir(input, arrangements)?;
                     input_arities.push(input.arity());
                     plans.push(plan);
-                    input_keys.push(keys.into_iter().collect());
-                    input_arities.push(arity);
+                    input_keys.push(keys);
                 }
 
                 // Extract temporal predicates as joins cannot currently absorb them.
@@ -591,7 +586,7 @@ impl Plan {
                             // we shouldn't plan delta joins at all if not all of the required arrangements
                             // are available. Print an error message, to increase the chances that
                             // the user will tell us about this.
-                            log::error!("Arrangements depended on by delta join alarmingly absent: {:?}
+                            tracing::error!("Arrangements depended on by delta join alarmingly absent: {:?}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing);
                         } else {
                             // It's fine and expected that linear joins don't have all their arrangements available up front,
