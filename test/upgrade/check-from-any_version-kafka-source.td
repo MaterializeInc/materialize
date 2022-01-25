@@ -23,7 +23,7 @@ a b
 1 2
 2 3
 
-$ kafka-ingest format=avro topic=upgrade-kafka-source-${env.UPGRADE_FROM_VERSION} schema=${schema} timestamp=1
+$ kafka-ingest format=avro topic=upgrade-kafka-source-${arg.upgrade-from-version} schema=${schema} timestamp=1
 {"a": 10, "b": 20}
 {"a": 20, "b": 30}
 

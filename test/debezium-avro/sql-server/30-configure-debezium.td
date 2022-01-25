@@ -37,7 +37,7 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
         "database.hostname": "sql-server",
         "database.port": "1433",
         "database.user": "sa",
-        "database.password": "${env.SA_PASSWORD}",
+        "database.password": "${arg.sa-password}",
         "database.dbname": "test",
         "database.server.name": "sql-server",
         "database.history.kafka.bootstrap.servers": "kafka:9092",
