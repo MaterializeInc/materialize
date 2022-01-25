@@ -1002,12 +1002,7 @@ pub fn plan_create_source(
         column_names,
     };
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE SOURCE: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
 
     Ok(Plan::CreateSource(CreateSourcePlan {
         name,
@@ -1099,10 +1094,15 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                             with_options: ccsr_options,
                         },
                 } => {
+                    let mut ccsr_with_options = normalize::options(&ccsr_options);
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         url.parse()?,
                         &kafka_util::extract_config(&mut normalize::options(with_options))?,
-                        normalize::options(&ccsr_options),
+                        &mut ccsr_with_options,
+                    )?;
+                    normalize::ensure_empty_options(
+                        &ccsr_with_options,
+                        "CONFLUENT SCHEMA REGISTRY",
                     )?;
                     if let Some(seed) = seed {
                         Schema {
@@ -1140,11 +1140,29 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
-                csr_connector: CsrConnectorProto { seed, .. },
+                csr_connector:
+                    CsrConnectorProto {
+                        url,
+                        seed,
+                        with_options: ccsr_options,
+                    },
             } => {
                 if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
                     seed
                 {
+                    let mut ccsr_with_options = normalize::options(&ccsr_options);
+
+                    // We validate here instead of in purification, to match the behavior of avro
+                    let _ccsr_config = kafka_util::generate_ccsr_client_config(
+                        url.parse()?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        &mut ccsr_with_options,
+                    )?;
+                    normalize::ensure_empty_options(
+                        &ccsr_with_options,
+                        "CONFLUENT SCHEMA REGISTRY",
+                    )?;
+
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: value.message_name.clone(),
@@ -1462,12 +1480,13 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
+            let mut ccsr_with_options = normalize::options(&with_options);
+
             let schema_registry_url = url.parse::<Url>()?;
-            let ccsr_with_options = normalize::options(&with_options);
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 schema_registry_url.clone(),
                 &config_options,
-                ccsr_with_options,
+                &mut ccsr_with_options,
             )?;
 
             let include_transaction =
@@ -1485,6 +1504,8 @@ fn kafka_sink_builder(
             let key_schema = schema_generator
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
+
+            normalize::ensure_empty_options(&ccsr_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             KafkaSinkFormat::Avro {
                 schema_registry_url,
@@ -1636,11 +1657,11 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = url.parse::<Url>()?;
-                let ccsr_with_options = normalize::options(&with_options);
+                let mut ccsr_with_options = normalize::options(&with_options);
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     config_options,
-                    ccsr_with_options,
+                    &mut ccsr_with_options,
                 )?;
 
                 Some((
@@ -1874,12 +1895,7 @@ pub fn plan_create_sink(
         }
     };
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE SINK: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
@@ -2154,12 +2170,7 @@ pub fn plan_create_type(
         ids.push(item_id);
     }
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE TYPE: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
 
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     if scx.catalog.item_exists(&name) {

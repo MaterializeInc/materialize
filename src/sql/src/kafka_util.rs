@@ -464,12 +464,12 @@ impl ClientContext for KafkaErrCheckContext {
 pub fn generate_ccsr_client_config(
     csr_url: Url,
     kafka_options: &BTreeMap<String, String>,
-    mut ccsr_options: BTreeMap<String, Value>,
+    ccsr_options: &mut BTreeMap<String, Value>,
 ) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
-    if let Some(ca_path) = match ccsr_options.get("ssl_ca_location") {
+    if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
         Some(Value::String(path)) => Some(path),
         Some(_) => {
             bail!("ssl_ca_location must be a string");
@@ -482,14 +482,16 @@ pub fn generate_ccsr_client_config(
         client_config = client_config.add_root_certificate(cert);
     }
 
-    let key_path = match ccsr_options.get("ssl_key_location") {
+    let ssl_key_location = ccsr_options.remove("ssl_key_location");
+    let key_path = match &&ssl_key_location {
         Some(Value::String(path)) => Some(path),
         Some(_) => {
             bail!("ssl_key_location must be a string");
         }
         None => kafka_options.get("ssl.key.location"),
     };
-    let cert_path = match ccsr_options.get("ssl_certificate_location") {
+    let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
+    let cert_path = match &ssl_certificate_location {
         Some(Value::String(path)) => Some(path),
         Some(_) => {
             bail!("ssl_certificate_location must be a string");
@@ -516,8 +518,14 @@ pub fn generate_ccsr_client_config(
     }
 
     let mut ccsr_options = extract(
-        &mut ccsr_options,
-        &[Config::string("username"), Config::string("password")],
+        ccsr_options,
+        &[
+            // An old migration
+            // (https://github.com/MaterializeInc/materialize/blob/c402917b7078a14bc0d0d6330b9c9b177aa73e47/src/coord/src/catalog/migrate.rs#L362)
+            // adds this field to kafka-avro WITH options, though now in the CSR case,
+            // the field is unread and fixed to `true`
+            Config::new("confluent_wire_format", ValType::Boolean),
+        ],
     )?;
     if let Some(username) = ccsr_options.remove("username") {
         client_config = client_config.auth(username, ccsr_options.remove("password"));

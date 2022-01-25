@@ -44,7 +44,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      security_protocol = 'SSL',
       ssl_key_location = '/share/secrets/materialized-sr.key',
       ssl_certificate_location = '/share/secrets/materialized-sr.crt',
       ssl_ca_location = '/share/secrets/ca.crt'

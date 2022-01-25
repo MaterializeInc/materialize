@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context};
+use itertools::Itertools;
 
 use dataflow_types::sources::{AwsConfig, AwsCredentials, SerdeUri};
 use repr::ColumnName;
@@ -409,6 +410,22 @@ macro_rules! with_option_type {
             _ => ::anyhow::bail!("expected Interval"),
         }
     };
+}
+
+/// Ensures that the given set of options are empty, useful for validating that
+/// `WITH` options are all real, used options
+pub(crate) fn ensure_empty_options<V>(
+    with_options: &BTreeMap<String, V>,
+    context: &str,
+) -> Result<(), anyhow::Error> {
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for {}: {}",
+            context,
+            with_options.keys().join(",")
+        )
+    }
+    Ok(())
 }
 
 /// This macro accepts a struct definition and will generate it and a `try_from`

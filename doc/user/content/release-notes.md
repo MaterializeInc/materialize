@@ -114,6 +114,10 @@ changes that have not yet been documented.
   is an [experimental mode] function that provides a primitive to express what
   other systems refer to as "hopping windows."
 
+- **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
+  of `CREATE SOURCE` and `CREATE SINK` now reject unknown parameters.
+  (Example: [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)).
+
 {{< comment >}}
 Only add new release notes above this line.
 
