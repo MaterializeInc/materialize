@@ -1553,7 +1553,8 @@ where
                 .write_handle
                 .allow_compaction(&table_since_updates);
             let _ = task::spawn(
-                || "compaction <insert some details about what we are compacting here>",
+                // TODO(guswynn): Add more relevant info here
+                || "compaction",
                 async move {
                     if let Err(err) = compaction_fut.await {
                         // TODO: Do something smarter here
