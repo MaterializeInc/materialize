@@ -1628,39 +1628,54 @@ fn plan_view_select(
             allow_windows: false,
         };
         let mut group_key = vec![];
-        let mut group_exprs = vec![];
+        let mut group_exprs: HashMap<HirScalarExpr, ScopeItem> = HashMap::new();
+        let mut group_hir_exprs = vec![];
         let mut group_scope = Scope::empty();
         let mut select_all_mapping = BTreeMap::new();
+
         for group_expr in &s.group_by {
             let (group_expr, expr) = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();
-            // Repeated expressions in GROUP BY confuse name resolution later,
-            // and dropping them doesn't change the result.
-            if group_exprs
-                .iter()
-                .find(|existing_expr| **existing_expr == expr)
-                .is_none()
-            {
-                let scope_item = if let HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: old_column,
-                }) = &expr
-                {
-                    // If we later have `SELECT foo.*` then we have to find all
-                    // the `foo` items in `from_scope` and figure out where they
-                    // ended up in `group_scope`. This is really hard to do
-                    // right using SQL name resolution, so instead we just track
-                    // the movement here.
-                    select_all_mapping.insert(*old_column, new_column);
-                    let mut scope_item = ecx.scope.items[*old_column].clone();
-                    scope_item.expr = group_expr.cloned();
-                    scope_item
-                } else {
-                    ScopeItem::from_expr(group_expr.cloned())
-                };
 
-                group_key.push(from_scope.len() + group_exprs.len());
-                group_exprs.push(expr);
+            if let Some(group_expr) = group_expr {
+                // Multiple AST expressions can map to the same HIR expression.
+                // If we already have a ScopeItem for this HIR, we can add this
+                // next AST expression to its set
+                if let Some(existing_scope_item) = group_exprs.get_mut(&expr) {
+                    existing_scope_item.exprs.insert(group_expr.clone());
+                    continue;
+                }
+            }
+
+            let mut scope_item = if let HirScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: old_column,
+            }) = &expr
+            {
+                // If we later have `SELECT foo.*` then we have to find all
+                // the `foo` items in `from_scope` and figure out where they
+                // ended up in `group_scope`. This is really hard to do
+                // right using SQL name resolution, so instead we just track
+                // the movement here.
+                select_all_mapping.insert(*old_column, new_column);
+                let scope_item = ecx.scope.items[*old_column].clone();
+                scope_item
+            } else {
+                ScopeItem::empty()
+            };
+
+            if let Some(group_expr) = group_expr.cloned() {
+                scope_item.exprs.insert(group_expr);
+            }
+
+            group_key.push(from_scope.len() + group_exprs.len());
+            group_hir_exprs.push(expr.clone());
+            group_exprs.insert(expr, scope_item);
+        }
+
+        assert_eq!(group_hir_exprs.len(), group_exprs.len());
+        for expr in &group_hir_exprs {
+            if let Some(scope_item) = group_exprs.remove(expr) {
                 group_scope.items.push(scope_item);
             }
         }
@@ -1670,7 +1685,7 @@ fn plan_view_select(
             qcx,
             name: "aggregate function",
             scope: &from_scope,
-            relation_type: &qcx.relation_type(&relation_expr.clone().map(group_exprs.clone())),
+            relation_type: &qcx.relation_type(&relation_expr.clone().map(group_hir_exprs.clone())),
             allow_aggregates: false,
             allow_subqueries: true,
             allow_windows: false,
@@ -1684,10 +1699,11 @@ fn plan_view_select(
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || s.having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr =
-                relation_expr
-                    .map(group_exprs)
-                    .reduce(group_key, agg_exprs, expected_group_size);
+            relation_expr = relation_expr.map(group_hir_exprs).reduce(
+                group_key,
+                agg_exprs,
+                expected_group_size,
+            );
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope
