@@ -1155,7 +1155,7 @@ pub mod util {
     /// expression that should be used to create the arrangement.
     ///
     /// The permutations and thinning expressions generated here will be tracked in
-    /// [`dataflow::plan::AvailableCollections`]; see the
+    /// `dataflow::plan::AvailableCollections`; see the
     /// documentation there for more details.
     pub fn permutation_for_arrangement<B: FromIterator<(usize, usize)>>(
         key: &[MirScalarExpr],
@@ -1189,7 +1189,7 @@ pub mod util {
     }
 
     /// Given the permutations (see [`permutation_for_arrangement`] and
-    /// ([`dataflow::plan::AvailableCollections`]) corresponding to two
+    /// (`dataflow::plan::AvailableCollections`) corresponding to two
     /// collections with the same key arity,
     /// computes the permutation for the result of joining them.
     pub fn join_permutations(

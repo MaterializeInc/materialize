@@ -51,7 +51,7 @@ fn serialize_arranged<S: Serializer>(
 
 /// The forms in which an operator's output is available;
 /// it can be considered the plan-time equivalent of
-/// [`render::context::CollectionBundle`].
+/// `render::context::CollectionBundle`.
 ///
 /// These forms are either "raw", representing an unarranged collection,
 /// or "arranged", representing one that has been arranged by some key.
