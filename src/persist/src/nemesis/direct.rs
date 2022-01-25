@@ -351,7 +351,7 @@ impl Runtime for Direct {
 
     fn add_worker(&mut self) -> DirectWorker {
         self.workers += 1;
-        DirectWorker::new(self.shared.clone())
+        DirectWorker::new(Arc::clone(&self.shared))
     }
 
     fn finish(self) {

@@ -100,7 +100,7 @@ impl RuntimeClient {
             stream_id,
             client: RuntimeReadClient {
                 sender: CmdReadSender::Full(self.sender.clone()),
-                stopper: self.stopper.clone(),
+                stopper: Arc::clone(&self.stopper),
             },
             _phantom: PhantomData,
         };
