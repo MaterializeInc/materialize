@@ -30,6 +30,8 @@ import yaml
 
 from materialize import mzbuild, mzcompose, spawn
 
+from ..deploy.deploy_util import materialized_rust_version
+
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so
 # whenever it changes, we ought not trim any jobs from the pipeline in order to
@@ -51,7 +53,9 @@ def main() -> int:
     spawn.runv(["git", "diff", "--stat", "origin/main..."])
 
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
-        pipeline = yaml.safe_load(f)
+        raw = f.read()
+    raw = raw.replace("$MATERIALIZED_RUST_VERSION", materialized_rust_version())
+    pipeline = yaml.safe_load(raw)
 
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         print("On main branch or tag, so not trimming pipeline")
@@ -104,7 +108,6 @@ def trim_pipeline(pipeline: Any) -> None:
     no other untrimmed steps that depend on it.
     """
     repo = mzbuild.Repository(Path("."))
-    images = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
     for config in pipeline["steps"]:
@@ -128,8 +131,8 @@ def trim_pipeline(pipeline: Any) -> None:
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
                         composition = mzcompose.Composition(repo, name)
-                        for image in composition.images:
-                            step.image_dependencies.add(images[image.name])
+                        for dep in composition.dependencies:
+                            step.image_dependencies.add(dep)
                         step.extra_inputs.add(str(repo.compositions[name]))
         steps[step.id] = step
 

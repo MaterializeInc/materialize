@@ -19,6 +19,7 @@ use futures_executor::block_on;
 use ore::cast::CastFrom;
 use persist_types::Codec;
 use semver::Version;
+use tokio::runtime::Runtime as AsyncRuntime;
 
 use crate::error::Error;
 use crate::gen::persist::{ProtoBatchFormat, ProtoMeta};
@@ -27,7 +28,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
-use crate::storage::{Atomicity, Blob};
+use crate::storage::{Atomicity, Blob, BlobRead};
 
 /// A disk-backed cache for objects in [Blob] storage.
 ///
@@ -43,22 +44,24 @@ use crate::storage::{Atomicity, Blob};
 /// the soft limit does some alerting and the hard limit starts blocking (or
 /// erroring) until disk space frees up.
 #[derive(Debug)]
-pub struct BlobCache<B: Blob> {
+pub struct BlobCache<B> {
     build_version: Version,
     metrics: Arc<Metrics>,
     blob: Arc<Mutex<B>>,
+    async_runtime: Arc<AsyncRuntime>,
     // TODO: Use a disk-backed LRU cache.
     unsealed: Arc<Mutex<HashMap<String, Arc<BlobUnsealedBatch>>>>,
     trace: Arc<Mutex<HashMap<String, Arc<BlobTraceBatch>>>>,
     prev_meta_len: u64,
 }
 
-impl<B: Blob> Clone for BlobCache<B> {
+impl<B> Clone for BlobCache<B> {
     fn clone(&self) -> Self {
         BlobCache {
             build_version: self.build_version.clone(),
             metrics: self.metrics.clone(),
             blob: self.blob.clone(),
+            async_runtime: self.async_runtime.clone(),
             unsealed: self.unsealed.clone(),
             trace: self.trace.clone(),
             prev_meta_len: self.prev_meta_len,
@@ -66,14 +69,20 @@ impl<B: Blob> Clone for BlobCache<B> {
     }
 }
 
-impl<B: Blob> BlobCache<B> {
+impl<B: BlobRead> BlobCache<B> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
-    pub fn new(build: BuildInfo, metrics: Arc<Metrics>, blob: B) -> Self {
+    pub fn new(
+        build: BuildInfo,
+        metrics: Arc<Metrics>,
+        async_runtime: Arc<AsyncRuntime>,
+        blob: B,
+    ) -> Self {
         BlobCache {
             build_version: build.semver_version(),
             metrics,
+            async_runtime,
             blob: Arc::new(Mutex::new(blob)),
             unsealed: Arc::new(Mutex::new(HashMap::new())),
             trace: Arc::new(Mutex::new(HashMap::new())),
@@ -92,6 +101,8 @@ impl<B: Blob> BlobCache<B> {
 
     /// Synchronously fetches the batch for the given key.
     fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
+        let async_guard = self.async_runtime.enter();
+
         let bytes = block_on(self.blob.lock()?.get(key))?
             .ok_or_else(|| Error::from(format!("no blob for unsealed batch at key: {}", key)))?;
         self.metrics
@@ -106,7 +117,10 @@ impl<B: Blob> BlobCache<B> {
         let mut cache = self.unsealed.lock()?;
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
-        Ok(cache.get(key).unwrap().clone())
+        let ret = cache.get(key).unwrap().clone();
+
+        drop(async_guard);
+        Ok(ret)
     }
 
     /// Asynchronously returns the batch for the given key, fetching in another
@@ -137,68 +151,18 @@ impl<B: Blob> BlobCache<B> {
         let key = key.to_owned();
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
+            let async_guard = cache.async_runtime.enter();
             let res = cache.fetch_unsealed_batch_sync(&key);
             tx.fill(res);
+            drop(async_guard);
         });
         rx
     }
 
-    /// Writes a batch to backing [Blob] storage.
-    ///
-    /// Returns the size of the encoded blob value in bytes.
-    pub fn set_unsealed_batch(
-        &mut self,
-        key: String,
-        batch: BlobUnsealedBatch,
-    ) -> Result<(ProtoBatchFormat, u64), Error> {
-        if key == Self::META_KEY {
-            return Err(format!(
-                "cannot write unsealed batch to meta key: {}",
-                Self::META_KEY
-            )
-            .into());
-        }
-        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
-
-        let mut val = Vec::new();
-        let format = ProtoBatchFormat::ParquetKvtd;
-        batch.encode(&mut val);
-        let val_len = u64::cast_from(val.len());
-
-        let write_start = Instant::now();
-        block_on(self.blob.lock()?.set(&key, val, Atomicity::AllowNonAtomic))
-            .map_err(|err| self.metric_set_error(err))?;
-        self.metrics
-            .unsealed
-            .blob_write_seconds
-            .inc_by(write_start.elapsed().as_secs_f64());
-        self.metrics.unsealed.blob_write_count.inc();
-        self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
-
-        self.unsealed.lock()?.insert(key, Arc::new(batch));
-        Ok((format, val_len))
-    }
-
-    /// Removes a batch from both [Blob] storage and the local cache.
-    pub fn delete_unsealed_batch(&mut self, batch: &UnsealedBatchMeta) -> Result<(), Error> {
-        let delete_start = Instant::now();
-        self.unsealed.lock()?.remove(&batch.key);
-        block_on(self.blob.lock()?.delete(&batch.key))?;
-        self.metrics
-            .unsealed
-            .blob_delete_seconds
-            .inc_by(delete_start.elapsed().as_secs_f64());
-        self.metrics.unsealed.blob_delete_count.inc();
-        self.metrics
-            .unsealed
-            .blob_delete_bytes
-            .inc_by(batch.size_bytes);
-
-        Ok(())
-    }
-
     /// Synchronously fetches the batch for the given key.
     fn fetch_trace_batch_sync(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
+        let async_guard = self.async_runtime.enter();
+
         let bytes = block_on(self.blob.lock()?.get(key))?
             .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
         self.metrics
@@ -212,7 +176,10 @@ impl<B: Blob> BlobCache<B> {
         let mut cache = self.trace.lock()?;
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
-        Ok(cache.get(key).unwrap().clone())
+        let ret = cache.get(key).unwrap().clone();
+
+        drop(async_guard);
+        Ok(ret)
     }
 
     /// Asynchronously returns the batch for the given key, fetching in another
@@ -243,10 +210,131 @@ impl<B: Blob> BlobCache<B> {
         let key = key.to_owned();
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
+            let async_guard = cache.async_runtime.enter();
             let res = cache.fetch_trace_batch_sync(&key);
             tx.fill(res);
+            drop(async_guard);
         });
         rx
+    }
+
+    /// Fetches metadata about what batches are in [Blob] storage.
+    pub fn get_meta(&self) -> Result<Option<BlobMeta>, Error> {
+        let async_guard = self.async_runtime.enter();
+
+        let blob = self.blob.lock()?;
+        let bytes = match block_on(blob.get(Self::META_KEY))? {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        };
+        let meta = ProtoMeta::decode(&bytes).map_err(|err| {
+            Error::from(format!("invalid meta at key {}: {}", Self::META_KEY, err))
+        })?;
+        self.check_meta_build_version(&meta)?;
+        let meta = BlobMeta::from(meta);
+        debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
+
+        drop(async_guard);
+        Ok(Some(meta))
+    }
+
+    fn check_meta_build_version(&self, meta: &ProtoMeta) -> Result<(), Error> {
+        // TODO: After ENCODING_VERSION is bumped to 8 or higher, this can be
+        // removed.
+        let meta_version = if meta.version.is_empty() {
+            // Any build that includes this check comes after a ProtoMeta that
+            // was written with no version set.
+            Version::new(0, 0, 0)
+        } else {
+            meta.version
+                .parse::<Version>()
+                .map_err(|err| err.to_string())?
+        };
+        // Allow data written by any previous version of persist (backward
+        // compatible for all time) but disallow data written by a future
+        // version of persist (aka we're currently *not* forward compatible).
+        // Note that at some point, mz will need to be forward compatible to
+        // allow for rollbacks but this policy is not yet settled.
+        //
+        // NB: Since ProtoMeta is the entrypoint for all written persist
+        // metadata and data, it's an upper bound on versions involved in any
+        // persist data.
+        if meta_version > self.build_version {
+            return Err(format!(
+                "persist v{} cannot read data written by future persist v{}",
+                self.build_version, meta_version
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Returns the list of keys known to the underlying [Blob].
+    pub fn list_keys(&self) -> Result<Vec<String>, Error> {
+        block_on(self.blob.lock()?.list_keys())
+    }
+}
+
+impl<B: Blob> BlobCache<B> {
+    /// Writes a batch to backing [Blob] storage.
+    ///
+    /// Returns the size of the encoded blob value in bytes.
+    pub fn set_unsealed_batch(
+        &mut self,
+        key: String,
+        batch: BlobUnsealedBatch,
+    ) -> Result<(ProtoBatchFormat, u64), Error> {
+        let async_guard = self.async_runtime.enter();
+
+        if key == Self::META_KEY {
+            return Err(format!(
+                "cannot write unsealed batch to meta key: {}",
+                Self::META_KEY
+            )
+            .into());
+        }
+        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
+
+        let mut val = Vec::new();
+        let format = ProtoBatchFormat::ParquetKvtd;
+        batch.encode(&mut val);
+        let val_len = u64::cast_from(val.len());
+
+        let write_start = Instant::now();
+        block_on(self.blob.lock()?.set(&key, val, Atomicity::AllowNonAtomic))
+            .map_err(|err| self.metric_set_error(err))?;
+        self.metrics
+            .unsealed
+            .blob_write_seconds
+            .inc_by(write_start.elapsed().as_secs_f64());
+        self.metrics.unsealed.blob_write_count.inc();
+        self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
+
+        self.unsealed.lock()?.insert(key, Arc::new(batch));
+
+        drop(async_guard);
+        Ok((format, val_len))
+    }
+
+    /// Removes a batch from both [Blob] storage and the local cache.
+    pub fn delete_unsealed_batch(&mut self, batch: &UnsealedBatchMeta) -> Result<(), Error> {
+        let async_guard = self.async_runtime.enter();
+
+        let delete_start = Instant::now();
+        self.unsealed.lock()?.remove(&batch.key);
+        block_on(self.blob.lock()?.delete(&batch.key))?;
+        self.metrics
+            .unsealed
+            .blob_delete_seconds
+            .inc_by(delete_start.elapsed().as_secs_f64());
+        self.metrics.unsealed.blob_delete_count.inc();
+        self.metrics
+            .unsealed
+            .blob_delete_bytes
+            .inc_by(batch.size_bytes);
+
+        drop(async_guard);
+        Ok(())
     }
 
     /// Writes a batch to backing [Blob] storage.
@@ -257,6 +345,8 @@ impl<B: Blob> BlobCache<B> {
         key: String,
         batch: BlobTraceBatch,
     ) -> Result<(ProtoBatchFormat, u64), Error> {
+        let async_guard = self.async_runtime.enter();
+
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }
@@ -278,11 +368,15 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.trace.blob_write_bytes.inc_by(val_len);
 
         self.trace.lock()?.insert(key, Arc::new(batch));
+
+        drop(async_guard);
         Ok((format, val_len))
     }
 
     /// Removes a batch from both [Blob] storage and the local cache.
     pub fn delete_trace_batch(&mut self, batch: &TraceBatchMeta) -> Result<(), Error> {
+        let async_guard = self.async_runtime.enter();
+
         let delete_start = Instant::now();
         self.trace.lock()?.remove(&batch.key);
         block_on(self.blob.lock()?.delete(&batch.key))?;
@@ -296,27 +390,14 @@ impl<B: Blob> BlobCache<B> {
             .blob_delete_bytes
             .inc_by(batch.size_bytes);
 
+        drop(async_guard);
         Ok(())
-    }
-
-    /// Fetches metadata about what batches are in [Blob] storage.
-    pub fn get_meta(&self) -> Result<Option<BlobMeta>, Error> {
-        let blob = self.blob.lock()?;
-        let bytes = match block_on(blob.get(Self::META_KEY))? {
-            Some(bytes) => bytes,
-            None => return Ok(None),
-        };
-        let meta = ProtoMeta::decode(&bytes).map_err(|err| {
-            Error::from(format!("invalid meta at key {}: {}", Self::META_KEY, err))
-        })?;
-        self.check_meta_build_version(&meta)?;
-        let meta = BlobMeta::from(meta);
-        debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
-        Ok(Some(meta))
     }
 
     /// Overwrites metadata about what batches are in [Blob] storage.
     pub fn set_meta(&mut self, meta: &BlobMeta) -> Result<(), Error> {
+        let async_guard = self.async_runtime.enter();
+
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
         let meta = ProtoMeta::from((meta, &self.build_version));
 
@@ -351,37 +432,7 @@ impl<B: Blob> BlobCache<B> {
         self.prev_meta_len = val_len;
 
         // Don't bother caching meta, nothing reads it after startup.
-        Ok(())
-    }
-
-    fn check_meta_build_version(&self, meta: &ProtoMeta) -> Result<(), Error> {
-        // TODO: After ENCODING_VERSION is bumped to 8 or higher, this can be
-        // removed.
-        let meta_version = if meta.version.is_empty() {
-            // Any build that includes this check comes after a ProtoMeta that
-            // was written with no version set.
-            Version::new(0, 0, 0)
-        } else {
-            meta.version
-                .parse::<Version>()
-                .map_err(|err| err.to_string())?
-        };
-        // Allow data written by any previous version of persist (backward
-        // compatible for all time) but disallow data written by a future
-        // version of persist (aka we're currently *not* forward compatible).
-        // Note that at some point, mz will need to be forward compatible to
-        // allow for rollbacks but this policy is not yet settled.
-        //
-        // NB: Since ProtoMeta is the entrypoint for all written persist
-        // metadata and data, it's an upper bound on versions involved in any
-        // persist data.
-        if meta_version > self.build_version {
-            return Err(format!(
-                "persist v{} cannot read data written by future persist v{}",
-                self.build_version, meta_version
-            )
-            .into());
-        }
+        drop(async_guard);
         Ok(())
     }
 
@@ -391,11 +442,6 @@ impl<B: Blob> BlobCache<B> {
             _ => self.metrics.blob_write_error_other_count.inc(),
         };
         err
-    }
-
-    /// Returns the list of keys known to the underlying [Blob].
-    pub fn list_keys(&self) -> Result<Vec<String>, Error> {
-        block_on(self.blob.lock()?.list_keys())
     }
 }
 
@@ -411,6 +457,7 @@ mod tests {
         let mut cache = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemRegistry::new().blob_no_reentrance()?,
         );
 

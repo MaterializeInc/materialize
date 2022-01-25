@@ -221,7 +221,8 @@ impl Retry {
         Err(err.expect("retry produces at least one element"))
     }
 
-    fn into_retry_stream(self) -> RetryStream {
+    /// Convert into [`RetryStream`]
+    pub fn into_retry_stream(self) -> RetryStream {
         RetryStream {
             retry: self,
             start: Instant::now(),
@@ -245,9 +246,10 @@ impl Default for Retry {
     }
 }
 
+/// Opaque type representing the stream of retries that continues to back off.
 #[pin_project]
 #[derive(Debug)]
-struct RetryStream {
+pub struct RetryStream {
     retry: Retry,
     start: Instant,
     i: usize,

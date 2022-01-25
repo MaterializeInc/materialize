@@ -13,6 +13,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::iter;
+use std::path::Path;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
@@ -28,7 +30,8 @@ use uuid::Uuid;
 
 use dataflow_types::sources::AwsConfig;
 use dataflow_types::sources::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
-use interchange::protobuf::compile_proto_from_subjects;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
+use protobuf_native::MessageLite;
 use repr::strconv;
 use sql_parser::parser::parse_columns;
 
@@ -789,14 +792,43 @@ async fn compile_proto(
 ) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
     let (primary_subject, dependency_subjects) =
         ccsr_client.get_subject_and_references(subject_name).await?;
-    compile_proto_from_subjects(primary_subject, dependency_subjects).await
+
+    // Compile .proto files into a file descriptor set.
+    let mut source_tree = VirtualSourceTree::new();
+    for subject in iter::once(&primary_subject).chain(dependency_subjects.iter()) {
+        source_tree.as_mut().add_file(
+            Path::new(&subject.name),
+            subject.schema.raw.as_bytes().to_vec(),
+        );
+    }
+    let mut db = SourceTreeDescriptorDatabase::new(source_tree.as_mut());
+    let fds = db
+        .as_mut()
+        .build_file_descriptor_set(&[Path::new(&primary_subject.name)])?;
+
+    // Ensure there is exactly one message in the file.
+    let primary_fd = fds.file(0);
+    let message_name = match primary_fd.message_type_size() {
+        1 => String::from_utf8_lossy(primary_fd.message_type(0).name()).into_owned(),
+        0 => bail_unsupported!(9598, "Protobuf schemas with no messages"),
+        _ => bail_unsupported!(9598, "Protobuf schemas with multiple messages"),
+    };
+
+    // Encode the file descriptor set into a SQL byte string.
+    let mut schema = String::new();
+    strconv::format_bytes(&mut schema, &fds.serialize()?);
+
+    Ok(CsrSeedCompiledEncoding {
+        schema,
+        message_name,
+    })
 }
 
 /// Makes an always-valid AWS API call to perform a basic sanity check of
 /// whether the specified AWS configuration is valid.
 async fn validate_aws_credentials(config: &AwsConfig) -> Result<(), anyhow::Error> {
-    let config = config.load().await?;
-    let sts_client = mz_aws_util::sts::client(&config)?;
+    let config = config.load().await;
+    let sts_client = mz_aws_util::sts::client(&config);
     let _ = sts_client.get_caller_identity().send().await?;
     Ok(())
 }

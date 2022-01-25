@@ -7,19 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fs;
+use std::path::Path;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
-use protobuf::Message;
-use regex::Regex;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
+use protobuf_native::MessageLite;
 use repr::strconv;
 use semver::Version;
-use tempfile;
 use tokio::fs::File;
 
-use mz_protoc::Protoc;
 use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
@@ -32,7 +30,6 @@ use sql::ast::{
     Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
-use uuid::Uuid;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
@@ -143,52 +140,31 @@ fn ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(
     stmt: &mut sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     fn compile_proto(schema: &str) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
-        let temp_schema_name: String = Uuid::new_v4().to_simple().to_string();
-        let include_dir = tempfile::tempdir()?;
-        let schema_path = include_dir.path().join(&temp_schema_name);
-        let schema_bytes = strconv::parse_bytes(schema)?;
-        fs::write(&schema_path, &schema_bytes)?;
+        // Compile .proto files into a file descriptor set.
+        let path = Path::new("migration.proto");
+        let mut source_tree = VirtualSourceTree::new();
+        source_tree
+            .as_mut()
+            .add_file(path, schema.as_bytes().to_vec());
+        let mut db = SourceTreeDescriptorDatabase::new(source_tree.as_mut());
+        let fds = db.as_mut().build_file_descriptor_set(&[path])?;
 
-        match Protoc::new()
-            .include(include_dir.path())
-            .input(schema_path)
-            .parse()
-        {
-            Ok(fds) => {
-                let message_name = fds
-                    .file
-                    .iter()
-                    .find(|f| f.get_name() == temp_schema_name)
-                    .map(|file| file.message_type.first())
-                    .flatten()
-                    .map(|message| format!(".{}", message.get_name()))
-                    .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;
-                let mut schema = String::new();
-                strconv::format_bytes(&mut schema, &fds.write_to_bytes()?);
-                Ok(CsrSeedCompiledEncoding {
-                    schema,
-                    message_name,
-                })
-            }
-            Err(e) => {
-                lazy_static! {
-                    static ref MISSING_IMPORT_ERROR: Regex = Regex::new(
-                        r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#
-                    )
-                    .unwrap();
-                }
+        // Ensure there is exactly one message in the file.
+        let primary_fd = fds.file(0);
+        let message_name = match primary_fd.message_type_size() {
+            1 => String::from_utf8_lossy(primary_fd.message_type(0).name()).into_owned(),
+            0 => bail!("Protobuf schema for source contains no messages"),
+            _ => bail!("Protobuf schema for source contains multiple messages"),
+        };
 
-                // Make protobuf import errors more user-friendly.
-                if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
-                    bail!(
-                        "unsupported protobuf schema reference {}",
-                        &captures["reference"]
-                    )
-                } else {
-                    Err(e)
-                }
-            }
-        }
+        // Encode the file descriptor set into a SQL byte string.
+        let mut schema = String::new();
+        strconv::format_bytes(&mut schema, &fds.serialize()?);
+
+        Ok(CsrSeedCompiledEncoding {
+            schema,
+            message_name,
+        })
     }
 
     fn do_upgrade(seed: &mut CsrSeedCompiledOrLegacy) -> Result<(), anyhow::Error> {

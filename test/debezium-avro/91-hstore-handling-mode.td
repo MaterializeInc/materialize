@@ -47,7 +47,7 @@ $ schema-registry-wait-schema schema=postgres.public.hstore_map-value
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.hstore_map'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
-Unsupported type in schema
+contains:Unsupported type in schema
 
 #
 # Restore default

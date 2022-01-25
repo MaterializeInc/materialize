@@ -10,11 +10,10 @@
 //! The public "async API" for persist.
 
 use std::collections::HashSet;
-use std::fmt;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use differential_dataflow::trace::Description;
 use persist_types::Codec;
@@ -22,11 +21,12 @@ use timely::progress::Antichain;
 
 use crate::error::Error;
 use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
-use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
-use crate::indexed::{ListenEvent, Snapshot};
-use crate::pfuture::{PFuture, PFutureHandle};
-use crate::runtime::{Cmd, RuntimeCore, RuntimeId};
+use crate::indexed::metrics::Metrics;
+use crate::indexed::{Cmd, CmdRead, ListenEvent, Snapshot};
+use crate::pfuture::PFuture;
+use crate::runtime::{RuntimeCmd, RuntimeHandle, RuntimeId};
 use crate::storage::SeqNo;
 
 /// A clone-able handle to the persistence runtime.
@@ -35,34 +35,37 @@ use crate::storage::SeqNo;
 /// all clients have been dropped, whichever comes first.
 ///
 /// NB: The methods below are executed concurrently. For a some call X to be
-/// guaranteed as "previous" to another call Y, X's response must have been
-/// received before Y's call started.
-#[derive(Clone)]
+/// guaranteed as "previous" to another call Y, X's future must have been
+/// received before Y's call started (though X's future doesn't need to have
+/// resolved).
+#[derive(Clone, Debug)]
 pub struct RuntimeClient {
-    id: RuntimeId,
-    core: Arc<RuntimeCore>,
-}
-
-impl fmt::Debug for RuntimeClient {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RuntimeClient")
-            .field(&"id", &self.id)
-            .field(&"core", &"..")
-            .finish()
-    }
+    sender: RuntimeCmdSender,
+    stopper: Arc<StopRuntimeOnDrop>,
 }
 
 impl PartialEq for RuntimeClient {
     fn eq(&self, other: &Self) -> bool {
-        self.id.eq(&other.id)
+        self.stopper.runtime_id.eq(&other.stopper.runtime_id)
     }
 }
 
 impl Eq for RuntimeClient {}
 
 impl RuntimeClient {
-    pub(crate) fn new(id: RuntimeId, core: Arc<RuntimeCore>) -> Self {
-        RuntimeClient { id, core }
+    pub(crate) fn new(
+        handle: RuntimeHandle,
+        tx: crossbeam_channel::Sender<RuntimeCmd>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
+        let runtime_id = handle.id();
+        let sender = RuntimeCmdSender { metrics, tx };
+        let stopper = Arc::new(StopRuntimeOnDrop {
+            runtime_id,
+            sender: CmdReadSender::Full(sender.clone()),
+            handle: Mutex::new(Some(handle)),
+        });
+        RuntimeClient { sender, stopper }
     }
 
     /// Synchronously registers a new stream for writes and reads.
@@ -78,76 +81,44 @@ impl RuntimeClient {
         name: &str,
     ) -> (StreamWriteHandle<K, V>, StreamReadHandle<K, V>) {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::Register(
-            name.to_owned(),
-            (K::codec_name(), V::codec_name()),
-            tx,
-        ));
-        let id = rx.recv();
-        let write = StreamWriteHandle::new(name.to_owned(), id.clone(), self.clone());
-        let meta = StreamReadHandle::new(name.to_owned(), id, self.clone());
-        (write, meta)
+        self.sender
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Register(
+                name.to_owned(),
+                (K::codec_name(), V::codec_name()),
+                tx,
+            )));
+        let stream_id = rx.recv();
+
+        let write = StreamWriteHandle {
+            name: name.to_owned(),
+            stream_id: stream_id.clone(),
+            client: self.clone(),
+            _phantom: PhantomData,
+        };
+        let read = StreamReadHandle {
+            name: name.to_owned(),
+            stream_id,
+            client: RuntimeReadClient {
+                sender: CmdReadSender::Full(self.sender.clone()),
+                stopper: self.stopper.clone(),
+            },
+            _phantom: PhantomData,
+        };
+        (write, read)
     }
 
     /// Returns a [Description] of the stream identified by `id_str`.
-    // TODO: We might want to think about returning only the compaction frontier (since) and seal
-    // timestamp (upper) here. Description seems more oriented towards describing batches, and in
-    // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
-    // tuple or create our own Description-like return type for this.
+    //
+    // TODO: We might want to think about returning only the compaction frontier
+    // (since) and seal timestamp (upper) here. Description seems more oriented
+    // towards describing batches, and in our case the lower is always
+    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
+    // create our own Description-like return type for this.
     pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::GetDescription(id_str.to_owned(), tx));
-        let seal_frontier = rx.recv()?;
-        Ok(seal_frontier)
-    }
-
-    /// Asynchronously persists `(Key, Value, Time, Diff)` updates for the
-    /// streams with the given ids.
-    ///
-    /// The ids must have previously been registered.
-    pub(crate) fn write(&self, updates: Vec<(Id, ColumnarRecords)>, res: PFutureHandle<SeqNo>) {
-        self.core.send(Cmd::Write(updates, res))
-    }
-
-    /// Asynchronously advances the "sealed" frontier for the streams with the
-    /// given ids, which restricts what times can later be sealed and/or written
-    /// for those ids.
-    ///
-    /// The ids must have previously been registered.
-    fn seal(&self, ids: &[Id], ts: u64, res: PFutureHandle<SeqNo>) {
-        self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
-    }
-
-    /// Asynchronously advances the compaction frontier for the streams with the
-    /// given ids, which lets the stream discard historical detail for times not
-    /// beyond the compaction frontier. This also restricts what times the
-    /// compaction frontier can later be advanced to for these ids.
-    ///
-    /// The ids must have previously been registered.
-    fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: PFutureHandle<SeqNo>) {
-        self.core
-            .send(Cmd::AllowCompaction(id_sinces.to_vec(), res))
-    }
-
-    /// Asynchronously returns a [crate::indexed::Snapshot] for the stream
-    /// with the given id.
-    ///
-    /// This snapshot is guaranteed to include any previous writes.
-    ///
-    /// The id must have previously been registered.
-    fn snapshot(&self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
-        self.core.send(Cmd::Snapshot(id, res))
-    }
-
-    /// Asynchronously registers a callback to be invoked on successful writes
-    /// and seals.
-    fn listen(
-        &self,
-        id: Id,
-        sender: crossbeam_channel::Sender<ListenEvent>,
-        res: PFutureHandle<ArrangementSnapshot>,
-    ) {
-        self.core.send(Cmd::Listen(id, sender, res))
+        self.sender
+            .send_cmd_read(CmdRead::GetDescription(id_str.to_owned(), tx));
+        rx.recv()
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -155,7 +126,7 @@ impl RuntimeClient {
     ///
     /// This method is idempotent.
     pub fn stop(&mut self) -> Result<(), Error> {
-        self.core.stop()
+        self.stopper.stop()
     }
 
     /// Synchronously remove the persisted stream.
@@ -164,18 +135,102 @@ impl RuntimeClient {
     /// destroyed, false if the stream had already been destroyed previously.
     pub fn destroy(&mut self, id: &str) -> Result<bool, Error> {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::Destroy(id.to_owned(), tx));
+        self.sender
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Destroy(id.to_owned(), tx)));
         rx.recv()
+    }
+}
+
+/// A clone-able handle to the read-only persistence runtime.
+///
+/// The runtime is stopped when any client calls [RuntimeReadClient::stop] or
+/// when all clients have been dropped, whichever comes first.
+///
+/// NB: The methods below are executed concurrently. For a some call X to be
+/// guaranteed as "previous" to another call Y, X's future must have been
+/// received before Y's call started (though X's future doesn't need to have
+/// resolved).
+#[derive(Clone, Debug)]
+pub struct RuntimeReadClient {
+    sender: CmdReadSender,
+    stopper: Arc<StopRuntimeOnDrop>,
+}
+
+impl PartialEq for RuntimeReadClient {
+    fn eq(&self, other: &Self) -> bool {
+        self.stopper.runtime_id.eq(&other.stopper.runtime_id)
+    }
+}
+
+impl Eq for RuntimeReadClient {}
+
+impl RuntimeReadClient {
+    pub(crate) fn new(
+        handle: RuntimeHandle,
+        tx: crossbeam_channel::Sender<CmdRead>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
+        let runtime_id = handle.id();
+        let sender = CmdReadSender::Read { metrics, tx };
+        let stopper = Arc::new(StopRuntimeOnDrop {
+            runtime_id,
+            sender: sender.clone(),
+            handle: Mutex::new(Some(handle)),
+        });
+        RuntimeReadClient { stopper, sender }
+    }
+
+    /// Synchronously loads a stream for reads.
+    pub fn load<K: Codec, V: Codec>(&self, name: &str) -> StreamReadHandle<K, V> {
+        let (tx, rx) = PFuture::new();
+        self.sender.send_cmd_read(CmdRead::Load(
+            name.to_owned(),
+            (K::codec_name(), V::codec_name()),
+            tx,
+        ));
+        let stream_id = match rx.recv() {
+            Ok(Some(stream_id)) => Ok(stream_id),
+            Ok(None) => Err(format!("unregistered collection: {}", name).into()),
+            Err(err) => Err(err),
+        };
+        StreamReadHandle {
+            name: name.to_owned(),
+            stream_id,
+            client: self.clone(),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Returns a [Description] of the stream identified by `id_str`.
+    //
+    // TODO: We might want to think about returning only the compaction frontier
+    // (since) and seal timestamp (upper) here. Description seems more oriented
+    // towards describing batches, and in our case the lower is always
+    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
+    // create our own Description-like return type for this.
+    pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
+        let (tx, rx) = PFuture::new();
+        self.sender
+            .send_cmd_read(CmdRead::GetDescription(id_str.to_owned(), tx));
+        let seal_frontier = rx.recv()?;
+        Ok(seal_frontier)
+    }
+
+    /// Synchronously closes the runtime, causing all future commands to error.
+    ///
+    /// This method is idempotent.
+    pub fn stop(&mut self) -> Result<(), Error> {
+        self.stopper.stop()
     }
 }
 
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
-#[derive(PartialEq)]
+#[derive(Debug)]
 pub struct StreamWriteHandle<K, V> {
     name: String,
-    id: Result<Id, Error>,
-    runtime: RuntimeClient,
+    stream_id: Result<Id, Error>,
+    client: RuntimeClient,
     _phantom: PhantomData<(K, V)>,
 }
 
@@ -183,34 +238,14 @@ impl<K, V> Clone for StreamWriteHandle<K, V> {
     fn clone(&self) -> Self {
         StreamWriteHandle {
             name: self.name.clone(),
-            id: self.id.clone(),
-            runtime: self.runtime.clone(),
+            stream_id: self.stream_id.clone(),
+            client: self.client.clone(),
             _phantom: self._phantom,
         }
     }
 }
 
-impl<K, V> fmt::Debug for StreamWriteHandle<K, V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StreamWriteHandle")
-            .field("name", &self.name)
-            .field("id", &self.id)
-            .field("runtime", &self.runtime)
-            .finish()
-    }
-}
-
 impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
-    /// Returns a new [StreamWriteHandle] for the given stream.
-    pub fn new(name: String, id: Result<Id, Error>, runtime: RuntimeClient) -> Self {
-        StreamWriteHandle {
-            name,
-            id,
-            runtime,
-            _phantom: PhantomData,
-        }
-    }
-
     /// Returns the external stream name for this handle.
     pub fn stream_name(&self) -> &str {
         &self.name
@@ -218,20 +253,27 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
 
     /// Returns the internal stream [Id] for this handle.
     pub fn stream_id(&self) -> Result<Id, Error> {
-        self.id.clone()
+        self.stream_id.clone()
     }
 
-    /// Synchronously writes (Key, Value, Time, Diff) updates.
+    /// Asynchronously persists `(Key, Value, Time, Diff)` updates.
     pub fn write<'a, I>(&self, updates: I) -> PFuture<SeqNo>
     where
         I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
     {
         let (tx, rx) = PFuture::new();
 
-        match self.id {
-            Ok(id) => {
+        match self.stream_id {
+            Ok(stream_id) => {
                 let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
-                self.runtime.write(vec![(id, updates.finish())], tx);
+                let updates = updates
+                    .finish()
+                    .into_iter()
+                    .map(|x| (stream_id, x))
+                    .collect();
+                self.client
+                    .sender
+                    .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Write(updates, tx)));
             }
             Err(ref e) => {
                 tx.fill(Err(e.clone()));
@@ -246,9 +288,15 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     pub fn seal(&self, upper: u64) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
 
-        match self.id {
-            Ok(id) => {
-                self.runtime.seal(&[id], upper, tx);
+        match self.stream_id {
+            Ok(stream_id) => {
+                self.client
+                    .sender
+                    .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Seal(
+                        vec![stream_id],
+                        upper,
+                        tx,
+                    )));
             }
             Err(ref e) => {
                 tx.fill(Err(e.clone()));
@@ -271,13 +319,17 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     /// come because we don't need them at their full resolution. A similar case is when we know
     /// that any outstanding queries have an `as_of` that is in the future of the seal: we can also
     /// pro-actively allow compaction of updates that did not yet arrive.
-    ///
     pub fn allow_compaction(&self, since: Antichain<u64>) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
 
-        match self.id {
-            Ok(id) => {
-                self.runtime.allow_compaction(&[(id, since)], tx);
+        match self.stream_id {
+            Ok(stream_id) => {
+                self.client
+                    .sender
+                    .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::AllowCompaction(
+                        vec![(stream_id, since)],
+                        tx,
+                    )));
             }
             Err(ref e) => {
                 tx.fill(Err(e.clone()));
@@ -291,15 +343,15 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
 /// A handle to construct a [ColumnarRecords] from a vector of records for writes.
 #[derive(Debug)]
 pub struct WriteReqBuilder<K: Codec, V: Codec> {
-    records: ColumnarRecordsBuilder,
+    records: ColumnarRecordsVecBuilder,
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
     _phantom: PhantomData<(K, V)>,
 }
 
 impl<K: Codec, V: Codec> WriteReqBuilder<K, V> {
-    /// Finalize a write request into [ColumnarRecords].
-    pub fn finish(&mut self) -> ColumnarRecords {
+    /// Finalize a write request into [Vec<ColumnarRecords>].
+    pub fn finish(&mut self) -> Vec<ColumnarRecords> {
         std::mem::take(&mut self.records).finish()
     }
 }
@@ -310,7 +362,7 @@ impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReq
         let size_hint = iter.size_hint();
 
         let mut builder = WriteReqBuilder {
-            records: ColumnarRecordsBuilder::default(),
+            records: ColumnarRecordsVecBuilder::default(),
             key_buf: Vec::new(),
             val_buf: Vec::new(),
             _phantom: PhantomData,
@@ -343,16 +395,16 @@ impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReq
 /// A handle for writing to multiple streams.
 #[derive(Debug, PartialEq, Eq)]
 pub struct MultiWriteHandle<K, V> {
-    ids: HashSet<Id>,
-    runtime: RuntimeClient,
+    stream_ids: HashSet<Id>,
+    client: RuntimeClient,
     _phantom: PhantomData<(K, V)>,
 }
 
 impl<K, V> Clone for MultiWriteHandle<K, V> {
     fn clone(&self) -> Self {
         MultiWriteHandle {
-            ids: self.ids.clone(),
-            runtime: self.runtime.clone(),
+            stream_ids: self.stream_ids.clone(),
+            client: self.client.clone(),
             _phantom: self._phantom,
         }
     }
@@ -362,16 +414,16 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     /// Returns a new [MultiWriteHandle] for the given streams.
     pub fn new(handles: &[&StreamWriteHandle<K, V>]) -> Result<Self, Error> {
         let mut stream_ids = HashSet::new();
-        let runtime = if let Some(handle) = handles.first() {
-            handle.runtime.clone()
+        let client = if let Some(handle) = handles.first() {
+            handle.client.clone()
         } else {
             return Err(Error::from("MultiWriteHandle received no streams"));
         };
         for handle in handles.iter() {
-            if handle.runtime.id != runtime.id {
+            if handle.client != client {
                 return Err(Error::from(format!(
                     "MultiWriteHandle got handles from two runtimes: {:?} and {:?}",
-                    runtime.id, handle.runtime.id
+                    client, handle.client
                 )));
             }
             // It's odd if there are duplicates but the semantics of what that
@@ -379,8 +431,8 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
             stream_ids.insert(handle.stream_id()?);
         }
         Ok(MultiWriteHandle {
-            ids: stream_ids,
-            runtime,
+            stream_ids,
+            client,
             _phantom: PhantomData,
         })
     }
@@ -401,23 +453,25 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     // StreamWriteHandle::write works.
     pub fn write_atomic(&self, updates: Vec<(Id, Vec<((K, V), u64, isize)>)>) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
-        for (id, _) in updates.iter() {
-            if !self.ids.contains(id) {
+        for (stream_id, _) in updates.iter() {
+            if !self.stream_ids.contains(stream_id) {
                 tx.fill(Err(Error::from(format!(
                     "MultiWriteHandle cannot write to stream: {:?}",
-                    id
+                    stream_id
                 ))));
                 return rx;
             }
         }
         let updates = updates
             .iter()
-            .map(|(id, updates)| {
+            .flat_map(|(id, updates)| {
                 let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
-                (*id, updates.finish())
+                updates.finish().into_iter().map(|x| (*id, x))
             })
             .collect();
-        self.runtime.write(updates, tx);
+        self.client
+            .sender
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Write(updates, tx)));
         rx
     }
 
@@ -428,16 +482,18 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     /// twice at the same timestamp, which we currently disallow).
     pub fn seal(&self, ids: &[Id], upper: u64) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
-        for id in ids {
-            if !self.ids.contains(id) {
+        for stream_id in ids {
+            if !self.stream_ids.contains(stream_id) {
                 tx.fill(Err(Error::from(format!(
                     "MultiWriteHandle cannot seal stream: {:?}",
-                    id
+                    stream_id
                 ))));
                 return rx;
             }
         }
-        self.runtime.seal(ids, upper, tx);
+        self.client
+            .sender
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Seal(ids.to_vec(), upper, tx)));
         rx
     }
 
@@ -448,16 +504,21 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     /// the stream twice at the same timestamp, which we currently disallow).
     pub fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)]) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
-        for (id, _) in id_sinces {
-            if !self.ids.contains(id) {
+        for (stream_id, _) in id_sinces {
+            if !self.stream_ids.contains(stream_id) {
                 tx.fill(Err(Error::from(format!(
                     "MultiWriteHandle cannot allow_compaction stream: {:?}",
-                    id
+                    stream_id
                 ))));
                 return rx;
             }
         }
-        self.runtime.allow_compaction(id_sinces, tx);
+        self.client
+            .sender
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::AllowCompaction(
+                id_sinces.to_vec(),
+                tx,
+            )));
         rx
     }
 }
@@ -535,13 +596,46 @@ impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
     }
 }
 
+#[derive(Debug)]
+struct StopRuntimeOnDrop {
+    runtime_id: RuntimeId,
+    sender: CmdReadSender,
+    handle: Mutex<Option<RuntimeHandle>>,
+}
+
+impl Drop for StopRuntimeOnDrop {
+    fn drop(&mut self) {
+        if let Err(err) = self.stop() {
+            tracing::error!("error while stopping dropped persist runtime: {}", err);
+        }
+    }
+}
+
+impl StopRuntimeOnDrop {
+    fn stop(&self) -> Result<(), Error> {
+        if let Some(handle) = self.handle.lock()?.take() {
+            let (tx, rx) = PFuture::new();
+            self.sender.send_cmd_read(CmdRead::Stop(tx));
+            // NB: Make sure there are no early returns before this `join`,
+            // otherwise the runtime thread might still be cleaning up when this
+            // returns (flushing out final writes, cleaning up LOCK files, etc).
+            //
+            // TODO: Regression test for this.
+            handle.join();
+            rx.recv()
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct StreamReadHandle<K, V> {
     name: String,
-    id: Result<Id, Error>,
-    runtime: RuntimeClient,
+    stream_id: Result<Id, Error>,
+    client: RuntimeReadClient,
     _phantom: PhantomData<(K, V)>,
 }
 
@@ -549,24 +643,14 @@ impl<K, V> Clone for StreamReadHandle<K, V> {
     fn clone(&self) -> Self {
         StreamReadHandle {
             name: self.name.clone(),
-            id: self.id.clone(),
-            runtime: self.runtime.clone(),
+            stream_id: self.stream_id.clone(),
+            client: self.client.clone(),
             _phantom: self._phantom,
         }
     }
 }
 
 impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
-    /// Returns a new [StreamReadHandle] for the given stream.
-    pub fn new(name: String, id: Result<Id, Error>, runtime: RuntimeClient) -> Self {
-        StreamReadHandle {
-            name,
-            id,
-            runtime,
-            _phantom: PhantomData,
-        }
-    }
-
     /// Returns the external stream name for this handle.
     pub fn stream_name(&self) -> &str {
         &self.name
@@ -574,14 +658,16 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 
     /// Returns a consistent snapshot of all previously persisted stream data.
     pub fn snapshot(&self) -> Result<DecodedSnapshot<K, V>, Error> {
-        let id = match self.id {
-            Ok(id) => id,
+        let stream_id = match self.stream_id {
+            Ok(stream_id) => stream_id,
             Err(ref e) => return Err(e.clone()),
         };
 
         // TODO: Make snapshot signature non-blocking.
         let (tx, rx) = PFuture::new();
-        self.runtime.snapshot(id, tx);
+        self.client
+            .sender
+            .send_cmd_read(CmdRead::Snapshot(stream_id, tx));
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
     }
@@ -596,15 +682,67 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         &self,
         sender: crossbeam_channel::Sender<ListenEvent>,
     ) -> Result<DecodedSnapshot<K, V>, Error> {
-        let id = match self.id {
-            Ok(id) => id,
+        let stream_id = match self.stream_id {
+            Ok(stream_id) => stream_id,
             Err(ref e) => return Err(e.clone()),
         };
 
         let (tx, rx) = PFuture::new();
-        self.runtime.listen(id, sender, tx);
+        self.client
+            .sender
+            .send_cmd_read(CmdRead::Listen(stream_id, sender, tx));
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeCmdSender {
+    metrics: Arc<Metrics>,
+    tx: crossbeam_channel::Sender<RuntimeCmd>,
+}
+
+impl RuntimeCmdSender {
+    pub fn send_cmd_read(&self, cmd: CmdRead) {
+        self.send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Read(cmd)));
+    }
+
+    pub fn send_runtime_cmd(&self, cmd: RuntimeCmd) {
+        self.metrics.cmd_queue_in.inc();
+        if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
+            // According to the docs, a SendError can only happen if the
+            // receiver has hung up, which in this case only happens if the
+            // thread has exited. The thread only exits if we send it a
+            // Cmd::Stop (or it panics).
+            cmd.fill_err_runtime_shutdown();
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum CmdReadSender {
+    Full(RuntimeCmdSender),
+    Read {
+        metrics: Arc<Metrics>,
+        tx: crossbeam_channel::Sender<CmdRead>,
+    },
+}
+
+impl CmdReadSender {
+    pub fn send_cmd_read(&self, cmd: CmdRead) {
+        match self {
+            CmdReadSender::Full(x) => x.send_cmd_read(cmd),
+            CmdReadSender::Read { metrics, tx } => {
+                metrics.cmd_queue_in.inc();
+                if let Err(crossbeam_channel::SendError(cmd)) = tx.send(cmd) {
+                    // According to the docs, a SendError can only happen if the
+                    // receiver has hung up, which in this case only happens if the
+                    // thread has exited. The thread only exits if we send it a
+                    // Cmd::Stop (or it panics).
+                    cmd.fill_err_runtime_shutdown();
+                }
+            }
+        }
     }
 }
 

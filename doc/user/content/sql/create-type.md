@@ -62,7 +62,7 @@ custom type's properties.
 
 ## Examples
 
-### Custom `list`s
+### Custom `list`
 
 ```sql
 CREATE TYPE int4_list AS LIST (element_type = int4);
@@ -75,7 +75,7 @@ SELECT '{1,2}'::int4_list::text AS custom_list;
  {1,2}
 ```
 
-### Nested custom `list`s
+### Nested custom `list`
 
 ```sql
 CREATE TYPE int4_list_list AS LIST (element_type = int4_list);
@@ -88,7 +88,7 @@ SELECT '{{1,2}}'::int4_list_list::text AS custom_nested_list;
  {{1,2}}
 ```
 
-### Custom `map`s
+### Custom `map`
 
 ```sql
 CREATE TYPE int4_map AS MAP (key_type=text, value_type=int4);
@@ -101,7 +101,7 @@ SELECT '{a=>1}'::int4_map::text AS custom_map;
  {a=>1}
 ```
 
-### Nested custom `map`s
+### Nested custom `map`
 
 ```sql
 CREATE TYPE int4_map_map AS MAP (key_type=text, value_type=int4_map);

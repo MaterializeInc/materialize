@@ -12,48 +12,40 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use build_info::BuildInfo;
-use differential_dataflow::trace::Description;
 use ore::metrics::MetricsRegistry;
-use timely::progress::Antichain;
-use tokio::runtime::Runtime;
+use tokio::runtime::Runtime as AsyncRuntime;
 use tokio::time;
 
-use crate::client::RuntimeClient;
-use crate::error::Error;
-use crate::indexed::arrangement::ArrangementSnapshot;
+use crate::client::{RuntimeClient, RuntimeReadClient};
+use crate::error::{Error, ErrorLog};
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::columnar::ColumnarRecords;
-use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Indexed, ListenEvent};
-use crate::pfuture::{PFuture, PFutureHandle};
-use crate::storage::{Blob, Log, SeqNo};
+use crate::indexed::{Cmd, CmdRead, Indexed};
+use crate::storage::{Blob, BlobRead, Log};
 use futures_executor::block_on;
 
-#[derive(Debug)]
-pub(crate) enum Cmd {
-    Register(String, (String, String), PFutureHandle<Id>),
-    Destroy(String, PFutureHandle<bool>),
-    Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
-    Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
-    GetDescription(String, PFutureHandle<Description<u64>>),
-    AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
-    Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
-    Listen(
-        Id,
-        crossbeam_channel::Sender<ListenEvent>,
-        PFutureHandle<ArrangementSnapshot>,
-    ),
-    Stop(PFutureHandle<()>),
+pub(crate) enum RuntimeCmd {
+    /// A command passed directly to [Indexed] for application.
+    IndexedCmd(Cmd),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
     Tick,
+}
+
+impl RuntimeCmd {
+    /// Fills self's response, if applicable, with Error::RuntimeShutdown.
+    pub fn fill_err_runtime_shutdown(self) {
+        match self {
+            RuntimeCmd::IndexedCmd(cmd) => cmd.fill_err_runtime_shutdown(),
+            RuntimeCmd::Tick => {}
+        }
+    }
 }
 
 /// Starts the runtime in a [std::thread].
@@ -78,7 +70,7 @@ pub fn start<L, B>(
     blob: B,
     build: BuildInfo,
     reg: &MetricsRegistry,
-    pool: Option<Arc<Runtime>>,
+    async_runtime: Option<Arc<AsyncRuntime>>,
 ) -> Result<RuntimeClient, Error>
 where
     L: Log + Send + 'static,
@@ -88,34 +80,24 @@ where
     let (tx, rx) = crossbeam_channel::unbounded();
     let metrics = Arc::new(Metrics::register_with(reg));
 
-    // Any usage of S3Blob requires a runtime context to be set. `Indexed::new`
-    // use the blob impl to start the recovery process, so make sure this stays
-    // early.
-    let pool = match pool {
+    let async_runtime = match async_runtime {
         Some(pool) => pool,
-        None => Arc::new(Runtime::new()?),
+        None => Arc::new(AsyncRuntime::new()?),
     };
-    let pool_guard = pool.enter();
 
     // Start up the runtime.
-    let blob = BlobCache::new(build, metrics.clone(), blob);
-    let maintainer = Maintainer::new(blob.clone(), pool.clone());
+    let blob = BlobCache::new(build, metrics.clone(), async_runtime.clone(), blob);
+    let maintainer = Maintainer::new(blob.clone(), async_runtime.clone());
     let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
     let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
-    let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
         .name("persist:runtime".into())
-        .spawn(move || {
-            let pool_guard = runtime_pool.enter();
-            while runtime.work() {}
-            // Explictly drop the pool guard so the lifetime is obvious.
-            drop(pool_guard);
-        })?;
+        .spawn(move || while runtime.work() {})?;
 
     // Start up the ticker thread.
     let ticker_tx = tx.clone();
-    let ticker_handle = pool.spawn(async move {
+    let ticker_handle = async_runtime.spawn(async move {
         // Try to keep worst case command response times to roughly `110% of
         // min_step_interval` by ensuring there's a tick relatively shortly
         // after a step becomes eligible. We could just as easily make this
@@ -123,7 +105,7 @@ where
         let mut interval = time::interval(config.min_step_interval / 10);
         loop {
             interval.tick().await;
-            match ticker_tx.send(Cmd::Tick) {
+            match ticker_tx.send(RuntimeCmd::Tick) {
                 Ok(_) => {}
                 Err(_) => {
                     // Runtime has shut down, we can stop ticking.
@@ -132,118 +114,153 @@ where
             }
         }
     });
-
-    // Construct the client.
-    let handles = Mutex::new(Some(RuntimeHandles {
+    let handles = RuntimeHandle(RuntimeHandleInner::Full {
+        id,
         impl_handle,
         ticker_handle,
-        ticker_pool: pool.clone(),
-    }));
-    let core = RuntimeCore {
-        handles,
-        tx,
-        metrics,
-    };
-    let client = RuntimeClient::new(id, Arc::new(core));
+        ticker_async_runtime: async_runtime,
+    });
 
-    // Explictly drop the pool guard so the lifetime is obvious.
-    drop(pool_guard);
-
-    Ok(client)
+    Ok(RuntimeClient::new(handles, tx, metrics))
 }
 
+/// Starts a read-only runtime in a [std::thread].
+///
+/// This returns a clone-able client handle. The runtime is stopped when any
+/// client calls [RuntimeClient::stop] or when all clients have been dropped.
+///
+/// If Some, the given [tokio::runtime::Runtime] is used for IO and cpu heavy
+/// operations. If None, a new Runtime is constructed for this. The latter
+/// requires that we are not in the context of an existing Runtime, so if this
+/// is the case, the caller must use the Some form.
+//
+// TODO: The rust doc above is still a bit of a lie. Actually use this runtime
+// for all IO and cpu heavy operations.
+//
+// TODO: The whole story around Runtime usage in persist is pretty awkward and
+// still pretty unprincipled. I think when we do the TODO to make the Log and
+// Blob storage traits async, this will clear up a bit.
+//
+// NB: This is pretty duplicative of start, but that's okay. It's already fairly
+// different and it's only going to get more so. DRYing this up wouldn't really
+// decrease the chance of bugs but it would decrease readability.
+pub fn start_read<L, B>(
+    blob: B,
+    build: BuildInfo,
+    reg: &MetricsRegistry,
+    async_runtime: Option<Arc<AsyncRuntime>>,
+) -> Result<RuntimeReadClient, Error>
+where
+    B: BlobRead + Send + 'static,
+{
+    // TODO: Is an unbounded channel the right thing to do here?
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let metrics = Arc::new(Metrics::register_with(reg));
+
+    let async_runtime = match async_runtime {
+        Some(async_runtime) => async_runtime,
+        None => Arc::new(AsyncRuntime::new()?),
+    };
+
+    // Start up the runtime.
+    let blob = BlobCache::new(build, metrics.clone(), async_runtime.clone(), blob);
+    let maintainer = Maintainer::new(blob.clone(), async_runtime);
+    let indexed = Indexed::new(ErrorLog, blob, maintainer, metrics.clone())?;
+    let mut runtime = RuntimeReadImpl::new(indexed, rx, metrics.clone());
+    let id = RuntimeId::new();
+    let impl_handle = thread::Builder::new()
+        .name("persist:runtime-read".into())
+        .spawn(move || while runtime.work() {})?;
+    let handle = RuntimeHandle(RuntimeHandleInner::Read { id, impl_handle });
+
+    Ok(RuntimeReadClient::new(handle, tx, metrics))
+}
+
+/// An opaque unique identifier for an instance of the persist runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct RuntimeId(u64);
+pub struct RuntimeId(u64);
 
 impl RuntimeId {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let mut h = DefaultHasher::new();
         Instant::now().hash(&mut h);
         RuntimeId(h.finish())
     }
 }
 
+/// A handle to a running instance of the persist runtime.
 #[derive(Debug)]
-struct RuntimeHandles {
-    impl_handle: JoinHandle<()>,
-    ticker_handle: tokio::task::JoinHandle<()>,
-    ticker_pool: Arc<Runtime>,
-}
+pub struct RuntimeHandle(RuntimeHandleInner);
 
 #[derive(Debug)]
-pub(crate) struct RuntimeCore {
-    handles: Mutex<Option<RuntimeHandles>>,
-    tx: crossbeam_channel::Sender<Cmd>,
-    metrics: Arc<Metrics>,
+enum RuntimeHandleInner {
+    Full {
+        id: RuntimeId,
+        impl_handle: JoinHandle<()>,
+        ticker_handle: tokio::task::JoinHandle<()>,
+        ticker_async_runtime: Arc<AsyncRuntime>,
+    },
+    Read {
+        id: RuntimeId,
+        impl_handle: JoinHandle<()>,
+    },
 }
 
-impl RuntimeCore {
-    pub(crate) fn send(&self, cmd: Cmd) {
-        self.metrics.cmd_queue_in.inc();
-        if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
-            // According to the docs, a SendError can only happen if the
-            // receiver has hung up, which in this case only happens if the
-            // thread has exited. The thread only exits if we send it a
-            // Cmd::Stop (or it panics).
-            match cmd {
-                Cmd::Stop(res) => {
-                    // Already stopped: no-op.
-                    res.fill(Ok(()))
+impl RuntimeHandle {
+    /// The unique id for this runtime.
+    pub fn id(&self) -> RuntimeId {
+        match self {
+            RuntimeHandle(RuntimeHandleInner::Full { id, .. }) => *id,
+            RuntimeHandle(RuntimeHandleInner::Read { id, .. }) => *id,
+        }
+    }
+
+    /// Block until this runtime shuts down.
+    ///
+    /// Similar to threads, etc, this doesn't initiate shutdown. That's
+    /// accomplished by first sending a [CmdRead::Stop].
+    pub fn join(self) {
+        match self {
+            RuntimeHandle(RuntimeHandleInner::Full {
+                id: _id,
+                impl_handle,
+                ticker_handle,
+                ticker_async_runtime,
+            }) => {
+                if let Err(_) = impl_handle.join() {
+                    // If the thread panic'd, then by definition it has been
+                    // stopped, so we can return an Ok. This is surprising,
+                    // though, so log a message. Unfortunately, there isn't
+                    // really a way to put the panic message in this log.
+                    tracing::error!("persist runtime thread panic'd");
                 }
-                Cmd::Register(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Destroy(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Write(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Seal(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::GetDescription(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Tick => {}
+                if let Err(err) = block_on(ticker_handle) {
+                    tracing::error!("persist ticker thread error'd: {:?}", err);
+                }
+                // Thread a copy of the Arc<AsyncRuntime> being used to drive
+                // ticker_handle to make sure the runtime doesn't shut down before
+                // ticker_handle has a chance to finish cleanly.
+                drop(ticker_async_runtime);
             }
-        }
-    }
-
-    pub(crate) fn stop(&self) -> Result<(), Error> {
-        if let Some(handles) = self.handles.lock()?.take() {
-            let (tx, rx) = PFuture::new();
-            self.send(Cmd::Stop(tx));
-            // NB: Make sure there are no early returns before this `join`,
-            // otherwise the runtime thread might still be cleaning up when this
-            // returns (flushing out final writes, cleaning up LOCK files, etc).
-            //
-            // TODO: Regression test for this.
-            if let Err(_) = handles.impl_handle.join() {
-                // If the thread panic'd, then by definition it has been
-                // stopped, so we can return an Ok. This is surprising, though,
-                // so log a message. Unfortunately, there isn't really a way to
-                // put the panic message in this log.
-                tracing::error!("persist runtime thread panic'd");
+            RuntimeHandle(RuntimeHandleInner::Read {
+                id: _id,
+                impl_handle,
+            }) => {
+                if let Err(_) = impl_handle.join() {
+                    // If the thread panic'd, then by definition it has been
+                    // stopped, so we can return an Ok. This is surprising,
+                    // though, so log a message. Unfortunately, there isn't
+                    // really a way to put the panic message in this log.
+                    tracing::error!("persist runtime thread panic'd");
+                }
             }
-            if let Err(err) = block_on(handles.ticker_handle) {
-                tracing::error!("persist ticker thread error'd: {:?}", err);
-            }
-            // Thread a copy of the Arc<Runtime> being used to drive
-            // ticker_handle to make sure the runtime doesn't shut down before
-            // ticker_handle has a chance to finish cleanly.
-            drop(handles.ticker_pool);
-            rx.recv()
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl Drop for RuntimeCore {
-    fn drop(&mut self) {
-        if let Err(err) = self.stop() {
-            tracing::error!("error while stopping dropped persist runtime: {}", err);
         }
     }
 }
 
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
-    rx: crossbeam_channel::Receiver<Cmd>,
+    rx: crossbeam_channel::Receiver<RuntimeCmd>,
     metrics: Arc<Metrics>,
     prev_step: Instant,
     min_step_interval: Duration,
@@ -285,7 +302,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     fn new(
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
-        rx: crossbeam_channel::Receiver<Cmd>,
+        rx: crossbeam_channel::Receiver<RuntimeCmd>,
         metrics: Arc<Metrics>,
     ) -> Self {
         RuntimeImpl {
@@ -334,45 +351,16 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         let run_start = Instant::now();
         for cmd in cmds {
             match cmd {
-                Cmd::Stop(res) => {
-                    // Finish up any pending work that we can before closing.
-                    if let Err(e) = self.indexed.step() {
-                        self.metrics.cmd_step_error_count.inc();
-                        tracing::warn!("error running step: {:?}", e);
-                    }
-                    res.fill(self.indexed.close());
-                    return false;
-                }
-                Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
-                    self.indexed
-                        .register(&id, &key_codec_name, &val_codec_name, res);
-                }
-                Cmd::Destroy(id, res) => {
-                    self.indexed.destroy(&id, res);
-                }
-                Cmd::Write(updates, res) => {
-                    self.metrics.cmd_write_count.inc();
-                    self.indexed.write(updates, res);
-                }
-                Cmd::Seal(ids, ts, res) => {
-                    self.indexed.seal(ids, ts, res);
-                }
-                Cmd::GetDescription(id_str, res) => {
-                    self.indexed.get_description(&id_str, res);
-                }
-                Cmd::AllowCompaction(id_sinces, res) => {
-                    self.indexed.allow_compaction(id_sinces, res);
-                }
-                Cmd::Snapshot(id, res) => {
-                    self.indexed.snapshot(id, res);
-                }
-                Cmd::Listen(id, sender, res) => {
-                    self.indexed.listen(id, sender, res);
-                }
-                Cmd::Tick => {
+                RuntimeCmd::Tick => {
                     // This is a no-op. It's only here to give us the
                     // opportunity to hit the step logic below on some minimum
                     // interval, even when no other commands are coming in.
+                }
+                RuntimeCmd::IndexedCmd(cmd) => {
+                    if !self.indexed.apply(cmd) {
+                        more_work = false;
+                        break;
+                    }
                 }
             }
             self.metrics.cmd_run_count.inc()
@@ -428,13 +416,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
         if need_step {
             self.prev_step = step_start;
-            if let Err(e) = self.indexed.step() {
-                self.metrics.cmd_step_error_count.inc();
-                // TODO: revisit whether we need to move this to a different log level
-                // depending on how spammy it ends up being. Alternatively, we
-                // may want to rate-limit our logging here.
-                tracing::warn!("error running step: {:?}", e);
-            }
+            self.indexed.step_or_log();
 
             self.metrics
                 .cmd_step_seconds
@@ -445,11 +427,59 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     }
 }
 
+struct RuntimeReadImpl<L: Log, B: BlobRead> {
+    indexed: Indexed<L, B>,
+    rx: crossbeam_channel::Receiver<CmdRead>,
+    metrics: Arc<Metrics>,
+}
+
+impl<L: Log, B: BlobRead> RuntimeReadImpl<L, B> {
+    fn new(
+        indexed: Indexed<L, B>,
+        rx: crossbeam_channel::Receiver<CmdRead>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
+        RuntimeReadImpl {
+            indexed,
+            rx,
+            metrics,
+        }
+    }
+
+    /// Synchronously waits for the next command, executes it, and responds.
+    ///
+    /// Returns false to indicate a graceful shutdown, true otherwise.
+    fn work(&mut self) -> bool {
+        let cmd = match self.rx.recv() {
+            Ok(cmd) => cmd,
+            Err(crossbeam_channel::RecvError) => {
+                // All Runtime handles hung up. Drop should have shut things down
+                // nicely, so this is unexpected.
+                return false;
+            }
+        };
+
+        let mut more_work = true;
+
+        let run_start = Instant::now();
+        if !self.indexed.apply_read(cmd) {
+            more_work = false;
+        }
+        self.metrics.cmd_run_count.inc();
+        self.metrics
+            .cmd_run_seconds
+            .inc_by(run_start.elapsed().as_secs_f64());
+
+        return more_work;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, OkErr, Probe};
     use timely::dataflow::ProbeHandle;
+    use timely::progress::Antichain;
 
     use crate::client::MultiWriteHandle;
     use crate::indexed::SnapshotExt;

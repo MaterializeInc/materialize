@@ -57,8 +57,7 @@ impl S3BlobConfig {
             loader = loader.credentials_provider(role_provider.build(default_provider));
         }
         let config = AwsConfig::from_loader(loader).await;
-        let client = mz_aws_util::s3::client(&config)
-            .map_err(|err| format!("connecting client: {}", err))?;
+        let client = mz_aws_util::s3::client(&config);
         Ok(S3BlobConfig {
             client,
             bucket,
@@ -70,7 +69,7 @@ impl S3BlobConfig {
     ///
     /// By default, persist tests that use external storage (like s3) are
     /// no-ops, so that `cargo test` does the right thing without any
-    /// configuration. To activate teh tests, set the
+    /// configuration. To activate the tests, set the
     /// `MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET` environment variable and
     /// ensure you have valid AWS credentials available in a location where the
     /// AWS Rust SDK can discovery them.
@@ -89,28 +88,22 @@ impl S3BlobConfig {
     /// `ci/test/cargo-test/mzcompose.yml`.
     ///
     /// For a Materialize developer, to opt in to these tests locally for
-    /// development, use the following values (potentially by putting them in a
+    /// development, follow the AWS access guide:
+    ///
+    ///     https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md
+    ///
+    /// then use the following values (potentially by putting them in a
     /// shell script and sourcing it if you'll do this often):
     ///
     /// ```shell
-    ///  export MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete"
-    ///  export AWS_DEFAULT_REGION="us-east-2"
-    ///  export AWS_ACCESS_KEY_ID="<scratch key>""
-    ///  export AWS_SECRET_ACCESS_KEY="<scratch secret>"
-    ///  export AWS_SESSION_TOKEN="<scratch token>"
+    /// export MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete"
+    /// export AWS_DEFAULT_REGION="us-east-2"
+    /// export AWS_PROFILE="mz-scratch-admin"
+    /// aws sso login
     /// ```
-    ///
-    /// You can get these auth envs by going to Materialize's AWS SSO page,
-    /// selecting the "Materialize Scratch" account, and then the "Command line
-    /// or programmatic access" option. You might have to update these if you
-    /// get auth failures.
     ///
     /// Non-Materialize developers will have to set up their own auto-deleting
     /// bucket.
-    // TODO(benesch): when the AWS Rust SDK supports reading SSO credentials,
-    // we should instruct Materialize developers to set
-    // `AWS_PROFILE=mz-scratch-admin` rather than copy/pasting credentials from
-    // the web interface.
     #[cfg(test)]
     pub async fn new_for_test() -> Result<Option<Self>, Error> {
         use uuid::Uuid;

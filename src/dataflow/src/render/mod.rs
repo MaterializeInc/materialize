@@ -133,6 +133,7 @@ use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
 
 mod context;
+mod envelope_none;
 mod flat_map;
 mod join;
 mod reduce;
@@ -143,30 +144,37 @@ mod top_k;
 mod upsert;
 
 /// Worker-local state that is maintained across dataflows.
-pub struct RenderState {
+///
+/// This state is restricted to the COMPUTE state, the deterministic, idempotent work
+/// done between data ingress and egress.
+pub struct ComputeState {
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
+    /// Tokens that should be dropped when a dataflow is dropped to clean up
+    /// associated state.
+    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    /// Shared buffer with TAIL operator instances by which they can respond.
+    ///
+    /// The entries are pairs of sink identifier (to identify the tail instance)
+    /// and the response itself.
+    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+}
+
+/// Worker-local state related to the ingress or egress of collections of data.
+pub struct StorageState {
     /// Handles to local inputs, keyed by ID.
     pub local_inputs: HashMap<GlobalId, LocalInput>,
     /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
-    /// Tokens that should be dropped when a dataflow is dropped to clean up
-    /// associated state.
-    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    /// Metrics reported by all dataflows.
+    pub metrics: Metrics,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Metrics reported by all dataflows.
-    pub metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
-    /// Shared buffer with TAIL operator instances by which they can respond.
-    ///
-    /// The entries are pairs of sink identifier (to identify the tail instance)
-    /// and the response itself.
-    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.
@@ -187,7 +195,8 @@ pub struct RelevantTokens {
 /// Build a dataflow from a description.
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
-    render_state: &mut RenderState,
+    compute_state: &mut ComputeState,
+    storage_state: &mut StorageState,
     dataflow: DataflowDescription<plan::Plan>,
     now: NowFn,
     source_metrics: &SourceBaseMetrics,
@@ -219,22 +228,37 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (src_id, (src, orig_id)) in &dataflow.source_imports {
-                context.import_source(
-                    render_state,
-                    &mut tokens,
-                    region,
-                    materialized_logging.clone(),
-                    src_id.clone(),
-                    src.clone(),
-                    orig_id.clone(),
-                    now.clone(),
-                    source_metrics,
-                );
+                let (collection_bundle, (source_token, additional_tokens)) =
+                    crate::render::sources::import_source(
+                        &context.debug_name,
+                        context.dataflow_id,
+                        &context.as_of_frontier,
+                        storage_state,
+                        region,
+                        materialized_logging.clone(),
+                        src_id.clone(),
+                        src.clone(),
+                        orig_id.clone(),
+                        now.clone(),
+                        source_metrics,
+                    );
+
+                // Associate collection bundle with the source identifier.
+                context.insert_id(Id::Global(*src_id), collection_bundle);
+
+                // Associate returned tokens with the source identifier.
+                let prior = tokens.source_tokens.insert(*src_id, source_token);
+                assert!(prior.is_none());
+                tokens
+                    .additional_tokens
+                    .entry(*src_id)
+                    .or_insert_with(Vec::new)
+                    .extend(additional_tokens);
             }
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(render_state, &mut tokens, scope, region, *idx_id, &idx.0);
+                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
             }
 
             // We first determine indexes and sinks to export, then build the declared object, and
@@ -264,13 +288,14 @@ pub fn build_dataflow<A: Allocate>(
 
             // Export declared indexes.
             for (idx_id, imports, idx) in indexes {
-                context.export_index(render_state, &mut tokens, imports, idx_id, &idx);
+                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
             }
 
             // Export declared sinks.
             for (sink_id, imports, sink) in sinks {
                 context.export_sink(
-                    render_state,
+                    compute_state,
+                    storage_state,
                     &mut tokens,
                     imports,
                     sink_id,
@@ -288,14 +313,14 @@ where
 {
     fn import_index(
         &mut self,
-        render_state: &mut RenderState,
+        compute_state: &mut ComputeState,
         tokens: &mut RelevantTokens,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
-        if let Some(traces) = render_state.traces.get_mut(&idx_id) {
+        if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 scope,
@@ -346,7 +371,7 @@ where
 
     fn export_index(
         &mut self,
-        render_state: &mut RenderState,
+        compute_state: &mut ComputeState,
         tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
@@ -372,7 +397,7 @@ where
         });
         match bundle.arrangement(&idx.keys) {
             Some(ArrangementFlavor::Local(oks, errs, permutation)) => {
-                render_state.traces.set(
+                compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace, permutation).with_drop(tokens),
                 );
@@ -380,8 +405,8 @@ where
             Some(ArrangementFlavor::Trace(gid, _, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
-                let trace = render_state.traces.get(&gid).unwrap().clone();
-                render_state.traces.set(idx_id, trace);
+                let trace = compute_state.traces.get(&gid).unwrap().clone();
+                compute_state.traces.set(idx_id, trace);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());

@@ -744,7 +744,7 @@ async fn main() -> anyhow::Result<()> {
                         })
                         .expect("unable to produce to Kafka");
                 }
-                producer.flush(Timeout::Never);
+                producer.flush(Timeout::Never).unwrap();
             });
         }
     })

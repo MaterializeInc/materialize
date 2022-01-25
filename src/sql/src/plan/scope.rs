@@ -88,6 +88,13 @@ pub struct ScopeItem {
     /// variables in outer scopes that would otherwise be valid to reference,
     /// but accessing them needs to produce an error.
     pub lateral_error_if_referenced: bool,
+    /// For table functions in scalar positions, this flag is true for the
+    /// ordinality column. If true, then this column represents an "exists" flag
+    /// for the entire row of the table function. In that case, this column must
+    /// be excluded from `*` expansion. If the corresponding datum is `NULL`, then
+    /// `*` expansion should yield a single `NULL` instead of a record with various
+    /// datums.
+    pub is_exists_column_for_a_table_function_that_was_in_the_target_list: bool,
     // Force use of the constructor methods.
     _private: (),
 }
@@ -127,6 +134,7 @@ impl ScopeItem {
             from_single_column_function: false,
             allow_unqualified_references: true,
             lateral_error_if_referenced: false,
+            is_exists_column_for_a_table_function_that_was_in_the_target_list: false,
             _private: (),
         }
     }

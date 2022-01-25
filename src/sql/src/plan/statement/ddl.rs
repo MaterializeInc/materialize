@@ -20,7 +20,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
-use interchange::protobuf::NormalizedProtobufMessageName;
 use itertools::Itertools;
 use regex::Regex;
 use reqwest::Url;
@@ -1148,18 +1147,14 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 {
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
-                        message_name: NormalizedProtobufMessageName::new(
-                            value.message_name.clone(),
-                        ),
+                        message_name: value.message_name.clone(),
                         confluent_wire_format: true,
                     });
                     if let Some(key) = key {
                         return Ok(SourceDataEncoding::KeyValue {
                             key: DataEncoding::Protobuf(ProtobufEncoding {
                                 descriptors: strconv::parse_bytes(&key.schema)?,
-                                message_name: NormalizedProtobufMessageName::new(
-                                    key.message_name.clone(),
-                                ),
+                                message_name: key.message_name.clone(),
                                 confluent_wire_format: true,
                             }),
                             value,
@@ -1183,7 +1178,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
 
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
-                    message_name: NormalizedProtobufMessageName::new(message_name.to_owned()),
+                    message_name: message_name.to_owned(),
                     confluent_wire_format: false,
                 })
             }
@@ -1433,6 +1428,28 @@ fn kafka_sink_builder(
     };
     let config_options = kafka_util::extract_config(with_options)?;
 
+    let avro_key_fullname = match with_options.remove("avro_key_fullname") {
+        Some(Value::String(s)) => Some(s),
+        None => None,
+        Some(_) => bail!("avro_key_fullname must be a string"),
+    };
+
+    if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
+        bail!("Cannot specify avro_key_fullname without a corresponding KEY field");
+    }
+
+    let avro_value_fullname = match with_options.remove("avro_value_fullname") {
+        Some(Value::String(s)) => Some(s),
+        None => None,
+        Some(_) => bail!("avro_value_fullname must be a string"),
+    };
+
+    if key_desc_and_indices.is_some()
+        && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
+    {
+        bail!("Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names");
+    }
+
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
             csr_connector:
@@ -1456,6 +1473,8 @@ fn kafka_sink_builder(
             let include_transaction =
                 reuse_topic || consistency_topic.is_some() || consistency.is_some();
             let schema_generator = AvroSchemaGenerator::new(
+                avro_key_fullname.as_deref(),
+                avro_value_fullname.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),

@@ -204,9 +204,14 @@ ENV RANLIB=$ARCH_GCC-unknown-linux-gnu-ranlib
 ENV CPP=$ARCH_GCC-unknown-linux-gnu-cpp
 ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
 ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
+ENV CXXSTDLIB=static=stdc++
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
+ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/"
+ENV TARGET_AR=$AR
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
+ENV TARGET_CXXSTDLIB=static=stdc++
+ENV TARGET_RANLIB=$RANLIB
 ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc

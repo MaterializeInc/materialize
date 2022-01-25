@@ -15,14 +15,14 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use timely::progress::Antichain;
 use timely::PartialOrder;
-use tokio::runtime::Runtime;
+use tokio::runtime::Runtime as AsyncRuntime;
 
 use crate::error::Error;
 use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
 use crate::pfuture::PFuture;
-use crate::storage::Blob;
+use crate::storage::{Blob, BlobRead};
 
 /// A request to merge two trace batches and write the results to blob storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,24 +50,26 @@ pub struct CompactTraceRes {
 // TODO: Add migrating records from unsealed to trace as well as deletion of
 // batches.
 #[derive(Debug)]
-pub struct Maintainer<B: Blob> {
+pub struct Maintainer<B> {
     // TODO: It feels like a smell to wrap BlobCache in an Arc when most of its
     // internals are already wrapped in Arcs. As of when this was written, the
     // only exception is prev_meta_len, which really is only used from a single
     // thread. Perhaps we should split the Meta parts out of BlobCache.
     blob: Arc<BlobCache<B>>,
-    runtime: Arc<Runtime>,
+    async_runtime: Arc<AsyncRuntime>,
+}
+
+impl<B: BlobRead> Maintainer<B> {
+    /// Returns a new [Maintainer].
+    pub fn new(blob: BlobCache<B>, async_runtime: Arc<AsyncRuntime>) -> Self {
+        Maintainer {
+            blob: Arc::new(blob),
+            async_runtime,
+        }
+    }
 }
 
 impl<B: Blob> Maintainer<B> {
-    /// Returns a new [Maintainer].
-    pub fn new(blob: BlobCache<B>, runtime: Arc<Runtime>) -> Self {
-        Maintainer {
-            blob: Arc::new(blob),
-            runtime,
-        }
-    }
-
     /// Asynchronously runs the requested compaction on the work pool provided
     /// at construction time.
     pub fn compact_trace(&self, req: CompactTraceReq) -> PFuture<CompactTraceRes> {
@@ -79,7 +81,7 @@ impl<B: Blob> Maintainer<B> {
         // TODO: Push the spawn_blocking down into the cpu-intensive bits and
         // use spawn here once the storage traits are made async.
         let _ = self
-            .runtime
+            .async_runtime
             .spawn_blocking(move || tx.fill(Self::compact_trace_blocking(blob, req)));
         rx
     }
@@ -176,7 +178,7 @@ impl<B: Blob> Maintainer<B> {
 #[cfg(test)]
 mod tests {
     use differential_dataflow::trace::Description;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::gen::persist::ProtoBatchFormat;
     use crate::indexed::metrics::Metrics;
@@ -194,12 +196,14 @@ mod tests {
 
     #[test]
     fn compact_trace() -> Result<(), Error> {
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            async_runtime.clone(),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let maintainer = Maintainer::new(blob.clone(), async_runtime);
 
         let b0 = BlobTraceBatch {
             desc: desc_from(0, 1, 0),
@@ -266,12 +270,14 @@ mod tests {
 
     #[test]
     fn compact_trace_errors() -> Result<(), Error> {
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            async_runtime.clone(),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob, Arc::new(Runtime::new()?));
+        let maintainer = Maintainer::new(blob, async_runtime);
 
         // Non-contiguous batch descs
         let req = CompactTraceReq {

@@ -59,7 +59,7 @@ DELETE FROM t1;
 1
 
 ! SELECT * FROM t1_update;
-Invalid data in source, saw retractions (1) for row that does not exist
+contains:Invalid data in source, saw retractions (1) for row that does not exist
 
 ! SELECT * FROM t1_delete;
-Invalid data in source, saw retractions (1) for row that does not exist
+contains:Invalid data in source, saw retractions (1) for row that does not exist

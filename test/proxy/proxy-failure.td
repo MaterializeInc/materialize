@@ -13,7 +13,7 @@
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-doesntmatter-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-error trying to connect: tcp connect error: Cannot assign requested address (os error 99)
+contains:error trying to connect: tcp connect error: Cannot assign requested address (os error 99)
 
 ! CREATE MATERIALIZED SOURCE s3_all
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'doesnt-matter'
@@ -25,4 +25,4 @@ error trying to connect: tcp connect error: Cannot assign requested address (os 
     token = '${testdrive.aws-token}'
   )
   FORMAT TEXT;
-Cannot assign requested address (os error 99)
+contains:Cannot assign requested address (os error 99)

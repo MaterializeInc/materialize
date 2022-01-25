@@ -27,13 +27,16 @@ use std::fmt;
 use std::iter;
 use std::mem;
 
+use uuid::Uuid;
+
 use expr::{func as expr_func, LocalId};
 use itertools::Itertools;
+use ore::collections::CollectionExt;
 use ore::stack::{CheckedRecursion, RecursionGuard};
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
-use sql_parser::ast::visit::{self, Visit};
+use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
@@ -1233,7 +1236,7 @@ fn plan_query_inner(
 
     let (mut result, scope, finishing) = match &q.body {
         SetExpr::Select(s) => {
-            let plan = plan_view_select(qcx, s, &q.order_by)?;
+            let plan = plan_view_select(qcx, *s.clone(), q.order_by.clone())?;
             let finishing = RowSetFinishing {
                 order_by: plan.order_by,
                 project: plan.project,
@@ -1305,8 +1308,8 @@ fn plan_set_expr(
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     match q {
         SetExpr::Select(select) => {
-            let order_by_exprs = &[];
-            let plan = plan_view_select(qcx, select, order_by_exprs)?;
+            let order_by_exprs = Vec::new();
+            let plan = plan_view_select(qcx, *select.clone(), order_by_exprs)?;
             // We didn't provide any `order_by_exprs`, so `plan_view_select`
             // should not have planned any ordering.
             assert!(plan.order_by.is_empty());
@@ -1515,21 +1518,16 @@ struct SelectPlan {
 /// former class, see `plan_view_select`.
 fn plan_view_select(
     qcx: &QueryContext,
-    s: &Select<Aug>,
-    order_by_exprs: &[OrderByExpr<Aug>],
+    mut s: Select<Aug>,
+    mut order_by_exprs: Vec<OrderByExpr<Aug>>,
 ) -> Result<SelectPlan, PlanError> {
-    let Select {
-        distinct,
-        projection,
-        from,
-        selection,
-        group_by,
-        having,
-        options,
-    } = s;
+    // TODO: Both `s` and `order_by_exprs` are not references because the
+    // AggregateTableFuncVisitor needs to be able to rewrite the expressions for
+    // table function support (the UUID mapping). Attempt to change this so callers
+    // don't need to clone the Select.
 
     // Extract hints about group size if there are any
-    let mut options = crate::normalize::options(options);
+    let mut options = crate::normalize::options(&s.options);
 
     let option = options.remove("expected_group_size");
 
@@ -1540,8 +1538,8 @@ fn plan_view_select(
     };
 
     // Step 1. Handle FROM clause, including joins.
-    let (mut relation_expr, from_scope) =
-        from.iter().fold(Ok(plan_join_identity()), |l, twj| {
+    let (mut relation_expr, mut from_scope) =
+        s.from.iter().fold(Ok(plan_join_identity()), |l, twj| {
             let (left, left_scope) = l?;
             plan_join(
                 qcx,
@@ -1557,22 +1555,8 @@ fn plan_view_select(
             )
         })?;
 
-    // Checks if an unknown column error was the result of not including that
-    // column in the GROUP BY clause and produces a friendlier error instead.
-    let check_ungrouped_col = |e| match e {
-        PlanError::UnknownColumn { table, column } => {
-            match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
-                Ok(ColumnRef { level: 0, column }) => {
-                    PlanError::ungrouped_column(&from_scope.items[column])
-                }
-                _ => PlanError::UnknownColumn { table, column },
-            }
-        }
-        e => e,
-    };
-
     // Step 2. Handle WHERE clause.
-    if let Some(selection) = &selection {
+    if let Some(selection) = &s.selection {
         let ecx = &ExprContext {
             qcx,
             name: "WHERE clause",
@@ -1588,15 +1572,27 @@ fn plan_view_select(
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
-    // Step 3. Gather aggregates.
-    let aggregates = {
-        let mut aggregate_visitor = AggregateFuncVisitor::new(&qcx.scx);
-        aggregate_visitor.visit_select(&s);
-        for o in order_by_exprs {
-            aggregate_visitor.visit_order_by_expr(o);
+    // Step 3. Gather aggregates and table functions.
+    let (aggregates, table_funcs) = {
+        let mut visitor = AggregateTableFuncVisitor::new(&qcx.scx);
+        visitor.visit_select_mut(&mut s);
+        for o in order_by_exprs.iter_mut() {
+            visitor.visit_order_by_expr_mut(o);
         }
-        aggregate_visitor.into_result()?
+        visitor.into_result()?
     };
+    let mut table_func_names: HashMap<String, Ident> = HashMap::new();
+    if !table_funcs.is_empty() {
+        let (expr, scope) = plan_scalar_table_funcs(
+            &qcx,
+            table_funcs,
+            &mut table_func_names,
+            &relation_expr,
+            &from_scope,
+        )?;
+        relation_expr = relation_expr.join(expr, HirScalarExpr::literal_true(), JoinKind::Inner);
+        from_scope = from_scope.product(scope)?;
+    }
 
     // Step 4. Expand SELECT clause.
     let projection = {
@@ -1610,11 +1606,11 @@ fn plan_view_select(
             allow_windows: true,
         };
         let mut out = vec![];
-        for si in projection {
-            if *si == SelectItem::Wildcard && from.is_empty() {
+        for si in &s.projection {
+            if *si == SelectItem::Wildcard && s.from.is_empty() {
                 sql_bail!("SELECT * with no tables specified is not valid");
             }
-            out.extend(expand_select_item(&ecx, si)?);
+            out.extend(expand_select_item(&ecx, si, &table_func_names)?);
         }
         out
     };
@@ -1635,7 +1631,7 @@ fn plan_view_select(
         let mut group_exprs = vec![];
         let mut group_scope = Scope::empty();
         let mut select_all_mapping = BTreeMap::new();
-        for group_expr in group_by {
+        for group_expr in &s.group_by {
             let (group_expr, expr) = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();
             // Repeated expressions in GROUP BY confuse name resolution later,
@@ -1681,12 +1677,12 @@ fn plan_view_select(
         };
         let mut agg_exprs = vec![];
         for sql_function in aggregates {
-            agg_exprs.push(plan_aggregate(ecx, sql_function)?);
+            agg_exprs.push(plan_aggregate(ecx, &sql_function)?);
             group_scope
                 .items
                 .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
         }
-        if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
+        if !agg_exprs.is_empty() || !group_key.is_empty() || s.having.is_some() {
             // apply GROUP BY / aggregates
             relation_expr =
                 relation_expr
@@ -1702,8 +1698,22 @@ fn plan_view_select(
         }
     };
 
+    // Checks if an unknown column error was the result of not including that
+    // column in the GROUP BY clause and produces a friendlier error instead.
+    let check_ungrouped_col = |e| match e {
+        PlanError::UnknownColumn { table, column } => {
+            match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
+                Ok(ColumnRef { level: 0, column }) => {
+                    PlanError::ungrouped_column(&from_scope.items[column])
+                }
+                _ => PlanError::UnknownColumn { table, column },
+            }
+        }
+        e => e,
+    };
+
     // Step 6. Handle HAVING clause.
-    if let Some(having) = having {
+    if let Some(having) = s.having {
         let ecx = &ExprContext {
             qcx,
             name: "HAVING clause",
@@ -1713,7 +1723,7 @@ fn plan_view_select(
             allow_subqueries: true,
             allow_windows: false,
         };
-        let expr = plan_expr(ecx, having)
+        let expr = plan_expr(ecx, &having)
             .map_err(check_ungrouped_col)?
             .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
@@ -1783,12 +1793,12 @@ fn plan_view_select(
                 allow_subqueries: true,
                 allow_windows: true,
             },
-            order_by_exprs,
+            &order_by_exprs,
             &output_columns,
         )
         .map_err(check_ungrouped_col)?;
 
-        match distinct {
+        match s.distinct {
             None => relation_expr = relation_expr.map(map_exprs),
             Some(Distinct::EntireRow) => {
                 if relation_type.arity() == 0 {
@@ -1821,7 +1831,7 @@ fn plan_view_select(
                 };
 
                 let mut distinct_exprs = vec![];
-                for expr in exprs {
+                for expr in &exprs {
                     let expr = plan_order_by_or_distinct_expr(ecx, expr, &output_columns)
                         .map_err(check_ungrouped_col)?;
                     distinct_exprs.push(expr);
@@ -1898,6 +1908,45 @@ fn plan_view_select(
         order_by,
         project: project_key,
     })
+}
+
+fn plan_scalar_table_funcs(
+    qcx: &QueryContext,
+    table_funcs: HashMap<TableFunction<Aug>, String>,
+    table_func_names: &mut HashMap<String, Ident>,
+    relation_expr: &HirRelationExpr,
+    from_scope: &Scope,
+) -> Result<(HirRelationExpr, Scope), PlanError> {
+    let rows_from_qcx = qcx.derived_context(from_scope.clone(), qcx.relation_type(&relation_expr));
+    let (expr, mut scope, num_cols) =
+        plan_rows_from_internal(&rows_from_qcx, table_funcs.keys(), None)?;
+    for (table_func, id) in table_funcs.iter() {
+        table_func_names.insert(id.clone(), table_func.name.0.last().unwrap().clone());
+    }
+    // Munge the scope so table names match with the generated ids.
+    let mut i = 0;
+    for (id, num_cols) in table_funcs.values().zip(num_cols) {
+        for _ in 0..num_cols {
+            scope.items[i].table_name = Some(PartialName {
+                database: None,
+                schema: None,
+                item: id.clone(),
+            });
+            scope.items[i].from_single_column_function = num_cols == 1;
+            i += 1;
+        }
+        // Ordinality column. This doubles as the
+        // `is_exists_column_for_a_table_function_that_was_in_the_target_list` later on
+        // because it only needs to be NULL or not.
+        scope.items[i].table_name = Some(PartialName {
+            database: None,
+            schema: None,
+            item: id.clone(),
+        });
+        scope.items[i].is_exists_column_for_a_table_function_that_was_in_the_target_list = true;
+        i += 1;
+    }
+    Ok((expr, scope))
 }
 
 /// Plans an expression in a `GROUP BY` clause.
@@ -2144,6 +2193,9 @@ fn plan_table_factor(
 ///
 /// This function creates a HirRelationExpr that follows the structure of the
 /// latter query.
+///
+/// `with_ordinality` can be used to have the output expression contain a
+/// single coalesced ordinality column at the end of the entire expression.
 fn plan_rows_from(
     qcx: &QueryContext,
     functions: &[TableFunction<Aug>],
@@ -2156,14 +2208,89 @@ fn plan_rows_from(
         return plan_solitary_table_function(qcx, function, alias, with_ordinality);
     }
 
+    // Per PostgreSQL, all scope items take the name of the first function
+    // (unless aliased).
+    // See: https://github.com/postgres/postgres/blob/639a86e36/src/backend/parser/parse_relation.c#L1701-L1705
+    let (expr, mut scope, num_cols) =
+        plan_rows_from_internal(qcx, functions, Some(&functions[0].name))?;
+
+    // Columns tracks the set of columns we will keep in the projection.
+    let mut columns = Vec::new();
+    let mut offset = 0;
+    // Retain table function's non-ordinality columns.
+    for (idx, cols) in num_cols.into_iter().enumerate() {
+        for i in 0..cols {
+            columns.push(offset + i);
+        }
+        offset += cols + 1;
+
+        // Remove the ordinality column from the scope, accounting for previous scope
+        // changes from this loop.
+        scope.items.remove(offset - idx - 1);
+    }
+
+    // If `WITH ORDINALITY` was specified, include the coalesced ordinality
+    // column. Otherwise remove it from the scope.
+    if with_ordinality {
+        columns.push(scope.items.len());
+    } else {
+        scope.items.pop();
+    }
+
+    let expr = expr.project(columns);
+
+    let scope = plan_table_alias(scope, alias)?;
+    Ok((expr, scope))
+}
+
+/// Plans an expression coalescing multiple table functions. Each table
+/// function is followed by its row ordinality. The entire expression is
+/// followed by the coalesced row ordinality.
+///
+/// The returned Scope will set all item's table_name's to the `table_name`
+/// parameter if it is `Some`. If `None`, they will be the name of each table
+/// function.
+///
+/// The returned `Vec<usize>` is the number of (non-ordinality) columns from
+/// each table function.
+///
+/// For example, with table functions tf1 returning 1 column (a) and tf2
+/// returning 2 columns (b, c), this function will return an expr 6 columns:
+///
+/// - tf1.a
+/// - tf1.ordinality
+/// - tf2.b
+/// - tf2.c
+/// - tf2.ordinality
+/// - coalesced_ordinality
+///
+/// And a `Vec<usize>` of `[1, 2]`.
+fn plan_rows_from_internal<'a>(
+    qcx: &QueryContext,
+    functions: impl IntoIterator<Item = &'a TableFunction<Aug>>,
+    table_name: Option<&UnresolvedObjectName>,
+) -> Result<(HirRelationExpr, Scope, Vec<usize>), PlanError> {
+    let mut functions = functions.into_iter();
+    let mut num_cols = Vec::new();
+
     // Join together each of the table functions in turn. The last column is
     // always the column to join against and is maintained to be the coalesence
     // of the row number column for all prior functions.
-    let (mut left_expr, mut left_scope) = plan_table_function_internal(&qcx, &functions[0], true)?;
-    for function in &functions[1..] {
+    let (mut left_expr, mut left_scope) =
+        plan_table_function_internal(&qcx, functions.next().unwrap(), true, table_name)?;
+    num_cols.push(left_scope.len() - 1);
+    // Create the coalesced ordinality column.
+    left_expr = left_expr.map(vec![HirScalarExpr::column(left_scope.len() - 1)]);
+    left_scope
+        .items
+        .push(ScopeItem::from_column_name("ordinality"));
+
+    for function in functions {
         // The right hand side of a join must be planned in a new scope.
         let qcx = qcx.empty_derived_context();
-        let (right_expr, right_scope) = plan_table_function_internal(&qcx, function, true)?;
+        let (right_expr, mut right_scope) =
+            plan_table_function_internal(&qcx, function, true, table_name)?;
+        num_cols.push(right_scope.len() - 1);
         let left_col = left_scope.len() - 1;
         let right_col = left_scope.len() + right_scope.len() - 1;
         let on = HirScalarExpr::CallBinary {
@@ -2179,37 +2306,22 @@ fn plan_rows_from(
                     HirScalarExpr::column(left_col),
                     HirScalarExpr::column(right_col),
                 ],
-            }])
-            .project(
-                (0..left_col) // non-ordinality columns from left function
-                    .chain(left_col + 1..right_col) // non-ordinality columns from right function
-                    .chain(iter::once(right_col + 1)) // new coalesced ordinality column
-                    .collect(),
-            );
-        left_scope.items.pop();
+            }]);
+
+        // Project off the previous iteration's coalesced column, but keep both of this
+        // iteration's ordinality columns.
+        left_expr = left_expr.project(
+            (0..left_col) // non-coalesced ordinality columns from left function
+                .chain(left_col + 1..right_col + 2) // non-ordinality columns from right function
+                .collect(),
+        );
+        // Move the coalesced ordinality column.
+        right_scope.items.push(left_scope.items.pop().unwrap());
+
         left_scope.items.extend(right_scope.items);
     }
 
-    // If `WITH ORDINALITY` was not specified, project off the ordinality
-    // column.
-    if !with_ordinality {
-        left_expr = left_expr.project((0..left_scope.len() - 1).collect());
-        left_scope.items.pop();
-    }
-
-    // Per PostgreSQL, all scope items take the name of the first function
-    // (unless aliased).
-    // See: https://github.com/postgres/postgres/blob/639a86e36/src/backend/parser/parse_relation.c#L1701-L1705
-    for item in &mut left_scope.items {
-        item.table_name = Some(PartialName {
-            database: None,
-            schema: None,
-            item: normalize::unresolved_object_name(functions[0].name.clone())?.item,
-        });
-    }
-    left_scope = plan_table_alias(left_scope, alias)?;
-
-    Ok((left_expr, left_scope))
+    Ok((left_expr, left_scope, num_cols))
 }
 
 /// Plans a table function that appears alone, i.e., that is not part of a `ROWS
@@ -2221,7 +2333,7 @@ fn plan_solitary_table_function(
     alias: Option<&TableAlias>,
     with_ordinality: bool,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let (expr, mut scope) = plan_table_function_internal(qcx, function, with_ordinality)?;
+    let (expr, mut scope) = plan_table_function_internal(qcx, function, with_ordinality, None)?;
 
     let single_column_function = scope.len() == 1 + if with_ordinality { 1 } else { 0 };
     if single_column_function {
@@ -2271,6 +2383,7 @@ fn plan_table_function_internal(
     qcx: &QueryContext,
     TableFunction { name, args }: &TableFunction<Aug>,
     with_ordinality: bool,
+    table_name: Option<&UnresolvedObjectName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     if *name == UnresolvedObjectName::unqualified("values") {
         // Produce a nice error message for the common typo
@@ -2301,10 +2414,14 @@ fn plan_table_function_internal(
         }
     };
     let resolved_name = normalize::unresolved_object_name(name.clone())?;
+    let table_name = match table_name {
+        Some(table_name) => normalize::unresolved_object_name(table_name.clone())?.item,
+        None => resolved_name.item.clone(),
+    };
     let scope_name = Some(PartialName {
         database: None,
         schema: None,
-        item: resolved_name.item.clone(),
+        item: table_name,
     });
 
     let (mut expr, mut scope) = match resolve_func(ecx, name, args)? {
@@ -2372,51 +2489,104 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
     Ok(scope)
 }
 
-fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName> {
-    match expr {
-        Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
-        Expr::Value(v) => match v {
-            // Per PostgreSQL, `bool` and `interval` literals take on the name
-            // of their type, but not other literal types.
-            Value::Boolean(_) => Some("bool".into()),
-            Value::Interval(_) => Some("interval".into()),
-            _ => None,
-        },
-        Expr::Function(func) => {
-            let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
-            if name.schema.as_deref() == Some("mz_internal") {
-                None
-            } else {
-                Some(name.item.into())
-            }
-        }
-        Expr::Coalesce { .. } => Some("coalesce".into()),
-        Expr::NullIf { .. } => Some("nullif".into()),
-        Expr::Array { .. } => Some("array".into()),
-        Expr::List { .. } => Some("list".into()),
-        Expr::Cast { expr, data_type } => match invent_column_name(ecx, expr) {
-            Some(name) => Some(name),
-            None => {
-                let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
-                let pgrepr_type = pgrepr::Type::from(&ty);
-                let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
-                Some(entry.name().item.clone().into())
-            }
-        },
-        Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
-        Expr::Exists { .. } => Some("exists".into()),
-        Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
-            invent_column_name(ecx, expr)
-        }
-        Expr::Subquery(query) | Expr::ListSubquery(query) => {
-            // A bit silly to have to plan the query here just to get its column
-            // name, since we throw away the planned expression, but fixing this
-            // requires a separate semantic analysis phase.
-            let (_expr, scope) = plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
-            scope.items.first().map(|name| name.column_name.clone())
-        }
-        _ => None,
+// `table_func_names` is a mapping from a UUID to the original function
+// name. The UUIDs are identifiers that have been rewritten from some table
+// function expression, and this mapping restores the original names.
+fn invent_column_name(
+    ecx: &ExprContext,
+    expr: &Expr<Aug>,
+    table_func_names: &HashMap<String, Ident>,
+) -> Option<ColumnName> {
+    // We follow PostgreSQL exactly here, which has some complicated rules
+    // around "high" and "low" quality names. Low quality names override other
+    // low quality names but not high quality names.
+    //
+    // See: https://github.com/postgres/postgres/blob/1f655fdc3/src/backend/parser/parse_target.c#L1716-L1728
+
+    enum NameQuality {
+        Low,
+        High,
     }
+
+    fn invent(
+        ecx: &ExprContext,
+        expr: &Expr<Aug>,
+        table_func_names: &HashMap<String, Ident>,
+    ) -> Option<(ColumnName, NameQuality)> {
+        match expr {
+            Expr::Identifier(names) => {
+                if let [name] = names.as_slice() {
+                    if let Some(table_func_name) = table_func_names.get(name.as_str()) {
+                        return Some((
+                            normalize::column_name(table_func_name.clone()),
+                            NameQuality::High,
+                        ));
+                    }
+                }
+                names
+                    .last()
+                    .map(|n| (normalize::column_name(n.clone()), NameQuality::High))
+            }
+            Expr::Value(v) => match v {
+                // Per PostgreSQL, `bool` and `interval` literals take on the name
+                // of their type, but not other literal types.
+                Value::Boolean(_) => Some(("bool".into(), NameQuality::High)),
+                Value::Interval(_) => Some(("interval".into(), NameQuality::High)),
+                _ => None,
+            },
+            Expr::Function(func) => {
+                let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
+                if name.schema.as_deref() == Some("mz_internal") {
+                    None
+                } else {
+                    Some((name.item.into(), NameQuality::High))
+                }
+            }
+            Expr::Coalesce { .. } => Some(("coalesce".into(), NameQuality::High)),
+            Expr::NullIf { .. } => Some(("nullif".into(), NameQuality::High)),
+            Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
+            Expr::List { .. } => Some(("list".into(), NameQuality::High)),
+            Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names) {
+                Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
+                _ => {
+                    let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
+                    let pgrepr_type = pgrepr::Type::from(&ty);
+                    let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
+                    Some((entry.name().item.clone().into(), NameQuality::Low))
+                }
+            },
+            Expr::Case { else_result, .. } => {
+                match else_result
+                    .as_ref()
+                    .and_then(|else_result| invent(ecx, else_result, table_func_names))
+                {
+                    Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
+                    _ => Some(("case".into(), NameQuality::Low)),
+                }
+            }
+            Expr::FieldAccess { field, .. } => {
+                Some((normalize::column_name(field.clone()), NameQuality::High))
+            }
+            Expr::Exists { .. } => Some(("exists".into(), NameQuality::High)),
+            Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
+                invent(ecx, expr, table_func_names)
+            }
+            Expr::Subquery(query) | Expr::ListSubquery(query) => {
+                // A bit silly to have to plan the query here just to get its column
+                // name, since we throw away the planned expression, but fixing this
+                // requires a separate semantic analysis phase.
+                let (_expr, scope) =
+                    plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
+                scope
+                    .items
+                    .first()
+                    .map(|name| (name.column_name.clone(), NameQuality::High))
+            }
+            _ => None,
+        }
+    }
+
+    invent(ecx, expr, table_func_names).map(|(name, _quality)| name)
 }
 
 #[derive(Debug)]
@@ -2437,6 +2607,7 @@ impl ExpandedSelectItem<'_> {
 fn expand_select_item<'a>(
     ecx: &ExprContext,
     s: &'a SelectItem<Aug>,
+    table_func_names: &HashMap<String, Ident>,
 ) -> Result<Vec<(ExpandedSelectItem<'a>, ColumnName)>, PlanError> {
     match s {
         SelectItem::Expr {
@@ -2475,14 +2646,39 @@ fn expand_select_item<'a>(
                 ScalarType::Record { fields, .. } => fields,
                 ty => sql_bail!("type {} is not composite", ecx.humanize_scalar_type(&ty)),
             };
+            let mut skip_cols: HashSet<ColumnName> = HashSet::new();
+            if let Expr::Identifier(ident) = sql_expr.as_ref() {
+                if let [name] = ident.as_slice() {
+                    if let Ok(items) = ecx.scope.items_from_table(
+                        &[],
+                        &PartialName {
+                            database: None,
+                            schema: None,
+                            item: name.as_str().to_string(),
+                        },
+                    ) {
+                        for (_, item) in items {
+                            if item
+                                .is_exists_column_for_a_table_function_that_was_in_the_target_list
+                            {
+                                skip_cols.insert(item.column_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
             let items = fields
                 .iter()
-                .map(|(name, _ty)| {
-                    let item = ExpandedSelectItem::Expr(Cow::Owned(Expr::FieldAccess {
-                        expr: sql_expr.clone(),
-                        field: Ident::new(name.as_str()),
-                    }));
-                    (item, name.clone())
+                .filter_map(|(name, _ty)| {
+                    if skip_cols.contains(name) {
+                        None
+                    } else {
+                        let item = ExpandedSelectItem::Expr(Cow::Owned(Expr::FieldAccess {
+                            expr: sql_expr.clone(),
+                            field: Ident::new(name.as_str()),
+                        }));
+                        Some((item, name.clone()))
+                    }
                 })
                 .collect();
             Ok(items)
@@ -2506,7 +2702,7 @@ fn expand_select_item<'a>(
             let name = alias
                 .clone()
                 .map(normalize::column_name)
-                .or_else(|| invent_column_name(ecx, &expr))
+                .or_else(|| invent_column_name(ecx, &expr, &table_func_names))
                 .unwrap_or_else(|| "?column?".into());
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
@@ -3521,18 +3717,41 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         // The name refers to a normal table. Return a record containing all the
         // columns of the table.
         _ => {
+            let mut has_exists_column = None;
             let (exprs, field_names): (Vec<_>, Vec<_>) = items
                 .into_iter()
-                .map(|(column, item)| {
-                    let expr = HirScalarExpr::Column(column);
-                    let name = item.column_name.clone();
-                    (expr, name)
+                .filter_map(|(column, item)| {
+                    if item.is_exists_column_for_a_table_function_that_was_in_the_target_list {
+                        has_exists_column = Some(column);
+                        None
+                    } else {
+                        let expr = HirScalarExpr::Column(column);
+                        let name = item.column_name.clone();
+                        Some((expr, name))
+                    }
                 })
                 .unzip();
-            Ok(HirScalarExpr::CallVariadic {
-                func: VariadicFunc::RecordCreate { field_names },
-                exprs,
-            })
+            // For the special case of a table function with a single column, the single column is instead not wrapped.
+            let expr = if exprs.len() == 1 && has_exists_column.is_some() {
+                exprs.into_element()
+            } else {
+                HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RecordCreate { field_names },
+                    exprs,
+                }
+            };
+            if let Some(has_exists_column) = has_exists_column {
+                Ok(HirScalarExpr::If {
+                    cond: Box::new(HirScalarExpr::CallUnary {
+                        func: UnaryFunc::IsNull(expr::func::IsNull),
+                        expr: Box::new(HirScalarExpr::Column(has_exists_column)),
+                    }),
+                    then: Box::new(HirScalarExpr::literal_null(ecx.scalar_type(&expr))),
+                    els: Box::new(expr),
+                })
+            } else {
+                Ok(expr)
+            }
         }
     }
 }
@@ -3982,80 +4201,164 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, PlanError> {
     }
 }
 
-/// This is used to collect aggregates from within an `Expr`.
+/// This is used to collect aggregates and table functions from within an `Expr`.
 /// See the explanation of aggregate handling at the top of the file for more details.
-struct AggregateFuncVisitor<'a, 'ast> {
+struct AggregateTableFuncVisitor<'a> {
     scx: &'a StatementContext<'a>,
-    aggs: Vec<&'ast Function<Aug>>,
+    aggs: Vec<Function<Aug>>,
     within_aggregate: bool,
+    tables: HashMap<TableFunction<Aug>, String>,
+    table_disallowed_context: Vec<&'static str>,
+    in_select_item: bool,
     err: Option<PlanError>,
 }
 
-impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
-    fn new(scx: &'a StatementContext<'a>) -> AggregateFuncVisitor<'a, 'ast> {
-        AggregateFuncVisitor {
+impl<'a> AggregateTableFuncVisitor<'a> {
+    fn new(scx: &'a StatementContext<'a>) -> AggregateTableFuncVisitor<'a> {
+        AggregateTableFuncVisitor {
             scx,
             aggs: Vec::new(),
             within_aggregate: false,
+            tables: HashMap::new(),
+            table_disallowed_context: Vec::new(),
+            in_select_item: false,
             err: None,
         }
     }
 
-    fn into_result(self) -> Result<Vec<&'ast Function<Aug>>, PlanError> {
+    fn into_result(
+        self,
+    ) -> Result<(Vec<Function<Aug>>, HashMap<TableFunction<Aug>, String>), PlanError> {
         match self.err {
             Some(err) => Err(err),
             None => {
-                // dedup aggs while preserving the order
-                // (we don't care what the order is, but it has to be reproducible so that EXPLAIN PLAN tests work)
+                // Dedup while preserving the order. We don't care what the order is, but it
+                // has to be reproducible so that EXPLAIN PLAN tests work.
                 let mut seen = HashSet::new();
-                Ok(self
+                let aggs = self
                     .aggs
                     .into_iter()
-                    .filter(move |agg| seen.insert(&**agg))
-                    .collect())
+                    .filter(move |agg| seen.insert(agg.clone()))
+                    .collect();
+                Ok((aggs, self.tables))
             }
         }
     }
 }
 
-impl<'a, 'ast> Visit<'ast, Aug> for AggregateFuncVisitor<'a, 'ast> {
-    fn visit_function(&mut self, func: &'ast Function<Aug>) {
+impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
+    fn visit_function_mut(&mut self, func: &mut Function<Aug>) {
         let item = match self.scx.resolve_function(func.name.clone()) {
             Ok(i) => i,
             // Catching missing functions later in planning improves error messages.
             Err(_) => return,
         };
 
-        if let Ok(Func::Aggregate { .. }) = item.func() {
-            if self.within_aggregate {
-                self.err = Some(PlanError::Unstructured(
-                    "nested aggregate functions are not allowed".into(),
-                ));
-                return;
-            }
-            self.aggs.push(func);
-            let Function {
-                name: _,
-                args,
-                filter,
-                over: _,
-                distinct: _,
-            } = func;
-            if let Some(filter) = filter {
-                self.visit_expr(filter);
-            }
-            let old_within_aggregate = self.within_aggregate;
-            self.within_aggregate = true;
-            self.visit_function_args(args);
+        match item.func() {
+            Ok(Func::Aggregate { .. }) => {
+                if self.within_aggregate {
+                    self.err = Some(PlanError::Unstructured(
+                        "nested aggregate functions are not allowed".into(),
+                    ));
+                    return;
+                }
+                self.aggs.push(func.clone());
+                let Function {
+                    name: _,
+                    args,
+                    filter,
+                    over: _,
+                    distinct: _,
+                } = func;
+                if let Some(filter) = filter {
+                    self.visit_expr_mut(filter);
+                }
+                let old_within_aggregate = self.within_aggregate;
+                self.within_aggregate = true;
+                self.table_disallowed_context
+                    .push("aggregate function calls");
 
-            self.within_aggregate = old_within_aggregate;
-        } else {
-            visit::visit_function(self, func);
+                self.visit_function_args_mut(args);
+
+                self.within_aggregate = old_within_aggregate;
+                self.table_disallowed_context.pop();
+            }
+            Ok(Func::Table { .. }) => {
+                self.table_disallowed_context.push("other table functions");
+                visit_mut::visit_function_mut(self, func);
+                self.table_disallowed_context.pop();
+            }
+            _ => visit_mut::visit_function_mut(self, func),
         }
     }
 
-    fn visit_query(&mut self, _query: &'ast Query<Aug>) {
+    fn visit_query_mut(&mut self, _query: &mut Query<Aug>) {
         // Don't go into subqueries.
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Expr<Aug>) {
+        let (disallowed_context, func) = match expr {
+            Expr::Case { .. } => (Some("CASE"), None),
+            Expr::Coalesce { .. } => (Some("COALESCE"), None),
+            Expr::Function(func) if self.in_select_item => {
+                // If we're in a SELECT list, replace table functions with a uuid identifier
+                // and save the table func so it can be planned elsewhere.
+                let mut table_func = None;
+                if let Ok(item) = self.scx.resolve_function(func.name.clone()) {
+                    if let Ok(Func::Table { .. }) = item.func() {
+                        if let Some(context) = self.table_disallowed_context.last() {
+                            self.err = Some(PlanError::Unstructured(format!(
+                                "table functions are not allowed in {}",
+                                context
+                            )));
+                            return;
+                        }
+                        table_func = Some(func.clone());
+                    }
+                }
+                // Since we will descend into the table func below, don't add its own disallow
+                // context here, instead use visit_function to set that.
+                (None, table_func)
+            }
+            _ => (None, None),
+        };
+        if let Some(func) = func {
+            // Since we are trading out expr, we need to visit the table func here.
+            visit_mut::visit_expr_mut(self, expr);
+            // Don't attempt to replace table functions with unsupported syntax.
+            if let Function {
+                name,
+                args,
+                filter: None,
+                over: None,
+                distinct: false,
+            } = func
+            {
+                let func = TableFunction { name, args };
+                // Identical table functions can be de-duplicated.
+                let id = self
+                    .tables
+                    .entry(func)
+                    .or_insert_with(|| format!("table_func_{}", Uuid::new_v4()));
+                *expr = Expr::Identifier(vec![Ident::from(id.clone())]);
+            }
+        }
+        if let Some(context) = disallowed_context {
+            self.table_disallowed_context.push(context);
+        }
+
+        visit_mut::visit_expr_mut(self, expr);
+
+        if disallowed_context.is_some() {
+            self.table_disallowed_context.pop();
+        }
+    }
+
+    fn visit_select_item_mut(&mut self, si: &mut SelectItem<Aug>) {
+        let old = self.in_select_item;
+        self.in_select_item = true;
+        visit_mut::visit_select_item_mut(self, si);
+        self.in_select_item = old;
     }
 }
 

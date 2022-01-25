@@ -7,78 +7,93 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Dict, List
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
+    Redpanda,
     SchemaRegistry,
     Squid,
     Testdrive,
     Zookeeper,
 )
 
-prerequisites = ["zookeeper", "kafka", "schema-registry", "squid", "localstack"]
-
-# Run certain testdrive tests for each combination of env variables under test
-tests: List[Dict[str, Any]] = [
-    {
-        "name": "with_proxy",
-        "env": ["ALL_PROXY=http://squid:3128"],
-        "td": ["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
-    },
-    {
-        "name": "proxy_failure",
-        "env": ["ALL_PROXY=http://localhost:1234"],
-        "td": ["proxy-failure.td"],
-    },
-    {
-        "name": "no_proxy",
-        "env": [
-            "ALL_PROXY=http://localhost:1234",
-            "NO_PROXY=schema-registry,amazonaws.com,localstack",
-        ],
-        "td": ["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
-    },
-]
-
-# Construct a dedicated Mz instance for each set of env variables under test
-for t in tests:
-    t["mz"] = Materialized(
-        name=f"materialized_{t['name']}",
-        hostname="materialized",
-        environment_extra=t["env"],
-    )
-
-mzs = [t["mz"] for t in tests]
-
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Redpanda(),
     Squid(),
     Localstack(),
-    *mzs,
+    Materialized(),
     Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"]),
 ]
 
 
-def workflow_proxy(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=prerequisites)
-    test_proxy(c, "--aws-endpoint=http://localstack:4566")
+@dataclass
+class TestCase:
+    name: str
+    env: List[str]
+    files: List[str]
 
 
-def workflow_proxy_ci(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=prerequisites)
-    test_proxy(c, "--aws-region=us-east-2")
+test_cases = [
+    TestCase(
+        name="with-proxy",
+        env=["ALL_PROXY=http://squid:3128"],
+        files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
+    ),
+    TestCase(
+        name="proxy-failure",
+        env=["ALL_PROXY=http://squid:3128"],
+        files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
+    ),
+    TestCase(
+        name="no-proxy",
+        env=[
+            "ALL_PROXY=http://localhost:1234",
+            "NO_PROXY=schema-registry,amazonaws.com,localstack",
+        ],
+        files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
+    ),
+]
 
 
-def test_proxy(c: Composition, aws: str) -> None:
-    for test in tests:
-        mz: Materialized = test["mz"]
-        c.up(mz.name)
-        c.wait_for_materialized(mz.name)
-        c.run("testdrive-svc", aws, *test["td"])
-        c.kill(mz.name)
+def workflow_proxy(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Run the proxy tests."""
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
+    parser.add_argument(
+        "--aws-region",
+        help="run against the specified AWS region instead of localstack",
+    )
+    args = parser.parse_args()
+
+    dependencies = ["squid"]
+    if args.redpanda:
+        dependencies += ["redpanda"]
+    else:
+        dependencies += ["zookeeper", "kafka", "schema-registry"]
+    if not args.aws_region:
+        dependencies += ["localstack"]
+    c.start_and_wait_for_tcp(dependencies)
+
+    aws_arg = (
+        f"--aws-region={args.aws_region}"
+        if args.aws_region
+        else "--aws-endpoint=http://localstack:4566"
+    )
+
+    for test_case in test_cases:
+        print(f"Running test case {test_case.name!r}")
+        with c.override(Materialized(environment_extra=test_case.env)):
+            c.up("materialized")
+            c.wait_for_materialized("materialized")
+            c.run("testdrive-svc", aws_arg, *test_case.files)

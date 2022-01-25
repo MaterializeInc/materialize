@@ -285,25 +285,32 @@ impl PersisterWithConfig {
         connector: &SourceConnector,
         pretty: &str,
     ) -> Result<Option<SourcePersistDesc>, Error> {
+        // NB: This gets written down in the catalog, so it should be
+        // safe to change the naming, if necessary. See
+        // Catalog::deserialize_item.
+        let name_prefix = format!("user-source-{}-{}", id, pretty);
+        let primary_stream = format!("{}", name_prefix);
+        let timestamp_bindings_stream = format!("{}-timestamp-bindings", name_prefix);
+
         let serialized_details = match connector {
             SourceConnector::External {
                 connector: ExternalSourceConnector::Kafka(_),
                 envelope: SourceEnvelope::Upsert(_),
                 ..
-            } if self.config.kafka_upsert_source_enabled => {
-                // NB: This gets written down in the catalog, so it should be
-                // safe to change the naming, if necessary. See
-                // Catalog::deserialize_item.
-                let name_prefix = format!("user-source-{}-{}", id, pretty);
-                let primary_stream = format!("{}", name_prefix);
-                let timestamp_bindings_stream = format!("{}-timestamp-bindings", name_prefix);
-
-                Some(SerializedSourcePersistDetails {
-                    primary_stream,
-                    timestamp_bindings_stream,
-                    envelope_details: crate::catalog::SerializedEnvelopePersistDetails::Upsert,
-                })
-            }
+            } if self.config.kafka_upsert_source_enabled => Some(SerializedSourcePersistDetails {
+                primary_stream,
+                timestamp_bindings_stream,
+                envelope_details: crate::catalog::SerializedEnvelopePersistDetails::Upsert,
+            }),
+            SourceConnector::External {
+                connector: ExternalSourceConnector::Kafka(_),
+                envelope: SourceEnvelope::None(_),
+                ..
+            } if self.config.kafka_upsert_source_enabled => Some(SerializedSourcePersistDetails {
+                primary_stream,
+                timestamp_bindings_stream,
+                envelope_details: crate::catalog::SerializedEnvelopePersistDetails::None,
+            }),
             _ => None,
         };
 
@@ -333,6 +340,17 @@ impl PersisterWithConfig {
                         SerializedEnvelopePersistDetails::Upsert
                     ));
                     EnvelopePersistDesc::Upsert
+                }
+
+                SourceConnector::External {
+                    envelope: SourceEnvelope::None(_),
+                    ..
+                } => {
+                    assert!(matches!(
+                        serialized_details.envelope_details,
+                        SerializedEnvelopePersistDetails::None
+                    ));
+                    EnvelopePersistDesc::None
                 }
 
                 SourceConnector::External { envelope, .. } => {

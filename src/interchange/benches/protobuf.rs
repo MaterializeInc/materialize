@@ -11,12 +11,12 @@ use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
 use prost::Message;
 
-use interchange::protobuf::{DecodedDescriptors, Decoder, NormalizedProtobufMessageName};
+use interchange::protobuf::{DecodedDescriptors, Decoder};
 
 use gen::benchmark::{Connector, Record, Value};
 
 mod gen {
-    include!(concat!(env!("OUT_DIR"), "/protobuf/mod.rs"));
+    include!(concat!(env!("OUT_DIR"), "/mod.rs"));
 }
 
 pub fn bench_protobuf(c: &mut Criterion) {
@@ -68,7 +68,7 @@ pub fn bench_protobuf(c: &mut Criterion) {
     let mut decoder = Decoder::new(
         DecodedDescriptors::from_bytes(
             gen::FILE_DESCRIPTOR_SET_DATA,
-            NormalizedProtobufMessageName::new(".benchmark.Record".to_string()),
+            ".benchmark.Record".to_string(),
         )
         .unwrap(),
         false,

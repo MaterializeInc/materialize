@@ -24,13 +24,13 @@ use uuid::Uuid;
 use crate::error::Error;
 use crate::indexed::background::{CompactTraceReq, Maintainer};
 use crate::indexed::cache::BlobCache;
-use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{
     ArrangementMeta, BlobTraceBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
 use crate::indexed::{BlobUnsealedBatch, Id, Snapshot};
 use crate::pfuture::PFuture;
-use crate::storage::{Blob, SeqNo};
+use crate::storage::{Blob, BlobRead, SeqNo};
 
 /// A persistent, compacting data structure containing indexed `(Key, Value,
 /// Time, Diff)` entries.
@@ -191,7 +191,7 @@ impl Arrangement {
 
     /// Returns a consistent read of all the updates contained in this
     /// arrangement.
-    pub fn snapshot<L: Blob>(
+    pub fn snapshot<L: BlobRead>(
         &self,
         seqno: SeqNo,
         blob: &BlobCache<L>,
@@ -313,7 +313,7 @@ impl Arrangement {
 
     /// Returns a consistent read of the updates contained in this unsealed
     /// matching the given filters (in practice, everything not in Trace).
-    pub fn unsealed_snapshot<L: Blob>(
+    pub fn unsealed_snapshot<L: BlobRead>(
         &self,
         ts_lower: Antichain<u64>,
         ts_upper: Antichain<u64>,
@@ -421,18 +421,19 @@ impl Arrangement {
     ) -> Result<UnsealedBatchMeta, Error> {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.trace_ts_upper().less_equal(&batch.ts_upper));
-        let updates = ColumnarRecords::from_iter(
+        let updates = ColumnarRecordsVec::from_iter(
             blob.get_unsealed_batch_async(&batch.key)
                 .recv()?
                 .updates
                 .iter()
                 .flat_map(|u| u.iter())
                 .filter(|(_, ts, _)| self.trace_ts_upper().less_equal(ts)),
-        );
+        )
+        .into_inner();
         debug_assert!(updates.len() != 0);
         let new_batch = BlobUnsealedBatch {
             desc: batch.desc,
-            updates: vec![updates],
+            updates,
         };
 
         self.unsealed_write_batch(new_batch, blob)
@@ -567,7 +568,7 @@ impl Arrangement {
     }
 
     /// Returns a consistent read of all the updates contained in this trace.
-    pub fn trace_snapshot<B: Blob>(&self, blob: &BlobCache<B>) -> TraceSnapshot {
+    pub fn trace_snapshot<B: BlobRead>(&self, blob: &BlobCache<B>) -> TraceSnapshot {
         let ts_upper = self.trace_ts_upper();
         let since = self.since();
         let mut batches = Vec::with_capacity(self.trace_batches.len());
@@ -898,9 +899,10 @@ impl Iterator for ArrangementSnapshotIter {
 #[cfg(test)]
 mod tests {
     use differential_dataflow::trace::Description;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::gen::persist::ProtoBatchFormat;
+    use crate::indexed::columnar::ColumnarRecords;
     use crate::indexed::encoding::Id;
     use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
@@ -925,8 +927,8 @@ mod tests {
     }
 
     // Generate a ColumnarRecords containing the provided updates
-    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> ColumnarRecords {
-        updates.iter().collect()
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> Vec<ColumnarRecords> {
+        updates.iter().collect::<ColumnarRecordsVec>().into_inner()
     }
 
     // Generate an unsealed batch spanning the specified sequence numbers with
@@ -934,7 +936,7 @@ mod tests {
     fn unsealed_batch(lower: u64, upper: u64, update_times: Vec<u64>) -> BlobUnsealedBatch {
         BlobUnsealedBatch {
             desc: SeqNo(lower)..SeqNo(upper),
-            updates: vec![columnar_records(unsealed_updates(update_times))],
+            updates: columnar_records(unsealed_updates(update_times)),
         }
     }
 
@@ -1004,6 +1006,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_trace_ts_upper_invariant"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1021,7 +1024,7 @@ mod tests {
         // ts < trace_ts_upper is disallowed
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(vec![(("k".into(), "v".into()), 1, 1)])],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 1, 1)]),
         };
         assert_eq!(
             f.unsealed_append(batch, &mut blob),
@@ -1033,7 +1036,7 @@ mod tests {
         // ts == trace_ts_upper is allowed
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(vec![(("k".into(), "v".into()), 2, 1)])],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 2, 1)]),
         };
         assert_eq!(f.unsealed_append(batch, &mut blob), Ok(()));
 
@@ -1043,10 +1046,11 @@ mod tests {
     /// This test checks whether we correctly determine the min/max times stored
     /// in a unsealed batch consisting of unsorted updates.
     #[test]
-    fn append_detect_min_max_times() {
+    fn append_detect_min_max_times() -> Result<(), Error> {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_ts_lower_invariant"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1058,10 +1062,10 @@ mod tests {
         // Construct a unsealed batch where the updates are not sorted by time.
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(vec![
+            updates: columnar_records(vec![
                 (("k".into(), "v".into()), 3, 1),
                 (("k".into(), "v".into()), 2, 1),
-            ])],
+            ]),
         };
 
         assert_eq!(f.unsealed_append(batch, &mut blob), Ok(()));
@@ -1070,6 +1074,8 @@ mod tests {
         let meta = &f.unsealed_batches[0];
         assert_eq!(meta.ts_lower, 2);
         assert_eq!(meta.ts_upper, 3);
+
+        Ok(())
     }
 
     #[test]
@@ -1077,6 +1083,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_evict"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1151,6 +1158,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_snapshot"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1166,7 +1174,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: vec![columnar_records(updates.clone())],
+            updates: columnar_records(updates.clone()),
         };
 
         f.unsealed_append(batch, &mut blob)?;
@@ -1204,6 +1212,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_batch_trim"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1220,7 +1229,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: vec![columnar_records(updates.clone())],
+            updates: columnar_records(updates.clone()),
         };
 
         f.unsealed_append(batch, &mut blob)?;
@@ -1321,12 +1330,14 @@ mod tests {
 
     #[test]
     fn trace_compact() -> Result<(), Error> {
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            async_runtime.clone(),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let maintainer = Maintainer::new(blob.clone(), async_runtime);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
         t.update_seal(10);
 
@@ -1473,12 +1484,14 @@ mod tests {
 
     #[test]
     fn compaction_beyond_upper() -> Result<(), Error> {
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            async_runtime.clone(),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let maintainer = Maintainer::new(blob.clone(), async_runtime);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
 
         t.update_seal(10);
@@ -1499,7 +1512,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![columnar_records(unsealed_updates)],
+            updates: columnar_records(unsealed_updates),
         };
 
         t.unsealed_append(batch, &mut blob)?;

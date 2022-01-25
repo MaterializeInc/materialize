@@ -10,7 +10,7 @@
 use std::thread;
 use std::time::Duration;
 
-use ore::result::ResultExt;
+use anyhow::Context;
 use rand::Rng;
 
 use crate::action::{State, SyncAction};
@@ -21,18 +21,18 @@ pub struct SleepAction {
     random: bool,
 }
 
-pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
+pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow::Error> {
     let arg = cmd.args.string("duration")?;
-    let duration = repr::util::parse_duration(&arg).map_err_to_string()?;
+    let duration = repr::util::parse_duration(&arg).context("parsing duration")?;
     Ok(SleepAction {
         duration,
         random: true,
     })
 }
 
-pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
+pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow::Error> {
     let arg = cmd.args.string("duration")?;
-    let duration = repr::util::parse_duration(&arg).map_err_to_string()?;
+    let duration = repr::util::parse_duration(&arg).context("parsing duration")?;
     Ok(SleepAction {
         duration,
         random: false,
@@ -40,11 +40,11 @@ pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
 }
 
 impl SyncAction for SleepAction {
-    fn undo(&self, _: &mut State) -> Result<(), String> {
+    fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    fn redo(&self, _: &mut State) -> Result<(), String> {
+    fn redo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         let sleep = if self.random {
             let mut rng = rand::thread_rng();
             rng.gen_range(Duration::from_secs(0)..self.duration)

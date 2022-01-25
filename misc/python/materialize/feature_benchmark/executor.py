@@ -10,7 +10,7 @@
 import os
 import subprocess
 from tempfile import NamedTemporaryFile
-from typing import Any, Callable
+from typing import Any, Callable, List
 
 from materialize.mzcompose import Composition
 
@@ -75,8 +75,13 @@ class Docker(Executor):
                 "testdrive-svc",
                 "--no-reset",
                 f"--seed={self._seed}",
-                "--initial-backoff=0ms",
+                "--initial-backoff=10ms",
                 "--backoff-factor=0",
                 f"tmp/{basename}",
                 capture=True,
             ).stdout
+
+    def Kgen(self, topic: str, args: List[str]) -> Any:
+        return self._composition.run(
+            "kgen", f"--topic=testdrive-{topic}-{self._seed}", *args
+        )

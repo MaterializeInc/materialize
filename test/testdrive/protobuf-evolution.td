@@ -32,7 +32,7 @@ $ kafka-create-topic topic=evolution partitions=1
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-evolution-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=.Message confluent-wire-format=true
+$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i": 1}
 
 > SELECT * FROM evolution
@@ -60,7 +60,7 @@ $ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb
 $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value schema-type=protobuf
 \${schema}
 
-$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=.Message confluent-wire-format=true
+$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i_renamed": 2, "extra": false}
 
 > SELECT * FROM evolution
@@ -88,7 +88,7 @@ $ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb
 $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value schema-type=protobuf
 \${schema}
 
-$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=.Message confluent-wire-format=true
+$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i_demoted": false}
 
 > SELECT * FROM evolution
@@ -101,7 +101,8 @@ i  mz_offset
 # Expect that ingesting an incompatible message will brick the topic. We have to
 # explicitly disable the schema registry's protection against this.
 
-$ http-request method=PUT url=${testdrive.schema-registry-url}config/testdrive-evolution-${testdrive.seed}-value
+$ http-request method=PUT content-type=application/json
+  url=${testdrive.schema-registry-url}config/testdrive-evolution-${testdrive.seed}-value
 {"compatibility": "NONE"}
 
 $ set schema
@@ -120,8 +121,8 @@ $ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb
 $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value schema-type=protobuf
 \${schema}
 
-$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=.Message confluent-wire-format=true
+$ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"wrong": "i'm not an int!"}
 
 ! SELECT * FROM evolution
-Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)
+contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)

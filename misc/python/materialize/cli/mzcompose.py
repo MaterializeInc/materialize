@@ -421,9 +421,8 @@ class DockerComposeCommand(Command):
             )
 
         composition = load_composition(args)
-        ui.header("Collecting mzbuild dependencies")
-        deps = composition.repo.resolve_dependencies(composition.images)
-        for d in deps:
+        ui.header("Collecting mzbuild images")
+        for d in composition.dependencies:
             ui.say(d.spec())
 
         if self.runs_containers:
@@ -433,7 +432,7 @@ class DockerComposeCommand(Command):
                 # it as root.
                 (composition.path / "coverage").mkdir(exist_ok=True)
             self.check_docker_resource_limits()
-            deps.acquire()
+            composition.dependencies.acquire()
 
         self.handle_composition(args, composition)
 

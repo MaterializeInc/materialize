@@ -41,7 +41,7 @@ $ set schema={
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-blah-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-catalog item 's' already exists
+contains:catalog item 's' already exists
 
 > CREATE SOURCE IF NOT EXISTS s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-blah-${testdrive.seed}'
@@ -57,23 +57,23 @@ catalog item 's' already exists
 > CREATE MATERIALIZED VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
-cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 ! DROP VIEW test2;
-cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3a'
+contains:cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3a'
 
 > DROP VIEW test3a;
 
 ! DROP VIEW test1;
-cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 ! DROP VIEW test2;
-cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3b'
+contains:cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3b'
 
 > DROP VIEW test3b;
 
 ! DROP VIEW test1;
-cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 > DROP VIEW test2;
 
@@ -93,10 +93,10 @@ cannot drop materialize.public.test1: still depended upon by catalog item 'mater
 # rather than verifying the drop by checking whether DROP VIEW fails.
 
 ! DROP VIEW test1;
-unknown catalog item 'test1'
+contains:unknown catalog item 'test1'
 
 ! DROP VIEW test2;
-unknown catalog item 'test2'
+contains:unknown catalog item 'test2'
 
 # Test that DROP VIEW IF EXISTS succeeds even if the view does not exist.
 
@@ -110,7 +110,7 @@ unknown catalog item 'test2'
 > DROP SOURCE s CASCADE;
 
 ! DROP VIEW test4;
-unknown catalog item 'test4'
+contains:unknown catalog item 'test4'
 
 > CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -124,7 +124,7 @@ unknown catalog item 'test4'
 ! CREATE SINK s1 FROM s
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-catalog item 's1' already exists
+contains:catalog item 's1' already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v2'
@@ -136,7 +136,7 @@ catalog item 's1' already exists
 
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
-catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
+contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
 
@@ -147,7 +147,7 @@ catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 # Test that indexes cannot be depended upon
 
 ! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
-catalog item 'materialize.public.i1' is an index and so cannot be depended upon
+contains:catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 
 > CREATE INDEX i2 ON v2a(x*2);
 
@@ -168,7 +168,7 @@ v2       v2_primary_idx  1            x           <null>     false    true
 > DROP VIEW v2a;
 
 ! DROP VIEW v2a;
-unknown catalog item 'v2a'
+contains:unknown catalog item 'v2a'
 
 > SHOW INDEX in v2;
 on_name  key_name        seq_in_index   column_name expression nullable enabled
@@ -177,7 +177,7 @@ v2       i1              1              x           <null>     false    true
 v2       v2_primary_idx  1              x           <null>     false    true
 
 ! DROP INDEX i2;
-unknown catalog item 'i2'
+contains:unknown catalog item 'i2'
 
 > CREATE MATERIALIZED VIEW v4 AS SELECT x, y from s;
 
@@ -204,10 +204,10 @@ v4       v4_primary_idx  2             y           <null>     false     true
 > DROP VIEW v4a CASCADE;
 
 ! DROP VIEW v4a;
-unknown catalog item 'v4a'
+contains:unknown catalog item 'v4a'
 
 ! DROP INDEX i3;
-unknown catalog item 'i3'
+contains:unknown catalog item 'i3'
 
 > SHOW INDEX in v4;
 on_name  key_name        seq_in_index  column_name expression nullable  enabled
@@ -244,16 +244,16 @@ multicol  i6        2            a            <null>       false    true
 > DROP VIEW v4 CASCADE;
 
 ! DROP VIEW v4;
-unknown catalog item 'v4'
+contains:unknown catalog item 'v4'
 
 ! DROP INDEX i5;
-unknown catalog item 'i5'
+contains:unknown catalog item 'i5'
 
 ! DROP VIEW v5;
-unknown catalog item 'v5'
+contains:unknown catalog item 'v5'
 
 ! DROP INDEX i4;
-unknown catalog item 'i4'
+contains:unknown catalog item 'i4'
 
 # Test that dropping indexes even with cascade does not cause the underlying view to be dropped
 
@@ -281,10 +281,10 @@ s3       s3_primary_idx  2             y           <null>                 false 
 > DROP SOURCE s3;
 
 ! DROP SOURCE s3;
-unknown catalog item 's3'
+contains:unknown catalog item 's3'
 
 ! DROP INDEX j1;
-unknown catalog item 'j1'
+contains:unknown catalog item 'j1'
 
 # Test cascade deletes all indexes associated with cascaded sources and views
 
@@ -314,16 +314,16 @@ w        j3         1             z           <null>     false    true
 > DROP SOURCE s4 CASCADE;
 
 ! DROP VIEW w;
-unknown catalog item 'w'
+contains:unknown catalog item 'w'
 
 ! DROP INDEX j3;
-unknown catalog item 'j3'
+contains:unknown catalog item 'j3'
 
 ! DROP SOURCE s4;
-unknown catalog item 's4'
+contains:unknown catalog item 's4'
 
 ! DROP INDEX j2;
-unknown catalog item 'j2'
+contains:unknown catalog item 'j2'
 
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
@@ -342,14 +342,14 @@ unknown catalog item 'j2'
 > CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list)
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
 
 > DROP VIEW v1
 
 > CREATE TABLE t1 (custom int4_list)
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.t1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.t1'
 
 > DROP TABLE t1
 
@@ -358,28 +358,28 @@ cannot drop materialize.public.int4_list: still depended upon by catalog item 'm
 > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM ( SELECT CAST('{2}' AS int4_list) )
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT CAST(CAST('{2}' AS int4_list) AS text)
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS VALUES (CAST('{2}' AS int4_list))
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT MIN(CAST(CAST('{1}' AS int4_list) AS string))
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
 
 > DROP VIEW v1
 
@@ -390,7 +390,7 @@ cannot drop materialize.public.int4_list: still depended upon by catalog item 'm
 > CREATE TEMPORARY TABLE t1 (f1 int4_list)
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'mz_temp.t1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'mz_temp.t1'
 
 > DROP TABLE t1
 
@@ -399,14 +399,14 @@ cannot drop materialize.public.int4_list: still depended upon by catalog item 'm
 > CREATE INDEX i1 ON t1 (CAST(f1 AS int4_list))
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.i1'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.i1'
 
 > DROP TABLE t1
 
 > CREATE TYPE int4_list_list AS LIST (element_type=int4_list)
 
 ! DROP TYPE int4_list
-cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.int4_list_list'
+contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.int4_list_list'
 
 > DROP TYPE int4_list_list
 
@@ -432,7 +432,7 @@ cannot drop materialize.public.int4_list: still depended upon by catalog item 'm
 2
 
 ! CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 3
-cannot drop materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
+contains:cannot drop materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
 
 > CREATE OR REPLACE MATERIALIZED VIEW v4 AS SELECT 3
 > SELECT * FROM v4
@@ -452,7 +452,7 @@ cannot drop materialize.public.v3: still depended upon by catalog item 'material
 > CREATE MATERIALIZED VIEW test2 AS SELECT * FROM test1;
 
 ! DROP VIEW test1;
-cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 # Succeeds even though it's dependent on.
 > CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 2 as b;

@@ -56,7 +56,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
       ssl_key_password_env = 'SSL_KEY_PASSWORD'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
+contains:Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
 
 ! CREATE SINK env_pw_snk FROM data
   INTO KAFKA BROKER 'kafka' TOPIC 'snk'
@@ -69,7 +69,7 @@ Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_
       ssl_key_password = 'mzmzmz'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
+contains:Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
 
 ! CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -82,4 +82,4 @@ Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-Invalid WITH option ssl_key_password_env='DNE': environment variable not found
+contains:Invalid WITH option ssl_key_password_env='DNE': environment variable not found

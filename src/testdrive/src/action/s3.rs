@@ -11,6 +11,7 @@ use std::cmp;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
 use aws_sdk_s3::model::{
@@ -22,8 +23,6 @@ use aws_sdk_sqs::model::{DeleteMessageBatchRequestEntry, QueueAttributeName};
 use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
 
-use ore::result::ResultExt;
-
 use crate::action::file::{build_compression, Compression};
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -32,7 +31,7 @@ pub struct CreateBucketAction {
     bucket_prefix: String,
 }
 
-pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction, String> {
+pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     cmd.args.done()?;
     Ok(CreateBucketAction { bucket_prefix })
@@ -40,11 +39,11 @@ pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction
 
 #[async_trait]
 impl Action for CreateBucketAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Creating S3 bucket {}", bucket);
 
@@ -75,7 +74,7 @@ impl Action for CreateBucketAction {
                 state.s3_buckets_created.insert(bucket);
                 Ok(())
             }
-            Err(e) => Err(format!("creating bucket: {}", e)),
+            Err(e) => Err(e).context("creating bucket"),
         }
     }
 }
@@ -87,7 +86,7 @@ pub struct PutObjectAction {
     contents: String,
 }
 
-pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, String> {
+pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     let key = cmd.args.string("key")?;
     let compression = build_compression(&mut cmd)?;
@@ -103,11 +102,11 @@ pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, Stri
 
 #[async_trait]
 impl Action for PutObjectAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Put S3 object {}/{}", bucket, self.key);
 
@@ -118,10 +117,8 @@ impl Action for PutObjectAction {
                 let mut encoder = GzEncoder::new(Vec::new(), Flate2Compression::default());
                 encoder
                     .write_all(buffer.as_ref())
-                    .map_err(|e| format!("error writing bytes to encoder: {}", e))?;
-                encoder
-                    .finish()
-                    .map_err(|e| format!("error compressing contents: {}", e))
+                    .context("writing to gzip encoder")?;
+                encoder.finish().context("writing to gzip encoder")
             }
         }?;
 
@@ -139,7 +136,7 @@ impl Action for PutObjectAction {
             .send()
             .await
             .map(|_| ())
-            .map_err(|e| format!("putting s3 object: {}", e))
+            .context("putting to S3")
     }
 }
 
@@ -148,7 +145,7 @@ pub struct DeleteObjectAction {
     keys: Vec<String>,
 }
 
-pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction, String> {
+pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     cmd.args.done()?;
     Ok(DeleteObjectAction {
@@ -159,14 +156,14 @@ pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction
 
 #[async_trait]
 impl Action for DeleteObjectAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Deleting S3 objects {}: {}", bucket, self.keys.join(", "));
-        let result = state
+        state
             .s3_client
             .delete_objects()
             .bucket(bucket)
@@ -183,9 +180,8 @@ impl Action for DeleteObjectAction {
             )
             .send()
             .await
-            .map(|_| ())
-            .map_err(|e| format!("deleting s3 objects: {}", e));
-        result
+            .context("deleting S3 objects")?;
+        Ok(())
     }
 }
 
@@ -196,7 +192,9 @@ pub struct AddBucketNotifications {
     sqs_validation_timeout: Option<Duration>,
 }
 
-pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
+pub fn build_add_notifications(
+    mut cmd: BuiltinCommand,
+) -> Result<AddBucketNotifications, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     let queue_prefix = format!("testdrive-{}", cmd.args.string("queue")?);
     let events = cmd
@@ -207,7 +205,7 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
     let sqs_validation_timeout = cmd
         .args
         .opt_string("sqs-validation-timeout")
-        .map(|t| repr::util::parse_duration(&t).map_err_to_string())
+        .map(|t| repr::util::parse_duration(&t).context("parsing duration"))
         .transpose()?;
     cmd.args.done()?;
     Ok(AddBucketNotifications {
@@ -220,11 +218,11 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
 
 #[async_trait]
 impl Action for AddBucketNotifications {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         let queue = format!("{}-{}", self.queue_prefix, state.seed);
 
@@ -248,16 +246,11 @@ impl Action for AddBucketNotifications {
                     .queue_name(&queue)
                     .send()
                     .await
-                    .map_err(|e| {
-                        format!(
-                            "when trying to get sqs queue url for already-existing queue: {}",
-                            e
-                        )
-                    })?;
+                    .context("fetching SQS queue url for existing queue")?;
                 resp.queue_url
                     .expect("successfully getting the url gets the url")
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.into()),
         };
 
         let queue_arn: String = state
@@ -267,11 +260,11 @@ impl Action for AddBucketNotifications {
             .attribute_names(QueueAttributeName::QueueArn)
             .send()
             .await
-            .map_err(|e| format!("getting queue {} attributes: {}", queue, e))?
+            .with_context(|| format!("getting queue {} attributes", queue))?
             .attributes
-            .ok_or_else(|| "the result should not be empty".to_string())?
+            .ok_or_else(|| anyhow!("queue attributes missing"))?
             .remove(&QueueAttributeName::QueueArn)
-            .ok_or_else(|| "QueueArn should be present in arn request".to_string())?;
+            .ok_or_else(|| anyhow!("queue ARN attribute missing"))?;
 
         // Configure the queue to allow the S3 bucket to write to this queue
         state
@@ -284,7 +277,7 @@ impl Action for AddBucketNotifications {
             )
             .send()
             .await
-            .map_err(|e| format!("setting aws queue attributes: {}", e))?;
+            .context("setting SQS queue policy")?;
 
         state.sqs_queues_created.insert(queue_url.clone());
 
@@ -295,7 +288,7 @@ impl Action for AddBucketNotifications {
             .bucket(&bucket)
             .send()
             .await
-            .map_err(|e| format!("getting bucket notification_configuration: {}", e))?;
+            .context("getting bucket notification_configuration")?;
 
         {
             let queue_configs = config.queue_configurations.get_or_insert_with(Vec::new);
@@ -321,12 +314,7 @@ impl Action for AddBucketNotifications {
             )
             .send()
             .await
-            .map_err(|e| {
-                format!(
-                    "Putting s3 bucket configuration notification {} \n{:?}",
-                    e, e
-                )
-            })?;
+            .context("putting S3 bucket configuration notification")?;
 
         let sqs_validation_timeout = self
             .sqs_validation_timeout
@@ -355,7 +343,7 @@ impl Action for AddBucketNotifications {
                 .key(format!("sqs-test/{}", attempts))
                 .send()
                 .await
-                .map_err(|e| format!("creating object to verify sqs: {}", e))?;
+                .context("creating SQS verification object")?;
             attempts += 1;
 
             let resp = state
@@ -365,7 +353,7 @@ impl Action for AddBucketNotifications {
                 .wait_time_seconds(1)
                 .send()
                 .await
-                .map_err(|e| format!("reading from sqs for verification: {}", e))?;
+                .context("receiving verification message from SQS")?;
 
             if let Some(ms) = resp.messages {
                 if !ms.is_empty() {
@@ -392,7 +380,7 @@ impl Action for AddBucketNotifications {
                         ))
                         .send()
                         .await
-                        .map_err(|e| format!("Deleting validation messages from sqs: {}", e))?;
+                        .context("deleting validation messages from SQS")?;
                 }
             }
             if success {
@@ -414,7 +402,7 @@ impl Action for AddBucketNotifications {
                 attempts + 1,
                 start.elapsed()
             );
-            Err("Never got messages on S3 bucket notification queue".to_string())
+            bail!("never received messages on S3 bucket notification queue")
         }
     }
 }

@@ -142,3 +142,35 @@ SELECT * FROM (SELECT 1 a) t1 CROSS JOIN ((SELECT 1 a) t1 CROSS JOIN LATERAL (SE
 
 query error table reference "t1" is ambiguous
 SELECT * FROM (SELECT 1 a) t1 CROSS JOIN ((SELECT 1 a) t1 CROSS JOIN LATERAL (SELECT t1) t2) t3;
+
+# Test column name inference corner cases.
+
+query T colnames
+SELECT 1::int
+----
+int4
+1
+
+query T colnames
+SELECT 1::text::int
+----
+int4
+1
+
+query T colnames
+SELECT CASE WHEN TRUE THEN 1 END
+----
+case
+1
+
+query T colnames
+SELECT CASE WHEN TRUE THEN 1 ELSE column1 END FROM (VALUES (1))
+----
+column1
+1
+
+query T colnames
+SELECT CASE WHEN TRUE THEN 1 ELSE 1::int END
+----
+case
+1

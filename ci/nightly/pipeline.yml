@@ -72,7 +72,8 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: proxy
-        run: proxy-ci
+        run: proxy
+        args: [--aws-region=us-east-2]
 
 - id: testdrive_workers_1
   label: ":racing_car: testdrive with --workers 1"

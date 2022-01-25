@@ -2635,6 +2635,7 @@ pub struct SerializedSourcePersistDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SerializedEnvelopePersistDetails {
     Upsert,
+    None,
 }
 
 impl From<SourcePersistDesc> for SerializedSourcePersistDetails {
@@ -2651,6 +2652,7 @@ impl From<EnvelopePersistDesc> for SerializedEnvelopePersistDetails {
     fn from(persist_desc: EnvelopePersistDesc) -> Self {
         match persist_desc {
             EnvelopePersistDesc::Upsert => SerializedEnvelopePersistDetails::Upsert,
+            EnvelopePersistDesc::None => SerializedEnvelopePersistDetails::None,
         }
     }
 }

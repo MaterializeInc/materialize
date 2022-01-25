@@ -25,10 +25,10 @@ connector_spec ::=
   'KAFKA BROKER' host 'TOPIC' topic?
 copy_to ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
-  ( 'WITH'? '(' option ( ',' option )* ')' )?
+  ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 copy_from ::=
   'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
-  ( 'WITH'? '(' option ( ',' option )* ')' )?
+  ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=

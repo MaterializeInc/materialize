@@ -31,7 +31,9 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use dataflow_types::client::{Command, LocalClient, Response, TimestampBindingFeedback};
+use dataflow_types::client::{
+    Command, ComputeCommand, LocalClient, Response, StorageCommand, TimestampBindingFeedback,
+};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     sources::{
@@ -51,7 +53,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
-use crate::render::{self, RenderState};
+use crate::render::{self, ComputeState, StorageState};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
@@ -133,16 +135,18 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
         let dataflow_sink_metrics = dataflow_sink_metrics.clone();
         Worker {
             timely_worker,
-            render_state: RenderState {
+            compute_state: ComputeState {
                 traces: TraceManager::new(trace_metrics, worker_idx),
+                dataflow_tokens: HashMap::new(),
+                tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            },
+            storage_state: StorageState {
                 local_inputs: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
-                dataflow_tokens: HashMap::new(),
                 sink_write_frontiers: HashMap::new(),
                 metrics,
                 persist: None,
-                tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             },
             materialized_logger: None,
             command_rx,
@@ -185,7 +189,9 @@ where
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The state associated with rendering dataflows.
-    render_state: RenderState,
+    compute_state: ComputeState,
+    /// The state associated with collection ingress and egress.
+    storage_state: StorageState,
     /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
@@ -404,7 +410,7 @@ where
         // Install traces as maintained indexes
         for (log, (trace, permutation)) in t_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -412,7 +418,7 @@ where
         }
         for (log, (trace, permutation)) in r_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -420,7 +426,7 @@ where
         }
         for (log, (trace, permutation)) in d_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -428,7 +434,7 @@ where
         }
         for (log, (trace, permutation)) in m_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -458,7 +464,7 @@ where
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
-            self.render_state.traces.maintenance();
+            self.compute_state.traces.maintenance();
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -495,7 +501,7 @@ where
             self.process_peeks();
             self.process_tails();
         }
-        self.render_state.traces.del_all_traces();
+        self.compute_state.traces.del_all_traces();
         self.shutdown_logging();
     }
 
@@ -522,7 +528,7 @@ where
 
         let mut new_frontier = Antichain::new();
         let mut progress = Vec::new();
-        for (id, traces) in self.render_state.traces.traces.iter_mut() {
+        for (id, traces) in self.compute_state.traces.traces.iter_mut() {
             // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
             let prev_frontier = self
@@ -544,7 +550,7 @@ where
             }
         }
 
-        for (id, history) in self.render_state.ts_histories.iter() {
+        for (id, history) in self.storage_state.ts_histories.iter() {
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
             let prev_frontier = self
@@ -561,7 +567,7 @@ where
             }
         }
 
-        for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+        for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
                 .reported_frontiers
@@ -598,7 +604,7 @@ where
         // Need to go through all sources that are generating timestamp bindings, and extract their upper frontiers.
         // If that frontier is different than the durability frontier we've previously reported then we also need to
         // get the new bindings we've produced and send them to the coordinator.
-        for (id, history) in self.render_state.ts_histories.iter() {
+        for (id, history) in self.storage_state.ts_histories.iter() {
             if !history.requires_persistence() {
                 continue;
             }
@@ -650,14 +656,21 @@ where
     /// Needs to be called periodically (ideally once per "timestamp_frequency" in order
     /// for real time sources to make progress.
     fn update_rt_timestamps(&self) {
-        for (_, history) in self.render_state.ts_histories.iter() {
+        for (_, history) in self.storage_state.ts_histories.iter() {
             history.update_timestamp();
         }
     }
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::CreateDataflows(dataflows) => {
+            Command::Compute(cmd) => self.handle_compute_command(cmd),
+            Command::Storage(cmd) => self.handle_storage_command(cmd),
+        }
+    }
+
+    fn handle_compute_command(&mut self, cmd: ComputeCommand) {
+        match cmd {
+            ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         self.reported_frontiers
@@ -680,7 +693,8 @@ where
 
                     render::build_dataflow(
                         self.timely_worker,
-                        &mut self.render_state,
+                        &mut self.compute_state,
+                        &mut self.storage_state,
                         dataflow,
                         self.now.clone(),
                         &self.dataflow_source_metrics,
@@ -689,21 +703,16 @@ where
                 }
             }
 
-            Command::DropSources(names) => {
-                for name in names {
-                    self.render_state.local_inputs.remove(&name);
-                }
-            }
-            Command::DropSinks(ids) => {
+            ComputeCommand::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
-                    self.render_state.sink_write_frontiers.remove(&id);
-                    self.render_state.dataflow_tokens.remove(&id);
+                    self.storage_state.sink_write_frontiers.remove(&id);
+                    self.compute_state.dataflow_tokens.remove(&id);
                 }
             }
-            Command::DropIndexes(ids) => {
+            ComputeCommand::DropIndexes(ids) => {
                 for id in ids {
-                    self.render_state.traces.del_trace(&id);
+                    self.compute_state.traces.del_trace(&id);
                     let frontier = self
                         .reported_frontiers
                         .remove(&id)
@@ -717,7 +726,7 @@ where
                 }
             }
 
-            Command::Peek {
+            ComputeCommand::Peek {
                 id,
                 key,
                 timestamp,
@@ -726,7 +735,7 @@ where
                 mut map_filter_project,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace_bundle = self.render_state.traces.get(&id).unwrap().clone();
+                let mut trace_bundle = self.compute_state.traces.get(&id).unwrap().clone();
                 trace_bundle
                     .permutation()
                     .permute_safe_mfp_plan(&mut map_filter_project);
@@ -767,7 +776,7 @@ where
                 self.metrics.observe_pending_peeks(&self.pending_peeks);
             }
 
-            Command::CancelPeek { conn_id } => {
+            ComputeCommand::CancelPeek { conn_id } => {
                 let pending_peeks_len = self.pending_peeks.len();
                 let mut pending_peeks = std::mem::replace(
                     &mut self.pending_peeks,
@@ -781,15 +790,38 @@ where
                     }
                 }
             }
+            ComputeCommand::AllowCompaction(list) => {
+                for (id, frontier) in list {
+                    self.compute_state
+                        .traces
+                        .allow_compaction(id, frontier.borrow());
+                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
+                        ts_history.set_compaction_frontier(frontier.borrow());
+                    }
+                }
+            }
+            ComputeCommand::EnableLogging(config) => {
+                self.initialize_logging(&config);
+            }
+        }
+    }
 
-            Command::AdvanceAllLocalInputs { advance_to } => {
-                for (_, local_input) in self.render_state.local_inputs.iter_mut() {
+    fn handle_storage_command(&mut self, cmd: StorageCommand) {
+        match cmd {
+            StorageCommand::DropTables(names) => {
+                for name in names {
+                    self.storage_state.local_inputs.remove(&name);
+                }
+            }
+
+            StorageCommand::AdvanceAllLocalInputs { advance_to } => {
+                for (_, local_input) in self.storage_state.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
                 }
             }
 
-            Command::Insert { id, updates } => {
-                let input = match self.render_state.local_inputs.get_mut(&id) {
+            StorageCommand::Insert { id, updates } => {
+                let input = match self.storage_state.local_inputs.get_mut(&id) {
                     Some(input) => input,
                     None => panic!(
                         "local input {} missing for insert at worker {}",
@@ -804,30 +836,18 @@ where
                 }
             }
 
-            Command::AllowCompaction(list) => {
+            StorageCommand::DurabilityFrontierUpdates(list) => {
                 for (id, frontier) in list {
-                    self.render_state
-                        .traces
-                        .allow_compaction(id, frontier.borrow());
-                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
-                        ts_history.set_compaction_frontier(frontier.borrow());
-                    }
-                }
-            }
-            Command::DurabilityFrontierUpdates(list) => {
-                for (id, frontier) in list {
-                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
+                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
             }
-            Command::EnableLogging(config) => {
-                self.initialize_logging(&config);
+
+            StorageCommand::EnablePersistence(runtime) => {
+                self.storage_state.persist = Some(runtime);
             }
-            Command::EnablePersistence(runtime) => {
-                self.render_state.persist = Some(runtime);
-            }
-            Command::AddSourceTimestamping {
+            StorageCommand::AddSourceTimestamping {
                 id,
                 connector,
                 bindings,
@@ -937,7 +957,7 @@ where
                         }
                     }
 
-                    let prev = self.render_state.ts_histories.insert(id, data);
+                    let prev = self.storage_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
                     self.reported_frontiers.insert(id, Antichain::from_elem(0));
                     self.reported_bindings_frontiers
@@ -946,8 +966,8 @@ where
                     assert!(bindings.is_empty());
                 }
             }
-            Command::AdvanceSourceTimestamp { id, update } => {
-                if let Some(history) = self.render_state.ts_histories.get_mut(&id) {
+            StorageCommand::AdvanceSourceTimestamp { id, update } => {
+                if let Some(history) = self.storage_state.ts_histories.get_mut(&id) {
                     match update {
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
                             // TODO: change the interface between the dataflow server and the
@@ -969,7 +989,7 @@ where
                     };
 
                     let sources = self
-                        .render_state
+                        .storage_state
                         .ts_source_mapping
                         .entry(id)
                         .or_insert_with(Vec::new);
@@ -982,14 +1002,14 @@ where
                     }
                 }
             }
-            Command::DropSourceTimestamping { id } => {
-                let prev = self.render_state.ts_histories.remove(&id);
+            StorageCommand::DropSourceTimestamping { id } => {
+                let prev = self.storage_state.ts_histories.remove(&id);
 
                 if prev.is_none() {
                     tracing::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
                 }
 
-                let prev = self.render_state.ts_source_mapping.remove(&id);
+                let prev = self.storage_state.ts_source_mapping.remove(&id);
                 if prev.is_none() {
                     tracing::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
@@ -1033,7 +1053,7 @@ where
 
     /// Scan the shared tail response buffer, and forward results along.
     fn process_tails(&mut self) {
-        let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
+        let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
             self.send_response(Response::TailResponse(sink_id, response));
         }

@@ -8,57 +8,29 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashSet;
-use std::iter;
-use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context};
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use regex::Regex;
 
 use prost_reflect::{
     Cardinality, DynamicMessage, FieldDescriptor, FileDescriptor, Kind, MessageDescriptor,
     ReflectMessage, Value,
 };
-use protobuf::Message;
-use serde::{Deserialize, Serialize};
 
-use ccsr::Subject;
-use mz_protoc::Protoc;
 use ore::str::StrExt;
-use repr::{strconv, ColumnName, ColumnType, Datum, Row, ScalarType};
-use sql_parser::ast::CsrSeedCompiledEncoding;
-
-/// Wrapper type that ensures a protobuf message name is properly normalized.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct NormalizedProtobufMessageName(String);
-
-impl NormalizedProtobufMessageName {
-    /// Create a new normalized protobuf message name.  A leading dot will be
-    /// prepended to the provided message name if necessary.
-    pub fn new(mut message_name: String) -> Self {
-        if !message_name.starts_with('.') {
-            message_name = format!(".{}", message_name);
-        }
-        NormalizedProtobufMessageName(message_name)
-    }
-}
+use repr::{ColumnName, ColumnType, Datum, Row, ScalarType};
 
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug, PartialEq)]
 pub struct DecodedDescriptors {
     message_descriptor: MessageDescriptor,
     columns: Vec<(ColumnName, ColumnType)>,
-    message_name: NormalizedProtobufMessageName,
+    message_name: String,
 }
 
 impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
-    pub fn from_bytes(
-        bytes: &[u8],
-        NormalizedProtobufMessageName(message_name): NormalizedProtobufMessageName,
-    ) -> Result<Self, anyhow::Error> {
+    pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
         let fds = FileDescriptor::decode(bytes).context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
             anyhow!(
@@ -77,7 +49,7 @@ impl DecodedDescriptors {
         Ok(DecodedDescriptors {
             message_descriptor,
             columns,
-            message_name: NormalizedProtobufMessageName(message_name),
+            message_name,
         })
     }
 
@@ -266,74 +238,4 @@ fn pack_value(
         ),
     }
     Ok(())
-}
-
-/// Given a primary subject and subjects for references (obtained using a ccsr client),
-/// compile the message descriptor
-pub async fn compile_proto_from_subjects(
-    primary_subject: Subject,
-    dependency_subjects: Vec<Subject>,
-) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
-    lazy_static! {
-        static ref WELL_KNOWN_REGEX: Regex = Regex::new(r#"(\.)?google\.protobuf\.\w+"#).unwrap();
-        static ref MISSING_IMPORT_ERROR: Regex =
-            Regex::new(r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#)
-                .unwrap();
-    }
-
-    let primary_proto_name = primary_subject.name.clone();
-    let include_dir = tempfile::tempdir()?;
-    let primary_proto_path = include_dir.path().join(&primary_proto_name);
-
-    for subject in iter::once(primary_subject).chain(dependency_subjects.into_iter()) {
-        if WELL_KNOWN_REGEX.is_match(&subject.name) {
-            continue;
-        }
-        let subject_pb = PathBuf::from(subject.name);
-        if let Some(parent) = subject_pb.parent() {
-            tokio::fs::create_dir_all(include_dir.path().join(parent)).await?;
-        }
-        let path = include_dir.path().join(subject_pb);
-        let bytes = strconv::parse_bytes(&subject.schema.raw)?;
-        tokio::fs::write(&path, &bytes).await?;
-    }
-
-    match Protoc::new()
-        .include(include_dir.path())
-        .input(primary_proto_path)
-        .parse()
-    {
-        Ok(fds) => {
-            let message_name = fds
-                .file
-                .iter()
-                .find(|f| f.get_name() == primary_proto_name)
-                .map(|file| file.message_type.iter().at_most_one())
-                .transpose()
-                .map_err(|_| anyhow!("proto files with multiple `message`'s are not yet supported"))
-                .map(|found| found.flatten())
-                .and_then(|message| {
-                    message
-                        .map(|message| format!(".{}", message.get_name()))
-                        .ok_or_else(|| anyhow!("unable to compile temporary schema"))
-                })?;
-            let mut schema = String::new();
-            strconv::format_bytes(&mut schema, &fds.write_to_bytes()?);
-            Ok(CsrSeedCompiledEncoding {
-                schema,
-                message_name,
-            })
-        }
-        Err(e) => {
-            // Make protobuf import errors more user-friendly.
-            if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
-                bail!(
-                    "unsupported protobuf schema reference {}",
-                    &captures["reference"]
-                )
-            } else {
-                Err(e)
-            }
-        }
-    }
 }

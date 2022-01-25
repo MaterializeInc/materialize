@@ -26,7 +26,7 @@ use persist_types::Codec;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
 use timely::progress::Antichain;
-use tokio::runtime::Runtime;
+use tokio::runtime::Runtime as AsyncRuntime;
 
 use persist::client::WriteReqBuilder;
 use persist::error::Error;
@@ -35,7 +35,7 @@ use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
 use persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
-use persist::indexed::Indexed;
+use persist::indexed::{Cmd, Indexed};
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};
 use persist::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
@@ -146,7 +146,7 @@ fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B:
 ) -> Result<T, Error> {
     let (tx, rx) = PFuture::new();
     f(index, tx);
-    index.step()?;
+    index.step_or_log();
     rx.recv()
 }
 
@@ -175,9 +175,13 @@ fn bench_write<L: Log, B: Blob>(
         for updates in data {
             // We intentionally never call seal, so that the data only gets written
             // once to Unsealed, and not to Trace.
-            let mut updates = WriteReqBuilder::from_iter(updates.iter());
+            let updates = WriteReqBuilder::from_iter(updates.iter())
+                .finish()
+                .into_iter()
+                .map(|x| (id, x))
+                .collect();
             block_on_drain(index, |i, handle| {
-                i.write(vec![(id, updates.finish())], handle)
+                i.apply(Cmd::Write(updates, handle));
             })
             .unwrap();
         }
@@ -229,7 +233,9 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
 
     g.throughput(Throughput::Bytes(data.goodput_bytes()));
 
-    let id = block_on(|res| index.register("0", "()", "()", res))?;
+    let id = block_on(|res| {
+        index.apply(Cmd::Register("0".into(), ("()".into(), "()".into()), res));
+    })?;
     g.bench_with_input(
         BenchmarkId::new(&format!("{}_sorted", name), data.goodput_pretty()),
         &sorted_updates,
@@ -265,9 +271,15 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
     let file_log = new_file_log("indexed_write_drain_log", temp_dir.path());
     let file_blob = new_file_blob("indexed_write_drain_blob", temp_dir.path());
 
+    let async_runtime = Arc::new(AsyncRuntime::new().unwrap());
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
-    let blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics.clone(), file_blob);
-    let compacter = Maintainer::new(blob_cache.clone(), Arc::new(Runtime::new().unwrap()));
+    let blob_cache = BlobCache::new(
+        build_info::DUMMY_BUILD_INFO,
+        metrics.clone(),
+        async_runtime.clone(),
+        file_blob,
+    );
+    let compacter = Maintainer::new(blob_cache.clone(), async_runtime);
     let file_indexed = Indexed::new(file_log, blob_cache, compacter, metrics)
         .expect("failed to create file indexed");
     bench_writes_indexed_inner(file_indexed, "file", &mut group).expect("running benchmark failed");
@@ -324,18 +336,29 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(1));
 
+    let async_runtime = Arc::new(AsyncRuntime::new().expect("failed to create runtime"));
     let mem_blob = MemRegistry::new()
         .blob_no_reentrance()
         .expect("creating a MemBlob cannot fail");
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
-    let mut mem_blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics, mem_blob);
+    let mut mem_blob_cache = BlobCache::new(
+        build_info::DUMMY_BUILD_INFO,
+        metrics,
+        async_runtime.clone(),
+        mem_blob,
+    );
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let file_blob = new_file_blob("indexed_write_drain_blob", temp_dir.path());
 
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
-    let mut file_blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics, file_blob);
+    let mut file_blob_cache = BlobCache::new(
+        build_info::DUMMY_BUILD_INFO,
+        metrics,
+        async_runtime,
+        file_blob,
+    );
 
     let data = DataGenerator::default();
     let batches = data.batches().collect::<Vec<_>>();

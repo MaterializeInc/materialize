@@ -31,10 +31,10 @@ $ file-append path=static.csv
 4
 
 ! SELECT * FROM unindexed
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 ! SELECT * FROM v_unindexed
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 > BEGIN
 
@@ -46,7 +46,7 @@ unable to automatically determine a query timestamp
 4
 
 ! SELECT c FROM unindexed ORDER BY c
-Transactions can only reference objects in the same timedomain
+contains:Transactions can only reference objects in the same timedomain
 
 > ROLLBACK
 
@@ -59,7 +59,7 @@ Transactions can only reference objects in the same timedomain
 4
 
 ! SELECT * FROM v_unindexed
-Transactions can only reference objects in the same timedomain
+contains:Transactions can only reference objects in the same timedomain
 
 > ROLLBACK
 

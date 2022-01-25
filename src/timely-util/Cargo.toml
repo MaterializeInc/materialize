@@ -4,6 +4,7 @@ description = "Utilities for working with Timely."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [dependencies]
 futures-util = "0.3.19"

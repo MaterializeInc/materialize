@@ -8,17 +8,22 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp;
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use futures::{StreamExt, TryFutureExt};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
+use ore::collections::CollectionExt;
+use ore::retry::Retry;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
@@ -52,7 +57,6 @@ use tokio::task;
 
 use super::{KafkaBaseMetrics, SinkBaseMetrics};
 use crate::render::sinks::SinkRender;
-use crate::render::RenderState;
 use crate::source::timestamp::TimestampBindingRc;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -76,7 +80,8 @@ where
 
     fn render_continuous_sink(
         &self,
-        render_state: &mut RenderState,
+        _compute_state: &mut crate::render::ComputeState,
+        storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
@@ -109,7 +114,7 @@ where
         let mut source_ts_histories = Vec::new();
 
         for id in &self.transitive_source_dependencies {
-            if let Some(history) = render_state.ts_histories.get(id) {
+            if let Some(history) = storage_state.ts_histories.get(id) {
                 // As soon as we have one sink that depends on a given source,
                 // that source needs to persist timestamp bindings.
                 history.enable_persistence();
@@ -131,7 +136,7 @@ where
         let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
 
         // Only the active_write_worker will ever produce data so all other workers have
-        // an empty frontier.  It's necessary to insert all of these into `render_state.
+        // an empty frontier.  It's necessary to insert all of these into `storage_state.
         // sink_write_frontier` below so we properly clear out default frontiers of
         // non-active workers.
         let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
@@ -154,7 +159,7 @@ where
             &metrics.kafka,
         );
 
-        render_state
+        storage_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 
@@ -253,18 +258,74 @@ impl Drop for KafkaSinkToken {
     }
 }
 
+#[derive(Clone)]
+struct KafkaTxProducer {
+    inner: Arc<ThreadedProducer<SinkProducerContext>>,
+    timeout: Duration,
+}
+
+impl KafkaTxProducer {
+    fn init_transactions(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(move || self_producer.init_transactions(self_timeout))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    fn begin_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        task::spawn_blocking(move || self_producer.begin_transaction())
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    fn commit_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(move || self_producer.commit_transaction(self_timeout))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    fn abort_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(move || self_producer.abort_transaction(self_timeout))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    fn flush(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(move || self_producer.flush(self_timeout))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    fn in_flight_count(&self) -> i32 {
+        // non-blocking call
+        self.inner.in_flight_count()
+    }
+
+    fn send<'a, K, P>(
+        &self,
+        record: BaseRecord<'a, K, P>,
+    ) -> Result<(), (KafkaError, BaseRecord<'a, K, P>)>
+    where
+        K: ToBytes + ?Sized,
+        P: ToBytes + ?Sized,
+    {
+        self.inner.send(record)
+    }
+}
+
 struct KafkaSinkState {
     name: String,
     topic: String,
     topic_prefix: String,
     shutdown_flag: Arc<AtomicBool>,
     metrics: Arc<SinkMetrics>,
-    producer: Arc<ThreadedProducer<SinkProducerContext>>,
+    producer: KafkaTxProducer,
     activator: timely::scheduling::Activator,
-    txn_timeout: Duration,
     transactional: bool,
     consistency: Option<KafkaSinkConsistencyConnector>,
-    fuel: usize,
     pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     send_state: SendState,
@@ -304,14 +365,17 @@ impl KafkaSinkState {
             &worker_id,
         ));
 
-        let producer = Arc::new(
-            config
-                .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
-                    Arc::clone(&metrics),
-                    Arc::clone(&shutdown_flag),
-                ))
-                .expect("creating kafka producer for Kafka sink failed"),
-        );
+        let producer = KafkaTxProducer {
+            inner: Arc::new(
+                config
+                    .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
+                        Arc::clone(&metrics),
+                        Arc::clone(&shutdown_flag),
+                    ))
+                    .expect("creating kafka producer for Kafka sink failed"),
+            ),
+            timeout: Duration::from_secs(5),
+        };
 
         KafkaSinkState {
             name: sink_name,
@@ -321,10 +385,8 @@ impl KafkaSinkState {
             metrics,
             producer,
             activator,
-            txn_timeout: Duration::from_secs(5),
             transactional: connector.exactly_once,
             consistency: connector.consistency,
-            fuel: connector.fuel,
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
             send_state: SendState::Init,
@@ -382,92 +444,134 @@ impl KafkaSinkState {
         config
     }
 
-    fn transition_on_txn_error(
-        &self,
-        current_state: SendState,
-        ts: u64,
-        e: KafkaError,
-    ) -> SendState {
-        error!(
-            "encountered error during kafka interaction. {} in state {:?} at time {} : {}",
-            &self.name, current_state, ts, e
-        );
-
-        match e {
-            KafkaError::Transaction(e) => {
-                if e.txn_requires_abort() {
-                    SendState::AbortTxn
-                } else if e.is_retriable() {
-                    current_state
-                } else {
-                    SendState::Shutdown
+    // TODO: maybe bound the backoff
+    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> KafkaResult<T>
+    where
+        F: Fn(KafkaTxProducer) -> Fut,
+        Fut: Future<Output = KafkaResult<T>>,
+    {
+        let shutdown = Cell::new(false);
+        let self_producer = self.producer.clone();
+        let mut last_error = KafkaError::Canceled;
+        let tries = Retry::default()
+            .clamp_backoff(Duration::from_secs(60 * 10))
+            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
+            // addressing error strategy holistically.
+            .max_tries(usize::MAX)
+            .into_retry_stream();
+        tokio::pin!(tries);
+        while tries.next().await.is_some() {
+            match f(self_producer.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(KafkaError::Transaction(e)) => {
+                    // clone is a cheap: Option<Arc<..>> internally
+                    last_error = KafkaError::Transaction(e.clone());
+                    if e.txn_requires_abort() {
+                        info!("Error requiring abort in kafka sink: {:?}", e);
+                        let self_self_producer = self_producer.clone();
+                        let should_shutdown = Retry::default()
+                            .clamp_backoff(Duration::from_secs(60 * 10))
+                            // Yes this might be bad but we had an infinite loop before so it's no
+                            // worse.  Fix when addressing error strategy holistically.
+                            .max_tries(usize::MAX)
+                            .retry_async(|_| async {
+                                match self_self_producer.abort_transaction().await {
+                                    Ok(_) => Ok(false),
+                                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                                        Err(KafkaError::Transaction(e))
+                                    }
+                                    Err(_) => Ok(true),
+                                }
+                            })
+                            .await
+                            .unwrap_or(true);
+                        shutdown.set(should_shutdown);
+                    } else if e.is_retriable() {
+                        info!("Retriable error in kafka sink: {:?}", e);
+                        continue;
+                    } else {
+                        shutdown.set(true);
+                    }
+                    break;
+                }
+                Err(e) => {
+                    last_error = e;
+                    shutdown.set(true);
+                    break;
                 }
             }
-            _ => SendState::Shutdown,
         }
-    }
 
-    async fn init_transactions(&self, timeout: Duration) -> KafkaResult<()> {
-        let self_producer = Arc::clone(&self.producer);
-        task::spawn_blocking(move || self_producer.init_transactions(timeout))
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
+        // Consider a retriable error that's hit our max backoff to be fatal.
+        if shutdown.get() {
+            self.shutdown_flag.store(true, Ordering::SeqCst);
+            // Indicate that the sink is closed to everyone else who
+            // might be tracking its write frontier.
+            info!("shutting down kafka sink: {}", &self.name);
+        }
+        Err(last_error)
     }
 
     async fn begin_transaction(&self) -> KafkaResult<()> {
-        let self_producer = Arc::clone(&self.producer);
-        task::spawn_blocking(move || self_producer.begin_transaction())
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
+        self.producer.begin_transaction().await
     }
 
-    async fn commit_transaction(&self, timeout: Duration) -> KafkaResult<()> {
-        let self_producer = Arc::clone(&self.producer);
-        task::spawn_blocking(move || self_producer.commit_transaction(timeout))
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
+    async fn commit_transaction(&self) -> KafkaResult<()> {
+        self.producer.commit_transaction().await
     }
 
-    async fn abort_transaction(&self, timeout: Duration) -> KafkaResult<()> {
-        let self_producer = Arc::clone(&self.producer);
-        task::spawn_blocking(move || self_producer.abort_transaction(timeout))
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
-    }
-
-    fn send<'a, K, P>(&self, record: BaseRecord<'a, K, P>) -> Result<(), bool>
+    async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>) -> KafkaResult<()>
     where
         K: ToBytes + ?Sized,
         P: ToBytes + ?Sized,
     {
-        if let Err((e, _)) = self.producer.send(record) {
-            self.metrics.message_send_errors_counter.inc();
+        let mut last_error = KafkaError::Canceled;
+        // Because of the lifetime bound on `record`, we can't just use `Retry::retry` so use the stream
+        let tries = Retry::default()
+            .clamp_backoff(Duration::from_secs(60 * 10))
+            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
+            // addressing error strategy holistically.
+            .max_tries(usize::MAX)
+            .into_retry_stream();
+        tokio::pin!(tries);
+        while tries.next().await.is_some() {
+            match self.producer.send(record) {
+                Ok(_) => {
+                    self.metrics.messages_sent_counter.inc();
+                    return Ok(());
+                }
+                Err((e, rec)) => {
+                    record = rec;
+                    last_error = e;
+                    self.metrics.message_send_errors_counter.inc();
 
-            if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = e {
-                debug!("unable to produce message in {}: rdkafka queue full. Retrying after 60 seconds.", self.name);
-                self.activator.activate_after(Duration::from_secs(60));
-                Err(true)
-            } else {
-                // We've received an error that is not transient
-                error!(
-                    "unable to produce message in {}: {}. Shutting down sink.",
-                    self.name, e
-                );
-                self.shutdown_flag.store(true, Ordering::SeqCst);
-                Err(false)
+                    if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = last_error {
+                        debug!(
+                            "unable to produce message in {}: rdkafka queue full. Retrying.",
+                            self.name
+                        );
+                        continue;
+                    } else {
+                        // We've received an error that is not transient
+                        error!(
+                            "unable to produce message in {}: {}. Shutting down sink.",
+                            self.name, last_error
+                        );
+                        self.shutdown_flag.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
             }
-        } else {
-            self.metrics.messages_sent_counter.inc();
-            Ok(())
         }
+        Err(last_error)
     }
 
-    fn send_consistency_record(
+    async fn send_consistency_record(
         &self,
         transaction_id: &str,
         status: &str,
         message_count: Option<i64>,
-    ) -> Result<(), bool> {
+    ) -> KafkaResult<()> {
         let consistency = self
             .consistency
             .as_ref()
@@ -485,7 +589,7 @@ impl KafkaSinkState {
             .payload(&encoded)
             .key(&self.topic_prefix);
 
-        self.send(record)
+        self.send(record).await
     }
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
@@ -549,10 +653,11 @@ impl KafkaSinkState {
                     }
 
                     self.send_consistency_record(&min_frontier.to_string(), "END", None)
-                        .map_err(|_e| anyhow::anyhow!("Error sending write frontier update."))?;
+                        .await
+                        .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
-                        self.commit_transaction(self.txn_timeout).await?
+                        self.commit_transaction().await?
                     }
                 }
                 self.latest_progress_ts = min_frontier;
@@ -580,28 +685,7 @@ enum SendState {
     // Note that this only runs once across all workers - it should only execute
     // for the worker that will actually be publishing to kafka
     Init,
-    // Corresponds to a Kafka begin_transaction call
-    BeginTxn,
-    // Write BEGIN consistency record
-    Begin,
-    // Flush pending rows for closed timestamps
-    Draining {
-        // row_index points to the current flushing row within the closed timestamp
-        // we're processing
-        row_index: usize,
-        // multiple copies of a row may need to be sent if its cardinality is >1
-        repeat_counter: usize,
-        // a count of all rows sent, accounting for the repeat counter
-        total_sent: i64,
-    },
-    // Write END consistency record
-    End(i64),
-    // Corresponds to a Kafka commit_transaction call
-    CommitTxn,
-    // Transitioned to when an error in a previous transactional state requires an abort
-    AbortTxn,
-    // Transitioned to when the sink needs to be closed
-    Shutdown,
+    Running,
 }
 
 #[derive(Debug)]
@@ -635,8 +719,13 @@ where
             key_schema_id,
             value_schema_id,
         }) => {
-            let schema_generator =
-                AvroSchemaGenerator::new(key_desc, value_desc, connector.consistency.is_some());
+            let schema_generator = AvroSchemaGenerator::new(
+                None,
+                None,
+                key_desc,
+                value_desc,
+                connector.consistency.is_some(),
+            );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
                 stream,
@@ -747,15 +836,25 @@ where
     builder.build_async(
         stream.scope(),
         async_op!(|_initial_capabilities, frontiers| {
-            let frontier = frontiers[0].borrow();
-
             if s.shutdown_flag.load(Ordering::SeqCst) {
                 debug!("shutting down sink: {}", &s.name);
+                // One last attempt to push anything pending to kafka before closing.
+                let _ = s.producer.flush().await;
+
                 // Indicate that the sink is closed to everyone else who
                 // might be tracking its write frontier.
                 s.write_frontier.borrow_mut().clear();
                 return false;
             }
+            // Panic if there's not exactly once element in the frontier like we expect.
+            let frontier = frontiers.clone().into_element();
+
+            // Figure out the durablity frontier for all sources we depend on
+            let durability_frontier = source_timestamp_histories
+                .iter()
+                .fold(Antichain::new(), |accum, history| {
+                    accum.meet(&history.durability_frontier())
+                });
 
             // Queue all pending rows waiting to be sent to kafka
             input.for_each(|_, rows| {
@@ -798,13 +897,6 @@ where
                 }
             });
 
-            // Figure out the durablity frontier for all sources we depent on
-            let mut durability_frontier = Antichain::new();
-
-            for history in source_timestamp_histories.iter() {
-                use differential_dataflow::lattice::Lattice;
-                durability_frontier.meet_assign(&history.durability_frontier());
-            }
             // Move any newly closed timestamps from pending to ready
             let mut closed_ts: Vec<u64> = s
                 .pending_rows
@@ -818,154 +910,92 @@ where
                 s.ready_rows.push_back((ts, rows));
             });
 
-            // TODO: #9980.  Rewrite this to take advantage of the fact that we're now within an
-            //       async op and don't need to explicitly yield in order to not block timely.
-            //
-            // Send a bounded number of records to Kafka from the ready queue.
-            // This loop has explicitly been designed so that each iteration sends
-            // at most one record to Kafka
-            for _ in 0..s.fuel {
-                if let Some((ts, rows)) = s.ready_rows.front() {
-                    s.send_state = match s.send_state {
-                        SendState::Init => {
-                            let result = if s.transactional {
-                                s.init_transactions(s.txn_timeout).await
-                            } else {
-                                Ok(())
-                            };
-
-                            match result {
-                                Ok(()) => SendState::BeginTxn,
-                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                            }
+            // Can't use `?` when the return type is a `bool` so use a custom try operator
+            macro_rules! bail_err {
+                ($expr:expr) => {
+                    match $expr {
+                        Ok(val) => val,
+                        Err(_) => {
+                            s.activator.activate();
+                            return true;
                         }
-                        SendState::BeginTxn => {
-                            let result = if s.transactional {
-                                s.begin_transaction().await
-                            } else {
-                                Ok(())
-                            };
+                    }
+                };
+            }
 
-                            match result {
-                                Ok(()) => SendState::Begin,
-                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                            }
-                        }
-                        SendState::Begin => {
-                            if s.consistency.is_some() {
-                                let result =
-                                    s.send_consistency_record(&ts.to_string(), "BEGIN", None);
-
-                                if let Err(retry) = result {
-                                    return retry;
-                                }
-                            }
-                            SendState::Draining {
-                                row_index: 0,
-                                repeat_counter: 0,
-                                total_sent: 0,
-                            }
-                        }
-                        SendState::Draining {
-                            mut row_index,
-                            mut repeat_counter,
-                            mut total_sent,
-                        } => {
-                            let encoded_row = &rows[row_index];
-                            let record = BaseRecord::to(&s.topic);
-                            let record = if encoded_row.value.is_some() {
-                                record.payload(encoded_row.value.as_ref().unwrap())
-                            } else {
-                                record
-                            };
-                            let record = if encoded_row.key.is_some() {
-                                record.key(encoded_row.key.as_ref().unwrap())
-                            } else {
-                                record
-                            };
-                            if let Err(retry) = s.send(record) {
-                                return retry;
-                            }
-
-                            // advance to the next repetition of this row, or the next row if all
-                            // reptitions are exhausted
-                            total_sent += 1;
-                            repeat_counter += 1;
-                            if repeat_counter == encoded_row.count {
-                                repeat_counter = 0;
-                                row_index += 1;
-                                s.metrics.rows_queued.dec();
-                            }
-
-                            // move to the end state if we've finished all rows in this timestamp
-                            if row_index == rows.len() {
-                                SendState::End(total_sent)
-                            } else {
-                                SendState::Draining {
-                                    row_index,
-                                    repeat_counter,
-                                    total_sent,
-                                }
-                            }
-                        }
-                        SendState::End(total_count) => {
-                            if s.consistency.is_some() {
-                                let result = s.send_consistency_record(
-                                    &ts.to_string(),
-                                    "END",
-                                    Some(total_count),
-                                );
-
-                                if let Err(retry) = result {
-                                    return retry;
-                                }
-                            }
-                            SendState::CommitTxn
-                        }
-                        SendState::CommitTxn => {
-                            let result = if s.transactional {
-                                s.commit_transaction(s.txn_timeout).await
-                            } else {
-                                Ok(())
-                            };
-
-                            match result {
-                                Ok(()) => {
-                                    // sanity check for the continuous updating
-                                    // of the write frontier below
-
-                                    s.assert_progress(ts);
-                                    progress_update.replace(ts.clone());
-
-                                    s.ready_rows.pop_front();
-                                    SendState::BeginTxn
-                                }
-                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                            }
-                        }
-                        SendState::AbortTxn => {
-                            let result = if s.transactional {
-                                s.abort_transaction(s.txn_timeout).await
-                            } else {
-                                Ok(())
-                            };
-
-                            match result {
-                                Ok(()) => SendState::BeginTxn,
-                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                            }
-                        }
-                        SendState::Shutdown => {
-                            s.shutdown_flag.store(true, Ordering::SeqCst);
-                            // Indicate that the sink is closed to everyone else who
-                            // might be tracking its write frontier.
-                            info!("shutting down kafka sink: {}", &s.name);
-                            break;
-                        }
-                    };
-                } else {
-                    break;
+            if is_active_worker
+                && matches!(s.send_state, SendState::Init)
+                // Removing this check would cause us to start writing out END consistency rows as
+                // soon as the sink starts up.  There isn't anything inherently wrong with this but
+                // we need to update testdrive to be able to check a reasonable condition that this
+                // is correct.  That is, td currently checks we start with a BEGIN and then END.
+                // We'd need to be able to do a search for a BEGIN to properly test were we to
+                // remove this check.  This would fix #9514.
+                && s.ready_rows.front().is_some()
+            {
+                if s.transactional {
+                    bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
                 }
+                s.send_state = SendState::Running;
+            }
+
+            while let Some((ts, rows)) = s.ready_rows.front() {
+                assert!(is_active_worker);
+
+                if s.transactional {
+                    bail_err!(s.retry_on_txn_error(|p| p.begin_transaction()).await);
+                }
+                if s.consistency.is_some() {
+                    bail_err!(
+                        s.send_consistency_record(&ts.to_string(), "BEGIN", None)
+                            .await
+                    );
+                }
+
+                let mut repeat_counter = 0;
+                let mut total_sent = 0;
+                for encoded_row in rows {
+                    let record = BaseRecord::to(&s.topic);
+                    let record = match encoded_row.value.as_ref() {
+                        Some(r) => record.payload(r),
+                        None => record,
+                    };
+                    let record = match encoded_row.key.as_ref() {
+                        Some(r) => record.key(r),
+                        None => record,
+                    };
+
+                    // Only fatal errors are returned from send
+                    bail_err!(s.send(record).await);
+
+                    // advance to the next repetition of this row, or the next row if all
+                    // reptitions are exhausted
+                    total_sent += 1;
+                    repeat_counter += 1;
+                    if repeat_counter == encoded_row.count {
+                        repeat_counter = 0;
+                        s.metrics.rows_queued.dec();
+                    }
+                }
+
+                if s.consistency.is_some() {
+                    bail_err!(
+                        s.send_consistency_record(&ts.to_string(), "END", Some(total_sent))
+                            .await
+                    );
+                }
+                if s.transactional {
+                    bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
+                };
+
+                bail_err!(s.retry_on_txn_error(|p| p.flush()).await);
+
+                // sanity check for the continuous updating
+                // of the write frontier below
+                s.assert_progress(ts);
+                progress_update.replace(ts.clone());
+
+                s.ready_rows.pop_front();
             }
 
             // update our state based on any END records we might have sent
@@ -981,24 +1011,14 @@ where
             // Only ever emit progress records if this operator/worker received
             // updates. Only on worker receives all the updates and we don't want
             // the other workers to also emit END records.
-            if s.ready_rows.is_empty() && is_active_worker {
-                if let Err(e) = s.maybe_emit_progress(frontier).await {
+            if is_active_worker {
+                if let Err(e) = s.maybe_emit_progress(frontier.borrow()).await {
                     // This can happen when the producer has not been
                     // initialized yet. This also means, that we only start
                     // emitting continuous updates once some real data
                     // has been emitted.
                     debug!("Error writing out progress update: {}", e);
                 }
-            }
-
-            let in_flight = s.producer.in_flight_count();
-            s.metrics.messages_in_flight.set(in_flight as u64);
-
-            if !s.ready_rows.is_empty() {
-                // We need timely to reschedule this operator as we have pending
-                // items that we need to send to Kafka
-                s.activator.activate();
-                return true;
             }
 
             if !s.pending_rows.is_empty() {
@@ -1009,6 +1029,11 @@ where
                 return true;
             }
 
+            // N.B. Given the `flush` call above, I don't think we should ever end up in this
+            // situation but let's keep the metrics / logging here so we can verify this in real
+            // world use cases.
+            let in_flight = s.producer.in_flight_count();
+            s.metrics.messages_in_flight.set(in_flight as u64);
             if in_flight > 0 {
                 // We still have messages that need to be flushed out to Kafka
                 // Let's make sure to keep the sink operator around until

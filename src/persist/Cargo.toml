@@ -4,6 +4,7 @@ description = "Abstraction for Materialize dataplane persistence."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [[bench]]
 name = "writer"
@@ -22,9 +23,9 @@ harness = false
 [dependencies]
 async-trait = "0.1"
 arrow2 = { version = "0.8.1", features = ["io_ipc", "io_parquet"] }
-aws-config = { version = "0.4.1", default-features = false, features = ["native-tls"] }
-aws-sdk-s3 = { version = "0.4.0", default-features = false }
-aws-types = { version = "0.4.0" }
+aws-config = { version = "0.5.0", default-features = false, features = ["native-tls"] }
+aws-sdk-s3 = { version = "0.5.0", default-features = false }
+aws-types = { version = "0.5.0" }
 base64 = "0.13.0"
 bincode = "1.3.3"
 build-info = { path = "../build-info" }
@@ -43,17 +44,17 @@ parquet2 = { version = "0.8.1", default-features = false }
 persist-types = { path = "../persist-types" }
 prost = "0.9.0"
 semver = { version = "1.0.4" }
-serde = { version = "1.0.133", features = ["derive"] }
+serde = { version = "1.0.135", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.15.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]
-mz-protoc = { path = "../protoc" }
+prost-build = "0.9.1"
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 ore = { path = "../ore", default-features = false, features = ["test"] }
 rand = { version = "0.8.4", features = [ "small_rng" ] }
 tempfile = "3.2.0"
-serde_json = "1.0.75"
+serde_json = "1.0.78"

@@ -199,6 +199,8 @@ Field         | Type           | Meaning
 `name`        | [`text`]       | The name of the function.
 `arg_ids`     | [`text array`] | The function's arguments' types. Elements refers to `mz_types.id`.
 `variadic_id` | [`text`]       | The variadic array parameter's elements, or `NULL` if the function does not have a variadic parameter. Refers to `mz_types.id`.
+`ret_id`      | [`text`]       | The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].
+`ret_set`     | [`bool`]       | Whether the returned value is a set, i.e. the function is a table function.
 
 ### `mz_indexes`
 

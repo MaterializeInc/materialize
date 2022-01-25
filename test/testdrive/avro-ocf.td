@@ -105,7 +105,7 @@ mz_obj_no  false     bigint
 ! CREATE MATERIALIZED SOURCE reader_schema
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
   WITH (reader_schema = '{"bad": "news", "bears"')
-validating avro schema:
+contains:validating avro schema:
 
 > CREATE MATERIALIZED SOURCE tailed
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf' WITH (tail = true)
@@ -287,4 +287,4 @@ a  b
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
   INCLUDE OFFSET
   ENVELOPE DEBEZIUM
-INCLUDE metadata with non-Kafka sources not yet supported
+contains:INCLUDE metadata with non-Kafka sources not yet supported

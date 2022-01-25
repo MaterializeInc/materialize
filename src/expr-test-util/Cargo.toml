@@ -4,6 +4,7 @@ description = "Utilities for creating objects in the expr crate for testing"
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [dependencies]
 expr = {path = "../expr"}
@@ -13,8 +14,8 @@ ore = { path = "../ore" }
 proc-macro2 = "1.0.36"
 repr = {path = "../repr"}
 repr_test_util = {path = "../repr-test-util"}
-serde = { version = "1.0.133", features = ["derive"] }
-serde_json = "1.0.75"
+serde = { version = "1.0.135", features = ["derive"] }
+serde_json = "1.0.78"
 
 [dev-dependencies]
 datadriven = "0.6.0"

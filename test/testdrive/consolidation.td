@@ -181,9 +181,9 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 # of the latest transaction (i.e., 4).
 
 ! SELECT * FROM nums AS OF 2
-Timestamp (2) is not valid for all inputs
+contains:Timestamp (2) is not valid for all inputs
 ! SELECT * FROM nums AS OF 3
-Timestamp (3) is not valid for all inputs
+contains:Timestamp (3) is not valid for all inputs
 > SELECT * FROM nums AS OF 4
 6
 
@@ -218,8 +218,8 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 8
 
 ! SELECT * FROM nums_compacted AS OF 4
-Timestamp (4) is not valid for all inputs
+contains:Timestamp (4) is not valid for all inputs
 ! SELECT * FROM nums_compacted AS OF 5
-Timestamp (5) is not valid for all inputs
+contains:Timestamp (5) is not valid for all inputs
 > SELECT * FROM nums_compacted AS OF 6
 8

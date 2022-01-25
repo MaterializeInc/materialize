@@ -85,32 +85,32 @@ CREATE TABLE "space table" ("space column" INTEGER);
 ! CREATE MATERIALIZED SOURCE "no_such_host"
   FROM POSTGRES CONNECTION 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
-failed to lookup address information
+contains:failed to lookup address information
 
 ! CREATE MATERIALIZED SOURCE "no_such_port"
   FROM POSTGRES CONNECTION 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
-error connecting to server: Connection refused (os error 111)
+contains:error connecting to server: Connection refused (os error 111)
 
 ! CREATE MATERIALIZED SOURCE "no_such_user"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=no_such_user password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
-db error: FATAL: role "no_such_user" does not exist
+contains:db error: FATAL: role "no_such_user" does not exist
 
 ! CREATE MATERIALIZED SOURCE "no_such_password"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
   PUBLICATION 'mz_source';
-db error: FATAL: password authentication failed for user "postgres"
+contains:db error: FATAL: password authentication failed for user "postgres"
 
 ! CREATE MATERIALIZED SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
   PUBLICATION 'mz_source';
-db error: FATAL: database "no_such_dbname" does not exist
+contains:db error: FATAL: database "no_such_dbname" does not exist
 
 ! CREATE MATERIALIZED SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'no_such_publication';
-publication "no_such_publication" does not exist
+contains:publication "no_such_publication" does not exist
 
 > CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
@@ -402,10 +402,10 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION mz_source;
 INSERT INTO pk_table VALUES (99999);
 
-! SELECT COUNT(*) = 0 FROM pk_table;
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
-Source error: materialize.public.mz_source: file IO: db error: ERROR: publication "mz_source" does not exist
+! SELECT COUNT(*) = 0 FROM pk_table;
+contains:Source error: materialize.public.mz_source: file IO: db error: ERROR: publication "mz_source" does not exist
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA conflict_schema CASCADE;

@@ -28,28 +28,28 @@ $ set-sql-timeout duration=125ms
 > INSERT INTO two_rows VALUES (1, 1), (2, 1);
 
 ! SELECT (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT f1 FROM two_rows) FROM two_rows LIMIT 0;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT TRUE FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT f1 FROM two_rows) FROM two_rows;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT f1 FROM two_rows) FROM empty;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT f1 FROM one_row UNION ALL SELECT f1 FROM one_row) FROM two_rows;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT f1 FROM empty UNION ALL SELECT f1 FROM two_rows) FROM two_rows;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT DISTINCT f1 FROM two_rows) FROM two_rows;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 > SELECT (SELECT DISTINCT f2 FROM two_rows) FROM two_rows;
 1
@@ -63,56 +63,56 @@ Evaluation error: more than one record produced in subquery
 1
 
 ! SELECT (SELECT f1 FROM two_rows GROUP BY f1);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT MIN(f1) FROM two_rows UNION ALL SELECT MIN(f2) FROM two_rows) FROM two_rows;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 > SELECT (SELECT MIN(f1) FROM two_rows UNION DISTINCT SELECT MIN(f2) FROM two_rows) FROM two_rows;
 1
 1
 
 ! SELECT MIN((SELECT f1 FROM two_rows)) FROM two_rows;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows WHERE f1 > (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows WHERE f1 > (SELECT f1 FROM one_row) AND f1 > (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows WHERE f1 > (SELECT f1 FROM one_row) OR f1 > (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows WHERE (SELECT f1 FROM two_rows) > (SELECT f1 FROM one_row);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows AS o WHERE (SELECT f1 FROM two_rows AS i WHERE o.f2 = i.f2) = 1 AND f1 = 2;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows JOIN two_rows AS r ON (SELECT TRUE FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows LEFT JOIN two_rows AS r ON (SELECT f1 = 1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT f1, COUNT(*) as C FROM two_rows GROUP BY f1 HAVING COUNT(*) > (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT (SELECT f1 FROM two_rows), COUNT(*) FROM two_rows GROUP BY (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT COUNT(*) FROM two_rows GROUP BY (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows ORDER BY (SELECT f1 FROM two_rows);
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 ! INSERT INTO two_rows VALUES ((SELECT 1 UNION ALL SELECT 2));
-more than one record produced in subquery
+contains:more than one record produced in subquery
 
 ! SELECT (SELECT f1 from two_rows) + 1 FROM two_rows;
-Evaluation error: more than one record produced in subquery
+contains:Evaluation error: more than one record produced in subquery
 
 > SELECT (SELECT f1 FROM two_rows LIMIT 0) IS NULL;
 true
@@ -142,7 +142,7 @@ true
 # Two columns returned by subquery in scalar context
 
 ! SELECT (SELECT * FROM one_row) FROM one_row;
-Expected subselect to return 1 column, got 2 columns
+contains:Expected subselect to return 1 column, got 2 columns
 
 ! SELECT * FROM one_row WHERE f1 = ( SELECT * FROM one_row );
-WHERE clause error: Expected subselect to return 1 column, got 2 columns
+contains:WHERE clause error: Expected subselect to return 1 column, got 2 columns

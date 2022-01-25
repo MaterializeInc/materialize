@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 //! Prometheus metrics for our interactive dataflow server
+use std::collections::HashMap;
 
-use enum_iterator::IntoEnumIterator;
 use ore::metrics::{
     CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, MetricsRegistry,
 };
@@ -19,7 +19,8 @@ use ore::{
 };
 
 use super::PendingPeek;
-use dataflow_types::client::{Command, CommandKind};
+use dataflow_types::client::{Command, ComputeCommandKind, StorageCommandKind};
+use enum_iterator::IntoEnumIterator;
 use prometheus::core::AtomicI64;
 
 #[derive(Clone)]
@@ -93,7 +94,7 @@ impl WorkerMetrics {
 
     /// Observe that we have executed a command. Must be paired with [`WorkerMetrics::observe_command_finish`]
     pub(super) fn observe_command(&mut self, command: &Command) {
-        self.commands_processed.observe(command.into());
+        self.commands_processed.observe(command);
     }
 
     /// Observe that we have executed a command
@@ -105,36 +106,37 @@ impl WorkerMetrics {
 /// Count of how many metrics we have processed for a given command type
 #[derive(Debug)]
 struct CommandsProcessedMetrics {
-    cache: Vec<i64>,
-    counters: Vec<DeleteOnDropCounter<'static, AtomicI64, Vec<String>>>,
+    cache: HashMap<&'static str, i64>,
+    counters: HashMap<&'static str, DeleteOnDropCounter<'static, AtomicI64, Vec<String>>>,
 }
 
 impl CommandsProcessedMetrics {
     fn new(worker: &str, commands_processed_metric: &IntCounterVec) -> CommandsProcessedMetrics {
+        let compute_names = ComputeCommandKind::into_enum_iter().map(|kind| kind.metric_name());
+        let storage_names = StorageCommandKind::into_enum_iter().map(|kind| kind.metric_name());
+        let names = compute_names.chain(storage_names);
         CommandsProcessedMetrics {
-            cache: CommandKind::into_enum_iter().map(|_| 0).collect(),
-            counters: CommandKind::into_enum_iter()
-                .map(|kind| {
-                    commands_processed_metric.get_delete_on_drop_counter(vec![
-                        worker.to_string(),
-                        kind.name().to_string(),
-                    ])
+            cache: names.clone().map(|name| (name, 0)).collect(),
+            counters: names
+                .map(|name| {
+                    (
+                        name,
+                        commands_processed_metric
+                            .get_delete_on_drop_counter(vec![worker.to_string(), name.to_string()]),
+                    )
                 })
                 .collect(),
         }
     }
 
-    fn observe(&mut self, command: CommandKind) {
-        let idx: usize = command.into();
-        self.cache[idx] += 1;
+    fn observe(&mut self, command: &Command) {
+        let metrics_name = command.metric_name();
+        *self.cache.entry(metrics_name).or_insert(0) += 1;
     }
 
     fn finish(&mut self) {
-        for (cache_entry, counter) in self.cache.iter_mut().zip(self.counters.iter()) {
-            if *cache_entry != 0 {
-                counter.inc_by(*cache_entry);
-            }
-            *cache_entry = 0;
+        for (key, count) in self.cache.drain() {
+            self.counters[key].inc_by(count);
         }
     }
 }

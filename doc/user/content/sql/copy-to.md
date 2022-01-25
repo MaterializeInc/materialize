@@ -15,24 +15,25 @@ menu:
 Field | Use
 ------|-----
 _query_ | The [`SELECT`](/sql/select) or [`TAIL`](/sql/tail) query to send
+_field_ | The name of the option you want to set.
+_val_ | The value for the option.
 
-Supported `option` values:
+### `WITH` options
 
-Name | Value
------|-------
-`FORMAT` | `text` for text output (the default)
-`FORMAT` | `binary` for binary output
+Name | Value type | Default value | Description
+----------------------------|--------|--------|--------
+`FORMAT` | `TEXT`,`BINARY` | `TEXT` | Sets the output formatting method.
 
 ## Example
 
 ### Copying a view
 
 ```sql
-COPY (SELECT * FROM some_view) TO STDOUT
+COPY (SELECT * FROM some_view) TO STDOUT;
 ```
 
 ### Tailing a view with binary output
 
 ```sql
-COPY (TAIL some_view) TO STDOUT WITH (FORMAT binary)
+COPY (TAIL some_view) TO STDOUT WITH (FORMAT binary);
 ```
