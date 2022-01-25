@@ -104,7 +104,6 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive
           args: [--aws-region=us-east-2]
 
   - id: cluster-smoke
@@ -114,7 +113,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
-          run: cluster-smoke
 
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"
@@ -124,7 +122,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-ssl
-          run: testdrive
 
   - id: kafka-krb5
     label: ":hotdog: Kafka Kerberos smoke test"
@@ -154,7 +151,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
-          run: sqllogictest-fast
 
   - id: streaming-demo
     label: ":credit_card: billing demo"
@@ -163,7 +159,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: billing
-          run: demo
           args: [--message-count=100, --partitions=10, --check-sink]
 
   - id: perf-kinesis
@@ -174,7 +169,6 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: perf-kinesis
-          run: ci
 
   - id: chbench-demo
     label: "chbench sanity check"
@@ -182,7 +176,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench
-          run: demo
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
 
@@ -202,7 +195,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
-          run: all-restart
 
   - id: upgrade
     label: "Upgrade testing"
@@ -211,7 +203,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
-          run: upgrade
           args: [--most-recent, "3"]
 
   - id: metabase-demo
@@ -230,7 +221,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
-          run: ci
 
   - id: debezium-avro
     label: "Debezium Avro test (Postgres)"
@@ -239,7 +229,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: debezium-avro
-          run: debezium-avro
 
   - id: debezium-sql-server
     label: "Debezium test (SQL Server)"
@@ -257,7 +246,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc
-          run: pg-cdc
 
   - id: pg-cdc-resumption
     label: "Postgres CDC test (Resumption logic)"
@@ -266,7 +254,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc-resumption
-          run: pg-cdc-resumption
 
   - id: s3-resumption
     label: "S3 Retry/Resumption test"
@@ -275,7 +262,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: s3-resumption
-          run: s3-resumption
 
   - id: kafka-exactly-once
     label: "Test for the Kafka exactly-once sink"
@@ -283,7 +269,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
-          run: kafka-exactly-once
 
   - id: persistence
     label: "Tests for persistence"
@@ -291,7 +276,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
-          run: persistence
 
   - id: lang-csharp
     label: ":csharp: tests"

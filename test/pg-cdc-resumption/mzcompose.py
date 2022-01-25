@@ -18,7 +18,7 @@ SERVICES = [
 ]
 
 
-def workflow_pg_cdc_resumption(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     """Test Postgres direct replication's failure handling by
     disrupting replication at various stages using Toxiproxy or service restarts
     """

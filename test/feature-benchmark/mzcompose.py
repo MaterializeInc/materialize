@@ -138,7 +138,7 @@ def run_one_scenario(
     return comparator
 
 
-def workflow_feature_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
 
     parser.add_argument(

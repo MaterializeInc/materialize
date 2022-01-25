@@ -15,7 +15,7 @@ from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import PrometheusSQLExporter
 
 
-def workflow_demo(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run CH-benCHmark without any load on Materialize"""
 
     # Parse arguments.

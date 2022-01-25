@@ -31,7 +31,7 @@ SERVICES = [
 ]
 
 
-def workflow_ci(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     """Run the load generator for one minute as a smoke test."""
     args = ["--total-records=6000", "--records-per-second=100", "--shard-count=2"]
     run(c, args, detach=False)

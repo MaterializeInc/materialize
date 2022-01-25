@@ -40,7 +40,7 @@ SERVICES = [
 ]
 
 
-def workflow_debezium_avro(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["postgres"])
 

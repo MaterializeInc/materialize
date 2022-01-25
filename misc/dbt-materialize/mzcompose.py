@@ -37,7 +37,7 @@ SERVICES = [
 ]
 
 
-def workflow_ci(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     """Runs the dbt adapter test suite against Materialize with and without TLS."""
     workflow_no_tls(c)
     workflow_tls(c)
