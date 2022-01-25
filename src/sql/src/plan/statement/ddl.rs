@@ -928,16 +928,59 @@ fn typecheck_debezium_dedup(
     let mut postgres = (None, None);
     let mut sqlserver = (None, None);
 
-    for (idx, (name, _)) in source_fields.iter().enumerate() {
-        // TODO: verify the types of these fields
+    for (idx, (name, ty)) in source_fields.iter().enumerate() {
         match name.as_str() {
-            "file" => mysql.0 = Some(idx),
-            "pos" => mysql.1 = Some(idx),
-            "row" => mysql.2 = Some(idx),
-            "sequence" => postgres.0 = Some(idx),
-            "lsn" => postgres.1 = Some(idx),
-            "change_lsn" => sqlserver.0 = Some(idx),
-            "event_serial_no" => sqlserver.1 = Some(idx),
+            "file" => {
+                mysql.0 = match &ty.scalar_type {
+                    ScalarType::String => Some(idx),
+                    t => bail!(r#""source"."file" must be of type string, found {:?}"#, t),
+                }
+            }
+            "pos" => {
+                mysql.1 = match &ty.scalar_type {
+                    ScalarType::Int64 => Some(idx),
+                    t => bail!(r#""source"."pos" must be of type bigint, found {:?}"#, t),
+                }
+            }
+            "row" => {
+                mysql.2 = match &ty.scalar_type {
+                    ScalarType::Int32 => Some(idx),
+                    t => bail!(r#""source"."file" must be of type int, found {:?}"#, t),
+                }
+            }
+            "sequence" => {
+                postgres.0 = match &ty.scalar_type {
+                    ScalarType::String => Some(idx),
+                    t => bail!(
+                        r#""source"."sequence" must be of type string, found {:?}"#,
+                        t
+                    ),
+                }
+            }
+            "lsn" => {
+                postgres.1 = match &ty.scalar_type {
+                    ScalarType::Int64 => Some(idx),
+                    t => bail!(r#""source"."lsn" must be of type bigint, found {:?}"#, t),
+                }
+            }
+            "change_lsn" => {
+                sqlserver.0 = match &ty.scalar_type {
+                    ScalarType::String => Some(idx),
+                    t => bail!(
+                        r#""source"."change_lsn" must be of type string, found {:?}"#,
+                        t
+                    ),
+                }
+            }
+            "event_serial_no" => {
+                sqlserver.1 = match &ty.scalar_type {
+                    ScalarType::Int64 => Some(idx),
+                    t => bail!(
+                        r#""source"."event_serial_no" must be of type bigint, found {:?}"#,
+                        t
+                    ),
+                }
+            }
             _ => {}
         }
     }
