@@ -550,7 +550,7 @@ async fn purify_csr_connector_proto(
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
                 &kafka_options,
-                normalize::options(&ccsr_options),
+                &mut normalize::options(&ccsr_options),
             )?;
 
             let value =
@@ -601,7 +601,7 @@ async fn purify_csr_connector_avro(
             kafka_util::generate_ccsr_client_config(
                 url,
                 &connector_options,
-                normalize::options(ccsr_options),
+                &mut normalize::options(ccsr_options),
             )
         })?;
 

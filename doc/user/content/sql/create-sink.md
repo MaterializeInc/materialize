@@ -66,14 +66,10 @@ Field                | Value type | Description
 `consistency_topic`  | `text`     | This option is only available to support backwards-compatibility. Please use the new [`CONSISTENCY` syntax](/sql/create-sink/#sink_kafka_connector) to define a consistency topic for the sink.
 `security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
-`retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.
-`retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default.
-`avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`.
-`avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`.
-
-{{< version-changed v0.9.7 >}}
-The `retention_ms` and `retention_bytes` options were added.
-{{< /version-changed >}}
+`retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default. {{< version-added v0.9.7 />}}
+`retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default. {{< version-added v0.9.7 />}}
+`avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`. {{< version-added v0.18.0 />}}
+`avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`. {{< version-added v0.18.0 />}}
 
 #### SSL `WITH` options
 

@@ -467,7 +467,7 @@ class Composition:
         *args: str,
         detach: bool = False,
         rm: bool = False,
-        env: Dict[str, str] = {},
+        env_extra: Dict[str, str] = {},
         capture: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
@@ -481,7 +481,7 @@ class Composition:
             service: The name of a service in the composition.
             args: Arguments to pass to the service's entrypoint.
             detach: Run the container in the background.
-            env: Additional environment variables to set in the container.
+            env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
             capture: Capture the stdout of the `docker-compose` invocation.
         """
@@ -491,7 +491,7 @@ class Composition:
         self.invoke("up", "--detach", "--scale", f"{service}=0", service)
         return self.invoke(
             "run",
-            *(f"-e{k}={v}" for k, v in env.items()),
+            *(f"-e{k}={v}" for k, v in env_extra.items()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
             service,
