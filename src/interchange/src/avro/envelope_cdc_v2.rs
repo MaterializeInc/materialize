@@ -42,7 +42,7 @@ pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode
 #[derive(AvroDecodable)]
 #[state_type(Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>)]
 struct MyUpdate {
-    #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
+    #[state_expr(Rc::clone(&self._STATE.0), Rc::clone(&self._STATE.1))]
     data: RowWrapper,
     time: Timestamp,
     diff: Diff,
@@ -83,8 +83,11 @@ impl AvroDecode for Decoder {
                 let packer = Rc::new(RefCell::new(Row::default()));
                 let buf = Rc::new(RefCell::new(vec![]));
                 let d = ArrayAsVecDecoder::new(|| {
-                    <MyUpdate as StatefulAvroDecodable>::new_decoder((packer.clone(), buf.clone()))
-                        .map_decoder(|update| Ok((update.data.0, update.time, update.diff)))
+                    <MyUpdate as StatefulAvroDecodable>::new_decoder((
+                        Rc::clone(&packer),
+                        Rc::clone(&buf),
+                    ))
+                    .map_decoder(|update| Ok((update.data.0, update.time, update.diff)))
                 });
                 let updates = deserializer.deserialize(r, d)?;
                 Ok(Message::Updates(updates))

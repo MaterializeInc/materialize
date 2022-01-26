@@ -53,7 +53,7 @@ where
                 needed_additional_tokens.extend_from_slice(addls);
             }
             if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(source_token.clone());
+                needed_source_tokens.push(Rc::clone(&source_token));
             }
         }
 
@@ -177,7 +177,7 @@ where
             let rp = Rc::new(RefCell::new(Row::default()));
             let collection = combined.flat_map(move |(mut k, v)| {
                 let max_idx = v.len() - 1;
-                let rp = rp.clone();
+                let rp = Rc::clone(&rp);
                 v.into_iter().enumerate().map(move |(idx, dp)| {
                     let k = if idx == max_idx { k.take() } else { k.clone() };
                     (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))

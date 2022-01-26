@@ -111,7 +111,7 @@ impl CoordTest {
         let experimental_mode = false;
         let timestamp = Arc::new(Mutex::new(0));
         let now = {
-            let timestamp = timestamp.clone();
+            let timestamp = Arc::clone(&timestamp);
             NowFn::from(move || *timestamp.lock().unwrap())
         };
         let metrics_registry = MetricsRegistry::new();
@@ -547,9 +547,9 @@ struct InterceptingDataflowClient<C> {
 impl<C> Clone for InterceptingDataflowClient<C> {
     fn clone(&self) -> InterceptingDataflowClient<C> {
         InterceptingDataflowClient {
-            inner: self.inner.clone(),
+            inner: Arc::clone(&self.inner),
             feedback_tx: self.feedback_tx.clone(),
-            feedback_rx: self.feedback_rx.clone(),
+            feedback_rx: Arc::clone(&self.feedback_rx),
         }
     }
 }

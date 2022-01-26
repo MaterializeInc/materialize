@@ -155,7 +155,7 @@ where
             self.value_desc.clone(),
             sink.as_of.clone(),
             source_ts_histories,
-            shared_frontier.clone(),
+            Rc::clone(&shared_frontier),
             &metrics.kafka,
         );
 

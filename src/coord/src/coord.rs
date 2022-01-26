@@ -4482,7 +4482,7 @@ where
         &self,
         session: &mut Session,
     ) -> Result<(), tokio::sync::TryLockError> {
-        self.write_lock.clone().try_lock_owned().map(|p| {
+        Arc::clone(&self.write_lock).try_lock_owned().map(|p| {
             session.grant_write_lock(p);
         })
     }

@@ -61,8 +61,8 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
         SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>>::position_value_contract(),
         "CDCv2-Decode",
         {
-            let channel = channel.clone();
-            let activator = activator.clone();
+            let channel = Rc::clone(&channel);
+            let activator = Rc::clone(&activator);
             move |input| {
                 input.for_each(|_time, data| {
                     data.swap(&mut vector);

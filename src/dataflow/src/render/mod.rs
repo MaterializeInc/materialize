@@ -386,7 +386,7 @@ where
                 needed_additional_tokens.extend_from_slice(addls);
             }
             if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(source_token.clone());
+                needed_source_tokens.push(Rc::clone(&source_token));
             }
         }
         let tokens = Rc::new((needed_source_tokens, needed_additional_tokens));

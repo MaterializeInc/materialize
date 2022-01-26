@@ -271,7 +271,7 @@ pub async fn create_consumer(
     match config.create_with_context(KafkaErrCheckContext::default()) {
         Ok(consumer) => {
             let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> = Arc::new(consumer);
-            let context = consumer.context().clone();
+            let context = Arc::clone(&consumer.context());
             let topic = String::from(topic);
             // Wait for a metadata request for up to one second. This greatly
             // increases the probability that we'll see a connection error if
@@ -279,7 +279,7 @@ pub async fn create_consumer(
             // better API for asking whether a connection succeeded or failed,
             // unfortunately.
             task::spawn_blocking({
-                let consumer = consumer.clone();
+                let consumer = Arc::clone(&consumer);
                 move || {
                     let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
                 }

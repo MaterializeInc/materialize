@@ -275,8 +275,8 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
     let blob_cache = BlobCache::new(
         build_info::DUMMY_BUILD_INFO,
-        metrics.clone(),
-        async_runtime.clone(),
+        Arc::clone(&metrics),
+        Arc::clone(&async_runtime),
         file_blob,
     );
     let compacter = Maintainer::new(blob_cache.clone(), async_runtime);
@@ -344,7 +344,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let mut mem_blob_cache = BlobCache::new(
         build_info::DUMMY_BUILD_INFO,
         metrics,
-        async_runtime.clone(),
+        Arc::clone(&async_runtime),
         mem_blob,
     );
 

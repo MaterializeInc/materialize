@@ -1779,7 +1779,7 @@ impl<'a> SchemaSerContext<'a> {
     fn step(&'a self, next: SchemaPieceRefOrNamed<'a>) -> Self {
         Self {
             node: self.node.step_ref(next),
-            seen_named: self.seen_named.clone(),
+            seen_named: Rc::clone(&self.seen_named),
         }
     }
 }

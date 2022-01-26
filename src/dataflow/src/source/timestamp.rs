@@ -483,7 +483,7 @@ impl TimestampBindingRc {
         )));
 
         let ret = Self {
-            wrapper: wrapper.clone(),
+            wrapper: Rc::clone(&wrapper),
             compaction_frontier: wrapper.borrow().compaction_frontier.frontier().to_owned(),
         };
 
@@ -629,7 +629,7 @@ impl Clone for TimestampBindingRc {
         self.wrapper.borrow_mut().compact();
 
         Self {
-            wrapper: self.wrapper.clone(),
+            wrapper: Rc::clone(&self.wrapper),
             compaction_frontier: frontier,
         }
     }
