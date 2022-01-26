@@ -133,17 +133,17 @@ SELECT INTERVAL '12:34';
 12:34:00
 
 query T
-SELECT INTERVAL '12:34' MINUTE TO SECOND;
-----
-00:12:34
-
-query T
 SELECT INTERVAL '12:34' HOUR;
 ----
 12:00:00
 
 query T
 SELECT INTERVAL '12:34' MINUTE;
+----
+12:34:00
+
+query T
+SELECT INTERVAL '12:34' SECOND;
 ----
 12:34:00
 
@@ -156,6 +156,46 @@ query T
 SELECT INTERVAL '12:34' HOUR TO SECOND;
 ----
 12:34:00
+
+query T
+SELECT INTERVAL '12:34' MINUTE TO SECOND;
+----
+00:12:34
+
+query T
+SELECT INTERVAL '12:34:56';
+----
+12:34:56
+
+query T
+SELECT INTERVAL '12:34:56' HOUR;
+----
+12:00:00
+
+query T
+SELECT INTERVAL '12:34:56' MINUTE;
+----
+12:34:00
+
+query T
+SELECT INTERVAL '12:34:56' SECOND;
+----
+12:34:56
+
+query T
+SELECT INTERVAL '12:34:56' HOUR TO MINUTE;
+----
+12:34:00
+
+query T
+SELECT INTERVAL '12:34:56' HOUR TO SECOND;
+----
+12:34:56
+
+query T
+SELECT INTERVAL '12:34:56' MINUTE TO SECOND;
+----
+00:34:56
 
 # Disallow ranges where trailing element is greater than lead.
 statement error
