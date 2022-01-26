@@ -67,6 +67,8 @@ pub enum CoordError {
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
+    /// A persistence-related error.
+    Persistence(persist::error::Error),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// The transaction is in read-only mode.
@@ -313,6 +315,7 @@ impl fmt::Display for CoordError {
             CoordError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            CoordError::Persistence(error) => error.fmt(f),
             CoordError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }

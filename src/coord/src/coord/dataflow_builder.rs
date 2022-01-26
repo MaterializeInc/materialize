@@ -141,9 +141,33 @@ impl<'a> DataflowBuilder<'a> {
                             }
                         }
 
+                        let mut connector = source.connector.clone();
+
+                        let persist_details = self
+                            .catalog
+                            .persist()
+                            .source_persist_desc_from_serialized(
+                                &source.connector,
+                                source.persist_details.clone(),
+                            )
+                            .map_err(CoordError::Persistence)?;
+
+                        // TODO: I don't like that we're injecting this into the otherwise "pristine"
+                        // immutable SourceConnector. We should clean this up once we have an
+                        // ingestd/dataflowd split, where we probably want to send SourceConnector only to
+                        // ingestd (and always with persistence details) and dataflowd will never see the
+                        // current style of SourceConnector.
+                        match &mut connector {
+                            SourceConnector::External { persist, .. } => {
+                                assert!(persist.is_none());
+                                *persist = persist_details;
+                            }
+                            SourceConnector::Local { .. } => unreachable!(),
+                        }
+
                         let source_connector = dataflow_types::sources::SourceDesc {
                             name: entry.name().to_string(),
-                            connector: source.connector.clone(),
+                            connector,
                             operators: None,
                             desc: source.desc.clone(),
                         };

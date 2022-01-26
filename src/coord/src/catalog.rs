@@ -114,8 +114,6 @@ pub struct Catalog {
     oid_counter: u32,
     transient_revision: u64,
     config: sql::catalog::CatalogConfig,
-    /// Handle to persistence runtime and feature configuration.
-    persist: PersisterWithConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +127,8 @@ pub struct CatalogState {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
+    /// Handle to persistence runtime and feature configuration.
+    persist: PersisterWithConfig,
 }
 
 impl CatalogState {
@@ -375,6 +375,10 @@ impl CatalogState {
         let id = &self.by_oid[oid];
         &self.by_id[id]
     }
+
+    pub fn persist(&self) -> &PersisterWithConfig {
+        &self.persist
+    }
 }
 
 // A newtype wrapper for the by_id map that makes it easier to reason about
@@ -554,6 +558,7 @@ impl Table {
 pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
+    pub persist_details: Option<SerializedSourcePersistDetails>,
     pub desc: RelationDesc,
 }
 
@@ -896,6 +901,7 @@ impl Catalog {
                 ambient_schemas: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
                 roles: HashMap::new(),
+                persist,
             },
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
@@ -913,7 +919,6 @@ impl Catalog {
                 now: config.now.clone(),
                 disable_user_indexes: config.disable_user_indexes,
             },
-            persist,
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
@@ -993,6 +998,7 @@ impl Catalog {
                                 timeline: Timeline::EpochMilliseconds,
                                 persisted_name: None,
                             },
+                            persist_details: None,
                             desc: log.variant.desc(),
                         }),
                     );
@@ -2212,20 +2218,12 @@ impl Catalog {
                 table_persist_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
                 source_persist_details: None,
             },
-            CatalogItem::Source(source) => {
-                let persist_details = match &source.connector {
-                    SourceConnector::External { persist, .. } => {
-                        persist.as_ref().map(|persist| persist.clone().into())
-                    }
-                    SourceConnector::Local { .. } => None,
-                };
-                SerializedCatalogItem::V1 {
-                    create_sql: source.create_sql.clone(),
-                    eval_env: None,
-                    table_persist_name: None,
-                    source_persist_details: persist_details,
-                }
-            }
+            CatalogItem::Source(source) => SerializedCatalogItem::V1 {
+                create_sql: source.create_sql.clone(),
+                eval_env: None,
+                table_persist_name: None,
+                source_persist_details: source.persist_details.clone(),
+            },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
@@ -2291,7 +2289,10 @@ impl Catalog {
                     source_persist_details.is_none(),
                     "got some source_persist_details while we didn't expect them for a table"
                 );
-                let persist = self.persist.table_details_from_name(table_persist_name)?;
+                let persist = self
+                    .state
+                    .persist
+                    .table_details_from_name(table_persist_name)?;
 
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
@@ -2302,30 +2303,15 @@ impl Catalog {
                     persist,
                 })
             }
-            Plan::CreateSource(CreateSourcePlan { mut source, .. }) => {
+            Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 assert!(
                     table_persist_name.is_none(),
                     "got some table_persist_name while we didn't expect them for a source"
                 );
-                let persist_details = self.persist.source_persist_desc_from_serialized(
-                    &source.connector,
-                    source_persist_details,
-                )?;
-                // TODO: I don't like that we're injecting this into the otherwise "pristine"
-                // immutable SourceConnector. We should clean this up once we have an
-                // ingestd/dataflowd split, where we probably want to send SourceConnector only to
-                // ingestd (and always with persistence details) and dataflowd will never see the
-                // current style of SourceConnector.
-                match &mut source.connector {
-                    SourceConnector::External { persist, .. } => {
-                        assert!(persist.is_none());
-                        *persist = persist_details;
-                    }
-                    SourceConnector::Local { .. } => unreachable!(),
-                }
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
                     connector: source.connector,
+                    persist_details: source_persist_details,
                     desc: source.desc,
                 })
             }
@@ -2518,7 +2504,7 @@ impl Catalog {
         id: GlobalId,
         name: &FullName,
     ) -> Result<Option<TablePersistDetails>, PersistError> {
-        self.persist.table_details(id, &name.to_string())
+        self.state.persist.table_details(id, &name.to_string())
     }
 
     pub fn persist_multi_details(&self) -> Option<&TablePersistMultiDetails> {
@@ -2531,7 +2517,8 @@ impl Catalog {
         connector: &SourceConnector,
         name: &FullName,
     ) -> Result<Option<SourcePersistDesc>, PersistError> {
-        self.persist
+        self.state
+            .persist
             .source_persist_desc(id, connector, &name.to_string())
     }
 }

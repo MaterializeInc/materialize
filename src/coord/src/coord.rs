@@ -2309,7 +2309,7 @@ where
         for plan in plans {
             let CreateSourcePlan {
                 name,
-                mut source,
+                source,
                 materialized,
                 ..
             } = plan;
@@ -2319,24 +2319,13 @@ where
             let persist_details = self
                 .catalog
                 .source_persist_desc(source_id, &source.connector, &name)
-                .map_err(|err| anyhow!("{}", err))?;
-
-            // TODO: I don't like that we're injecting this into the otherwise "pristine" immutable
-            // SourceConnector. We should clean this up once we have an ingestd/dataflowd split,
-            // where we probably want to send SourceConnector only to ingestd (and always with
-            // persistence details) and dataflowd will never see the current style of
-            // SourceConnector.
-            match &mut source.connector {
-                SourceConnector::External { persist, .. } => {
-                    assert!(persist.is_none());
-                    *persist = persist_details;
-                }
-                SourceConnector::Local { .. } => unreachable!(),
-            }
+                .map_err(|err| anyhow!("{}", err))?
+                .map(|persist| persist.into());
 
             let source = catalog::Source {
                 create_sql: source.create_sql,
                 connector: source.connector,
+                persist_details,
                 desc: source.desc,
             };
             ops.push(catalog::Op::CreateItem {
