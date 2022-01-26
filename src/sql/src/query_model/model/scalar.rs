@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Parts of the Query Graph Model that involve scalar expressions.
+//!
+//! All types in this module are crate-private.
+
 use std::collections::HashSet;
 use std::fmt;
 
@@ -14,7 +18,7 @@ use ore::str::separated;
 use repr::*;
 
 use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::query_model::{QuantifierId, QuantifierSet};
+use crate::query_model::model::{QuantifierId, QuantifierSet};
 use expr::AggregateFunc;
 
 /// Representation for scalar expressions within a query graph model.
@@ -30,9 +34,9 @@ use expr::AggregateFunc;
 ///   the projection of BaseTables and TableFunctions.
 ///
 /// Scalar expressions only make sense within the context of a
-/// [`crate::query_model::QueryBox`], and hence, their name.
+/// [`super::graph::QueryBox`], and hence, their name.
 #[derive(Debug, PartialEq, Clone)]
-pub enum BoxScalarExpr {
+pub(crate) enum BoxScalarExpr {
     /// A reference to a column from a quantifier that either lives in
     /// the same box as the expression or is a sibling quantifier of
     /// an ascendent box of the box that contains the expression.
@@ -73,13 +77,13 @@ pub enum BoxScalarExpr {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
-pub struct ColumnReference {
+pub(crate) struct ColumnReference {
     pub quantifier_id: QuantifierId,
     pub position: usize,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct BaseColumn {
+pub(crate) struct BaseColumn {
     pub position: usize,
     pub column_type: repr::ColumnType,
 }

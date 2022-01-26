@@ -8,8 +8,17 @@
 // by the Apache License, Version 2.0.
 
 //! Apply rewrites to [`Model`] instances.
+//!
+//! The public interface consists of the [`Model::optimize`] method.
 
-use crate::query_model::{BoxId, Model};
+use crate::query_model::model::BoxId;
+use crate::query_model::Model;
+
+impl Model {
+    pub fn optimize(&mut self) {
+        rewrite_model(self);
+    }
+}
 
 /// Trait that all rewrite rules must implement.
 pub(crate) trait Rule {
@@ -174,7 +183,7 @@ fn apply_dft_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query_model::*;
+    use crate::query_model::model::*;
 
     #[test]
     fn it_applies_a_simple_rule() {
@@ -277,7 +286,7 @@ mod tests {
         }
 
         fn connected(&self, model: &Model, tgt_id: BoxId) -> bool {
-            model.quantifiers.values().any(|q| {
+            model.quantifiers().any(|q| {
                 let q = q.borrow();
                 self.matches_quantifer(q.quantifier_type)
                     && (q.input_box == self.src_id && q.parent_box == tgt_id)

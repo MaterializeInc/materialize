@@ -349,9 +349,7 @@ fn test_hir_generator() {
                     let mut output = String::new();
 
                     if dot_graph {
-                        output += &match query_model::dot::DotGenerator::new()
-                            .generate(&model, &s.input)
-                        {
+                        output += &match model.as_dot(&s.input) {
                             Ok(graph) => graph,
                             Err(e) => return format!("graph generation error: {}", e),
                         };
@@ -359,7 +357,7 @@ fn test_hir_generator() {
 
                     if lower {
                         output +=
-                            &generate_explanation(&catalog, &model.lower(), s.args.get("format"));
+                            &generate_explanation(&catalog, &model.into(), s.args.get("format"));
                     }
 
                     output
