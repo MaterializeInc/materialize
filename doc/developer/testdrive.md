@@ -561,7 +561,7 @@ Creates a named connection to SQL Server. The parameters of the connection are s
 
 ```
 $ sql-server-connect name=sql-server
-server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${env.SA_PASSWORD}
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 ```
 
 #### `$ sql-server-execute name=...`

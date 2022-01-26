@@ -22,7 +22,7 @@ $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_nopk-value
   ENVELOPE DEBEZIUM;
 
 $ sql-server-connect name=sql-server
-server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${env.SA_PASSWORD}
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 
 $ sql-server-execute name=sql-server
 USE test;

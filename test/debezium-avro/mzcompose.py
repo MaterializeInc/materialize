@@ -7,10 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 import random
 import string
-from unittest.mock import patch
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
@@ -53,9 +51,8 @@ def workflow_debezium_avro(c: Composition) -> None:
     c.run("testdrive-svc", "*.td")
 
 
-@patch.dict(os.environ, {"SA_PASSWORD": sa_password})
 def workflow_debezium_sql_server(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["sql-server"])
 
-    c.run("testdrive-svc", "sql-server/*.td")
+    c.run("testdrive-svc", f"--var=sa-password={sa_password}", "sql-server/*.td")
