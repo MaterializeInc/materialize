@@ -395,7 +395,6 @@ impl Plan {
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
     ) -> Result<(Self, AvailableCollections), ()> {
-        // let output_arity = expr.arity();
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
         //

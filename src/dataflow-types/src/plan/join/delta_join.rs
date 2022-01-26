@@ -72,7 +72,7 @@ pub struct DeltaStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     pub stream_key: Vec<MirScalarExpr>,
-    /// The columns in the stream that are not redundant with the key
+    /// The thinning expression to apply on the value part of the stream
     pub stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
     pub lookup_key: Vec<MirScalarExpr>,
