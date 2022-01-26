@@ -22,7 +22,7 @@ use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
-    DataflowError,
+    DataflowError, DecodeError,
 };
 use expr::GlobalId;
 use repr::{Datum, Diff, Row};
@@ -117,13 +117,22 @@ pub(crate) fn render<G: Scope>(
                             };
 
                             let should_use = match state {
-                                Some(ref mut s) => s.should_use_record(
-                                    key,
-                                    &value,
-                                    result.position,
-                                    result.upstream_time_millis,
-                                    &debug_name,
-                                ),
+                                Some(ref mut s) => {
+                                    let res = s.should_use_record(
+                                        key,
+                                        &value,
+                                        result.position,
+                                        result.upstream_time_millis,
+                                        &debug_name,
+                                    );
+                                    match res {
+                                        Ok(b) => b,
+                                        Err(err) => {
+                                            session.give((Err(err), cap.time().clone(), 1));
+                                            continue;
+                                        }
+                                    }
+                                }
                                 None => true,
                             };
 
@@ -271,20 +280,22 @@ struct SqlServerLsn {
 }
 
 impl FromStr for SqlServerLsn {
-    type Err = ();
+    type Err = DecodeError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let make_err = || DecodeError::Text(format!("invalid lsn: {}", input));
         // SQL Server change LSNs are 10-byte integers. Debezium
         // encodes them as hex, in the following format: xxxxxxxx:xxxxxxxx:xxxx
         if input.len() != 22 {
-            return Err(());
+            return Err(make_err());
         }
         if input.as_bytes()[8] != b':' || input.as_bytes()[17] != b':' {
-            return Err(());
+            return Err(make_err());
         }
-        let file_seq_num = u32::from_str_radix(&input[0..8], 16).or(Err(()))?;
-        let log_block_offset = u32::from_str_radix(&input[9..17], 16).or(Err(()))?;
-        let slot_num = u16::from_str_radix(&input[18..22], 16).or(Err(()))?;
+        let file_seq_num = u32::from_str_radix(&input[0..8], 16).or_else(|_| Err(make_err()))?;
+        let log_block_offset =
+            u32::from_str_radix(&input[9..17], 16).or_else(|_| Err(make_err()))?;
+        let slot_num = u16::from_str_radix(&input[18..22], 16).or_else(|_| Err(make_err()))?;
 
         Ok(Self {
             file_seq_num,
@@ -349,19 +360,26 @@ impl DebeziumDeduplicationState {
         }
     }
 
-    fn extract_binlog_position(&mut self, value: &Row) -> Option<RowCoordinates> {
+    fn extract_binlog_position(
+        &mut self,
+        value: &Row,
+    ) -> Result<Option<RowCoordinates>, DataflowError> {
         match value.iter().nth(self.projection.source_idx).unwrap() {
             Datum::List(source) => {
                 // While reading a snapshot the row coordinates are useless, so early return None
                 match source.iter().nth(self.projection.snapshot_idx).unwrap() {
-                    Datum::String(s) if s != "false" => return None,
-                    Datum::True => return None,
+                    Datum::String(s) if s != "false" => return Ok(None),
+                    Datum::True => return Ok(None),
                     _ => {}
                 }
 
                 let coords = match self.projection.source_projection {
                     DebeziumSourceProjection::MySql { file, pos, row } => {
-                        let filename = source.iter().nth(file).unwrap().unwrap_str();
+                        let filename = match source.iter().nth(file).unwrap() {
+                            Datum::String(s) => s,
+                            Datum::Null => return Ok(None),
+                            d => panic!("type error: expected text, found {:?}", d),
+                        };
 
                         let file = match self.filenames_to_indices.get(filename) {
                             Some(idx) => *idx,
@@ -372,25 +390,46 @@ impl DebeziumDeduplicationState {
                                 next_idx
                             }
                         };
-                        let pos = source.iter().nth(pos).unwrap().unwrap_int64();
-                        let row = source.iter().nth(row).unwrap().unwrap_int32();
+                        let pos = match source.iter().nth(pos).unwrap() {
+                            Datum::Int64(s) => s,
+                            Datum::Null => return Ok(None),
+                            d => panic!("type error: expected bigint, found {:?}", d),
+                        };
+                        let row = match source.iter().nth(row).unwrap() {
+                            Datum::Int32(s) => s,
+                            Datum::Null => return Ok(None),
+                            d => panic!("type error: expected int, found {:?}", d),
+                        };
 
                         RowCoordinates::MySql { file, pos, row }
                     }
                     DebeziumSourceProjection::Postgres { sequence, lsn } => {
-                        let last_commit_lsn = sequence.map(|idx| {
-                            let sequence = source.iter().nth(idx).unwrap().unwrap_str();
-                            // TODO: We need to produce an error if we can't parse it
-                            let sequence: Vec<Option<&str>> =
-                                serde_json::from_str(sequence).unwrap();
+                        let last_commit_lsn = match sequence {
+                            Some(idx) => {
+                                let sequence = match source.iter().nth(idx).unwrap() {
+                                    Datum::String(s) => s,
+                                    Datum::Null => return Ok(None),
+                                    d => panic!("type error: expected text, found {:?}", d),
+                                };
+                                let make_err = || {
+                                    DecodeError::Text(format!("invalid sequence: {:?}", sequence))
+                                };
+                                let sequence: Vec<Option<&str>> =
+                                    serde_json::from_str(sequence).or_else(|_| Err(make_err()))?;
 
-                            match sequence[0] {
-                                Some(s) => u64::from_str(s).unwrap(),
-                                None => 0,
+                                match sequence.first().ok_or_else(make_err)? {
+                                    Some(s) => Some(u64::from_str(s).or_else(|_| Err(make_err()))?),
+                                    None => None,
+                                }
                             }
-                        });
+                            None => None,
+                        };
 
-                        let lsn = source.iter().nth(lsn).unwrap().unwrap_int64();
+                        let lsn = match source.iter().nth(lsn).unwrap() {
+                            Datum::Int64(s) => s,
+                            Datum::Null => return Ok(None),
+                            d => panic!("type error: expected bigint, found {:?}", d),
+                        };
                         let total_order = self.extract_total_order(value);
 
                         RowCoordinates::Postgres {
@@ -403,16 +442,16 @@ impl DebeziumDeduplicationState {
                         change_lsn,
                         event_serial_no,
                     } => {
-                        // TODO: We need to produce an error if we can't parse it
-                        let change_lsn: SqlServerLsn = source
-                            .iter()
-                            .nth(change_lsn)
-                            .unwrap()
-                            .unwrap_str()
-                            .parse()
-                            .unwrap();
-                        let event_serial_no =
-                            source.iter().nth(event_serial_no).unwrap().unwrap_int64();
+                        let change_lsn = match source.iter().nth(change_lsn).unwrap() {
+                            Datum::String(s) => s.parse::<SqlServerLsn>()?,
+                            Datum::Null => return Ok(None),
+                            d => panic!("type error: expected text, found {:?}", d),
+                        };
+                        let event_serial_no = match source.iter().nth(event_serial_no).unwrap() {
+                            Datum::Int64(s) => s,
+                            Datum::Null => return Ok(None),
+                            d => panic!("type error: expected bigint, found {:?}", d),
+                        };
 
                         RowCoordinates::SqlServer {
                             change_lsn,
@@ -420,9 +459,9 @@ impl DebeziumDeduplicationState {
                         }
                     }
                 };
-                Some(coords)
+                Ok(Some(coords))
             }
-            Datum::Null => None,
+            Datum::Null => Ok(None),
             d => panic!("type error: expected record, found {:?}", d),
         }
     }
@@ -434,8 +473,8 @@ impl DebeziumDeduplicationState {
         connector_offset: Option<i64>,
         upstream_time_millis: Option<i64>,
         debug_name: &str,
-    ) -> bool {
-        let binlog_position = self.extract_binlog_position(value);
+    ) -> Result<bool, DataflowError> {
+        let binlog_position = self.extract_binlog_position(value)?;
 
         self.messages_processed += 1;
 
@@ -494,7 +533,7 @@ impl DebeziumDeduplicationState {
                                 }
                                 *started_padding = false;
                                 *started = false;
-                                return should_skip.is_none();
+                                return Ok(should_skip.is_none());
                             }
                             if upstream_time_millis < range.start {
                                 // in the padding time range
@@ -510,7 +549,7 @@ impl DebeziumDeduplicationState {
                                 if seen_positions.get(&position).is_none() {
                                     seen_positions.insert(position, upstream_time_millis);
                                 }
-                                return should_skip.is_none();
+                                return Ok(should_skip.is_none());
                             }
                             if upstream_time_millis <= range.end && !*started {
                                 *started = true;
@@ -555,7 +594,7 @@ impl DebeziumDeduplicationState {
                         Some(key) => key,
                         // No key, so we can't do anything sensible for snapshots.
                         // Return "all OK" and hope their data isn't corrupted.
-                        None => return true,
+                        None => return Ok(true),
                     };
 
                     // TODO: avoid cloning via `get_or_insert` once rust-lang/rust#60896 is resolved
@@ -579,7 +618,7 @@ impl DebeziumDeduplicationState {
             );
             self.full = None;
         }
-        should_use
+        Ok(should_use)
     }
 }
 
