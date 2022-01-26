@@ -1022,6 +1022,8 @@ where
                 match s.maybe_emit_progress(frontier.borrow()).await {
                     Ok(progress_emitted) => {
                         if progress_emitted {
+                            // Don't flush if we know there were no records emitted.
+                            // It has a noticeable negative performance impact.
                             bail_err!(s.flush().await);
                         }
                     }
