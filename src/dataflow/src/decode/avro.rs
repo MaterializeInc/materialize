@@ -10,7 +10,7 @@
 use futures::executor::block_on;
 
 use dataflow_types::DecodeError;
-use interchange::avro::{Decoder, EnvelopeType};
+use interchange::avro::Decoder;
 use repr::Row;
 
 #[derive(Debug)]
@@ -24,8 +24,6 @@ impl AvroDecoderState {
     pub fn new(
         value_schema: &str,
         schema_registry_config: Option<ccsr::ClientConfig>,
-        envelope: EnvelopeType,
-        reject_non_inserts: bool,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
@@ -33,21 +31,15 @@ impl AvroDecoderState {
             decoder: Decoder::new(
                 value_schema,
                 schema_registry_config,
-                envelope,
                 debug_name,
                 confluent_wire_format,
-                reject_non_inserts,
             )?,
             events_success: 0,
         })
     }
 
-    pub fn decode(
-        &mut self,
-        bytes: &mut &[u8],
-        upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, DecodeError> {
-        match block_on(self.decoder.decode(bytes, upstream_time_millis)) {
+    pub fn decode(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
+        match block_on(self.decoder.decode(bytes)) {
             Ok(row) => {
                 self.events_success += 1;
                 Ok(Some(row))

@@ -1204,17 +1204,6 @@ impl MirRelationExpr {
         }
     }
 
-    /// Returns whether this collection is just a `Get` wrapping an underlying bare source.
-    pub fn is_trivial_source(&self) -> bool {
-        matches!(
-            self,
-            MirRelationExpr::Get {
-                id: Id::LocalBareSource,
-                ..
-            }
-        )
-    }
-
     /// Applies a fallible immutable `f` to each child of type `MirRelationExpr`.
     pub fn try_visit_children<'a, F, E>(&'a self, f: F) -> Result<(), E>
     where

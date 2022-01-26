@@ -12,7 +12,6 @@ use mz_avro::schema::{SchemaPiece, SchemaPieceOrNamed};
 mod decode;
 mod encode;
 pub mod envelope_cdc_v2;
-mod envelope_debezium;
 mod schema;
 
 pub use envelope_cdc_v2 as cdc_v2;
@@ -22,19 +21,7 @@ pub use self::encode::{
     encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
     AvroEncoder, AvroSchemaGenerator,
 };
-pub use self::envelope_debezium::DebeziumDeduplicationStrategy;
 pub use self::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};
-
-use self::decode::{AvroStringDecoder, OptionalRecordDecoder, RowWrapper};
-use self::envelope_debezium::{AvroDebeziumDecoder, RowCoordinates};
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum EnvelopeType {
-    None,
-    Debezium,
-    Upsert,
-    CdcV2,
-}
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
     matches!(schema, SchemaPieceOrNamed::Piece(SchemaPiece::Null))
