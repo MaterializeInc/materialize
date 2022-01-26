@@ -263,7 +263,7 @@ mod tests {
         }
     }
 
-    /// A test [`Rule`] that createse quantifiers between `src_id`
+    /// A test [`Rule`] that creates quantifiers between `src_id`
     /// and all other nodes in the given [`VisitOrder`].
     struct ConnectAll {
         src_id: BoxId,
