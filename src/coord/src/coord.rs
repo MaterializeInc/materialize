@@ -2890,7 +2890,6 @@ where
                         // persisting. In practice, we don't enable/disable this
                         // with table-level granularity so it will be all of
                         // them or none of them, which is checked below.
-                        let mut persist_streams = Vec::new();
                         let mut persist_updates = Vec::new();
                         let mut volatile_updates = Vec::new();
                         for WriteOp { id, rows } in inserts {
@@ -2910,12 +2909,10 @@ where
                                     persist: Some(persist),
                                     ..
                                 }) => {
-                                    let updates: Vec<((Row, ()), Timestamp, Diff)> = rows
+                                    let updates = rows
                                         .into_iter()
-                                        .map(|(row, diff)| ((row, ()), timestamp, diff))
-                                        .collect();
-                                    persist_streams.push(&persist.write_handle);
-                                    persist_updates.push((persist.stream_id, updates));
+                                        .map(|(row, diff)| ((row, ()), timestamp, diff));
+                                    persist_updates.push((&persist.write_handle, updates));
                                 }
                                 _ => {
                                     let updates = rows
@@ -2953,7 +2950,12 @@ where
                             write_fut = Some(
                                 persist_multi
                                     .write_handle
-                                    .write_atomic(persist_updates)
+                                    .write_atomic(|builder| {
+                                        for (handle, updates) in persist_updates {
+                                            builder.add_write(handle, updates)?;
+                                        }
+                                        Ok(())
+                                    })
                                     .map(|res| match res {
                                         Ok(_) => Ok(()),
                                         Err(err) => {

@@ -9,6 +9,7 @@
 
 //! The public "async API" for persist.
 
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
@@ -356,8 +357,10 @@ impl<K: Codec, V: Codec> WriteReqBuilder<K, V> {
     }
 }
 
-impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReqBuilder<K, V> {
-    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, isize)>>(iter: T) -> Self {
+impl<'a, K: Codec, V: Codec, T: Borrow<((K, V), u64, isize)>> FromIterator<T>
+    for WriteReqBuilder<K, V>
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let size_hint = iter.size_hint();
 
@@ -368,7 +371,7 @@ impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReq
             _phantom: PhantomData,
         };
         for record in iter {
-            let ((key, val), ts, diff) = record;
+            let ((key, val), ts, diff) = record.borrow();
             builder.key_buf.clear();
             key.encode(&mut builder.key_buf);
             builder.val_buf.clear();
@@ -393,85 +396,80 @@ impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReq
 }
 
 /// A handle for writing to multiple streams.
-#[derive(Debug, PartialEq, Eq)]
-pub struct MultiWriteHandle<K, V> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiWriteHandle {
     stream_ids: HashSet<Id>,
     client: RuntimeClient,
-    _phantom: PhantomData<(K, V)>,
 }
 
-impl<K, V> Clone for MultiWriteHandle<K, V> {
-    fn clone(&self) -> Self {
-        MultiWriteHandle {
-            stream_ids: self.stream_ids.clone(),
-            client: self.client.clone(),
-            _phantom: self._phantom,
-        }
-    }
-}
-
-impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
-    /// Returns a new [MultiWriteHandle] for the given streams.
-    pub fn new(handles: &[&StreamWriteHandle<K, V>]) -> Result<Self, Error> {
+impl MultiWriteHandle {
+    /// Returns a new [MultiWriteHandle] for the given stream.
+    pub fn new<K: Codec, V: Codec>(handle: &StreamWriteHandle<K, V>) -> Result<Self, Error> {
         let mut stream_ids = HashSet::new();
-        let client = if let Some(handle) = handles.first() {
-            handle.client.clone()
-        } else {
-            return Err(Error::from("MultiWriteHandle received no streams"));
-        };
-        for handle in handles.iter() {
-            if handle.client != client {
-                return Err(Error::from(format!(
-                    "MultiWriteHandle got handles from two runtimes: {:?} and {:?}",
-                    client, handle.client
-                )));
-            }
-            // It's odd if there are duplicates but the semantics of what that
-            // means are straightforward, so for now we support it.
-            stream_ids.insert(handle.stream_id()?);
+        stream_ids.insert(handle.stream_id()?);
+        let client = handle.client.clone();
+        Ok(MultiWriteHandle { stream_ids, client })
+    }
+
+    /// Returns a new [MultiWriteHandle] for the given streams.
+    ///
+    /// Convenience function for when all the streams have matching K and V.
+    pub fn new_from_streams<K, V, H, I>(mut handles: I) -> Result<Self, Error>
+    where
+        K: Codec,
+        V: Codec,
+        H: Borrow<StreamWriteHandle<K, V>>,
+        I: Iterator<Item = H>,
+    {
+        // Manually pop the first handle to construct the MultiWriteHandle, then
+        // continue with the same iter to add the rest.
+        let first_handle = handles
+            .next()
+            .ok_or_else(|| Error::from("MultiWriteHandle requires at least one stream"))?;
+        let mut ret = Self::new(first_handle.borrow())?;
+        for handle in handles {
+            ret.add_stream(handle.borrow())?;
         }
-        Ok(MultiWriteHandle {
-            stream_ids,
-            client,
-            _phantom: PhantomData,
-        })
+        Ok(ret)
+    }
+
+    /// Adds the given stream to the set
+    pub fn add_stream<K: Codec, V: Codec>(
+        &mut self,
+        handle: &StreamWriteHandle<K, V>,
+    ) -> Result<(), Error> {
+        if handle.client != self.client {
+            return Err(Error::from(format!(
+                "MultiWriteHandle got handles from two runtimes: {:?} and {:?}",
+                self.client, handle.client
+            )));
+        }
+        // It's odd if there are duplicates but the semantics of what that
+        // means are straightforward, so for now we support it.
+        self.stream_ids.insert(handle.stream_id()?);
+        Ok(())
     }
 
     /// Atomically writes the given updates to the paired streams.
     ///
     /// Either all of the writes will be made durable for replay or none of them
     /// will.
-    ///
-    /// Ids may be duplicated. However, the updates are passed down to storage
-    /// unchanged, so users should coalesce them when that's not otherwise
-    /// slower.
-    //
-    // TODO: This could take &StreamWriteHandle instead of Id to avoid surfacing
-    // Id to users, but that would require an extra Vec. Revisit.
-    //
-    // TODO: Make this take a two-layer IntoIterator to mirror how
-    // StreamWriteHandle::write works.
-    pub fn write_atomic(&self, updates: Vec<(Id, Vec<((K, V), u64, isize)>)>) -> PFuture<SeqNo> {
+    pub fn write_atomic<F: FnOnce(&mut AtomicWriteBuilder<'_>) -> Result<(), Error>>(
+        &self,
+        f: F,
+    ) -> PFuture<SeqNo> {
+        let mut builder = AtomicWriteBuilder {
+            stream_ids: &self.stream_ids,
+            records: Vec::new(),
+        };
         let (tx, rx) = PFuture::new();
-        for (stream_id, _) in updates.iter() {
-            if !self.stream_ids.contains(stream_id) {
-                tx.fill(Err(Error::from(format!(
-                    "MultiWriteHandle cannot write to stream: {:?}",
-                    stream_id
-                ))));
-                return rx;
-            }
+        if let Err(err) = f(&mut builder) {
+            tx.fill(Err(err));
+            return rx;
         }
-        let updates = updates
-            .iter()
-            .flat_map(|(id, updates)| {
-                let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
-                updates.finish().into_iter().map(|x| (*id, x))
-            })
-            .collect();
         self.client
             .sender
-            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Write(updates, tx)));
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Write(builder.records, tx)));
         rx
     }
 
@@ -520,6 +518,46 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
                 tx,
             )));
         rx
+    }
+}
+
+/// A buffer for staging a set of records to write atomically.
+///
+/// Feel free to think of this as a write-only transaction.
+#[derive(Debug)]
+pub struct AtomicWriteBuilder<'a> {
+    stream_ids: &'a HashSet<Id>,
+    records: Vec<(Id, ColumnarRecords)>,
+}
+
+impl AtomicWriteBuilder<'_> {
+    /// Adds the given updates to the set that will be written atomically.
+    ///
+    /// Streams may be duplicated. However, the updates are passed down to
+    /// storage unchanged, so users should coalesce them when that's not
+    /// otherwise slower.
+    pub fn add_write<K, V, T, I>(
+        &mut self,
+        handle: &StreamWriteHandle<K, V>,
+        updates: I,
+    ) -> Result<(), Error>
+    where
+        K: Codec,
+        V: Codec,
+        T: Borrow<((K, V), u64, isize)>,
+        I: IntoIterator<Item = T>,
+    {
+        let stream_id = handle.stream_id()?;
+        if !self.stream_ids.contains(&stream_id) {
+            return Err(Error::from(format!(
+                "MultiWriteHandle cannot write to stream: {:?}",
+                stream_id
+            )));
+        }
+        let records = WriteReqBuilder::<K, V>::from_iter(updates).finish();
+        self.records
+            .extend(records.into_iter().map(|x| (stream_id, x)));
+        Ok(())
     }
 }
 

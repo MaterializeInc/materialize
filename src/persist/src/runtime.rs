@@ -481,7 +481,7 @@ mod tests {
     use timely::dataflow::ProbeHandle;
     use timely::progress::Antichain;
 
-    use crate::client::MultiWriteHandle;
+    use crate::client::{MultiWriteHandle, StreamWriteHandle};
     use crate::indexed::SnapshotExt;
     use crate::mem::{MemMultiRegistry, MemRegistry};
     use crate::operators::source::PersistedSource;
@@ -633,23 +633,26 @@ mod tests {
         let client1 = registry.open("1", "multi")?;
         let client2 = registry.open("2", "multi")?;
 
-        let (c1s1, c1s1_read) = client1.create_or_load("1");
-        let (c1s2, c1s2_read) = client1.create_or_load("2");
-        let (c2s1, _) = client2.create_or_load("1");
+        let (c1s1, c1s1_read) = client1.create_or_load::<String, ()>("1");
+        let (c1s2, c1s2_read) = client1.create_or_load::<String, ()>("2");
+        let (c2s1, _) = client2.create_or_load::<String, ()>("1");
 
         // Cannot construct with no streams.
-        assert!(MultiWriteHandle::<(), ()>::new(&[]).is_err());
+        let no_streams: &[StreamWriteHandle<String, ()>] = &[];
+        assert!(MultiWriteHandle::new_from_streams(no_streams.into_iter()).is_err());
 
         // Cannot construct with streams from different runtimes.
-        assert!(MultiWriteHandle::new(&[&c1s2, &c2s1]).is_err());
+        assert!(MultiWriteHandle::new_from_streams([&c1s2, &c2s1].into_iter()).is_err());
 
         // Normal write
-        let multi = MultiWriteHandle::new(&[&c1s1, &c1s2])?;
-        let updates = vec![
-            (c1s1.stream_id()?, data[..1].to_vec()),
-            (c1s2.stream_id()?, data[1..].to_vec()),
-        ];
-        multi.write_atomic(updates).recv()?;
+        let multi = MultiWriteHandle::new_from_streams([&c1s1, &c1s2].into_iter())?;
+        multi
+            .write_atomic(|b| {
+                b.add_write(&c1s1, &data[..1])?;
+                b.add_write(&c1s2, &data[1..])?;
+                Ok(())
+            })
+            .recv()?;
         assert_eq!(c1s1_read.snapshot()?.read_to_end()?, data[..1].to_vec());
         assert_eq!(c1s2_read.snapshot()?.read_to_end()?, data[1..].to_vec());
 
@@ -662,15 +665,36 @@ mod tests {
         assert_eq!(c1s1.seal(1).recv().map_err(|err| err.to_string()), Err("invalid seal for Id(0): 1 not at or in advance of current seal frontier Antichain { elements: [2] }".into()));
         assert_eq!(c1s2.seal(1).recv().map_err(|err| err.to_string()), Err("invalid seal for Id(1): 1 not at or in advance of current seal frontier Antichain { elements: [2] }".into()));
 
+        // Verify that we can atomically write to streams with mismatched types.
+        let (c1s3, c1s3_read) = client1.create_or_load::<String, ()>("3");
+        let (c1s4, c1s4_read) = client1.create_or_load::<(), String>("4");
+        let mut multi = MultiWriteHandle::new(&c1s3)?;
+        multi.add_stream(&c1s4)?;
+        multi
+            .write_atomic(|b| {
+                b.add_write(&c1s3, &[(("foo".into(), ()), 0, 1)])?;
+                b.add_write(&c1s4, &[(((), "bar".into()), 0, 1)])?;
+                Ok(())
+            })
+            .recv()?;
+        assert_eq!(
+            c1s3_read.snapshot()?.read_to_end()?,
+            vec![(("foo".into(), ()), 0, 1)]
+        );
+        assert_eq!(
+            c1s4_read.snapshot()?.read_to_end()?,
+            vec![(((), "bar".into()), 0, 1)]
+        );
+
         // Cannot write to streams not specified during construction.
-        let (c1s3, _) = client1.create_or_load::<(), ()>("3");
+        let (c1s5, _) = client1.create_or_load::<String, ()>("5");
         assert!(multi
-            .write_atomic(vec![(c1s3.stream_id()?, data)])
+            .write_atomic(|b| b.add_write(&c1s5, data))
             .recv()
             .is_err());
 
         // Cannot seal streams not specified during construction.
-        assert!(multi.seal(&[c1s3.stream_id()?], 3).recv().is_err());
+        assert!(multi.seal(&[c1s5.stream_id()?], 3).recv().is_err());
 
         Ok(())
     }

@@ -109,7 +109,6 @@ use crate::client::{
     DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
 use crate::error::Error;
-use crate::indexed::encoding::Id;
 use crate::indexed::SnapshotExt;
 use crate::nemesis::progress::{DataflowProgress, DataflowProgressHandle};
 use crate::nemesis::{
@@ -128,7 +127,6 @@ use crate::unreliable::UnreliableHandle;
 struct Ingest {
     write: StreamWriteHandle<String, ()>,
     read: StreamReadHandle<String, ()>,
-    stream_id: Id,
     progress_rx: DataflowProgress,
 }
 
@@ -157,7 +155,8 @@ impl DirectCore {
             }
             Entry::Vacant(x) => {
                 let (write, read) = self.runtime.create_or_load(name);
-                let stream_id = write.stream_id()?;
+                // Error if the create_or_load wasn't successful.
+                let _ = write.stream_id()?;
                 let dataflow_read = read.clone();
                 let (output_tx, output_rx) = mpsc::channel();
                 let output_tx = Arc::new(Mutex::new(output_tx));
@@ -189,7 +188,6 @@ impl DirectCore {
                 let input = Ingest {
                     write,
                     read,
-                    stream_id,
                     progress_rx,
                 };
                 let output = Dataflow {
@@ -481,17 +479,19 @@ impl DirectWorker {
     }
 
     fn write_multi(&mut self, req: WriteReqMulti) -> Result<PFuture<SeqNo>, Error> {
-        let mut write_handles = Vec::new();
         let mut updates = Vec::new();
         for req in req.writes {
             let stream = self.stream(&req.stream)?;
-            updates.push((stream.stream_id, vec![req.update]));
-            write_handles.push(stream.write.clone());
+            updates.push((stream.write.clone(), vec![req.update]));
         }
-        let write_handles = write_handles.iter().collect::<Vec<_>>();
-        let multi = MultiWriteHandle::new(&write_handles)?;
+        let multi = MultiWriteHandle::new_from_streams(updates.iter().map(|(x, _)| x))?;
 
-        Ok(multi.write_atomic(updates))
+        Ok(multi.write_atomic(|builder| {
+            for (handle, updates) in updates {
+                builder.add_write(&handle, updates.iter())?;
+            }
+            Ok(())
+        }))
     }
 
     fn seal(&mut self, req: SealReq) -> Result<PFuture<SeqNo>, Error> {
