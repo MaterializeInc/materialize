@@ -86,10 +86,15 @@ where
     };
 
     // Start up the runtime.
-    let blob = BlobCache::new(build, metrics.clone(), async_runtime.clone(), blob);
-    let maintainer = Maintainer::new(blob.clone(), async_runtime.clone());
-    let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
-    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
+    let blob = BlobCache::new(
+        build,
+        Arc::clone(&metrics),
+        Arc::clone(&async_runtime),
+        blob,
+    );
+    let maintainer = Maintainer::new(blob.clone(), Arc::clone(&async_runtime));
+    let indexed = Indexed::new(log, blob, maintainer, Arc::clone(&metrics))?;
+    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, Arc::clone(&metrics));
     let id = RuntimeId::new();
     let impl_handle = thread::Builder::new()
         .name("persist:runtime".into())
@@ -163,10 +168,15 @@ where
     };
 
     // Start up the runtime.
-    let blob = BlobCache::new(build, metrics.clone(), async_runtime.clone(), blob);
+    let blob = BlobCache::new(
+        build,
+        Arc::clone(&metrics),
+        Arc::clone(&async_runtime),
+        blob,
+    );
     let maintainer = Maintainer::new(blob.clone(), async_runtime);
-    let indexed = Indexed::new(ErrorLog, blob, maintainer, metrics.clone())?;
-    let mut runtime = RuntimeReadImpl::new(indexed, rx, metrics.clone());
+    let indexed = Indexed::new(ErrorLog, blob, maintainer, Arc::clone(&metrics))?;
+    let mut runtime = RuntimeReadImpl::new(indexed, rx, Arc::clone(&metrics));
     let id = RuntimeId::new();
     let impl_handle = thread::Builder::new()
         .name("persist:runtime-read".into())

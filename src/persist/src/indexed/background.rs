@@ -75,7 +75,7 @@ impl<B: Blob> Maintainer<B> {
     /// at construction time.
     pub fn compact_trace(&self, req: CompactTraceReq) -> PFuture<CompactTraceRes> {
         let (tx, rx) = PFuture::new();
-        let blob = self.blob.clone();
+        let blob = Arc::clone(&self.blob);
         // Ignore the spawn_blocking response since we communicate
         // success/failure through the returned future.
         //
@@ -194,7 +194,7 @@ mod tests {
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
-            async_runtime.clone(),
+            Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime);
@@ -277,7 +277,7 @@ mod tests {
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
-            async_runtime.clone(),
+            Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
         let maintainer = Maintainer::new(blob, async_runtime);

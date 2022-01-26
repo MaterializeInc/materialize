@@ -59,11 +59,11 @@ impl<B> Clone for BlobCache<B> {
     fn clone(&self) -> Self {
         BlobCache {
             build_version: self.build_version.clone(),
-            metrics: self.metrics.clone(),
-            blob: self.blob.clone(),
-            async_runtime: self.async_runtime.clone(),
-            unsealed: self.unsealed.clone(),
-            trace: self.trace.clone(),
+            metrics: Arc::clone(&self.metrics),
+            blob: Arc::clone(&self.blob),
+            async_runtime: Arc::clone(&self.async_runtime),
+            unsealed: Arc::clone(&self.unsealed),
+            trace: Arc::clone(&self.trace),
             prev_meta_len: self.prev_meta_len,
         }
     }
@@ -117,7 +117,7 @@ impl<B: BlobRead> BlobCache<B> {
         let mut cache = self.unsealed.lock()?;
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
-        let ret = cache.get(key).unwrap().clone();
+        let ret = Arc::clone(&cache.get(key).unwrap());
 
         drop(async_guard);
         Ok(ret)
@@ -139,7 +139,7 @@ impl<B: BlobRead> BlobCache<B> {
             };
             if let Some(entry) = unsealed.get(key) {
                 self.metrics.blob_read_cache_hit_count.inc();
-                tx.fill(Ok(entry.clone()));
+                tx.fill(Ok(Arc::clone(&entry)));
                 return rx;
             }
             self.metrics.blob_read_cache_miss_count.inc();
@@ -176,7 +176,7 @@ impl<B: BlobRead> BlobCache<B> {
         let mut cache = self.trace.lock()?;
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
-        let ret = cache.get(key).unwrap().clone();
+        let ret = Arc::clone(&cache.get(key).unwrap());
 
         drop(async_guard);
         Ok(ret)
@@ -198,7 +198,7 @@ impl<B: BlobRead> BlobCache<B> {
             };
             if let Some(entry) = trace.get(key) {
                 self.metrics.blob_read_cache_hit_count.inc();
-                tx.fill(Ok(entry.clone()));
+                tx.fill(Ok(Arc::clone(&entry)));
                 return rx;
             }
             self.metrics.blob_read_cache_miss_count.inc();

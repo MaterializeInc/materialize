@@ -414,7 +414,7 @@ impl MemRegistry {
     /// Opens the [MemLog] contained by this registry.
     pub fn log_no_reentrance(&self) -> Result<MemLog, Error> {
         MemLog::open(
-            self.log.clone(),
+            Arc::clone(&self.log),
             LockInfo::new_no_reentrance("MemRegistry".to_owned()),
         )
     }
@@ -423,7 +423,7 @@ impl MemRegistry {
     pub fn blob_no_reentrance(&self) -> Result<MemBlob, Error> {
         MemBlob::open_exclusive(
             MemBlobConfig {
-                core: self.blob.clone(),
+                core: Arc::clone(&self.blob),
             },
             LockInfo::new_no_reentrance("MemRegistry".to_owned()),
         )
@@ -437,8 +437,8 @@ impl MemRegistry {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
-            metrics.clone(),
-            async_runtime.clone(),
+            Arc::clone(&metrics),
+            Arc::clone(&async_runtime),
             self.blob_no_reentrance()?,
         );
         let compacter = Maintainer::new(blob.clone(), async_runtime);
@@ -459,8 +459,8 @@ impl MemRegistry {
         let blob = UnreliableBlob::from_handle(blob, unreliable);
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
-            metrics.clone(),
-            async_runtime.clone(),
+            Arc::clone(&metrics),
+            Arc::clone(&async_runtime),
             blob,
         );
         let compacter = Maintainer::new(blob.clone(), async_runtime);
@@ -525,10 +525,10 @@ impl MemMultiRegistry {
     /// Opens a [MemLog] associated with `path`.
     pub fn log(&mut self, path: &str, lock_info: LockInfo) -> Result<MemLog, Error> {
         if let Some(log) = self.log_by_path.get(path) {
-            MemLog::open(log.clone(), lock_info)
+            MemLog::open(Arc::clone(&log), lock_info)
         } else {
             let log = Arc::new(Mutex::new(MemLogCore::new(lock_info)));
-            self.log_by_path.insert(path.to_string(), log.clone());
+            self.log_by_path.insert(path.to_string(), Arc::clone(&log));
             let log = MemLog { core: Some(log) };
             Ok(log)
         }
@@ -537,10 +537,16 @@ impl MemMultiRegistry {
     /// Opens a [MemBlob] associated with `path`.
     pub fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
         if let Some(blob) = self.blob_by_path.get(path) {
-            MemBlob::open_exclusive(MemBlobConfig { core: blob.clone() }, lock_info)
+            MemBlob::open_exclusive(
+                MemBlobConfig {
+                    core: Arc::clone(&blob),
+                },
+                lock_info,
+            )
         } else {
             let blob = Arc::new(Mutex::new(MemBlobCore::new(lock_info)));
-            self.blob_by_path.insert(path.to_string(), blob.clone());
+            self.blob_by_path
+                .insert(path.to_string(), Arc::clone(&blob));
             let blob = MemBlob { core: Some(blob) };
             Ok(blob)
         }
@@ -549,10 +555,13 @@ impl MemMultiRegistry {
     /// Opens a [MemBlobRead] associated with `path`.
     pub fn blob_read(&mut self, path: &str) -> MemBlobRead {
         if let Some(blob) = self.blob_by_path.get(path) {
-            MemBlobRead::open(MemBlobConfig { core: blob.clone() })
+            MemBlobRead::open(MemBlobConfig {
+                core: Arc::clone(&blob),
+            })
         } else {
             let blob = Arc::new(Mutex::new(MemBlobCore::new_read()));
-            self.blob_by_path.insert(path.to_string(), blob.clone());
+            self.blob_by_path
+                .insert(path.to_string(), Arc::clone(&blob));
             MemBlobRead::open(MemBlobConfig { core: blob })
         }
     }
@@ -589,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn mem_blob() -> Result<(), Error> {
         let registry = Arc::new(Mutex::new(MemMultiRegistry::new()));
-        let registry_read = registry.clone();
+        let registry_read = Arc::clone(&registry);
         blob_impl_test(
             move |t| {
                 registry
@@ -615,7 +624,7 @@ mod tests {
         // Put a blob in an Arc<Mutex<..>> and copy it (like we do to in
         // BlobCache to share it between the main persist loop and maintenance).
         let blob_gen1_1 = Arc::new(Mutex::new(registry.blob_no_reentrance()?));
-        let blob_gen1_2 = blob_gen1_1.clone();
+        let blob_gen1_2 = Arc::clone(&blob_gen1_1);
 
         // Close one of them because the runtime is shutting down, but keep the
         // other around (to simulate an async fetch in maintenance).

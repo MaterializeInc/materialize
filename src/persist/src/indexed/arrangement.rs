@@ -1338,7 +1338,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
-            async_runtime.clone(),
+            Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime);
@@ -1492,7 +1492,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
-            async_runtime.clone(),
+            Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime);
