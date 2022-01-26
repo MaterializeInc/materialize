@@ -20,6 +20,7 @@ use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use persist::indexed::columnar::ColumnarRecords;
+use persist::s3::{S3Blob, S3BlobConfig};
 use persist_types::Codec;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
@@ -133,6 +134,23 @@ pub fn bench_blob(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
         &blob_val,
         |b, blob_val| bench_set(&mut file_blob, blob_val.clone(), b),
     );
+
+    // Only run s3 benchmarks if the magic env vars are set.
+    if let Some(config) =
+        futures_executor::block_on(S3BlobConfig::new_for_test()).expect("failed to load s3 config")
+    {
+        let async_runtime = Arc::new(AsyncRuntime::new().expect("failed to create async runtime"));
+        let async_guard = async_runtime.enter();
+        let mut s3_blob =
+            S3Blob::open_exclusive(config, LockInfo::new_no_reentrance("s3_blob_set".into()))
+                .expect("failed to create S3Blob");
+        g.bench_with_input(
+            BenchmarkId::new("s3", data.goodput_pretty()),
+            &blob_val,
+            |b, blob_val| bench_set(&mut s3_blob, blob_val.clone(), b),
+        );
+        drop(async_guard);
+    }
 }
 
 fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B: Blob>(

@@ -96,7 +96,10 @@ impl<B: BlobRead> BlobCache<B> {
     /// This method is idempotent. Returns true if the blob had not
     /// previously been closed.
     pub fn close(&mut self) -> Result<bool, Error> {
-        block_on(self.blob.lock()?.close())
+        let async_guard = self.async_runtime.enter();
+        let ret = block_on(self.blob.lock()?.close());
+        drop(async_guard);
+        ret
     }
 
     /// Synchronously fetches the batch for the given key.
@@ -271,7 +274,10 @@ impl<B: BlobRead> BlobCache<B> {
 
     /// Returns the list of keys known to the underlying [Blob].
     pub fn list_keys(&self) -> Result<Vec<String>, Error> {
-        block_on(self.blob.lock()?.list_keys())
+        let async_guard = self.async_runtime.enter();
+        let ret = block_on(self.blob.lock()?.list_keys());
+        drop(async_guard);
+        ret
     }
 }
 

@@ -20,6 +20,7 @@ use aws_types::credentials::SharedCredentialsProvider;
 use futures_executor::block_on;
 
 use mz_aws_util::config::AwsConfig;
+use uuid::Uuid;
 
 use crate::error::Error;
 use crate::storage::{Atomicity, Blob, BlobRead, LockInfo};
@@ -33,7 +34,6 @@ pub struct S3BlobConfig {
 }
 
 impl S3BlobConfig {
-    #[cfg(test)]
     const EXTERNAL_TESTS_S3_BUCKET: &'static str = "MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET";
 
     /// Returns a new [S3BlobConfig] for use in production.
@@ -65,7 +65,7 @@ impl S3BlobConfig {
         })
     }
 
-    /// Returns a new [Config] for use in unit tests.
+    /// Returns a new [S3BlobConfig] for use in unit tests.
     ///
     /// By default, persist tests that use external storage (like s3) are
     /// no-ops, so that `cargo test` does the right thing without any
@@ -90,24 +90,18 @@ impl S3BlobConfig {
     /// For a Materialize developer, to opt in to these tests locally for
     /// development, follow the AWS access guide:
     ///
-    ///     https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md
-    ///
-    /// then use the following values (potentially by putting them in a
-    /// shell script and sourcing it if you'll do this often):
-    ///
-    /// ```shell
-    /// export MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete"
-    /// export AWS_DEFAULT_REGION="us-east-2"
-    /// export AWS_PROFILE="mz-scratch-admin"
-    /// aws sso login
+    /// ```text
+    /// https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md
     /// ```
     ///
+    /// then running `source src/persist/s3_test_env_mz.sh`. You will also have
+    /// to run `aws sso login` if you haven't recently.
+    ///
     /// Non-Materialize developers will have to set up their own auto-deleting
-    /// bucket.
-    #[cfg(test)]
+    /// bucket and export the same env vars that s3_test_env_mz.sh does.
+    ///
+    /// Only public for use in src/benches.
     pub async fn new_for_test() -> Result<Option<Self>, Error> {
-        use uuid::Uuid;
-
         let bucket = match std::env::var(Self::EXTERNAL_TESTS_S3_BUCKET) {
             Ok(bucket) => bucket,
             Err(_) => {
@@ -125,6 +119,13 @@ impl S3BlobConfig {
         let role_arn = None;
         let config = S3BlobConfig::new(bucket, prefix, role_arn).await?;
         Ok(Some(config))
+    }
+
+    /// Returns a clone of Self with a new v4 uuid prefix.
+    pub fn clone_with_new_uuid_prefix(&self) -> Self {
+        let mut ret = self.clone();
+        ret.prefix = Uuid::new_v4().to_string();
+        ret
     }
 }
 
