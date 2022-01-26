@@ -527,15 +527,16 @@ class ResolvedImage:
         Returns:
             acquired_from: How the image was acquired.
         """
-        if self.image.publish:
-            try:
-                spawn.runv(
-                    ["docker", "pull", self.spec()],
-                    stdout=sys.stderr.buffer,
-                )
-                return AcquiredFrom.REGISTRY
-            except subprocess.CalledProcessError:
-                pass
+
+        try:
+            spawn.runv(
+                ["docker", "pull", self.spec()],
+                stdout=sys.stderr.buffer,
+            )
+            return AcquiredFrom.REGISTRY
+        except subprocess.CalledProcessError:
+            pass
+
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
