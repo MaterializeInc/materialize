@@ -38,6 +38,7 @@ pub mod fmt;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod future;
+pub mod graph;
 pub mod hash;
 pub mod hint;
 pub mod id_gen;

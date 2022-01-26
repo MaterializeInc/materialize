@@ -433,38 +433,92 @@ impl Model {
         }
     }
 
-    /// Visit boxes in the query graph in pre-order starting from `self.top_box`.
-    fn visit_pre_boxes<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
+    /// Traverse the entire graph using depth-first traversal.
+    ///
+    /// The function `pre` runs on a parent [`QueryBox`] before it runs on any
+    /// of its children.
+    /// The function `post` runs on all children [`QueryBox`]es before it runs
+    /// on a parent.
+    pub(super) fn try_visit_pre_post<'a, F, G, E>(
+        &'a self,
+        pre: &mut F,
+        post: &mut G,
+    ) -> Result<(), E>
     where
-        F: FnMut(Ref<'a, QueryBox>) -> Result<(), E>,
+        F: FnMut(&Model, &BoxId) -> Result<(), E>,
+        G: FnMut(&Model, &BoxId) -> Result<(), E>,
     {
-        self.visit_pre_boxes_in_subgraph(f, self.top_box)
+        self.try_visit_pre_post_descendants(pre, post, self.top_box)
     }
 
-    /// Visit boxes in the query graph in pre-order
-    fn visit_pre_boxes_in_subgraph<'a, F, E>(&'a self, f: &mut F, start_box: BoxId) -> Result<(), E>
+    /// Traverse a subgraph using depth-first traversal starting at `root`.
+    ///
+    /// The function `pre` runs on a parent [`QueryBox`] before it runs on any
+    /// of its children.
+    /// The function `post` runs on all children [`QueryBox`]es before it runs
+    /// on a parent.
+    pub(super) fn try_visit_pre_post_descendants<'a, F, G, E>(
+        &'a self,
+        pre: &mut F,
+        post: &mut G,
+        root: BoxId,
+    ) -> Result<(), E>
     where
-        F: FnMut(Ref<'a, QueryBox>) -> Result<(), E>,
+        F: FnMut(&Model, &BoxId) -> Result<(), E>,
+        G: FnMut(&Model, &BoxId) -> Result<(), E>,
     {
-        let mut visited = HashSet::new();
-        let mut stack = vec![start_box];
-        while !stack.is_empty() {
-            let box_id = stack.pop().unwrap();
-            if visited.insert(box_id) {
-                let query_box = self.boxes.get(&box_id).expect("a valid box identifier");
-                f(query_box.borrow())?;
+        ore::graph::nonrecursive_dft(
+            self,
+            root,
+            &mut |model, box_id| {
+                pre(model, box_id)?;
+                Ok(model
+                    .get_box(*box_id)
+                    .input_quantifiers()
+                    .map(|q| q.input_box)
+                    .collect())
+            },
+            post,
+        )
+    }
 
-                stack.extend(
-                    query_box
-                        .borrow()
-                        .quantifiers
-                        .iter()
-                        .rev()
-                        .map(|q| self.get_quantifier(*q).input_box),
-                );
-            }
-        }
-        Ok(())
+    /// Same as [`try_visit_pre_post`], but permits mutating the model.
+    pub(super) fn try_visit_mut_pre_post<'a, F, G, E>(
+        &'a mut self,
+        pre: &mut F,
+        post: &mut G,
+    ) -> Result<(), E>
+    where
+        F: FnMut(&mut Model, &BoxId) -> Result<(), E>,
+        G: FnMut(&mut Model, &BoxId) -> Result<(), E>,
+    {
+        self.try_visit_mut_pre_post_descendants(pre, post, self.top_box)
+    }
+
+    /// Same as [`try_visit_pre_post_descendants`], but permits mutating the model.
+    pub(super) fn try_visit_mut_pre_post_descendants<'a, F, G, E>(
+        &'a mut self,
+        pre: &mut F,
+        post: &mut G,
+        root: BoxId,
+    ) -> Result<(), E>
+    where
+        F: FnMut(&mut Model, &BoxId) -> Result<(), E>,
+        G: FnMut(&mut Model, &BoxId) -> Result<(), E>,
+    {
+        ore::graph::nonrecursive_dft_mut(
+            self,
+            root,
+            &mut |model, box_id| {
+                pre(model, box_id)?;
+                Ok(model
+                    .get_box(*box_id)
+                    .input_quantifiers()
+                    .map(|q| q.input_box)
+                    .collect())
+            },
+            post,
+        )
     }
 
     /// Removes unreferenced objects from the model.
@@ -474,11 +528,15 @@ impl Model {
         let mut visited_boxes = HashSet::new();
         let mut visited_quantifiers: HashSet<QuantifierId> = HashSet::new();
 
-        let _ = self.visit_pre_boxes(&mut |b| -> Result<(), ()> {
-            visited_boxes.insert(b.id);
-            visited_quantifiers.extend(b.quantifiers.iter());
-            Ok(())
-        });
+        let _ = self.try_visit_pre_post(
+            &mut |m, box_id| -> Result<(), ()> {
+                visited_boxes.insert(*box_id);
+                let b = m.get_box(*box_id);
+                visited_quantifiers.extend(b.input_quantifiers().map(|q| q.id));
+                Ok(())
+            },
+            &mut |_, _| Ok(()),
+        );
         self.boxes.retain(|b, _| visited_boxes.contains(b));
         self.quantifiers
             .retain(|q, _| visited_quantifiers.contains(q));
@@ -686,7 +744,8 @@ impl QueryBox {
             // collect the column references from the current context within
             // the subgraph under the current quantifier
             let mut column_refs = HashSet::new();
-            let mut f = |inner_box: Ref<'_, QueryBox>| -> Result<(), ()> {
+            let mut f = |m: &Model, box_id: &BoxId| -> Result<(), ()> {
+                let inner_box = m.get_box(*box_id);
                 inner_box.visit_expressions(&mut |expr: &BoxScalarExpr| -> Result<(), ()> {
                     expr.collect_column_references_from_context(
                         &self.quantifiers,
@@ -697,7 +756,7 @@ impl QueryBox {
             };
             let q = model.get_quantifier(*q_id);
             model
-                .visit_pre_boxes_in_subgraph(&mut f, q.input_box)
+                .try_visit_pre_post_descendants(&mut f, &mut |_, _| Ok(()), q.input_box)
                 .unwrap();
             if !column_refs.is_empty() {
                 correlation_info.insert(*q_id, column_refs);

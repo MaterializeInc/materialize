@@ -166,7 +166,7 @@ impl BoxScalarExpr {
     /// The function `post` runs on child `BoxScalarExpr`s first before the
     /// parent. Optionally, `pre` can return which child `BoxScalarExpr`s, if
     /// any, should be visited (default is to visit all children).
-    pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    pub fn try_visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&Self) -> Option<Vec<&Self>>,
         F2: FnMut(&Self),
@@ -174,10 +174,10 @@ impl BoxScalarExpr {
         let to_visit = pre(self);
         if let Some(to_visit) = to_visit {
             for e in to_visit {
-                e.visit_pre_post(pre, post);
+                e.try_visit_pre_post(pre, post);
             }
         } else {
-            self.visit_children(|e| e.visit_pre_post(pre, post));
+            self.visit_children(|e| e.try_visit_pre_post(pre, post));
         }
         post(self);
     }
@@ -223,7 +223,7 @@ impl BoxScalarExpr {
         context: &QuantifierSet,
         column_refs: &mut HashSet<ColumnReference>,
     ) {
-        self.visit_pre_post(&mut |_| None, &mut |expr| {
+        self.try_visit_pre_post(&mut |_| None, &mut |expr| {
             if let BoxScalarExpr::ColumnReference(c) = expr {
                 if context.contains(&c.quantifier_id) {
                     column_refs.insert(c.clone());
