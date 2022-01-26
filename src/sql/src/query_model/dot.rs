@@ -9,10 +9,12 @@
 
 //! Generates a graphviz graph from a Query Graph Model.
 
-use crate::query_model::{BoxId, BoxType, Model, Quantifier, QuantifierId, QueryBox};
+use crate::query_model::{
+    BoxId, BoxType, ColumnReference, Model, Quantifier, QuantifierId, QueryBox,
+};
 use itertools::Itertools;
 use ore::str::separated;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Write};
 
 /// Generates a graphviz graph from a Query Graph Model, defined in the DOT language.
@@ -108,7 +110,7 @@ impl DotGenerator {
                         ));
                     }
 
-                    self.add_correlation_info(model, &b);
+                    self.add_correlation_info(b.correlation_info());
 
                     self.dec();
                     self.new_line("}");
@@ -207,24 +209,23 @@ impl DotGenerator {
 
     /// Adds red arrows from correlated quantifiers to the sibling quantifiers they
     /// are correlated with.
-    fn add_correlation_info(&mut self, model: &Model, b: &QueryBox) {
-        let correlation_info: BTreeMap<QuantifierId, Vec<QuantifierId>> = b
-            .correlation_info(model)
-            .into_iter()
-            .map(|(id, column_refs)| {
-                (
-                    id,
-                    column_refs
-                        .iter()
-                        .map(|c| c.quantifier_id)
-                        .sorted()
-                        .unique()
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect();
+    fn add_correlation_info(
+        &mut self,
+        correlation_info: BTreeMap<QuantifierId, HashSet<ColumnReference>>,
+    ) {
+        let q_correlation_info = correlation_info.into_iter().map(|(id, column_refs)| {
+            (
+                id,
+                column_refs
+                    .iter()
+                    .map(|c| c.quantifier_id)
+                    .sorted()
+                    .unique()
+                    .collect::<Vec<_>>(),
+            )
+        });
 
-        for (correlated_q, quantifiers) in correlation_info.iter() {
+        for (correlated_q, quantifiers) in q_correlation_info {
             for q in quantifiers.iter() {
                 self.new_line(&format!(
                     "Q{0} -> Q{1} [ {2}, style = filled, color = red ]",

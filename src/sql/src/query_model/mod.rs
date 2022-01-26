@@ -851,6 +851,10 @@ impl<'a> BoundRef<'a, QueryBox> {
     pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
     }
+
+    pub fn correlation_info(&self) -> BTreeMap<QuantifierId, HashSet<ColumnReference>> {
+        self.deref().correlation_info(self.model)
+    }
 }
 
 /// Mutable [`QueryBox`] methods that depend on their enclosing [`Model`].

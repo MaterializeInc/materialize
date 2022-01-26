@@ -98,7 +98,7 @@ impl<'a> Lowerer<'a> {
                 // and then apply the correlated ones one by one in order of dependency
                 // on top the join built so far, adding the predicates as soon as their
                 // dependencies are satisfied.
-                let correlation_info = the_box.correlation_info(&self.model);
+                let correlation_info = the_box.correlation_info();
                 if !correlation_info.is_empty() {
                     panic!("correlated joins are not supported yet");
                 }
