@@ -106,6 +106,15 @@ struct Args {
     #[clap(long)]
     seed: Option<u32>,
 
+    /// Divide the test files into shards and run only the test files in this
+    /// shard.
+    #[clap(long, requires = "shard-count")]
+    shard: Option<usize>,
+
+    /// The total number of shards to use.
+    #[clap(long, requires = "shard")]
+    shard_count: Option<usize>,
+
     /// Maximum number of errors before aborting
     #[clap(long, default_value = "10")]
     max_errors: usize,
@@ -193,6 +202,9 @@ async fn main() {
         args.materialized_url.get_hosts()[0],
         args.max_errors
     );
+    if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
+        println!("    shard: {}/{}", shard + 1, shard_count);
+    }
 
     let mut arg_vars = BTreeMap::new();
     for arg in &args.var {
@@ -269,6 +281,10 @@ async fn main() {
                 die!("testdrive: glob did not match any patterns: {}", glob)
             }
         }
+    }
+
+    if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
+        files = files.into_iter().skip(shard).step_by(shard_count).collect();
     }
 
     if args.shuffle_tests {

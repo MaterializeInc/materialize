@@ -96,10 +96,11 @@ steps:
       queue: builder
 
   - id: testdrive
-    label: ":racing_car: testdrive"
+    label: ":racing_car: testdrive %n"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
+    parallelism: 4
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
