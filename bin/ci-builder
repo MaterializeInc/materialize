@@ -11,6 +11,9 @@
 #
 # ci-builder — builds and releases CI builder image.
 
+# NOTE(benesch): this script is reaching the breaking point in Bash. We should
+# rewrite it in Python before adding much more logic to it.
+
 set -euo pipefail
 
 NIGHTLY_RUST_DATE=2021-11-29
@@ -130,10 +133,12 @@ case "$cmd" in
         docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
+        mkdir -p target-xcompile
         args=(
             --cidfile "$cid_file"
             --rm --interactive
             --init
+            --volume "$(pwd)/target-xcompile:/mnt/build"
             --volume "$(pwd):$(pwd)"
             --workdir "$(pwd)"
             --env AWS_ACCESS_KEY_ID
@@ -190,6 +195,12 @@ case "$cmd" in
             args+=(--volume "mz-ci-builder-cargo:/cargo")
         else
             args+=(--user "$(id -u):1001")
+        fi
+        if [[ "${CI_BUILDER_SCCACHE:-}" ]]; then
+            args+=(
+                --env RUSTC_WRAPPER=sccache
+                --env SCCACHE_BUCKET
+            )
         fi
         rm -f "$cid_file"
         docker run "${args[@]}" "materialize/ci-builder:$tag" "$@"

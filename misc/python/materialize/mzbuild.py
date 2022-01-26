@@ -272,21 +272,23 @@ class CargoBuild(CargoPreImage):
                 cwd=self.rd.root,
             )
             target_dir = str(self.rd.cargo_target_dir().absolute())
+            ci_builder_target_dir = "/mnt/build/" + xcompile.target(self.rd.arch)
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
                     continue
                 message = json.loads(line)
                 if message["reason"] != "build-script-executed":
                     continue
-                if not message["out_dir"].startswith(target_dir):
+                out_dir = message["out_dir"]
+                if out_dir.startswith(ci_builder_target_dir):
+                    out_dir = target_dir + out_dir[len(ci_builder_target_dir) :]
+                if not out_dir.startswith(target_dir):
                     # Some crates are built for both the host and the target.
                     # Ignore the built-for-host out dir.
                     continue
                 package = message["package_id"].split()[0]
                 for src, dst in self.extract.get(package, {}).items():
-                    spawn.runv(
-                        ["cp", "-R", Path(message["out_dir"]) / src, self.path / dst]
-                    )
+                    spawn.runv(["cp", "-R", Path(out_dir) / src, self.path / dst])
 
     def run(self) -> None:
         super().run()

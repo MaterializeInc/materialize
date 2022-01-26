@@ -91,6 +91,7 @@ def cargo(
         extra_env = {
             f"CMAKE_SYSTEM_NAME": "Linux",
             f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
+            f"CARGO_TARGET_DIR": ROOT / "target-xcompile",
             f"TARGET_AR": f"{_target}-ar",
             f"TARGET_CPP": f"{_target}-cpp",
             f"TARGET_CC": f"{_target}-cc",
@@ -111,7 +112,6 @@ def cargo(
 
     env = {
         **extra_env,
-        "CARGO_TARGET_DIR": ROOT / "target-xcompile",
         "RUSTFLAGS": " ".join(rustflags),
         **KRB5_CONF_OVERRIDES,
     }
