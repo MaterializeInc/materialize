@@ -158,7 +158,7 @@ impl ConnClient {
         let mut client = SessionClient {
             inner: self,
             session: Some(session),
-            cancel_tx: cancel_tx.clone(),
+            cancel_tx: Arc::clone(&cancel_tx),
             cancel_rx,
         };
         let response = client

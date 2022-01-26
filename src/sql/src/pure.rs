@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::iter;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
@@ -116,7 +117,7 @@ pub fn purify(
 
                     // Translate `kafka_time_offset` to `start_offset`.
                     match kafka_util::lookup_start_offsets(
-                        consumer.clone(),
+                        Arc::clone(&consumer),
                         &topic,
                         &with_options_map,
                         now,

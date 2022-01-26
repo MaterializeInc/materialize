@@ -10,6 +10,7 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -238,13 +239,13 @@ where
 
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
-        let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
+        let mut t_logger = BatchLogger::new(Rc::clone(&t_linked), granularity_ms);
         let r_linked = std::rc::Rc::new(EventLink::new());
-        let mut r_logger = BatchLogger::new(r_linked.clone(), granularity_ms);
+        let mut r_logger = BatchLogger::new(Rc::clone(&r_linked), granularity_ms);
         let d_linked = std::rc::Rc::new(EventLink::new());
-        let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
+        let mut d_logger = BatchLogger::new(Rc::clone(&d_linked), granularity_ms);
         let m_linked = std::rc::Rc::new(EventLink::new());
-        let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
+        let mut m_logger = BatchLogger::new(Rc::clone(&m_linked), granularity_ms);
 
         let mut t_traces = HashMap::new();
         let mut r_traces = HashMap::new();
@@ -263,25 +264,25 @@ where
             t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
-                t_linked.clone(),
+                Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
-                r_linked.clone(),
+                Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
-                d_linked.clone(),
+                Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
-                m_linked.clone(),
+                Rc::clone(&m_linked),
                 m_activator.clone(),
             ));
         }

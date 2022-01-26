@@ -75,7 +75,7 @@ where
         let tail_protocol_handle = Rc::new(RefCell::new(if active_worker {
             Some(TailProtocol {
                 sink_id,
-                tail_response_buffer: Some(compute_state.tail_response_buffer.clone()),
+                tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
             })
         } else {
             None

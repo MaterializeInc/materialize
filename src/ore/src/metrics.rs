@@ -354,7 +354,7 @@ where
     fn clone(&self) -> ComputedGenericGauge<P> {
         ComputedGenericGauge {
             gauge: self.gauge.clone(),
-            f: self.f.clone(),
+            f: Arc::clone(&self.f),
         }
     }
 }
