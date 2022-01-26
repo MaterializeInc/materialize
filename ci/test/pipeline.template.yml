@@ -222,13 +222,14 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
 
-  - id: debezium-avro
-    label: "Debezium Avro test (Postgres)"
+  - id: debezium-postgres
+    label: "Debezium test (Postgres)"
     depends_on: build-x86_64
     inputs: [test/debezium-avro]
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: debezium-avro
+          composition: debezium
+          run: postgres
 
   - id: debezium-sql-server
     label: "Debezium test (SQL Server)"
@@ -236,8 +237,8 @@ steps:
     inputs: [test/debezium-avro]
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: debezium-avro
-          run: debezium-sql-server
+          composition: debezium
+          run: sql-server
 
   - id: pg-cdc
     label: "Postgres CDC test"
