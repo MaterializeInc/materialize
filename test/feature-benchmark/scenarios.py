@@ -548,33 +548,32 @@ true
 
 
 class KafkaEnvelopeNoneBytes(Kafka):
-    SHARED = Td(
-        """
-$ set count=1000000
-
+    def shared(self) -> Action:
+        return TdAction(
+            f"""
 $ kafka-create-topic topic=kafka-envelope-none-bytes
 
-$ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat=${count}
+$ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 12345678901234567890123456789012345678901234567890
 """
-    )
-    BENCHMARK = Td(
-        """
-$ set count=1000000
+        )
 
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
 > DROP SOURCE IF EXISTS s1;
 
 > CREATE MATERIALIZED SOURCE s1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-envelope-none-bytes-${testdrive.seed}'
+  FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
   FORMAT BYTES
   ENVELOPE NONE
   /* A */
 
-> SELECT COUNT(*) = ${count} FROM s1
+> SELECT COUNT(*) = {self.n()} FROM s1
   /* B */
 true
 """
-    )
+        )
 
 
 class KafkaUpsert(Kafka):
