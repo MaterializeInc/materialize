@@ -50,7 +50,7 @@ SERVICES = [
 ]
 
 
-def workflow_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test upgrades from various versions."""
 
     parser.add_argument(

@@ -48,6 +48,17 @@ SERVICES = [
 ]
 
 
+def workflow_default(c: Composition) -> None:
+    """All mzcompose files should contain a default workflow
+
+    This workflow just runs all the other ones
+    """
+    c.workflow("start-confluents")
+    c.workflow("versioned-mz")
+    c.workflow("two-mz")
+    c.workflow("mz-with-options")
+
+
 def workflow_start_confluents(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 

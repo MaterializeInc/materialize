@@ -13,15 +13,17 @@ from materialize.mzcompose.services import Postgres, SqlLogicTest
 SERVICES = [Postgres(), SqlLogicTest()]
 
 
+def workflow_default(c: Composition) -> None:
+    "Run fast SQL logic tests"
+    run_sqllogictest(c, "ci/test/slt-fast.sh")
+
+
+def workflow_sqllogictest(c: Composition) -> None:
+    "Run slow SQL logic tests"
+    run_sqllogictest(c, "ci/slt/slt.sh")
+
+
 def run_sqllogictest(c: Composition, command: str) -> None:
     c.up("postgres")
     c.wait_for_postgres(dbname="postgres")
     c.run("sqllogictest-svc", command)
-
-
-def workflow_sqllogictest(c: Composition) -> None:
-    run_sqllogictest(c, "ci/slt/slt.sh")
-
-
-def workflow_sqllogictest_fast(c: Composition) -> None:
-    run_sqllogictest(c, "ci/test/slt-fast.sh")

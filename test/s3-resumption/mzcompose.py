@@ -31,7 +31,7 @@ SERVICES = [
 # network and expect full recovery if the interruption has been
 # shorter than the timeout.
 #
-def workflow_s3_resumption(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["localstack", "materialized", "toxiproxy"])
     c.wait_for_materialized()
 

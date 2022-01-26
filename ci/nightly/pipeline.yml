@@ -18,14 +18,12 @@
   plugins:
     - ./ci/plugins/mzcompose:
         composition: kafka-matrix
-        run: kafka-matrix
 
 - id: kafka-multi-broker
   label: Kafka multi-broker test
   plugins:
     - ./ci/plugins/mzcompose:
         composition: kafka-multi-broker
-        run: kafka-multi-broker
 
 - id: redpanda-testdrive
   label: ":panda_face: :racing_car: testdrive"
@@ -48,14 +46,12 @@
   plugins:
     - ./ci/plugins/mzcompose:
         composition: upgrade
-        run: upgrade
 
 - id: limits
   label: "Product limits test"
   plugins:
     - ./ci/plugins/mzcompose:
         composition: limits
-        run: limits
   timeout_in_minutes: 50
 
 - id: cluster-testdrive
@@ -63,7 +59,7 @@
   plugins:
     - ./ci/plugins/mzcompose:
         composition: cluster
-        run: cluster-testdrive
+        run: nightly
   timeout_in_minutes: 30
 
 - id: proxy
@@ -72,7 +68,6 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: proxy
-        run: proxy
         args: [--aws-region=us-east-2]
 
 - id: testdrive_workers_1
@@ -82,7 +77,6 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: testdrive
         args: [--aws-region=us-east-2, --workers=1]
 
 - id: testdrive_workers_32
@@ -92,7 +86,6 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: testdrive
         args: [--aws-region=us-east-2, --workers=32]
 
 - id: persistence_testdrive
@@ -102,7 +95,6 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: testdrive
         args: [--aws-region=us-east-2, --persistent-user-tables]
 
 - id: feature-benchmark
@@ -111,7 +103,6 @@
   plugins:
     - ./ci/plugins/mzcompose:
         composition: feature-benchmark
-        run: feature-benchmark
         args:
           - --other-tag
           - latest
@@ -122,7 +113,6 @@
   plugins:
     - ./ci/plugins/mzcompose:
         composition: feature-benchmark
-        run: feature-benchmark
         args:
           - --other-tag
           - latest

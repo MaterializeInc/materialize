@@ -34,7 +34,7 @@ SERVICES = [
 ]
 
 
-def workflow_kafka_matrix(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     for version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"==> Testing Confluent Platform {version}")
         confluent_platform_services = [

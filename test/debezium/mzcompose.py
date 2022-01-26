@@ -40,7 +40,7 @@ SERVICES = [
 ]
 
 
-def workflow_debezium_avro(c: Composition) -> None:
+def workflow_postgres(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["postgres"])
 
@@ -51,7 +51,7 @@ def workflow_debezium_avro(c: Composition) -> None:
     c.run("testdrive-svc", "*.td")
 
 
-def workflow_debezium_sql_server(c: Composition) -> None:
+def workflow_sql_server(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["sql-server"])
 

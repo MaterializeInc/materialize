@@ -33,7 +33,7 @@ SERVICES = [
 ]
 
 
-def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run testdrive."""
     parser.add_argument(
         "--redpanda",
@@ -108,4 +108,4 @@ def workflow_testdrive_redpanda_ci(c: Composition) -> None:
         ).split()
     )
     files -= KNOWN_FAILURES
-    c.workflow("testdrive", "--redpanda", *files)
+    c.workflow("default", "--redpanda", *files)

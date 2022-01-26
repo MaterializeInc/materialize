@@ -91,9 +91,7 @@ def send_records(
 # might be causing them.
 #
 # [1]: https://www.scylladb.com/2021/04/22/on-coordinated-omission/
-def workflow_kafka_ingest_open_loop(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--num-seconds", type=int, default=100)
     parser.add_argument("--records-per-second", type=int, default=10000)
     parser.add_argument("--num-keys", type=int, default=1000000000)

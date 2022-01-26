@@ -20,37 +20,37 @@ The "upgrade" from your current source to your current source is also tested.
 To run the entire sequence of tests:
 
 ```
-./mzcompose down -v ; ./mzcompose run upgrade
+./mzcompose down -v ; ./mzcompose run default
 ```
 
 To run the tests against a particular version and all following versions:
 
 ```
-./mzcompose down -v ; ./mzcompose run upgrade --min-version 0.9.6
+./mzcompose down -v ; ./mzcompose run default --min-version 0.9.6
 ```
 
 To run the tests against the last five versions:
 
 ```
-./mzcompose down -v ; ./mzcompose run upgrade --most-recent 5
+./mzcompose down -v ; ./mzcompose run default --most-recent 5
 ```
 
 To run the tests upgrading from the current source to the current source:
 
 ```
-./mzcompose down -v ; ./mzcompose run upgrade --most-recent 0
+./mzcompose down -v ; ./mzcompose run default --most-recent 0
 ```
 
 To run just a particular test or tests:
 
 ```
-./mzcompose down -v ; ./mzcompose run upgrade 'persistent-user-tables*'
+./mzcompose down -v ; ./mzcompose run default 'persistent-user-tables*'
 ```
 
 For a full description of the command line options, run:
 
 ```
-./mzcompose run upgrade --help
+./mzcompose run default --help
 ```
 
 ## Test naming convention
