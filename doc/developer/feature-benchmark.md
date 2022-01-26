@@ -21,7 +21,7 @@ The `--help` option can be used to show supported options:
 To run the default benchmark scenarios:
 ```
 cd test/feature-benchmark
-./mzcompose run feature-benchmark --other-tag unstable
+./mzcompose run default --other-tag unstable
 ```
 
 This is going to benchmark the current source against the `materialize/materialized:unstable` container from DockerHub.
@@ -29,24 +29,24 @@ This is going to benchmark the current source against the `materialize/materiali
 To run one benchmark scenario or a named subset:
 
 ```
-./mzcompose run feature-benchmark --root-scenario=FastPath
+./mzcompose run default --root-scenario=FastPath
 ```
 
 To use specific Mz command-line options:
 
 ```
- ./mzcompose run feature-benchmark --this-options "--workers 16" --other-options "--workers 1"
+ ./mzcompose run default --this-options "--workers 16" --other-options "--workers 1"
 ```
 
 To compare specific Mz versions:
 
 ```
-./mzcompose run feature-benchmark --this-tag v1.2.3 --other-tag v2.3.4 ...
+./mzcompose run default --this-tag v1.2.3 --other-tag v2.3.4 ...
 ```
 
 To compare specific Mz git revisions:
 ```
-./mzcompose run feature-benchmark --this-tag unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6 ...
+./mzcompose run default --this-tag unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6 ...
 ```
 
 # Output

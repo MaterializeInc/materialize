@@ -240,7 +240,7 @@ For example, here's how you'd run the testdrive job on the EC2 instance:
 ```
 bin/scratch ssh INSTANCE-ID
 cd materialize
-bin/mzcompose --find testdrive run testdrive-ci
+bin/mzcompose --find testdrive run default
 ```
 
 If the test fails like it did in CI, you're set! You now have a reliable way to
