@@ -133,7 +133,7 @@ impl fmt::Display for BoxScalarExpr {
 }
 
 impl BoxScalarExpr {
-    pub fn visit1<'a, F>(&'a self, mut f: F)
+    pub fn visit_children<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
     {
@@ -177,9 +177,45 @@ impl BoxScalarExpr {
                 e.visit_pre_post(pre, post);
             }
         } else {
-            self.visit1(|e| e.visit_pre_post(pre, post));
+            self.visit_children(|e| e.visit_pre_post(pre, post));
         }
         post(self);
+    }
+
+    pub fn visit_mut_children<'a, F>(&'a mut self, mut f: F)
+    where
+        F: FnMut(&'a mut Self),
+    {
+        use BoxScalarExpr::*;
+        match self {
+            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallNullary(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Aggregate { expr, .. } => {
+                f(expr);
+            }
+        }
+    }
+
+    pub fn visit_mut_post<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Self),
+    {
+        self.visit_mut_children(|e| e.visit_mut_post(f));
+        f(self);
     }
 
     pub fn collect_column_references_from_context(

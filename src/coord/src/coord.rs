@@ -3473,7 +3473,13 @@ where
             ExplainStage::QueryGraph => {
                 // TODO add type information to the output graph
                 let model = sql::query_model::Model::from(raw_plan);
-                sql::query_model::dot::DotGenerator::new().generate(&model, "")?
+                sql::query_model::DotGenerator::new().generate(&model, "")?
+            }
+            ExplainStage::OptimizedQueryGraph => {
+                // TODO add type information to the output graph
+                let mut model = sql::query_model::Model::from(raw_plan);
+                sql::query_model::rewrite_model(&mut model);
+                sql::query_model::DotGenerator::new().generate(&model, "")?
             }
             ExplainStage::DecorrelatedPlan => {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
