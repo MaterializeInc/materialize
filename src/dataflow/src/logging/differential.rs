@@ -15,7 +15,7 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use expr::MirScalarExpr;
+use expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::EventLink;
@@ -28,7 +28,6 @@ use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
-use dataflow_types::plan::make_thinning_expression;
 use repr::{Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for differential logs.
@@ -157,7 +156,7 @@ pub fn construct<A: Allocate>(
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
-                let value = make_thinning_expression(
+                let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
                     &key.iter()
                         .cloned()
                         .map(MirScalarExpr::Column)

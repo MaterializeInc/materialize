@@ -33,7 +33,6 @@ use expr::{
 use repr::{Datum, Diff, Row};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 // This function exists purely to convert the HashMap into a BTreeMap,
 // so that the value will be stable, for the benefit of tests
@@ -1124,18 +1123,4 @@ pub fn linear_to_mfp(linear: crate::LinearOperator, typ: &repr::RelationType) ->
         .filter(predicates)
         .map(dummies)
         .project(demand_projection)
-}
-
-/// Return the set of columns in a relation of a given arity that are not redundant with a given key.
-///
-/// Example:
-/// Given a four-column relation that is to be arranged by the key [Column(0), Column(2)],
-/// this function will return [1, 3], as we may store only those columns in the value of the arrangement
-/// with no loss of information.
-pub fn make_thinning_expression(key: &[MirScalarExpr], arity: usize) -> Vec<usize> {
-    let columns_in_key: HashSet<_> = key.iter().filter_map(|expr| expr.as_column()).collect();
-    (0..arity)
-        .into_iter()
-        .filter(|c| !columns_in_key.contains(&c))
-        .collect()
 }
