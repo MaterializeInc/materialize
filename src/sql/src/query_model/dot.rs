@@ -69,10 +69,9 @@ impl DotGenerator {
         let mut quantifiers = Vec::new();
 
         model
-            .visit_pre_boxes_in_subgraph(
-                &mut |b| -> Result<(), ()> {
-                    let box_id = b.id;
-
+            .try_visit_pre_post_descendants(
+                &mut |m, box_id| -> Result<(), ()> {
+                    let b = m.get_box(*box_id);
                     self.new_line(&format!("subgraph cluster{} {{", box_id));
                     self.inc();
                     self.new_line(
@@ -118,6 +117,7 @@ impl DotGenerator {
 
                     Ok(())
                 },
+                &mut |_, _| Ok(()),
                 start_box,
             )
             .unwrap();

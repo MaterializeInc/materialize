@@ -10,7 +10,6 @@
 //! Apply rewrites to [`Model`] instances.
 
 use crate::query_model::{BoxId, Model};
-use std::collections::HashSet;
 
 /// Trait that all rewrite rules must implement.
 pub(crate) trait Rule {
@@ -115,68 +114,25 @@ fn apply_rule(rule: &dyn Rule, model: &mut Model, box_id: BoxId) -> bool {
 ///
 /// Returns whether any box was rewritten.
 fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &mut Model) -> bool {
-    let mut rewritten = false;
+    let mut rewritten_in_pre = false;
+    let mut rewritten_in_post = false;
 
-    // All nodes that have been entered but not exited. Last node in the vec is
-    // the node that we most recently entered.
-    let mut entered = Vec::new();
-    // All nodes that have been exited.
-    let mut exited = HashSet::new();
-
-    // In our current node, find the next child box, if any, that we have not entered.
-    fn find_next_child_to_enter(
-        model: &Model,
-        entered: &mut Vec<(BoxId, usize)>,
-        exited: &HashSet<BoxId>,
-    ) -> Option<BoxId> {
-        let (box_id, traversed_quantifiers) = entered.last_mut().unwrap();
-        let b = model.get_box(*box_id);
-        for q in b.input_quantifiers().skip(*traversed_quantifiers) {
-            *traversed_quantifiers += 1;
-            if !exited.contains(&q.input_box) {
-                return Some(q.input_box);
-            }
-        }
-        return None;
-    }
-
-    // Pseudocode for the recursive version of this function would look like:
-    // ```
-    // apply_preorder_rules()
-    // foreach quantifier:
-    //    recursive_call(quantifier.input_box)
-    // apply_postorder_rules()
-    // ```
-    // In this non-recursive implementation, you can think of the call stack as
-    // been replaced by `entered`. Every time an object is pushed into `entered`
-    // would have been a time you would have pushed a recursive call onto the
-    // call stack. Likewise, times an object is popped from `entered` would have
-    // been times when recursive calls leave the stack.
-
-    // Start from the top box.
-    entered.push((model.top_box, 0));
-    for rule in pre {
-        rewritten |= apply_rule(rule.as_ref(), model, model.top_box);
-    }
-    while !entered.is_empty() {
-        if let Some(to_enter) = find_next_child_to_enter(model, &mut entered, &exited) {
-            entered.push((to_enter, 0));
+    let _ = model.visit_mut_pre_post(
+        &mut |m, box_id| -> Result<(), ()> {
             for rule in pre {
-                rewritten |= apply_rule(rule.as_ref(), model, to_enter);
+                rewritten_in_pre |= apply_rule(rule.as_ref(), m, *box_id);
             }
-        } else {
-            // If this box has no more children to descend into,
-            // run PostOrder rules and exit the current box.
-            let (box_id, _) = entered.last().unwrap();
+            Ok(())
+        },
+        &mut |m, box_id| -> Result<(), ()> {
             for rule in post {
-                rewritten |= apply_rule(rule.as_ref(), model, *box_id);
+                rewritten_in_post |= apply_rule(rule.as_ref(), m, *box_id);
             }
-            exited.insert(*box_id);
-            entered.pop();
-        }
-    }
+            Ok(())
+        },
+    );
 
-    rewritten
+    rewritten_in_pre | rewritten_in_post
 }
 
 #[cfg(test)]
