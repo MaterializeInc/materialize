@@ -33,6 +33,7 @@ class Materialized(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
+        forward_aws_credentials: bool = True,
         volumes: Optional[List[str]] = None,
         volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
@@ -48,6 +49,10 @@ class Materialized(Service):
                 # To dynamically change the environment during a workflow run,
                 # use Composition.override.
                 "MZ_LOG_FILTER",
+            ]
+
+        if forward_aws_credentials:
+            environment += [
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
