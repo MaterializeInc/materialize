@@ -274,7 +274,10 @@ impl Action for IngestAction {
 
     async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let topic_name = &format!("{}-{}", self.topic_prefix, state.seed);
-        println!("Ingesting data into Kafka topic {}", topic_name);
+        println!(
+            "Ingesting data into Kafka topic {} with repeat {}",
+            topic_name, self.repeat
+        );
 
         let ccsr_client = &state.ccsr_client;
         let temp_path = &state.temp_path;

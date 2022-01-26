@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import re
-from typing import Callable, Iterator, List, Optional
+from typing import Iterator, List, Optional
 
 from materialize.feature_benchmark.executor import Executor
 
@@ -36,63 +36,10 @@ class MeasurementSource:
         return self
 
     def run(
-        self, executor: Optional[Executor] = None, measure: bool = True
+        self,
+        executor: Optional[Executor] = None,
     ) -> Optional[float]:
         assert False
-
-
-class Dummy(MeasurementSource):
-    """Returns a constant stream of 1s"""
-
-    def __iter__(self) -> Iterator[float]:
-        return self
-
-    def __next__(self) -> float:
-        return 1.0
-
-
-class Assert(MeasurementSource):
-    """Asserts when iterated over"""
-
-    def __iter__(self) -> Iterator[float]:
-        return self
-
-    def __next__(self) -> float:
-        assert False
-
-
-class Lambda(MeasurementSource):
-    def __init__(self, _lambda: Callable) -> None:
-        self._lambda = _lambda
-
-    def __iter__(self) -> Iterator[float]:
-        return self
-
-    def __next__(self) -> float:
-        val = self.run()
-        assert val is not None
-        return val
-
-    def run(
-        self, executor: Optional[Executor] = None, measure: bool = True
-    ) -> Optional[float]:
-        assert self._executor is not None
-        return self._executor.Lambda(self._lambda)
-
-
-class Kgen(MeasurementSource):
-    def __init__(self, topic: str, args: List[str]) -> None:
-        self._topic: str = topic
-        self._args: List[str] = args
-        self._executor: Optional[Executor] = None
-
-    def run(
-        self, executor: Optional[Executor] = None, measure: bool = True
-    ) -> Optional[float]:
-        getattr((executor if executor else self._executor), "Kgen")(
-            topic=self._topic, args=self._args
-        )
-        return None
 
 
 class Td(MeasurementSource):
@@ -122,7 +69,8 @@ class Td(MeasurementSource):
         return val
 
     def run(
-        self, executor: Optional[Executor] = None, measure: bool = True
+        self,
+        executor: Optional[Executor] = None,
     ) -> Optional[float]:
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
@@ -131,16 +79,13 @@ class Td(MeasurementSource):
             self._td_str
         )
 
-        if measure:
-            lines = td_output.splitlines()
-            lines = [l for l in lines if l]
+        lines = td_output.splitlines()
+        lines = [l for l in lines if l]
 
-            start_time = self._get_time_for_marker(lines, "A")
-            end_time = self._get_time_for_marker(lines, "B")
-            diff = end_time - start_time
-            return diff
-        else:
-            return None
+        start_time = self._get_time_for_marker(lines, "A")
+        end_time = self._get_time_for_marker(lines, "B")
+        diff = end_time - start_time
+        return diff
 
     def _get_time_for_marker(self, lines: List[str], marker: str) -> float:
         matched_line_id = None
@@ -187,3 +132,23 @@ class RelativeFactorMeasurementSource(MeasurementSource):
 
     def __init__(self, source: MeasurementSource, factor: float) -> None:
         self._data = [d * factor for d in source]
+
+
+class Dummy(MeasurementSource):
+    """Returns a constant stream of 1s"""
+
+    def __iter__(self) -> Iterator[float]:
+        return self
+
+    def __next__(self) -> float:
+        return 1.0
+
+
+class Assert(MeasurementSource):
+    """Asserts when iterated over"""
+
+    def __iter__(self) -> Iterator[float]:
+        return self
+
+    def __next__(self) -> float:
+        assert False
