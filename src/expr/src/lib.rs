@@ -31,7 +31,7 @@ pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId};
 pub use linear::{
     memoize_expr,
     plan::{MfpPlan, SafeMfpPlan},
-    util::permutation_to_map_and_new_arity,
+    util::{join_permutations, permutation_for_arrangement},
     MapFilterProject,
 };
 pub use relation::func::{AggregateFunc, TableFunc};

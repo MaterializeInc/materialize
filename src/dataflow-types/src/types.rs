@@ -173,7 +173,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
                     description.on_id,
                     on_type.clone(),
                 )),
-                keys: vec![description.keys.clone()],
+                keys: vec![description.key.clone()],
             }),
         );
         self.index_exports.push((id, description, on_type));
@@ -1615,7 +1615,7 @@ pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
-    pub keys: Vec<MirScalarExpr>,
+    pub key: Vec<MirScalarExpr>,
 }
 
 // TODO: change contract to ensure that the operator is always applied to
