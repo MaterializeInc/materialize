@@ -629,7 +629,8 @@ impl KafkaSinkState {
     async fn maybe_emit_progress<'a>(
         &mut self,
         input_frontier: AntichainRef<'a, Timestamp>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<bool, anyhow::Error> {
+        let mut progress_emitted = false;
         // This only looks at the first entry of the antichain.
         // If we ever have multi-dimensional time, this is not correct
         // anymore. There might not even be progress in the first dimension.
@@ -664,6 +665,7 @@ impl KafkaSinkState {
                     if self.transactional {
                         self.commit_transaction().await?
                     }
+                    progress_emitted = true;
                 }
                 self.latest_progress_ts = min_frontier;
             }
@@ -680,7 +682,7 @@ impl KafkaSinkState {
             self.write_frontier.borrow_mut().clear();
         }
 
-        Ok(())
+        Ok(progress_emitted)
     }
 }
 
@@ -1017,17 +1019,22 @@ where
             // updates. Only on worker receives all the updates and we don't want
             // the other workers to also emit END records.
             if is_active_worker {
-                if let Err(e) = s.maybe_emit_progress(frontier.borrow()).await {
-                    // This can happen when the producer has not been
-                    // initialized yet. This also means, that we only start
-                    // emitting continuous updates once some real data
-                    // has been emitted.
-                    debug!("Error writing out progress update: {}", e);
+                match s.maybe_emit_progress(frontier.borrow()).await {
+                    Ok(progress_emitted) => {
+                        if progress_emitted {
+                            bail_err!(s.flush().await);
+                        }
+                    }
+                    Err(e) => {
+                        // This can happen when the producer has not been
+                        // initialized yet. This also means, that we only start
+                        // emitting continuous updates once some real data
+                        // has been emitted.
+                        debug!("Error writing out progress update: {}", e);
+                    }
                 }
             }
 
-            // Make sure that everything is flushed (e.g. from `maybe_emit_progress`) before returning
-            bail_err!(s.flush().await);
             debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
 
             if !s.pending_rows.is_empty() {
