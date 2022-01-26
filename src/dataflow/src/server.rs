@@ -821,14 +821,11 @@ where
                     }
                 }
             }
-            ComputeCommand::AllowCompaction(list) => {
+            ComputeCommand::AllowIndexCompaction(list) => {
                 for (id, frontier) in list {
                     self.compute_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
-                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
-                        ts_history.set_compaction_frontier(frontier.borrow());
-                    }
                 }
             }
             ComputeCommand::EnableLogging(config) => {
@@ -1030,6 +1027,13 @@ where
                                 token.activate();
                             }
                         }
+                    }
+                }
+            }
+            StorageCommand::AllowSourceCompaction(list) => {
+                for (id, frontier) in list {
+                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
+                        ts_history.set_compaction_frontier(frontier.borrow());
                     }
                 }
             }

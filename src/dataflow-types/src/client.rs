@@ -97,7 +97,8 @@ pub enum ComputeCommand {
     /// Each entry in the vector names a view and provides a frontier after which
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    // TODO: Could be called `AllowTraceCompaction` or `AllowArrangementCompaction`?
+    AllowIndexCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -109,7 +110,8 @@ impl ComputeCommandKind {
     /// Must remain unique over all variants of `Command`.
     pub fn metric_name(&self) -> &'static str {
         match self {
-            ComputeCommandKind::AllowCompaction => "allow_compaction",
+            // TODO: This breaks metrics. Not sure that's a problem.
+            ComputeCommandKind::AllowIndexCompaction => "allow_index_compaction",
             ComputeCommandKind::CancelPeek => "cancel_peek",
             ComputeCommandKind::CreateDataflows => "create_dataflows",
             ComputeCommandKind::DropIndexes => "drop_indexes",
@@ -160,6 +162,11 @@ pub enum StorageCommand {
         /// The associated update (RT or BYO)
         update: crate::types::sources::persistence::TimestampSourceUpdate,
     },
+    /// Enable compaction in sources.
+    ///
+    /// Each entry in the vector names a source and provides a frontier after which
+    /// accumulations must be correct.
+    AllowSourceCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Drop all timestamping info for a source
     DropSourceTimestamping {
         /// The ID id of the formerly timestamped source.
@@ -188,6 +195,7 @@ impl StorageCommandKind {
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
             StorageCommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
             StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
+            StorageCommandKind::AllowSourceCompaction => "allows_source_compaction",
             StorageCommandKind::DropTables => "drop_tables",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::EnablePersistence => "enable_persistence",
@@ -356,9 +364,11 @@ pub trait ComputeClient: Client {
         self.send(Command::Compute(ComputeCommand::CancelPeek { conn_id }))
             .await
     }
-    async fn allow_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
-        self.send(Command::Compute(ComputeCommand::AllowCompaction(frontiers)))
-            .await
+    async fn allow_index_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        self.send(Command::Compute(ComputeCommand::AllowIndexCompaction(
+            frontiers,
+        )))
+        .await
     }
     async fn enable_logging(&mut self, logging_config: LoggingConfig) {
         self.send(Command::Compute(ComputeCommand::EnableLogging(
@@ -412,6 +422,12 @@ pub trait StorageClient: Client {
             id,
             update,
         }))
+        .await
+    }
+    async fn allow_source_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        self.send(Command::Storage(StorageCommand::AllowSourceCompaction(
+            frontiers,
+        )))
         .await
     }
     async fn drop_source_timestamping(&mut self, id: GlobalId) {
