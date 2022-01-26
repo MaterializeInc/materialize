@@ -69,7 +69,8 @@ stipulations:
     For example, the `time_expr` `'1:2'` (1 hour, 2 minutes) also writes a value
     of 0 seconds. You cannot then include another `time_expr` which writes to
     the seconds `time_unit`.
-
+- A two-field `time_expr` like `'1:2'` is by default interpreted as (hour, minute)
+  while `1:2 MINUTE TO SECOND` interprets as (minute, seconds).
 - Only PostgreSQL `time_expr`s support non-second fractional `time_units`, e.g.
     `1.2 days`. Materialize only supports 9 places of decimal precision.
 
