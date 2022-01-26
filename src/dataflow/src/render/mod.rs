@@ -107,7 +107,6 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 use differential_dataflow::AsCollection;
-use persist::client::RuntimeClient;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
@@ -120,12 +119,14 @@ use expr::{GlobalId, Id};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
+use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::metrics::Metrics;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::sources::PersistedSourceManager;
 use crate::server::LocalInput;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -139,7 +140,7 @@ mod flat_map;
 mod join;
 mod reduce;
 pub mod sinks;
-mod sources;
+pub mod sources;
 mod threshold;
 mod top_k;
 mod upsert;
@@ -176,6 +177,10 @@ pub struct StorageState {
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
+    /// Handles that allow setting the compaction frontier for a persisted source. There can only
+    /// ever be one running (rendered) source of a persisted source, and if there is one, this map
+    /// will contain a handle to it.
+    pub persisted_sources: PersistedSourceManager,
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
     /// Frontier of sink writes (all subsequent writes will be at times at or

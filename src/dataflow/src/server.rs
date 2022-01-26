@@ -52,6 +52,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
+use crate::render::sources::PersistedSourceManager;
 use crate::render::{self, ComputeState, StorageState};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -144,6 +145,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 source_descriptions: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
+                persisted_sources: PersistedSourceManager::new(),
                 sink_write_frontiers: HashMap::new(),
                 metrics,
                 persist: None,
@@ -839,10 +841,12 @@ where
                 // Nothing to do at the moment, but in the future prepare source ingestion.
             }
             StorageCommand::DropSources(names) => {
-                // The only sources that currently require actions are local inputs.
                 for name in names {
                     // Drop table-related state.
                     self.storage_state.local_inputs.remove(&name);
+
+                    // Clean up potentially left over persisted source state.
+                    self.storage_state.persisted_sources.del_source(&name);
                 }
             }
 
@@ -979,11 +983,14 @@ where
                     if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                         ts_history.set_compaction_frontier(frontier.borrow());
                     }
+
+                    self.storage_state
+                        .persisted_sources
+                        .allow_compaction(id, frontier);
                 }
             }
             StorageCommand::DropSourceTimestamping { id } => {
                 let prev = self.storage_state.ts_histories.remove(&id);
-
                 if prev.is_none() {
                     tracing::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
                 }
