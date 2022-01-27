@@ -30,9 +30,7 @@ def main() -> int:
             return 1
         deps = repo.resolve_dependencies([repo.images[args.image]])
         rimage = deps[args.image]
-        if args.command == "build":
-            deps.acquire(force_build=True)
-        elif args.command == "run":
+        if args.command == "run":
             deps.acquire()
             rimage.run(args.image_args)
         elif args.command == "acquire":
@@ -89,10 +87,6 @@ def _parse_args() -> argparse.Namespace:
         "list",
         description="List all images in this repository.",
         help="list all images",
-    )
-
-    add_image_subcommand(
-        "build", description="Unconditionally build an image.", help="build an image"
     )
 
     add_image_subcommand(
