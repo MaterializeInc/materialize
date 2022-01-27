@@ -561,6 +561,84 @@ impl AtomicWriteBuilder<'_> {
     }
 }
 
+/// A handle for atomically allowing compaction on multiple streams, to the same frontier.
+#[derive(Debug, Clone)]
+pub struct AtomicCompactionHandle {
+    stream_ids: HashSet<Id>,
+    client: RuntimeClient,
+    // Returns `Some(Error)` in case any setup operation failed. We don't fail on the setup calls
+    // because we cannot fail when setting up dataflows.
+    error: Option<Error>,
+}
+
+impl AtomicCompactionHandle {
+    /// Returns a new [`AtomicCompactionHandle`] for the given stream.
+    pub fn new<K: Codec, V: Codec>(handle: &StreamWriteHandle<K, V>) -> Self {
+        let mut stream_ids = HashSet::new();
+
+        let initialization_error = match handle.stream_id() {
+            Ok(id) => {
+                stream_ids.insert(id);
+                None
+            }
+            Err(e) => Some(e),
+        };
+
+        let client = handle.client.clone();
+        AtomicCompactionHandle {
+            stream_ids,
+            client,
+            error: initialization_error,
+        }
+    }
+
+    /// Adds the given stream to the set
+    pub fn add_stream<K: Codec, V: Codec>(&mut self, handle: &StreamWriteHandle<K, V>) {
+        if handle.client != self.client {
+            panic!(
+                "AtomicCompactHandle got handles from two runtimes: {:?} and {:?}",
+                self.client, handle.client
+            );
+        }
+
+        if self.error.is_some() {
+            return;
+        }
+
+        match handle.stream_id() {
+            Ok(id) => {
+                // It's odd if there are duplicates but the semantics of what that
+                // means are straightforward, so for now we support it.
+                self.stream_ids.insert(id);
+            }
+            Err(e) => {
+                self.error.replace(e);
+            }
+        }
+    }
+
+    /// Atomically unblocks compaction for all streams at the given `since` frontier.
+    pub fn allow_compaction(&self, since: Antichain<u64>) -> PFuture<SeqNo> {
+        let (tx, rx) = PFuture::new();
+
+        if let Some(error) = self.error.as_ref() {
+            tx.fill(Err(error.clone()));
+            return rx;
+        }
+
+        let id_sinces = self
+            .stream_ids
+            .iter()
+            .map(|id| (id.clone(), since.clone()))
+            .collect::<Vec<_>>();
+
+        self.client
+            .sender
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::AllowCompaction(id_sinces, tx)));
+        rx
+    }
+}
+
 /// A consistent snapshot of all data currently stored for an id, with keys and
 /// vals decoded.
 #[derive(Debug)]
