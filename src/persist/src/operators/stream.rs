@@ -32,6 +32,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::Data as TimelyData;
 use timely::PartialOrder;
 
+use crate::client::AtomicCompactionHandle;
 use crate::client::StreamWriteHandle;
 use crate::error::Error;
 use crate::storage::SeqNo;
@@ -470,9 +471,9 @@ where
 // NOTE: This is not named AllowCompaction because there are already too many things with that
 // name...
 pub trait AllowPersistCompaction<G: Scope<Timestamp = u64>, D: TimelyData> {
-    /// Passes through each element of the stream and allows compaction on the given collection
-    /// (the `write` handle) when the input frontier combined with the allowed compaction frontier
-    /// (the effective input frontier) advance.
+    /// Passes through each element of the stream and allows compaction using the given
+    /// [`AtomicCompactionHandle`] when the input frontier combined with the allowed compaction
+    /// frontier (the effective input frontier) advance.
     ///
     /// NOTE: This does not allow compaction right up to the effective input frontier. Instead,
     /// when the frontier advances, we allow compaction up to the latest previous frontier that is
@@ -480,15 +481,12 @@ pub trait AllowPersistCompaction<G: Scope<Timestamp = u64>, D: TimelyData> {
     /// because the input frontier is most likely a proxy for an upstream persist or seal frontier
     /// and we don't want to advance up to the seal, so that we can still distinguish between
     /// updates that are in front of or beyond the seal frontier.
-    fn allow_compaction<K, V>(
+    fn allow_compaction(
         &self,
         name: &str,
-        write: StreamWriteHandle<K, V>,
+        compaction_handle: AtomicCompactionHandle,
         allowed_compaction_frontier: Rc<RefCell<Antichain<u64>>>,
-    ) -> Stream<G, (D, u64, isize)>
-    where
-        K: Codec,
-        V: Codec;
+    ) -> Stream<G, (D, u64, isize)>;
 }
 
 impl<G, D> AllowPersistCompaction<G, D> for Stream<G, (D, u64, isize)>
@@ -496,16 +494,12 @@ where
     G: Scope<Timestamp = u64>,
     D: TimelyData,
 {
-    fn allow_compaction<K, V>(
+    fn allow_compaction(
         &self,
         name: &str,
-        write: StreamWriteHandle<K, V>,
+        compaction_handle: AtomicCompactionHandle,
         allowed_compaction_frontier: Rc<RefCell<Antichain<u64>>>,
-    ) -> Stream<G, (D, u64, isize)>
-    where
-        K: Codec,
-        V: Codec,
-    {
+    ) -> Stream<G, (D, u64, isize)> {
         let operator_name = format!("allow_compaction({})", name);
         let mut op = OperatorBuilder::new(operator_name.clone(), self.scope());
 
@@ -601,7 +595,7 @@ where
                         effective_input_frontier
                     );
 
-                    let fut = write.allow_compaction(compaction_frontier.clone());
+                    let fut = compaction_handle.allow_compaction(compaction_frontier.clone());
 
                     pending_futures.push_back(CompactionFuture {
                         frontier: compaction_frontier.clone(),
@@ -1291,12 +1285,15 @@ mod tests {
 
             let (mut input, probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("1");
+                let compaction_handle = AtomicCompactionHandle::new(&write);
+
                 let mut input = Handle::new();
 
-                let ok_stream =
-                    input
-                        .to_stream(scope)
-                        .allow_compaction("test", write, allowed_compaction);
+                let ok_stream = input.to_stream(scope).allow_compaction(
+                    "test",
+                    compaction_handle,
+                    allowed_compaction,
+                );
 
                 let probe = ok_stream.probe();
                 (input, probe)
@@ -1338,12 +1335,15 @@ mod tests {
 
             let (mut input, probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("1");
+                let compaction_handle = AtomicCompactionHandle::new(&write);
+
                 let mut input = Handle::new();
 
-                let ok_stream =
-                    input
-                        .to_stream(scope)
-                        .allow_compaction("test", write, allowed_compaction);
+                let ok_stream = input.to_stream(scope).allow_compaction(
+                    "test",
+                    compaction_handle,
+                    allowed_compaction,
+                );
 
                 let probe = ok_stream.probe();
                 (input, probe)
