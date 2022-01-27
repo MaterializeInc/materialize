@@ -4329,7 +4329,6 @@ where
         for (source_id, _description) in dataflow.source_imports.iter() {
             // Extract `since` information about each source and apply here.
             if let Some(source_since) = self.sources.since_of(source_id) {
-                println!("Source since for {}: {:?}", source_id, source_since);
                 since.join_assign(&source_since);
             }
         }
