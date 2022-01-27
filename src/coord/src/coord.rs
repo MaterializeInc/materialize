@@ -2024,9 +2024,7 @@ where
                 match self.sequence_execute(&mut session, plan) {
                     Ok(portal_name) => {
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
-                        // TODO(guswynn): see if we can avoid this formatting
-                        let task_name = format!("execute:{plan_name}");
-                        task::spawn(|| task_name, async move {
+                        task::spawn(|| format!("execute:{plan_name}"), async move {
                             internal_cmd_tx
                                 .send(Message::Command(Command::Execute {
                                     portal_name,

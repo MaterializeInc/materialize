@@ -272,18 +272,16 @@ pub async fn create_consumer(
         Ok(consumer) => {
             let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> = Arc::new(consumer);
             let context = Arc::clone(&consumer.context());
-            let topic = String::from(topic);
+            let owned_topic = String::from(topic);
             // Wait for a metadata request for up to one second. This greatly
             // increases the probability that we'll see a connection error if
             // e.g. the hostname was mistyped. librdkafka doesn't expose a
             // better API for asking whether a connection succeeded or failed,
             // unfortunately.
-            // TODO(guswynn): see if we can avoid this formatting
-            let task_name = format!("kafka_set_metadata:{broker}:{topic}");
-            task::spawn_blocking(|| task_name, {
+            task::spawn_blocking(move || format!("kafka_set_metadata:{broker}:{topic}"), {
                 let consumer = Arc::clone(&consumer);
                 move || {
-                    let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
+                    let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
                 }
             })
             .await?;
@@ -365,10 +363,8 @@ pub async fn lookup_start_offsets(
     };
 
     // Lookup offsets
-    // TODO(guswynn): see if we can avoid this formatting
     // TODO(guswynn): see if we can add broker to this name
-    let task_name = format!("kafka_lookup_start_offets:{topic}");
-    task::spawn_blocking(|| task_name, {
+    task::spawn_blocking(|| format!("kafka_lookup_start_offets:{topic}"), {
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions
