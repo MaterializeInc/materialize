@@ -43,6 +43,7 @@ use expr::{GlobalId, PartitionId, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use ore::now::NowFn;
+use ore::task;
 use prometheus::core::{AtomicI64, AtomicU64};
 use tracing::error;
 
@@ -1178,27 +1179,30 @@ where
     let (tx, mut rx) = mpsc::channel(64);
 
     if active {
-        tokio::spawn(async move {
-            let timestamper = Timestamper::new(tx, timestamp_frequency, now);
-            let source = connector.start(&timestamper);
-            tokio::pin!(source);
+        task::spawn(
+            || format!("source_simple_timestamper:{}", id.source_id),
+            async move {
+                let timestamper = Timestamper::new(tx, timestamp_frequency, now);
+                let source = connector.start(&timestamper);
+                tokio::pin!(source);
 
-            loop {
-                tokio::select! {
-                    res = timestamper.tick() => {
-                        if res.is_err() {
+                loop {
+                    tokio::select! {
+                        res = timestamper.tick() => {
+                            if res.is_err() {
+                                break;
+                            }
+                        }
+                        res = &mut source => {
+                            if let Err(err) = res {
+                                let _ = timestamper.error(err).await;
+                            }
                             break;
                         }
                     }
-                    res = &mut source => {
-                        if let Err(err) = res {
-                            let _ = timestamper.error(err).await;
-                        }
-                        break;
-                    }
                 }
-            }
-        });
+            },
+        );
     }
 
     let (stream, _secondary_stream, capability) = source(scope, name.clone(), move |info| {

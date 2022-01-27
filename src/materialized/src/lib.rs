@@ -30,6 +30,7 @@ use build_info::BuildInfo;
 use coord::LoggingConfig;
 use ore::metrics::MetricsRegistry;
 use ore::now::SYSTEM_TIME;
+use ore::task;
 use pid_file::PidFile;
 
 use crate::mux::Mux;
@@ -257,7 +258,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Listen on the third-party metrics port if we are configured for it.
     if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
-        tokio::spawn({
+        task::spawn(|| "metrics_server", {
             let server = http::ThirdPartyServer::new(metrics_registry.clone());
             async move {
                 server.serve(third_party_addr).await;
@@ -273,7 +274,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // should be rejected. Once all existing user connections have gracefully
     // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
-    tokio::spawn({
+    task::spawn(|| "pgwire_server", {
         let pgwire_server = pgwire::Server::new(pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
@@ -307,7 +308,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             workers,
             coord_client,
         };
-        tokio::spawn(async move { telemetry::report_loop(config).await });
+        task::spawn(|| "telemetry_loop", async move {
+            telemetry::report_loop(config).await
+        });
     }
 
     Ok(Server {

@@ -12,6 +12,7 @@ default = ["network", "chrono", "cli", "metrics", "stack", "test"]
 cli = ["clap"]
 metrics = ["prometheus"]
 network = ["async-trait", "bytes", "futures", "openssl", "smallvec", "tokio-openssl", "tokio"]
+task = ["tokio", "tokio/tracing"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber"]
 

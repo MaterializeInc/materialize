@@ -62,6 +62,9 @@ pub mod retry;
 pub mod stack;
 pub mod stats;
 pub mod str;
+#[cfg(feature = "task")]
+#[doc(hidden)]
+pub mod task;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
 #[cfg(feature = "test")]
 pub mod test;

@@ -12,5 +12,6 @@ openssl = { version = "0.10.38", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 sql-parser = { path = "../sql-parser" }
 repr = { path = "../repr" }
+ore = { path = "../ore", features = [ "task" ] }
 tokio = { version = "1.15.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

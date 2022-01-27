@@ -50,10 +50,10 @@ use interchange::encode::Encode;
 use kafka_util::client::MzClientContext;
 use ore::cast::CastFrom;
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use ore::task;
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 use timely_util::async_op;
 use timely_util::operators_async_ext::OperatorBuilderExt;
-use tokio::task;
 
 use super::{KafkaBaseMetrics, SinkBaseMetrics};
 use crate::render::sinks::SinkRender;
@@ -258,6 +258,7 @@ impl Drop for KafkaSinkToken {
 
 #[derive(Clone)]
 struct KafkaTxProducer {
+    name: String,
     inner: Arc<ThreadedProducer<SinkProducerContext>>,
     timeout: Duration,
 }
@@ -266,35 +267,50 @@ impl KafkaTxProducer {
     fn init_transactions(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
-        task::spawn_blocking(move || self_producer.init_transactions(self_timeout))
-            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+        task::spawn_blocking(
+            || format!("init_transactions:{}", self.name),
+            move || self_producer.init_transactions(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
     fn begin_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
-        task::spawn_blocking(move || self_producer.begin_transaction())
-            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+        task::spawn_blocking(
+            || format!("begin_transaction:{}", self.name),
+            move || self_producer.begin_transaction(),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
     fn commit_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
-        task::spawn_blocking(move || self_producer.commit_transaction(self_timeout))
-            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+        task::spawn_blocking(
+            || format!("commit_transaction:{}", self.name),
+            move || self_producer.commit_transaction(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
     fn abort_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
-        task::spawn_blocking(move || self_producer.abort_transaction(self_timeout))
-            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+        task::spawn_blocking(
+            || format!("abort_transaction:{}", self.name),
+            move || self_producer.abort_transaction(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
     fn flush(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
-        task::spawn_blocking(move || self_producer.flush(self_timeout))
-            .unwrap_or_else(|_| Err(KafkaError::Canceled))
+        task::spawn_blocking(
+            || format!("flush:{}", self.name),
+            move || self_producer.flush(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
     fn send<'a, K, P>(
@@ -359,6 +375,7 @@ impl KafkaSinkState {
         ));
 
         let producer = KafkaTxProducer {
+            name: sink_name.clone(),
             inner: Arc::new(
                 config
                     .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
