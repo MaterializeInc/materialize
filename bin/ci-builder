@@ -148,6 +148,8 @@ case "$cmd" in
             --env BUILDKITE_BUILD_URL
             --env BUILDKITE_COMMIT
             --env BUILDKITE_JOB_ID
+            --env BUILDKITE_PARALLEL_JOB
+            --env BUILDKITE_PARALLEL_JOB_COUNT
             --env BUILDKITE_PULL_REQUEST
             --env BUILDKITE_TAG
             --env CI

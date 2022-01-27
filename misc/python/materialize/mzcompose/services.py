@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import random
 from typing import List, Optional, Union
 
@@ -511,6 +512,7 @@ class Testdrive(Service):
         volumes_extra: Optional[List[str]] = None,
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
+        forward_buildkite_shard: bool = False,
     ) -> None:
         if environment is None:
             environment = [
@@ -548,6 +550,14 @@ class Testdrive(Service):
             entrypoint.append("--no-reset")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
+
+        if forward_buildkite_shard:
+            shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+            shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+            if shard:
+                entrypoint += [f"--shard={shard}"]
+            if shard_count:
+                entrypoint += [f"--shard-count={shard_count}"]
 
         if seed and consistent_seed:
             raise RuntimeError("Can't pass `seed` and `consistent_seed` at same time")
