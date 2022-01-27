@@ -103,7 +103,7 @@ where
 
     // Start up the ticker thread.
     let ticker_tx = tx.clone();
-    let ticker_handle = <_ as RuntimeExt>::spawn(&async_runtime, || "persist_ticker", async move {
+    let ticker_handle = async_runtime.spawn_named(|| "persist_ticker", async move {
         // Try to keep worst case command response times to roughly `110% of
         // min_step_interval` by ensuring there's a tick relatively shortly
         // after a step becomes eligible. We could just as easily make this

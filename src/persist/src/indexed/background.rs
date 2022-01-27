@@ -83,9 +83,9 @@ impl<B: Blob> Maintainer<B> {
         //
         // TODO: Push the spawn_blocking down into the cpu-intensive bits and
         // use spawn here once the storage traits are made async.
-        let _ = <_ as RuntimeExt>::spawn_blocking(
-            &self.async_runtime,
-            || "",
+        // TODO(guswynn): consider adding more info to the task name here
+        let _ = self.async_runtime.spawn_blocking_named(
+            || "persist_trace_compaction",
             move || tx.fill(Self::compact_trace_blocking(blob, req)),
         );
         rx

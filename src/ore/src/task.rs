@@ -93,7 +93,7 @@ where
 
 pub trait RuntimeExt {
     #[track_caller]
-    fn spawn_blocking<Function, Output, Name, NameClosure>(
+    fn spawn_blocking_named<Function, Output, Name, NameClosure>(
         &self,
         nc: NameClosure,
         function: Function,
@@ -105,7 +105,7 @@ pub trait RuntimeExt {
         Output: Send + 'static;
 
     #[track_caller]
-    fn spawn<Fut, Name, NameClosure>(
+    fn spawn_named<Fut, Name, NameClosure>(
         &self,
         _nc: NameClosure,
         future: Fut,
@@ -118,7 +118,7 @@ pub trait RuntimeExt {
 }
 
 impl RuntimeExt for Arc<Runtime> {
-    fn spawn_blocking<Function, Output, Name, NameClosure>(
+    fn spawn_blocking_named<Function, Output, Name, NameClosure>(
         &self,
         nc: NameClosure,
         function: Function,
@@ -133,7 +133,11 @@ impl RuntimeExt for Arc<Runtime> {
         spawn_blocking(nc, function)
     }
 
-    fn spawn<Fut, Name, NameClosure>(&self, nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
+    fn spawn_named<Fut, Name, NameClosure>(
+        &self,
+        nc: NameClosure,
+        future: Fut,
+    ) -> JoinHandle<Fut::Output>
     where
         Name: AsRef<str>,
         NameClosure: FnOnce() -> Name,
@@ -146,7 +150,7 @@ impl RuntimeExt for Arc<Runtime> {
 }
 
 impl RuntimeExt for Handle {
-    fn spawn_blocking<Function, Output, Name, NameClosure>(
+    fn spawn_blocking_named<Function, Output, Name, NameClosure>(
         &self,
         nc: NameClosure,
         function: Function,
@@ -161,7 +165,11 @@ impl RuntimeExt for Handle {
         spawn_blocking(nc, function)
     }
 
-    fn spawn<Fut, Name, NameClosure>(&self, nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
+    fn spawn_named<Fut, Name, NameClosure>(
+        &self,
+        nc: NameClosure,
+        future: Fut,
+    ) -> JoinHandle<Fut::Output>
     where
         Name: AsRef<str>,
         NameClosure: FnOnce() -> Name,
