@@ -9,18 +9,28 @@
 
 //! An S3 implementation of [Blob] storage.
 
+use std::cmp;
+use std::ops::Range;
+use std::time::Instant;
+
 use async_trait::async_trait;
 use aws_config::default_provider::{credentials, region};
 use aws_config::meta::region::ProvideRegion;
 use aws_config::sts::AssumeRoleProvider;
+use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::SdkError;
 use aws_types::credentials::SharedCredentialsProvider;
+use bytes::Bytes;
 use futures_executor::block_on;
+use futures_util::FutureExt;
+use ore::task::RuntimeExt;
+use tokio::runtime::Handle as AsyncHandle;
+use uuid::Uuid;
 
 use mz_aws_util::config::AwsConfig;
-use uuid::Uuid;
+use ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::storage::{Atomicity, Blob, BlobRead, LockInfo};
@@ -112,7 +122,7 @@ impl S3BlobConfig {
             }
         };
 
-        // Give each test a unique prefix so they don't confict. We don't have
+        // Give each test a unique prefix so they don't conflict. We don't have
         // to worry about deleting any data that we create because the bucket is
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
@@ -138,6 +148,7 @@ struct S3BlobCore {
     //
     // Defaults to 1000 which is the current AWS max.
     max_keys: i32,
+    multipart_config: MultipartConfig,
 }
 
 impl S3BlobCore {
@@ -270,8 +281,172 @@ impl S3Blob {
             let _ = new_lock.check_reentrant_for(&lockfile_path, &mut existing.as_slice())?;
         }
         let contents = new_lock.to_string().into_bytes();
-        self.set(Self::LOCKFILE_KEY, contents, Atomicity::RequireAtomic)
-            .await?;
+        self.set_single_part(Self::LOCKFILE_KEY, contents).await?;
+        Ok(())
+    }
+
+    async fn set_single_part(&self, key: &str, value: Vec<u8>) -> Result<(), Error> {
+        let client = self.core.ensure_open()?;
+        let path = self.core.get_path(key);
+
+        let value_len = value.len();
+        let start_overall = Instant::now();
+        client
+            .put_object()
+            .bucket(&self.core.bucket)
+            .key(path)
+            .body(ByteStream::from(value))
+            .send()
+            .await
+            .map_err(|err| Error::from(err.to_string()))?;
+        tracing::debug!(
+            "s3 PutObject single done {}b / {:?}",
+            value_len,
+            start_overall.elapsed()
+        );
+        Ok(())
+    }
+
+    async fn set_multi_part(&self, key: &str, value: Vec<u8>) -> Result<(), Error> {
+        let client = self.core.ensure_open()?;
+        let path = self.core.get_path(key);
+
+        let value = Bytes::from(value);
+        let start_overall = Instant::now();
+
+        // Start the multi part request and get an upload id.
+        tracing::trace!("s3 PutObject multi start {}b", value.len());
+        let upload_res = client
+            .create_multipart_upload()
+            .bucket(&self.core.bucket)
+            .key(&path)
+            .send()
+            .await
+            .map_err(|err| Error::from(format!("create_multipart_upload err: {}", err)))?;
+        let upload_id = upload_res.upload_id().ok_or_else(|| {
+            Error::from(format!(
+                "create_multipart_upload response missing upload_id"
+            ))
+        })?;
+        tracing::trace!(
+            "s3 create_multipart_upload took {:?}",
+            start_overall.elapsed()
+        );
+
+        // TODO: Plumb an Arc<AsyncRuntime> on S3BlobCore instead. I tried but
+        // was getting a "Cannot drop a runtime in a context where blocking is
+        // not allowed" error that I didn't want to get distracted with. All the
+        // calls into the s3 library require that this context is set anyway, so
+        // I suppose this is no worse than where we started.
+        let async_runtime = AsyncHandle::try_current().map_err(|err| err.to_string())?;
+
+        // Fire off all the individual parts.
+        //
+        // TODO: The aws cli throttles how many of these are outstanding at any
+        // given point. We'll likely want to do the same at some point.
+        let start_parts = Instant::now();
+        let mut part_futs = Vec::new();
+        for (part_num, part_range) in self.core.multipart_config.part_iter(value.len()) {
+            // NB: Without this spawn, these will execute serially. This is rust
+            // async 101 stuff, but there isn't much async in the persist
+            // codebase (yet?) so I thought it worth calling out.
+            let part_fut = async_runtime.spawn_named(
+                || "persist_s3blob_multipart",
+                client
+                    .upload_part()
+                    .bucket(&self.core.bucket)
+                    .key(&path)
+                    .upload_id(upload_id)
+                    .part_number(part_num as i32)
+                    .body(ByteStream::from(value.slice(part_range)))
+                    .send()
+                    .map(move |res| (start_parts.elapsed(), res)),
+            );
+            part_futs.push((part_num, part_fut));
+        }
+        let parts_len = part_futs.len();
+
+        // Wait on all the parts to finish. This is done in part order, no need
+        // for joining them in the order they finish.
+        //
+        // TODO: Consider using something like futures::future::join_all() for
+        // this. That would cancel outstanding requests for us if any of them
+        // fails. However, it might not play well with using retries for tail
+        // latencies. Investigate.
+        let mut min_part_elapsed = None;
+        let mut parts = Vec::with_capacity(parts_len);
+        for (part_num, part_fut) in part_futs.into_iter() {
+            let (this_part_elapsed, part_res) = part_fut
+                .await
+                .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?;
+            let part_res =
+                part_res.map_err(|err| Error::from(format!("s3 upload_part err: {}", err)))?;
+            let part_e_tag = part_res
+                .e_tag()
+                .ok_or_else(|| Error::from("s3 upload part missing e_tag"))?;
+            parts.push(
+                CompletedPart::builder()
+                    .e_tag(part_e_tag)
+                    .part_number(part_num as i32)
+                    .build(),
+            );
+
+            let min_part_elapsed = min_part_elapsed.get_or_insert(this_part_elapsed);
+            if this_part_elapsed < *min_part_elapsed {
+                *min_part_elapsed = this_part_elapsed;
+            }
+            if this_part_elapsed >= *min_part_elapsed * 8 {
+                tracing::debug!(
+                    "s3 upload_part took {:?} more than 8x the min {:?}",
+                    this_part_elapsed,
+                    min_part_elapsed
+                );
+            } else {
+                tracing::trace!("s3 upload_part took {:?}", this_part_elapsed);
+            }
+        }
+        tracing::trace!(
+            "s3 upload_parts overall took {:?} ({} parts)",
+            start_parts.elapsed(),
+            parts_len
+        );
+
+        // Complete the upload.
+        //
+        // Currently, we early return if any of the individual parts fail. This
+        // permanently orphans any parts that succeeded. One fix is to call
+        // abort_multipart_upload, which deletes them. However, there's also an
+        // option for an s3 bucket to auto-delete parts that haven't been
+        // completed or aborted after a given amount of time. This latter is
+        // simpler and also resilient to ill-timed mz restarts, so we use it for
+        // now. We could likely add the accounting necessary to make
+        // abort_multipart_upload work, but it would be complex and affect perf.
+        // Let's see how far we can get without it.
+        let start_complete = Instant::now();
+        client
+            .complete_multipart_upload()
+            .bucket(&self.core.bucket)
+            .key(&path)
+            .upload_id(upload_id)
+            .multipart_upload(
+                CompletedMultipartUpload::builder()
+                    .set_parts(Some(parts))
+                    .build(),
+            )
+            .send()
+            .await
+            .map_err(|err| Error::from(format!("complete_multipart_upload err: {}", err)))?;
+        tracing::trace!(
+            "s3 complete_multipart_upload took {:?}",
+            start_complete.elapsed()
+        );
+
+        tracing::debug!(
+            "s3 PutObject multi done {}b / {:?} ({} parts)",
+            value.len(),
+            start_overall.elapsed(),
+            parts_len
+        );
         Ok(())
     }
 }
@@ -324,6 +499,7 @@ impl Blob for S3Blob {
                 bucket: config.bucket,
                 prefix: config.prefix,
                 max_keys: 1_000,
+                multipart_config: MultipartConfig::default(),
             };
             let mut blob = S3Blob { core };
             let _ = blob.lock(lock_info).await?;
@@ -338,6 +514,7 @@ impl Blob for S3Blob {
                 bucket: config.bucket,
                 prefix: config.prefix,
                 max_keys: 1_000,
+                multipart_config: MultipartConfig::default(),
             };
             Ok(S3BlobRead { core })
         })
@@ -345,19 +522,11 @@ impl Blob for S3Blob {
 
     async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
         // NB: S3 is always atomic, so we're free to ignore the atomic param.
-        let client = self.core.ensure_open()?;
-        let path = self.core.get_path(key);
-
-        let body = ByteStream::from(value);
-        client
-            .put_object()
-            .bucket(&self.core.bucket)
-            .key(path)
-            .body(body)
-            .send()
-            .await
-            .map_err(|err| Error::from(err.to_string()))?;
-        Ok(())
+        if self.core.multipart_config.should_multipart(value.len())? {
+            self.set_multi_part(key, value).await
+        } else {
+            self.set_single_part(key, value).await
+        }
     }
 
     async fn delete(&mut self, key: &str) -> Result<(), Error> {
@@ -371,6 +540,120 @@ impl Blob for S3Blob {
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MultipartConfig {
+    multipart_threshold: usize,
+    multipart_chunk_size: usize,
+}
+
+impl Default for MultipartConfig {
+    fn default() -> Self {
+        Self {
+            multipart_threshold: Self::DEFAULT_MULTIPART_THRESHOLD,
+            multipart_chunk_size: Self::DEFAULT_MULTIPART_CHUNK_SIZE,
+        }
+    }
+}
+
+const MB: usize = 1024 * 1024;
+const TB: usize = 1024 * 1024 * MB;
+
+impl MultipartConfig {
+    /// The minimum object size for which we start using multipart upload.
+    ///
+    /// From the official `aws cli` tool implementation:
+    ///
+    /// <https://github.com/aws/aws-cli/blob/2.4.14/awscli/customizations/s3/transferconfig.py#L18-L29>
+    const DEFAULT_MULTIPART_THRESHOLD: usize = 8 * MB;
+    /// The size of each part (except the last) in a multipart upload.
+    ///
+    /// From the official `aws cli` tool implementation:
+    ///
+    /// <https://github.com/aws/aws-cli/blob/2.4.14/awscli/customizations/s3/transferconfig.py#L18-L29>
+    const DEFAULT_MULTIPART_CHUNK_SIZE: usize = 8 * MB;
+
+    /// The largest size object creatable in S3.
+    ///
+    /// From <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
+    const MAX_SINGLE_UPLOAD_SIZE: usize = 5 * TB;
+    /// The minimum size of a part in a multipart upload.
+    ///
+    /// This minimum doesn't apply to the last chunk, which can be any size.
+    ///
+    /// From <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
+    const MIN_UPLOAD_CHUNK_SIZE: usize = 5 * MB;
+    /// The smallest allowable part number (inclusive).
+    ///
+    /// From <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
+    const MIN_PART_NUM: u32 = 1;
+    /// The largest allowable part number (inclusive).
+    ///
+    /// From <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
+    const MAX_PART_NUM: u32 = 10_000;
+
+    fn should_multipart(&self, blob_len: usize) -> Result<bool, String> {
+        if blob_len > Self::MAX_SINGLE_UPLOAD_SIZE {
+            return Err(format!(
+                "S3 does not support blobs larger than {} bytes got: {}",
+                Self::MAX_SINGLE_UPLOAD_SIZE,
+                blob_len
+            ));
+        }
+        return Ok(blob_len > self.multipart_threshold);
+    }
+
+    fn part_iter(&self, blob_len: usize) -> MultipartChunkIter {
+        debug_assert!(self.multipart_chunk_size >= MultipartConfig::MIN_UPLOAD_CHUNK_SIZE);
+        MultipartChunkIter::new(self.multipart_chunk_size, blob_len)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MultipartChunkIter {
+    total_len: usize,
+    part_size: usize,
+    part_idx: u32,
+}
+
+impl MultipartChunkIter {
+    fn new(default_part_size: usize, blob_len: usize) -> Self {
+        let max_parts: usize = usize::cast_from(MultipartConfig::MAX_PART_NUM);
+
+        // Compute the minimum part size we can use without going over the max
+        // number of parts that S3 allows: `ceil(blob_len / max_parts)`.This
+        // will end up getting thrown away by the `cmp::max` for anything
+        // smaller than `max_parts * default_part_size = 80GiB`.
+        let min_part_size = (blob_len + max_parts - 1) / max_parts;
+        let part_size = cmp::max(min_part_size, default_part_size);
+
+        // Part nums are 1-indexed in S3. Convert back to 0-indexed to make the
+        // range math easier to follow.
+        let part_idx = MultipartConfig::MIN_PART_NUM - 1;
+        MultipartChunkIter {
+            total_len: blob_len,
+            part_size,
+            part_idx,
+        }
+    }
+}
+
+impl Iterator for MultipartChunkIter {
+    type Item = (u32, Range<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let part_idx = self.part_idx;
+        self.part_idx += 1;
+
+        let start = usize::cast_from(part_idx) * self.part_size;
+        if start >= self.total_len {
+            return None;
+        }
+        let end = cmp::min(start + self.part_size, self.total_len);
+        let part_num = part_idx + 1;
+        Some((part_num, start..end))
     }
 }
 
@@ -395,6 +678,7 @@ mod tests {
             }
         };
         let config_read = config.clone();
+        let config_multipart = config.clone_with_new_uuid_prefix();
 
         blob_impl_test(
             move |t| {
@@ -420,6 +704,76 @@ mod tests {
             },
         )
         .await?;
+
+        // Also specifically test multipart. S3 requires all parts but the last
+        // to be at least 5MB, which we don't want to do from a test, so this
+        // uses the multipart code path but only writes a single part.
+        {
+            let blob = S3Blob::open_exclusive(
+                config_multipart,
+                LockInfo::new_no_reentrance("multipart".into()),
+            )?;
+            blob.set_multi_part("multipart", "foobar".into()).await?;
+            assert_eq!(blob.get("multipart").await?, Some("foobar".into()));
+        }
+
         Ok(())
+    }
+
+    #[test]
+    fn should_multipart() {
+        let config = MultipartConfig::default();
+        assert_eq!(config.should_multipart(0), Ok(false));
+        assert_eq!(config.should_multipart(1), Ok(false));
+        assert_eq!(
+            config.should_multipart(MultipartConfig::DEFAULT_MULTIPART_THRESHOLD),
+            Ok(false)
+        );
+        assert_eq!(
+            config.should_multipart(MultipartConfig::DEFAULT_MULTIPART_THRESHOLD + 1),
+            Ok(true)
+        );
+        assert_eq!(
+            config.should_multipart(MultipartConfig::DEFAULT_MULTIPART_THRESHOLD * 2),
+            Ok(true)
+        );
+        assert_eq!(
+            config.should_multipart(MultipartConfig::MAX_SINGLE_UPLOAD_SIZE),
+            Ok(true)
+        );
+        assert_eq!(
+            config.should_multipart(MultipartConfig::MAX_SINGLE_UPLOAD_SIZE + 1),
+            Err(
+                "S3 does not support blobs larger than 5497558138880 bytes got: 5497558138881"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn multipart_iter() {
+        let iter = MultipartChunkIter::new(10, 0);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![]);
+
+        let iter = MultipartChunkIter::new(10, 9);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![(1, 0..9)]);
+
+        let iter = MultipartChunkIter::new(10, 10);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![(1, 0..10)]);
+
+        let iter = MultipartChunkIter::new(10, 11);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![(1, 0..10), (2, 10..11)]);
+
+        let iter = MultipartChunkIter::new(10, 19);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![(1, 0..10), (2, 10..19)]);
+
+        let iter = MultipartChunkIter::new(10, 20);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![(1, 0..10), (2, 10..20)]);
+
+        let iter = MultipartChunkIter::new(10, 21);
+        assert_eq!(
+            iter.collect::<Vec<_>>(),
+            vec![(1, 0..10), (2, 10..20), (3, 20..21)]
+        );
     }
 }
