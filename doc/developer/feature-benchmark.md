@@ -225,6 +225,19 @@ Available `Action`s:
 * `Lambda(lambda e: e.RestartMz())` - restarts the Mz service
 
 
+## Running the same scenario with multiple times within the same run
+
+It is possible to use the python `parameterized` module to cause the same scenario to be executed multiple times. For example, with different scale factors:
+
+```
+@parameterized_class(
+    [{"SCALE": i} for i in [5,6,7,8]], class_name_func=Scenario.name_with_scale
+)
+class ScalingScenario(ScenarioBig):
+    def benchmark(self) -> MeasurementSource:
+        ...
+```
+
 ## Caveats and considerations
 
 * Aim for the query or queries being benchmarked to take around 1 second to execute. This allows the framework to perform several iterations without blowing up

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from math import ceil
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Type, Union
 
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource
@@ -42,6 +42,14 @@ class RootScenario:
 
     def n(self) -> int:
         return self._n
+
+    @staticmethod
+    def name_with_scale(cls: Type["Scenario"], num: int, params_dict: Dict) -> str:
+        """Return the name of the Senario including the scale.
+        Used for running multiple instances of the same scenario via the
+        parameterized python module.
+        """
+        return f"{cls.__name__}_scale_{params_dict['SCALE']}"
 
     def table_ten(self) -> TdAction:
         """Returns a Td() object that creates the 'ten' table"""

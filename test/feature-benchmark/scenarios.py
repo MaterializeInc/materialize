@@ -9,6 +9,8 @@
 
 from typing import List
 
+from parameterized import parameterized_class  # type: ignore
+
 from materialize.feature_benchmark.action import Action, Kgen, Lambda, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
 from materialize.feature_benchmark.scenario import Scenario, ScenarioBig
@@ -756,6 +758,55 @@ true
 1
 
 > SELECT * FROM s1_is_complete
+  /* B */
+true
+"""
+        )
+
+
+@parameterized_class(
+    [{"SCALE": i} for i in [5, 6, 7, 8, 9]], class_name_func=Scenario.name_with_scale
+)
+class KafkaEnvelopeNoneBytesScalability(ScenarioBig):
+    """Run the same scenario across different scales. Do not materialize the entire
+    source but rather just a non-memory-consuming view on top of it.
+    """
+
+    def shared(self) -> List[Action]:
+        return [
+            TdAction(
+                f"""
+$ kafka-create-topic topic=kafka-scalability partitions=8
+"""
+            ),
+            Kgen(
+                topic="kafka-scalability",
+                args=[
+                    "--keys=sequential",
+                    f"--num-records={self.n()}",
+                    "--values=bytes",
+                    "--max-message-size=100",
+                    "--min-message-size=100",
+                ],
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v1;
+
+> DROP SOURCE IF EXISTS s1;
+
+> CREATE SOURCE s1
+  FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}'
+  FORMAT BYTES
+  ENVELOPE NONE
+  /* A */
+
+> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c FROM s1;
+
+> SELECT c = {self.n()} FROM v1
   /* B */
 true
 """
