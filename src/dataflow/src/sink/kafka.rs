@@ -553,11 +553,10 @@ impl KafkaSinkState {
         let shutdown = Cell::new(false);
         let self_producer = self.producer.clone();
         let mut last_error = KafkaError::Canceled;
+        // Only actually used for retriable errors.
         let tries = Retry::default()
-            .clamp_backoff(Duration::from_secs(60 * 10))
-            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
-            // addressing error strategy holistically.
             .max_tries(usize::MAX)
+            .clamp_backoff(Duration::from_secs(60 * 10))
             .into_retry_stream();
         tokio::pin!(tries);
         while tries.next().await.is_some() {
@@ -569,11 +568,10 @@ impl KafkaSinkState {
                     if e.txn_requires_abort() {
                         info!("Error requiring abort in kafka sink: {:?}", e);
                         let self_self_producer = self_producer.clone();
+                        // Only actually used for retriable errors.
                         let should_shutdown = Retry::default()
-                            .clamp_backoff(Duration::from_secs(60 * 10))
-                            // Yes this might be bad but we had an infinite loop before so it's no
-                            // worse.  Fix when addressing error strategy holistically.
                             .max_tries(usize::MAX)
+                            .clamp_backoff(Duration::from_secs(60 * 10))
                             .retry_async(|_| async {
                                 match self_self_producer.abort_transaction().await {
                                     Ok(_) => Ok(false),
@@ -624,12 +622,10 @@ impl KafkaSinkState {
         P: ToBytes + ?Sized,
     {
         let mut last_error = KafkaError::Canceled;
-        // Because of the lifetime bound on `record`, we can't just use `Retry::retry` so use the stream
+        // Only actually used for retriable errors.
         let tries = Retry::default()
-            .clamp_backoff(Duration::from_secs(60 * 10))
-            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
-            // addressing error strategy holistically.
             .max_tries(usize::MAX)
+            .clamp_backoff(Duration::from_secs(60 * 10))
             .into_retry_stream();
         tokio::pin!(tries);
         while tries.next().await.is_some() {
@@ -666,12 +662,11 @@ impl KafkaSinkState {
 
     async fn flush(&self) -> KafkaResult<()> {
         let self_producer = self.producer.clone();
+        // Only actually used for retriable errors.
         Retry::default()
+            .max_tries(usize::MAX)
             // Because we only expect to receive timeout errors, we should clamp fairly low.
             .clamp_backoff(Duration::from_secs(60))
-            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
-            // addressing error strategy holistically.
-            .max_tries(usize::MAX)
             .retry_async(|_| self_producer.flush())
             .await
     }
@@ -833,11 +828,10 @@ impl KafkaSinkState {
             ..
         })) = self.sink_state
         {
+            // Only actually used for retriable errors.
             return Retry::default()
-                .clamp_backoff(Duration::from_secs(60 * 10))
-                // Yes this is bad but we had an infinite loop before so it's no worse. Fix when
-                // addressing error strategy holistically.
                 .max_tries(usize::MAX)
+                .clamp_backoff(Duration::from_secs(60 * 10))
                 .retry_async(|_| async {
                     let topic = topic.clone();
                     let consistency_client_config = consistency_client_config.clone();
