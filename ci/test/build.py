@@ -28,6 +28,8 @@ def main() -> None:
     # other build agents.
     print("--- Acquiring mzbuild images")
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
+    for pruned in deps.retain_only_unpushed():
+        print(f"Skipping already-existing image {pruned.name}")
     deps.acquire()
     deps.push()
 
