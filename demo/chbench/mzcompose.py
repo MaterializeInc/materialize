@@ -85,7 +85,7 @@ def workflow_load_test(c: Composition) -> None:
     """Run CH-benCHmark with a selected amount of load against Materialize."""
     c.up("prometheus-sql-exporter")
     c.workflow(
-        "demo",
+        "default",
         "--peek-conns=1",
         "--mz-views=q01,q02,q05,q06,q08,q09,q12,q14,q17,q19",
         "--transactional-threads=2",
