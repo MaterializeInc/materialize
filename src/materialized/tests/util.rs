@@ -17,6 +17,7 @@ use std::time::Duration;
 use coord::PersistConfig;
 use lazy_static::lazy_static;
 use ore::metrics::MetricsRegistry;
+use ore::task;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -201,7 +202,7 @@ impl Server {
         <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
     {
         let (client, conn) = self.pg_config_async().connect(tls).await?;
-        let handle = tokio::spawn(async move {
+        let handle = task::spawn(|| "connect_async", async move {
             if let Err(err) = conn.await {
                 panic!("connection error: {}", err);
             }

@@ -31,6 +31,7 @@ use anyhow::Context;
 use rand::Rng;
 
 use mz_aws_util::config::AwsConfig;
+use ore::task;
 use test_util::mz_client;
 
 mod kinesis;
@@ -67,7 +68,7 @@ async fn run() -> Result<(), anyhow::Error> {
     tracing::info!("Created Kinesis stream {}", stream_name);
 
     // Push records to Kinesis.
-    let kinesis_task = tokio::spawn({
+    let kinesis_task = task::spawn(|| "kinesis_task", {
         let kinesis_client_clone = kinesis_client.clone();
         let stream_name_clone = stream_name.clone();
         let total_records = args.total_records;
@@ -93,7 +94,7 @@ async fn run() -> Result<(), anyhow::Error> {
     tracing::info!("Created source and materialized views");
 
     // Query materialized view for all pushed Kinesis records.
-    let materialize_task = tokio::spawn({
+    let materialize_task = task::spawn(|| "kinesis_mz_verify", {
         let total_records = args.total_records;
         async move { mz::query_materialized_view_until(&client, "foo_count", total_records).await }
     });

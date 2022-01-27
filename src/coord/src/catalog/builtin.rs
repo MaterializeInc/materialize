@@ -1873,6 +1873,8 @@ mod tests {
 
     use tokio_postgres::NoTls;
 
+    use ore::task;
+
     use super::*;
 
     // Connect to a running Postgres server and verify that our builtin functions
@@ -1889,7 +1891,7 @@ mod tests {
         let (client, connection) =
             tokio_postgres::connect("host=localhost user=postgres", NoTls).await?;
 
-        tokio::spawn(async move {
+        task::spawn(|| "verify_function_sanity", async move {
             if let Err(e) = connection.await {
                 eprintln!("connection error: {}", e);
             }

@@ -11,6 +11,8 @@ use anyhow::Result;
 use tokio::time::{self, Duration};
 use tokio_postgres::{error::SqlState, Client, Error, NoTls, Row};
 
+use ore::task;
+
 /// Create and return a new PostgreSQL client, spawning off the connection
 /// object along the way.
 pub async fn client(host: &str, port: u16) -> Result<Client> {
@@ -23,7 +25,7 @@ pub async fn client(host: &str, port: u16) -> Result<Client> {
 
     // The connection object performs the actual communication with the database,
     // so spawn it off to run on its own.
-    tokio::spawn(async move {
+    task::spawn(|| "test_util_mz_client", async move {
         if let Err(e) = conn.await {
             panic!("connection error: {}", e);
         }

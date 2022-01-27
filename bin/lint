@@ -48,6 +48,7 @@ copyright_files=$(grep -vE \
     -e '^deny\.toml$' \
     -e '^netlify\.toml$' \
     -e '^rustfmt\.toml$' \
+    -e '^clippy\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
     -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so)$' \

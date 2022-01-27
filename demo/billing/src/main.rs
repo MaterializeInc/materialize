@@ -25,6 +25,7 @@ use anyhow::Result;
 use prost::Message;
 use tokio::time::{self, Duration};
 
+use ore::task;
 use test_util::kafka::kafka_client;
 use test_util::mz_client;
 
@@ -119,7 +120,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             let res = k_client.send(&config.topic, &buf);
             match res {
                 Ok(fut) => {
-                    tokio::spawn(fut);
+                    task::spawn(|| "producer", fut);
                 }
                 Err(e) => {
                     tracing::error!("failed to produce message: {}", e);

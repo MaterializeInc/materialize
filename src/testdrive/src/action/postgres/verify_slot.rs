@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use tokio_postgres::NoTls;
 
 use ore::retry::Retry;
+use ore::task;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -51,7 +52,7 @@ impl Action for VerifySlotAction {
             "Executing queries against PostgreSQL server at {}...",
             self.connection
         );
-        let conn_handle = tokio::spawn(conn);
+        let conn_handle = task::spawn(|| "verify_slot_action_pgconn", conn);
 
         Retry::default()
             .initial_backoff(Duration::from_millis(50))

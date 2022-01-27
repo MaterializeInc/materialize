@@ -34,6 +34,7 @@ use url::Url;
 use mz_aws_util::config::AwsConfig;
 use ore::display::DisplayExt;
 use ore::retry::Retry;
+use ore::task;
 
 use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
@@ -672,7 +673,7 @@ pub async fn create_state(
             .connect(tokio_postgres::NoTls)
             .await
             .with_context(|| format!("opening SQL connection: {}", materialized_url))?;
-        let pgconn_task = tokio::spawn(pgconn).map(|join| {
+        let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
             join.expect("pgconn_task unexpectedly canceled")
                 .context("running SQL connection")
         });

@@ -12,6 +12,8 @@ use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config, NoTls};
 use url::Url;
 
+use ore::task;
+
 /// Constructs a URL from PostgreSQL configuration parameters.
 ///
 /// Returns an error if the set of configuration parameters is not representable
@@ -49,7 +51,7 @@ pub async fn postgres_client(url: &String) -> Result<Client, anyhow::Error> {
         .context("connecting to postgres")?;
 
     println!("Connecting to PostgreSQL server at {}...", url);
-    tokio::spawn(connection);
+    task::spawn(|| "postgres_client_task", connection);
 
     Ok(client)
 }
