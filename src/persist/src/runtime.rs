@@ -93,9 +93,21 @@ where
         Arc::clone(&async_runtime),
         blob,
     );
-    let maintainer = Maintainer::new(blob.clone(), Arc::clone(&async_runtime));
-    let indexed = Indexed::new(log, blob, maintainer, Arc::clone(&metrics))?;
-    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, Arc::clone(&metrics));
+    let maintainer = Maintainer::new(
+        blob.clone(),
+        Arc::clone(&async_runtime),
+        Arc::clone(&metrics),
+    );
+    let indexed = Indexed::new(log, blob, Arc::clone(&metrics))?;
+    let mut runtime = RuntimeImpl::new(
+        config.clone(),
+        indexed,
+        maintainer,
+        Arc::clone(&async_runtime),
+        rx,
+        tx.clone(),
+        Arc::clone(&metrics),
+    );
     let id = RuntimeId::new();
     let impl_handle = thread::Builder::new()
         .name("persist:runtime".into())
@@ -169,14 +181,8 @@ where
     };
 
     // Start up the runtime.
-    let blob = BlobCache::new(
-        build,
-        Arc::clone(&metrics),
-        Arc::clone(&async_runtime),
-        blob,
-    );
-    let maintainer = Maintainer::new(blob.clone(), async_runtime);
-    let indexed = Indexed::new(ErrorLog, blob, maintainer, Arc::clone(&metrics))?;
+    let blob = BlobCache::new(build, Arc::clone(&metrics), async_runtime, blob);
+    let indexed = Indexed::new(ErrorLog, blob, Arc::clone(&metrics))?;
     let mut runtime = RuntimeReadImpl::new(indexed, rx, Arc::clone(&metrics));
     let id = RuntimeId::new();
     let impl_handle = thread::Builder::new()
@@ -271,7 +277,11 @@ impl RuntimeHandle {
 
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
+    maintainer: Maintainer<B>,
+    async_runtime: Arc<AsyncRuntime>,
     rx: crossbeam_channel::Receiver<RuntimeCmd>,
+    // Used to send maintenance responses back to the [RuntimeImpl].
+    tx: crossbeam_channel::Sender<RuntimeCmd>,
     metrics: Arc<Metrics>,
     prev_step: Instant,
     min_step_interval: Duration,
@@ -313,12 +323,18 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     fn new(
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
+        maintainer: Maintainer<B>,
+        async_runtime: Arc<AsyncRuntime>,
         rx: crossbeam_channel::Receiver<RuntimeCmd>,
+        tx: crossbeam_channel::Sender<RuntimeCmd>,
         metrics: Arc<Metrics>,
     ) -> Self {
         RuntimeImpl {
             indexed,
+            maintainer,
+            async_runtime,
             rx,
+            tx,
             metrics,
             // Initialize this so it's ready to trigger immediately.
             prev_step: Instant::now() - config.min_step_interval,
@@ -427,8 +443,20 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
         if need_step {
             self.prev_step = step_start;
-            self.indexed.step_or_log();
-
+            let maintenance_reqs = self.indexed.step_or_log();
+            for maintenance_req in maintenance_reqs {
+                let sender = self.tx.clone();
+                let maintenance_future = maintenance_req.run_async(&self.maintainer);
+                self.async_runtime.spawn(async move {
+                    let resp = maintenance_future.recv().await;
+                    // The sender can only fail if the runtime is closed, in
+                    // which case we don't need to do anything.
+                    if let Err(crossbeam_channel::SendError(_)) =
+                        sender.send(RuntimeCmd::IndexedCmd(Cmd::Maintenance(resp)))
+                    {
+                    }
+                });
+            }
             self.metrics
                 .cmd_step_seconds
                 .inc_by(step_start.elapsed().as_secs_f64());

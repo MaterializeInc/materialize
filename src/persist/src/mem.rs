@@ -20,7 +20,6 @@ use tokio::runtime::Runtime as AsyncRuntime;
 
 use crate::client::RuntimeClient;
 use crate::error::Error;
-use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::Indexed;
@@ -438,11 +437,10 @@ impl MemRegistry {
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::clone(&metrics),
-            Arc::clone(&async_runtime),
+            async_runtime,
             self.blob_no_reentrance()?,
         );
-        let compacter = Maintainer::new(blob.clone(), async_runtime);
-        Indexed::new(log, blob, compacter, metrics)
+        Indexed::new(log, blob, metrics)
     }
 
     /// Returns a [RuntimeClient] with unreliable storage backed by the given
@@ -460,11 +458,10 @@ impl MemRegistry {
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::clone(&metrics),
-            Arc::clone(&async_runtime),
+            async_runtime,
             blob,
         );
-        let compacter = Maintainer::new(blob.clone(), async_runtime);
-        Indexed::new(log, blob, compacter, metrics)
+        Indexed::new(log, blob, metrics)
     }
 
     /// Starts a [RuntimeClient] using the [MemLog] and [MemBlob] contained by
