@@ -14,19 +14,64 @@ use std::collections::HashSet;
 
 /// Trait that all rewrite rules must implement.
 pub(crate) trait Rule {
+    /// The type of matches associated with this [`Rule`].
+    type Match;
+
+    /// The name of the rule, used for debugging and tracing purposes.
     fn name(&self) -> &'static str;
 
+    /// The [`ApplyStrategy`] for the rule.
     fn strategy(&self) -> ApplyStrategy;
 
     /// Determines how to rewrite the box.
     ///
     /// Returns None if the box does not need to be rewritten.
-    fn check(&self, model: &Model, box_id: BoxId) -> Option<Box<dyn Rewrite>>;
+    fn check(&self, model: &Model, box_id: BoxId) -> Option<Self::Match>;
+
+    /// Rewrites the [`Model`] based on the parameters of [`Self::Match`]
+    /// determined by a previous [`Rule::check`] call.
+    fn rewrite(&self, model: &mut Model, mat: Self::Match);
 }
 
-/// Trait for something that modifies a Query Graph Model.
-pub(crate) trait Rewrite {
-    fn rewrite(&mut self, model: &mut Model);
+/// A trait with a blanket implementation that abstracts over the
+/// associated [`Rule::Match`] and its use sites [`Rule::check`] and [`Rule::rewrite`]
+/// behind [`ApplyRule::apply`] method.
+///
+/// Allows for holding a vector of rules in a `Vec<dyn ApplyRule>` instances.
+pub(crate) trait ApplyRule {
+    /// The name of the rule, used for debugging and tracing purposes.
+    fn name(&self) -> &'static str;
+
+    /// The [`ApplyStrategy`] for the rule.
+    fn strategy(&self) -> ApplyStrategy;
+
+    /// Attempts to apply the rewrite to a subgraph rooted at the given `box_id`.
+    /// Returns whether the attempt was successful.
+    fn apply(&self, model: &mut Model, box_id: BoxId) -> bool;
+}
+
+/// Blanket implementation for [`ApplyRule`] for all [`Rule`] types.
+impl<U: Rule> ApplyRule for U {
+    #[inline(always)]
+    fn name(&self) -> &'static str {
+        self.name()
+    }
+
+    #[inline(always)]
+    fn strategy(&self) -> ApplyStrategy {
+        self.strategy()
+    }
+
+    /// Apply the [`Rule::rewrite`] and return `true` if [`Rule::check`] returns
+    /// a [`Rule::Match`], or return `false` otherwise.
+    fn apply(&self, model: &mut Model, box_id: BoxId) -> bool {
+        if let Some(mat) = self.check(model, box_id) {
+            self.rewrite(model, mat);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Where and how a rule should be applied to boxes in the model.
@@ -56,7 +101,7 @@ impl Default for VisitOrder {
 
 /// Apply all available rewrite rules to the model.
 pub fn rewrite_model(model: &mut Model) {
-    let rules: Vec<Box<dyn Rule>> = vec![];
+    let rules: Vec<Box<dyn ApplyRule>> = vec![];
     apply_rules_to_model(model, rules);
     model.garbage_collect();
 
@@ -66,16 +111,16 @@ pub fn rewrite_model(model: &mut Model) {
 }
 
 /// Transform the model by applying a list of rewrite rules.
-fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn Rule>>) {
-    let (top_box, other): (Vec<Box<dyn Rule>>, Vec<Box<dyn Rule>>) = rules
+fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
+    let (top_box, other): (Vec<Box<dyn ApplyRule>>, Vec<Box<dyn ApplyRule>>) = rules
         .into_iter()
         .partition(|r| matches!(r.strategy(), ApplyStrategy::TopBox));
-    let (pre, post): (Vec<Box<dyn Rule>>, Vec<Box<dyn Rule>>) = other
+    let (pre, post): (Vec<Box<dyn ApplyRule>>, Vec<Box<dyn ApplyRule>>) = other
         .into_iter()
         .partition(|r| matches!(r.strategy(), ApplyStrategy::AllBoxes(VisitOrder::Pre)));
 
     for rule in &top_box {
-        apply_rule(rule.as_ref(), model, model.top_box);
+        rule.apply(model, model.top_box);
     }
 
     let mut rewritten = true;
@@ -85,21 +130,8 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn Rule>>) {
         rewritten |= apply_dft_rules(&pre, &post, model);
 
         for rule in &top_box {
-            rewritten |= apply_rule(rule.as_ref(), model, model.top_box);
+            rewritten |= rule.apply(model, model.top_box);
         }
-    }
-}
-
-/// Applies the rewrite rule corresponding to the `rule` to a box.
-///
-/// Returns whether the box was rewritten.
-fn apply_rule(rule: &dyn Rule, model: &mut Model, box_id: BoxId) -> bool {
-    let rewrite = rule.check(model, box_id);
-    if let Some(mut rewrite) = rewrite {
-        rewrite.rewrite(model);
-        true
-    } else {
-        false
     }
 }
 
@@ -114,7 +146,11 @@ fn apply_rule(rule: &dyn Rule, model: &mut Model, box_id: BoxId) -> bool {
 /// exit-time.
 ///
 /// Returns whether any box was rewritten.
-fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &mut Model) -> bool {
+fn apply_dft_rules(
+    pre: &Vec<Box<dyn ApplyRule>>,
+    post: &Vec<Box<dyn ApplyRule>>,
+    model: &mut Model,
+) -> bool {
     let mut rewritten = false;
 
     // All nodes that have been entered but not exited. Last node in the vec is
@@ -156,20 +192,20 @@ fn apply_dft_rules(pre: &Vec<Box<dyn Rule>>, post: &Vec<Box<dyn Rule>>, model: &
     // Start from the top box.
     entered.push((model.top_box, 0));
     for rule in pre {
-        rewritten |= apply_rule(rule.as_ref(), model, model.top_box);
+        rewritten |= rule.apply(model, model.top_box);
     }
     while !entered.is_empty() {
         if let Some(to_enter) = find_next_child_to_enter(model, &mut entered, &exited) {
             entered.push((to_enter, 0));
             for rule in pre {
-                rewritten |= apply_rule(rule.as_ref(), model, to_enter);
+                rewritten |= rule.apply(model, to_enter);
             }
         } else {
             // If this box has no more children to descend into,
             // run PostOrder rules and exit the current box.
             let (box_id, _) = entered.last().unwrap();
             for rule in post {
-                rewritten |= apply_rule(rule.as_ref(), model, *box_id);
+                rewritten |= rule.apply(model, *box_id);
             }
             exited.insert(*box_id);
             entered.pop();
@@ -189,7 +225,7 @@ mod tests {
         let mut model = test_model();
         let src_id = model.make_box(get_user_id(5).into());
 
-        let rules: Vec<Box<dyn Rule>> = vec![
+        let rules: Vec<Box<dyn ApplyRule>> = vec![
             // create E(src_id, curr_id) quantifiers in pre-visit
             Box::new(ConnectAll::new(src_id, VisitOrder::Pre)),
             // create A(src_id, curr_id) quantifiers in post-visit
@@ -301,7 +337,16 @@ mod tests {
         }
     }
 
+    /// A [`Rule::Match`] for the [`ConnectAll`] rule.
+    struct Connect {
+        src_id: BoxId,
+        tgt_id: BoxId,
+        quantifier_type: QuantifierType,
+    }
+
     impl Rule for ConnectAll {
+        type Match = Connect;
+
         fn name(&self) -> &'static str {
             "connect-all"
         }
@@ -310,30 +355,21 @@ mod tests {
             ApplyStrategy::AllBoxes(self.visit_order)
         }
 
-        fn check(&self, model: &Model, box_id: BoxId) -> Option<Box<dyn Rewrite>> {
+        fn check(&self, model: &Model, box_id: BoxId) -> Option<Connect> {
             if box_id != self.src_id && !self.connected(model, box_id) {
-                Some(Box::new(Connect {
+                Some(Connect {
                     src_id: self.src_id,
                     tgt_id: box_id,
                     quantifier_type: self.quantifier_type(),
-                }))
+                })
             } else {
                 None
             }
         }
-    }
 
-    /// A test [`Rewrite`] that creates the specified quantifier.
-    struct Connect {
-        src_id: BoxId,
-        tgt_id: BoxId,
-        quantifier_type: QuantifierType,
-    }
-
-    impl Rewrite for Connect {
-        fn rewrite(&mut self, model: &mut Model) {
+        fn rewrite(&self, model: &mut Model, mat: Connect) {
             // println!("{}:{}⇒{}", self.quantifier_type, self.src_id, self.tgt_id);
-            model.make_quantifier(self.quantifier_type, self.src_id, self.tgt_id);
+            model.make_quantifier(mat.quantifier_type, mat.src_id, mat.tgt_id);
         }
     }
 }
