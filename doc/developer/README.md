@@ -62,6 +62,8 @@ land, and then browsed as reference material as you skill up on the codebase.
   of these docs are subject to change, this one is _especially_ subject to
   change.
 
+* [reading.md](reading.md) contains a reading list.
+
 * [setup-mysql-debezium.md](setup-mysql-debezium.md) describes how to use
   Materialize as a fast read replica for a MySQL database.
 
