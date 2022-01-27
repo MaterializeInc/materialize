@@ -118,6 +118,8 @@ changes that have not yet been documented.
   of `CREATE SOURCE` and `CREATE SINK` now reject unknown parameters.
   (Example: [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)).
 
+- Add the `array_cat` function.
+
 {{< comment >}}
 Only add new release notes above this line.
 
