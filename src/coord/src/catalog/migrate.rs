@@ -87,6 +87,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         ast_rewrite_type_references_0_6_1(stmt)?;
         ast_use_pg_catalog_0_7_1(stmt)?;
         ast_insert_default_confluent_wire_format_0_7_1(stmt)?;
+        ast_remove_csr_confluent_wire_format_0_19_0(stmt)?;
         if catalog_version < *VER_0_9_1 {
             ast_rewrite_pg_catalog_char_to_text_0_9_1(stmt)?;
         }
@@ -364,6 +365,31 @@ fn ast_insert_default_confluent_wire_format_0_7_1(
                 })
             }
         }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn ast_remove_csr_confluent_wire_format_0_19_0(
+    stmt: &mut sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    match stmt {
+        Statement::CreateSource(CreateSourceStatement {
+            format:
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr {
+                    csr_connector:
+                        CsrConnectorAvro {
+                            ref mut with_options,
+                            ..
+                        },
+                })),
+            ..
+        }) => with_options.retain(|with_option| {
+            !matches!(
+                with_option,
+                SqlOption::Value { name, .. } if name == &Ident::new("confluent_wire_format")
+            )
+        }),
         _ => {}
     }
     Ok(())
