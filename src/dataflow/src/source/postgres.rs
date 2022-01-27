@@ -8,14 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::io;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use futures::TryStreamExt;
+use futures::{pin_mut, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
@@ -23,7 +23,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
-use tokio_postgres::types::PgLsn;
+use tokio_postgres::types::{PgLsn, Type};
 use tokio_postgres::SimpleQueryMessage;
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
@@ -197,26 +197,50 @@ impl PostgresSourceReader {
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
         for info in publication_tables {
-            // TODO(petrosagg): use a COPY statement here for more efficient network transfer
-            let data = client
-                .simple_query(&format!(
-                    "SELECT * FROM {:?}.{:?}",
-                    info.namespace, info.name
-                ))
+            let relation_id: Datum = (info.rel_id as i32).into();
+            let reader = client
+                .copy_out_simple(
+                    format!(
+                        "COPY {:?}.{:?} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
+                        info.namespace, info.name
+                    )
+                    .as_str(),
+                )
                 .await?;
-            for msg in data {
-                if let SimpleQueryMessage::Row(row) = msg {
-                    let mut mz_row = Row::default();
-                    let rel_id: Datum = (info.rel_id as i32).into();
-                    mz_row.push(rel_id);
-                    mz_row.push_list((0..row.len()).map(|n| {
-                        let a: Datum = row.get(n).into();
-                        a
-                    }));
-                    try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
-                }
+
+            pin_mut!(reader);
+            let mut data = vec![];
+            while let Some(Ok(b)) = reader.next().await {
+                data.extend(b.as_ref());
             }
+
+            // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
+            // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
+            let mut parser = pgwire::CopyTextFormatParser::new(&data, "\t", "\\N");
+            while !parser.is_eof() && !parser.is_end_of_copy_marker() {
+                let mut mz_row = Row::default();
+                mz_row.push(relation_id);
+
+                try_fatal!(mz_row.push_list_with(|rp| -> Result<(), io::Error> {
+                    for col in 0..info.schema.len() {
+                        if col > 0 {
+                            parser.expect_column_delimiter()?;
+                        }
+                        let raw_value = parser.consume_raw_value()?;
+                        if let Some(raw_value) = raw_value {
+                            rp.push(Datum::String(std::str::from_utf8(raw_value).unwrap()));
+                        } else {
+                            rp.push(Datum::Null);
+                        }
+                    }
+                    parser.expect_end_of_line()?;
+                    Ok(())
+                }));
+
+                try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
+                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+            }
+
             self.metrics.tables.inc();
         }
         self.metrics.lsn.set(self.lsn.into());
