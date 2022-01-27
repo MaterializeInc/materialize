@@ -17,7 +17,6 @@ documentation][user-docs].
 
 import argparse
 import base64
-import enum
 import hashlib
 import json
 import os
@@ -48,16 +47,6 @@ class Fingerprint(bytes):
 
     def __str__(self) -> str:
         return base64.b32encode(self).decode()
-
-
-class AcquiredFrom(enum.Enum):
-    """Where an `Image` was acquired from."""
-
-    REGISTRY = "registry"
-    """The image was downloaded from Docker Hub."""
-
-    LOCAL_BUILD = "local-build"
-    """The image was built from source locally."""
 
 
 class RepositoryDetails:
@@ -441,12 +430,14 @@ class ResolvedImage:
 
     Attributes:
         image: The underlying `Image`.
+        acquired: Whether the image is available locally.
         dependencies: A mapping from dependency name to `ResolvedImage` for
             each of the images that `image` depends upon.
     """
 
     def __init__(self, image: Image, dependencies: Iterable["ResolvedImage"]):
         self.image = image
+        self.acquired = False
         self.dependencies = {}
         for d in dependencies:
             self.dependencies[d.name] = d
@@ -493,6 +484,8 @@ class ResolvedImage:
 
     def build(self) -> None:
         """Build the image from source."""
+        for dep in self.dependencies.values():
+            dep.acquire()
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
         for pre_image in self.image.pre_images:
             pre_image.run()
@@ -514,24 +507,31 @@ class ResolvedImage:
         ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
-    def acquire(self) -> AcquiredFrom:
-        """Download or build the image.
+    def acquire(self) -> None:
+        """Download or build the image if it does not exist locally."""
+        if self.acquired:
+            return
 
-        Returns:
-            acquired_from: How the image was acquired.
-        """
-
+        ui.header(f"Acquiring {self.spec()}")
         try:
             spawn.runv(
                 ["docker", "pull", self.spec()],
                 stdout=sys.stderr.buffer,
             )
-            return AcquiredFrom.REGISTRY
         except subprocess.CalledProcessError:
-            pass
+            self.build()
+        self.acquired = True
 
+    def ensure(self) -> None:
+        """Ensure the image exists on Docker Hub if it is publishable.
+
+        The image is pushed using its spec as its tag.
+        """
+        if self.publish and is_docker_image_pushed(self.spec()):
+            ui.say(f"{self.spec()} already exists")
+            return
         self.build()
-        return AcquiredFrom.LOCAL_BUILD
+        spawn.runv(["docker", "push", self.spec()])
 
     def run(self, args: List[str] = [], docker_args: List[str] = []) -> None:
         """Run a command in the image.
@@ -636,110 +636,48 @@ class ResolvedImage:
 
 
 class DependencySet:
-    """A topologically-sorted, transitively-closed list of `Image`s.
+    """A set of `ResolvedImage`s.
 
-    .. warning:: These guarantees are not enforced.
-        Dependency sets constructed by `Repository.resolve_dependencies` will
-        uphold the topological sort and transitive closure guarantees, but
-        it is your responsibility to provide these guarantees for any dependency
-        sets you create yourself.
-
-    Iterating over a dependency set yields the contained images in the stored
-    order, with the caveat noted above. Indexing a dependency set yields the
-    _i_ th item in the stored order.
+    Iterating over a dependency set yields the contained images in an arbitrary
+    order. Indexing a dependency set yields the image with the specified name.
     """
 
     def __init__(self, dependencies: Iterable[Image]):
-        self.dependencies: OrderedDict[str, ResolvedImage] = OrderedDict()
-        for d in dependencies:
-            self.dependencies[d.name] = ResolvedImage(
-                d, (self.dependencies[d0] for d0 in d.depends_on)
-            )
+        """Construct a new `DependencySet`.
 
-    def retain_only_unpushed(self) -> Set[ResolvedImage]:
-        """Retain only the dependencies that do not exist on Docker Hub.
-
-        Transitive dependencies of any images that do not exist on Docker Hub
-        are retained as well.
-
-        Returns the pruned images.
+        The provided `dependencies` must be topologically sorted.
         """
-
-        # Build the reverse dependency graph.
-        used_by: Dict[ResolvedImage, Set[ResolvedImage]] = {}
-        for image in self:
-            used_by[image] = set()
-            for dep in image.dependencies.values():
-                used_by[dep].add(image)
-
-        visited = set()
-        pruned = set()
-
-        def visit(image: ResolvedImage) -> None:
-            # Ignore already-visited images.
-            if image in visited:
-                return
-            visited.add(image)
-
-            # Visit each user of this dependency. This may prune the users.
-            for user in used_by[image].copy():
-                visit(user)
-
-            # If there are no longer any users of this image (or there never
-            # were), and it already exists on Docker Hub, prune it.
-            if len(used_by[image]) == 0 and (
-                not image.publish or is_docker_image_pushed(image.spec())
-            ):
-                for dep in image.dependencies.values():
-                    used_by[dep].remove(image)
-                del self.dependencies[image.name]
-                pruned.add(image)
-
-        for image in used_by:
-            visit(image)
-
-        return pruned
-
-    def acquire(self, force_build: bool = False) -> None:
-        """Download or build all of the images in the dependency set.
-
-        Args:
-            force_build: Whether to force all images that are not already
-                available locally to be built from source, regardless of whether
-                the image is available for download. Note that this argument has
-                no effect if the image is already available locally.
-            push: Whether to push any images that will built locally to Docker
-                Hub.
-        """
+        self._dependencies: Dict[str, ResolvedImage] = {}
         known_images = docker_images()
-        for d in self:
-            spec = d.spec()
-            if spec not in known_images:
-                if force_build:
-                    ui.header(f"Force-building {spec}")
-                    d.build()
-                else:
-                    ui.header(f"Acquiring {spec}")
-                    d.acquire()
-            else:
-                ui.header(f"Already built {spec}")
+        for d in dependencies:
+            image = ResolvedImage(
+                image=d,
+                dependencies=(self._dependencies[d0] for d0 in d.depends_on),
+            )
+            image.acquired = image.spec() in known_images
+            self._dependencies[d.name] = image
 
-    def push(self) -> None:
-        """Push all publishable images in this dependency set to Docker Hub.
-
-        Images are pushed using their spec as their tag. All images must have
-        been acquired (e.g., by `DependencySet.acquire`) before calling this
-        method.
+    def acquire(self) -> None:
+        """Download or build all of the images in the dependency set that do not
+        already exist locally.
         """
         for dep in self:
-            if dep.publish and not is_docker_image_pushed(dep.spec()):
-                spawn.runv(["docker", "push", dep.spec()])
+            dep.acquire()
+
+    def ensure(self) -> None:
+        """Ensure all publishable images in this dependency set exist on Docker
+        Hub.
+
+        Images are pushed using their spec as their tag.
+        """
+        for dep in self:
+            dep.ensure()
 
     def __iter__(self) -> Iterator[ResolvedImage]:
-        return iter(self.dependencies.values())
+        return iter(self._dependencies.values())
 
     def __getitem__(self, key: str) -> ResolvedImage:
-        return self.dependencies[key]
+        return self._dependencies[key]
 
 
 class Repository:

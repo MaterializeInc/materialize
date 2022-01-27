@@ -23,15 +23,11 @@ def main() -> None:
     repo = mzbuild.Repository(Path("."))
     workspace = cargo.Workspace(repo.root)
 
-    # Acquire all the mzbuild images in the repository, while pushing any
-    # images that we build to Docker Hub, where they will be accessible to
-    # other build agents.
+    # Build and push any images that are not already available on Docker Hub,
+    # so they are accessible to other build agents.
     print("--- Acquiring mzbuild images")
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
-    for pruned in deps.retain_only_unpushed():
-        print(f"Skipping already-existing image {pruned.name}")
-    deps.acquire()
-    deps.push()
+    deps.ensure()
 
     print("--- Staging Debian package")
     if os.environ["BUILDKITE_BRANCH"] == "main":
