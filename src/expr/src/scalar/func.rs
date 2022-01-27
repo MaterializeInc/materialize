@@ -2252,6 +2252,7 @@ pub enum BinaryFunc {
     ArrayLower,
     ArrayRemove,
     ArrayUpper,
+    ArrayArrayConcat,
     ListListConcat,
     ListElementConcat,
     ElementListConcat,
@@ -2502,6 +2503,7 @@ impl BinaryFunc {
             BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
             BinaryFunc::ArrayRemove => eager!(array_remove, temp_storage),
             BinaryFunc::ArrayUpper => Ok(eager!(array_upper)),
+            BinaryFunc::ArrayArrayConcat => eager!(array_array_concat, temp_storage),
             BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
             BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
             BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
@@ -2660,10 +2662,12 @@ impl BinaryFunc {
                 ScalarType::Int64.nullable(true)
             }
 
-            ArrayRemove | ListListConcat | ListElementConcat | ListRemove => input1_type
-                .scalar_type
-                .default_embedded_value()
-                .nullable(true),
+            ArrayArrayConcat | ArrayRemove | ListListConcat | ListElementConcat | ListRemove => {
+                input1_type
+                    .scalar_type
+                    .default_embedded_value()
+                    .nullable(true)
+            }
 
             ElementListConcat => input2_type
                 .scalar_type
@@ -2692,6 +2696,7 @@ impl BinaryFunc {
             self,
             BinaryFunc::And
                 | BinaryFunc::Or
+                | BinaryFunc::ArrayArrayConcat
                 | BinaryFunc::ListListConcat
                 | BinaryFunc::ListElementConcat
                 | BinaryFunc::ElementListConcat
@@ -2876,6 +2881,7 @@ impl BinaryFunc {
             | ArrayLength
             | ArrayLower
             | ArrayUpper
+            | ArrayArrayConcat
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
@@ -3078,6 +3084,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ArrayLower => f.write_str("array_lower"),
             BinaryFunc::ArrayRemove => f.write_str("array_remove"),
             BinaryFunc::ArrayUpper => f.write_str("array_upper"),
+            BinaryFunc::ArrayArrayConcat => f.write_str("||"),
             BinaryFunc::ListListConcat => f.write_str("||"),
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
@@ -5377,6 +5384,108 @@ fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Dat
 fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let array = Datum::unwrap_array(&b);
     Datum::from(array.elements().iter().any(|e| e == a))
+}
+
+fn array_array_concat<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    if a.is_null() {
+        return Ok(b);
+    } else if b.is_null() {
+        return Ok(a);
+    }
+
+    let a_array = a.unwrap_array();
+    let b_array = b.unwrap_array();
+
+    let a_dims: Vec<ArrayDimension> = a_array.dims().into_iter().collect();
+    let b_dims: Vec<ArrayDimension> = b_array.dims().into_iter().collect();
+
+    let a_ndims = a_dims.len();
+    let b_ndims = b_dims.len();
+
+    // Per PostgreSQL, if either of the input arrays is zero dimensional,
+    // the output is the other array, no matter their dimensions.
+    if a_ndims == 0 {
+        return Ok(b);
+    } else if b_ndims == 0 {
+        return Ok(a);
+    }
+
+    // Postgres supports concatenating arrays of different dimensions,
+    // as long as one of the arrays has the same type as an element of
+    // the other array, i.e. `int[2][4] || int[4]` (or `int[4] || int[2][4]`)
+    // works, because each element of `int[2][4]` is an `int[4]`.
+    // This check is separate from the one below because Postgres gives a
+    // specific error message if the number of dimensions differs by more
+    // than one.
+    // This cast is safe since MAX_ARRAY_DIMENSIONS is 6
+    // Can be replaced by .abs_diff once it is stabilized
+    if (a_ndims as isize - b_ndims as isize).abs() > 1 {
+        return Err(EvalError::IncompatibleArrayDimensions {
+            dims: Some((a_ndims, b_ndims)),
+        });
+    }
+
+    let mut dims;
+
+    // After the checks above, we are certain that:
+    // - neither array is zero dimensional nor empty
+    // - both arrays have the same number of dimensions, or differ
+    //   at most by one.
+    match a_ndims.cmp(&b_ndims) {
+        // If both arrays have the same number of dimensions, validate
+        // that their inner dimensions are the same and concatenate the
+        // arrays.
+        Ordering::Equal => {
+            if &a_dims[1..] != &b_dims[1..] {
+                return Err(EvalError::IncompatibleArrayDimensions { dims: None });
+            }
+            dims = vec![ArrayDimension {
+                lower_bound: 1,
+                length: a_dims[0].length + b_dims[0].length,
+            }];
+            dims.extend(&a_dims[1..]);
+        }
+        // If `a` has less dimensions than `b`, this is an element-array
+        // concatenation, which requires that `a` has the same dimensions
+        // as an element of `b`.
+        Ordering::Less => {
+            if &a_dims[..] != &b_dims[1..] {
+                return Err(EvalError::IncompatibleArrayDimensions { dims: None });
+            }
+            dims = vec![ArrayDimension {
+                lower_bound: 1,
+                // Since `a` is treated as an element of `b`, the length of
+                // the first dimension of `b` is incremented by one, as `a` is
+                // non-empty.
+                length: b_dims[0].length + 1,
+            }];
+            dims.extend(a_dims);
+        }
+        // If `a` has more dimensions than `b`, this is an array-element
+        // concatenation, which requires that `b` has the same dimensions
+        // as an element of `a`.
+        Ordering::Greater => {
+            if &a_dims[1..] != &b_dims[..] {
+                return Err(EvalError::IncompatibleArrayDimensions { dims: None });
+            }
+            dims = vec![ArrayDimension {
+                lower_bound: 1,
+                // Since `b` is treated as an element of `a`, the length of
+                // the first dimension of `a` is incremented by one, as `b`
+                // is non-empty.
+                length: a_dims[0].length + 1,
+            }];
+            dims.extend(b_dims);
+        }
+    }
+
+    let elems = a_array.elements().iter().chain(b_array.elements().iter());
+
+    Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, elems))?)
 }
 
 fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {

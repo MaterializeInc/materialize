@@ -40,8 +40,6 @@ use repr::{Datum, Row, RowArena};
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
-use super::Permutation;
-
 /// A complete enumeration of possible join plans to render.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum JoinPlan {
@@ -64,16 +62,6 @@ pub struct JoinClosure {
 }
 
 impl JoinClosure {
-    /// Prepares this join closure to act on a permuted input,
-    /// according to the permutation `p`.
-    pub fn permute(&mut self, p: &Permutation) {
-        p.permute_safe_mfp_plan(&mut self.before);
-        for key in &mut self.ready_equivalences {
-            for expr in key {
-                expr.permute(&p.permutation);
-            }
-        }
-    }
     /// Applies per-row filtering and logic.
     #[inline(always)]
     pub fn apply<'a>(
@@ -110,6 +98,8 @@ impl JoinClosure {
         columns: &mut HashMap<usize, usize>,
         equivalences: &mut Vec<Vec<MirScalarExpr>>,
         mfp: &mut MapFilterProject,
+        permutation: HashMap<usize, usize>,
+        thinned_arity_with_key: usize,
     ) -> Self {
         // First, determine which columns should be compared due to `equivalences`.
         let mut ready_equivalences = Vec::new();
@@ -139,11 +129,11 @@ impl JoinClosure {
             }
         }
         equivalences.retain(|e| e.len() > 1);
-
+        let permuted_columns = columns.iter().map(|(k, v)| (*k, permutation[v])).collect();
         // Update ready_equivalences to reference correct column locations.
         for exprs in ready_equivalences.iter_mut() {
             for expr in exprs.iter_mut() {
-                expr.permute_map(&columns);
+                expr.permute_map(&permuted_columns);
             }
         }
 
@@ -207,6 +197,8 @@ impl JoinClosure {
                 columns.insert(*column, index);
             }
         }
+
+        before.permute(permutation, thinned_arity_with_key);
 
         // `before` should not be modified after this point.
         before.optimize();
@@ -279,6 +271,9 @@ impl JoinBuildState {
         &mut self,
         new_columns: std::ops::Range<usize>,
         bound_expressions: &[MirScalarExpr],
+        thinned_arity_with_key: usize,
+        // The permutation to run on the join of the thinned collections
+        permutation: HashMap<usize, usize>,
     ) -> JoinClosure {
         // Remove each element of `bound_expressions` from `equivalences`, so that we
         // avoid redundant predicate work. This removal also paves the way for
@@ -293,7 +288,7 @@ impl JoinBuildState {
             self.column_map.insert(column, self.column_map.len());
         }
 
-        self.extract_closure()
+        self.extract_closure(permutation, thinned_arity_with_key)
     }
 
     /// Extract a final `MapFilterProject` once all columns are available.
@@ -332,7 +327,17 @@ impl JoinBuildState {
     ///
     /// The extracted closure is not guaranteed to be non-trivial. Sensitive users should
     /// consider using the `.is_identity()` method to determine non-triviality.
-    fn extract_closure(&mut self) -> JoinClosure {
-        JoinClosure::build(&mut self.column_map, &mut self.equivalences, &mut self.mfp)
+    fn extract_closure(
+        &mut self,
+        permutation: HashMap<usize, usize>,
+        thinned_arity_with_key: usize,
+    ) -> JoinClosure {
+        JoinClosure::build(
+            &mut self.column_map,
+            &mut self.equivalences,
+            &mut self.mfp,
+            permutation,
+            thinned_arity_with_key,
+        )
     }
 }

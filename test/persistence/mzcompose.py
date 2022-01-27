@@ -44,7 +44,7 @@ SERVICES = [
 td_test = os.environ.pop("TD_TEST", "*")
 
 
-def workflow_persistence(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     for mz in [mz_default, mz_logical_compaction_window_off]:
         with c.override(mz):
             workflow_kafka_sources(c)

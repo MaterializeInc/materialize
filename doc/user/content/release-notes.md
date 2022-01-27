@@ -118,6 +118,8 @@ changes that have not yet been documented.
   of `CREATE SOURCE` and `CREATE SINK` now reject unknown parameters.
   (Example: [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)).
 
+- Add the `array_cat` function.
+
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`date`] value but a time-related field (e.g., `SECOND`).
 

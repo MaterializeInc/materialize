@@ -33,7 +33,7 @@ SERVICES = [
 ]
 
 
-def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run testdrive."""
     parser.add_argument(
         "--redpanda",
@@ -82,9 +82,10 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     testdrive = Testdrive(
+        forward_buildkite_shard=True,
         entrypoint_extra=[f"--aws-region={args.aws_region}"]
         if args.aws_region
-        else ["--aws-endpoint=http://localstack:4566"]
+        else ["--aws-endpoint=http://localstack:4566"],
     )
 
     with c.override(materialized, testdrive):
@@ -108,4 +109,4 @@ def workflow_testdrive_redpanda_ci(c: Composition) -> None:
         ).split()
     )
     files -= KNOWN_FAILURES
-    c.workflow("testdrive", "--redpanda", *files)
+    c.workflow("default", "--redpanda", *files)

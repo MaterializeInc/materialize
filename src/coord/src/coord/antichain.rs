@@ -11,6 +11,8 @@
 
 #![allow(missing_debug_implementations)]
 
+use std::rc::Rc;
+
 use timely::order::PartialOrder;
 use timely::progress::change_batch::ChangeBatch;
 use timely::progress::frontier::MutableAntichain;
@@ -115,8 +117,8 @@ impl<T: PartialOrder + Ord + Clone> Clone for AntichainToken<T> {
         (self.action.borrow_mut())(self.changes.borrow_mut().drain());
         Self {
             antichain: self.antichain.clone(),
-            changes: self.changes.clone(),
-            action: self.action.clone(),
+            changes: Rc::clone(&self.changes),
+            action: Rc::clone(&self.action),
         }
     }
 }

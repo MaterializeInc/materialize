@@ -238,14 +238,14 @@ impl KafkaSourceReader {
 
         // Since librdkafka v1.6.0, we need to recreate all partition queues
         // after every call to `self.consumer.assign`.
-        let context = self.consumer.context().clone();
+        let context = Arc::clone(&self.consumer.context());
         for pc in &mut self.partition_consumers {
             pc.partition_queue = self
                 .consumer
                 .split_partition_queue(&self.topic_name, pc.pid)
                 .expect("partition known to be valid");
             pc.partition_queue.set_nonempty_callback({
-                let context = context.clone();
+                let context = Arc::clone(&context);
                 move || context.activate()
             });
         }

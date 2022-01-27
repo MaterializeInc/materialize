@@ -10,7 +10,7 @@
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 
 
-def workflow_demo(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--message-count", type=int, default=1000)
     parser.add_argument("--partitions", type=int, default=1)
     parser.add_argument("--check-sink", action="store_true")

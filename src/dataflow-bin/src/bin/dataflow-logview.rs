@@ -65,8 +65,7 @@ fn main() {
     timely::execute_from_args(args.timely_args.into_iter(), move |worker| {
         let index = worker.index();
         let peers = worker.peers();
-        let replayers = sockets
-            .clone()
+        let replayers = Arc::clone(&sockets)
             .lock()
             .expect("sockets lock poisoned")
             .iter_mut()

@@ -25,7 +25,7 @@ SERVICES = [
 ]
 
 
-def workflow_kafka_exactly_once(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--seed",
         help="an alternate seed to use to avoid clashing with existing topics",

@@ -22,17 +22,19 @@
 //! but instead can have multiple handles to it which forward changes from an
 //! internal MutableAntichain to the since.
 //!
-//! The [`Coordinator`] tracks various compaction frontiers so that indexes,
-//! compaction, and transactions can work together.
-//! [`determine_timestamp()`](Coordinator::determine_timestamp) returns the
-//! least valid since of its sources. Any new transactions should thus always
-//! be >= the current compaction frontier and so should never change the
-//! frontier when being added to [`txn_reads`](Coordinator::txn_reads). The
-//! compaction frontier may change when a transaction ends (if it was the
-//! oldest transaction and the index's since was advanced after the transaction
-//! started) or when [`update_upper()`](Coordinator::update_upper) is run (if
-//! there are no in progress transactions before the new since). When it does,
-//! it is added to [`since_updates`](Coordinator::since_updates) and will be
+//! The [`Coordinator`] tracks various compaction frontiers so that source,
+//! indexes, compaction, and transactions can work together.
+//! [`determine_timestamp()`](Coordinator::determine_timestamp)
+//! returns the least valid since of its sources. Any new transactions should
+//! thus always be >= the current compaction frontier and so should never change
+//! the frontier when being added to [`txn_reads`](Coordinator::txn_reads). The
+//! compaction frontier may change when a transaction ends (if it was the oldest
+//! transaction and the since was advanced after the transaction started) or
+//! when [`update_index_upper()`](Coordinator::update_index_upper) or
+//! [`update_storage_upper`](Coordinator::update_storage_upper) is run (if there
+//! are no in progress transactions before the new since). When it does, it is
+//! added to [`index_since_updates`](Coordinator::index_since_updates) or
+//! [`source_since_updates`](Coordinator::source_since_updates) and will be
 //! processed during the next [`maintenance()`](Coordinator::maintenance) call.
 //!
 //! ## Frontiers another way
@@ -107,8 +109,9 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use build_info::BuildInfo;
-use dataflow_types::client::TimestampBindingFeedback;
 use dataflow_types::client::{ComputeClient, StorageClient};
+use dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
+use dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{sinks::SinkAsOf, sources::Timeline};
 use dataflow_types::{
@@ -120,8 +123,8 @@ use dataflow_types::{
     DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
 };
 use expr::{
-    ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr,
+    NullaryFunc, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, NowFn};
@@ -326,7 +329,10 @@ where
 
     /// Holds pending compaction messages to be sent to the dataflow workers. When
     /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
-    since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
+    index_since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
+    /// Holds pending compaction messages to be sent to the dataflow workers. When
+    /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
+    source_since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
     /// Holds handles to ids that are advanced by update_upper.
     since_handles: HashMap<GlobalId, AntichainToken<Timestamp>>,
     /// Tracks active read transactions so that we don't compact any indexes beyond
@@ -473,12 +479,12 @@ where
         to_datetime((self.catalog.config().now)())
     }
 
-    /// Generate a new frontiers object that forwards since changes to since_updates.
+    /// Generate a new frontiers object that forwards since changes to `index_since_updates`.
     ///
     /// # Panics
     ///
     /// This function panics if called twice with the same `id`.
-    fn new_frontiers<I>(
+    fn new_index_frontiers<I>(
         &mut self,
         id: GlobalId,
         initial: I,
@@ -487,9 +493,33 @@ where
     where
         I: IntoIterator<Item = Timestamp>,
     {
-        let since_updates = Rc::clone(&self.since_updates);
+        let index_since_updates = Rc::clone(&self.index_since_updates);
         let (frontier, handle) = Frontiers::new(initial, compaction_window_ms, move |frontier| {
-            since_updates.borrow_mut().insert(id, frontier);
+            index_since_updates.borrow_mut().insert(id, frontier);
+        });
+        let prev = self.since_handles.insert(id, handle);
+        // Ensure we don't double-register ids.
+        assert!(prev.is_none());
+        frontier
+    }
+    ///
+    /// Generate a new frontiers object that forwards since changes to `source_since_updates`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if called twice with the same `id`.
+    fn new_source_frontiers<I>(
+        &mut self,
+        id: GlobalId,
+        initial: I,
+        compaction_window_ms: Option<Timestamp>,
+    ) -> Frontiers<Timestamp>
+    where
+        I: IntoIterator<Item = Timestamp>,
+    {
+        let storage_since_updates = Rc::clone(&self.source_since_updates);
+        let (frontier, handle) = Frontiers::new(initial, compaction_window_ms, move |frontier| {
+            storage_since_updates.borrow_mut().insert(id, frontier);
         });
         let prev = self.since_handles.insert(id, handle);
         // Ensure we don't double-register ids.
@@ -529,7 +559,7 @@ where
 
                     let since_ts = since_ts.unwrap_or(0);
 
-                    let frontiers = self.new_frontiers(
+                    let frontiers = self.new_source_frontiers(
                         entry.id(),
                         [since_ts],
                         self.logical_compaction_window_ms,
@@ -545,7 +575,7 @@ where
                     };
 
                     let since_ts = since_ts.unwrap_or(0);
-                    let frontiers = self.new_frontiers(
+                    let frontiers = self.new_source_frontiers(
                         entry.id(),
                         [since_ts],
                         self.logical_compaction_window_ms,
@@ -566,7 +596,7 @@ where
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
+                        let frontiers = self.new_index_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
                         let index_id = entry.id();
@@ -797,9 +827,9 @@ where
             .await;
     }
 
-    async fn message_worker(&mut self, message: dataflow_types::client::Response) {
+    async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            dataflow_types::client::Response::PeekResponse(conn_id, response) => {
+            DataflowResponse::Compute(ComputeResponse::PeekResponse(conn_id, response)) => {
                 // We expect exactly one peek response, which we forward.
                 self.pending_peeks
                     .remove(&conn_id)
@@ -807,7 +837,7 @@ where
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
-            dataflow_types::client::Response::TailResponse(sink_id, response) => {
+            DataflowResponse::Compute(ComputeResponse::TailResponse(sink_id, response)) => {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -818,16 +848,21 @@ where
                     }
                 }
             }
-            dataflow_types::client::Response::FrontierUppers(updates) => {
+            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
                 for (name, changes) in updates {
-                    self.update_upper(&name, changes);
+                    self.update_index_upper(&name, changes);
                 }
                 self.maintenance().await;
             }
-            dataflow_types::client::Response::TimestampBindings(TimestampBindingFeedback {
-                bindings,
-                changes,
-            }) => {
+            DataflowResponse::Storage(StorageResponse::Frontiers(updates)) => {
+                for (name, changes) in updates {
+                    self.update_storage_upper(&name, changes);
+                }
+                self.maintenance().await;
+            }
+            DataflowResponse::Storage(StorageResponse::TimestampBindings(
+                TimestampBindingFeedback { bindings, changes },
+            )) => {
                 self.catalog
                     .insert_timestamp_bindings(
                         bindings
@@ -1365,7 +1400,7 @@ where
     }
 
     /// Updates the upper frontier of a named view.
-    fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
+    fn update_index_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
         if let Some(index_state) = self.indexes.get_mut(name) {
             let changes = Self::validate_update_iter(&mut index_state.upper, changes);
 
@@ -1398,6 +1433,26 @@ where
                     }
                 }
             }
+        } else if self.sources.get_mut(name).is_some() {
+            panic!(
+                "expected an update for an index, instead got update for source {}",
+                name
+            );
+        } else if self.sink_writes.get_mut(name).is_some() {
+            panic!(
+                "expected an update for an index, instead got update for sink {}",
+                name
+            );
+        }
+    }
+
+    /// Updates the upper frontier of a named source or sink.
+    fn update_storage_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
+        if self.indexes.get_mut(name).is_some() {
+            panic!(
+                "expected an update for a source or a sink, instead got update for index {}",
+                name
+            );
         } else if let Some(source_state) = self.sources.get_mut(name) {
             let changes = Self::validate_update_iter(&mut source_state.upper, changes);
 
@@ -1510,16 +1565,32 @@ where
         // Don't try to compact to an empty frontier. There may be a good reason to do this
         // in principle, but not in any current Mz use case.
         // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-        let since_updates: Vec<_> = self
-            .since_updates
+
+        let index_since_updates: Vec<_> = self
+            .index_since_updates
             .borrow_mut()
             .drain()
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
 
-        if !since_updates.is_empty() {
-            self.persisted_table_allow_compaction(&since_updates);
-            self.dataflow_client.allow_compaction(since_updates).await;
+        if !index_since_updates.is_empty() {
+            self.dataflow_client
+                .allow_index_compaction(index_since_updates)
+                .await;
+        }
+
+        let source_since_updates: Vec<_> = self
+            .source_since_updates
+            .borrow_mut()
+            .drain()
+            .filter(|(_, frontier)| frontier != &Antichain::new())
+            .collect();
+
+        if !source_since_updates.is_empty() {
+            self.persisted_table_allow_compaction(&source_since_updates);
+            self.dataflow_client
+                .allow_source_compaction(source_since_updates)
+                .await;
         }
     }
 
@@ -2140,8 +2211,11 @@ where
                     };
 
                     let since_ts = since_ts.unwrap_or(0);
-                    let frontiers =
-                        self.new_frontiers(table_id, [since_ts], self.logical_compaction_window_ms);
+                    let frontiers = self.new_source_frontiers(
+                        table_id,
+                        [since_ts],
+                        self.logical_compaction_window_ms,
+                    );
 
                     // NOTE: Tables are not sources, but to a large part of the system they look
                     // like they are, e.g. they are rendered as a SourceConnector::Local.
@@ -2207,7 +2281,7 @@ where
                     self.update_timestamper(source_id, true).await;
                     let since_ts = since_ts.unwrap_or(0);
 
-                    let frontiers = self.new_frontiers(
+                    let frontiers = self.new_source_frontiers(
                         source_id,
                         [since_ts],
                         self.logical_compaction_window_ms,
@@ -2239,9 +2313,6 @@ where
                 materialized,
                 ..
             } = plan;
-            let optimized_expr = self.view_optimizer.optimize(source.expr)?;
-            let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
-
             let source_id = self.catalog.allocate_id()?;
             let source_oid = self.catalog.allocate_oid()?;
 
@@ -2265,10 +2336,8 @@ where
 
             let source = catalog::Source {
                 create_sql: source.create_sql,
-                optimized_expr,
                 connector: source.connector,
-                bare_desc: source.bare_desc,
-                desc: transformed_desc,
+                desc: source.desc,
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
@@ -2821,7 +2890,6 @@ where
                         // persisting. In practice, we don't enable/disable this
                         // with table-level granularity so it will be all of
                         // them or none of them, which is checked below.
-                        let mut persist_streams = Vec::new();
                         let mut persist_updates = Vec::new();
                         let mut volatile_updates = Vec::new();
                         for WriteOp { id, rows } in inserts {
@@ -2841,12 +2909,10 @@ where
                                     persist: Some(persist),
                                     ..
                                 }) => {
-                                    let updates: Vec<((Row, ()), Timestamp, Diff)> = rows
+                                    let updates = rows
                                         .into_iter()
-                                        .map(|(row, diff)| ((row, ()), timestamp, diff))
-                                        .collect();
-                                    persist_streams.push(&persist.write_handle);
-                                    persist_updates.push((persist.stream_id, updates));
+                                        .map(|(row, diff)| ((row, ()), timestamp, diff));
+                                    persist_updates.push((&persist.write_handle, updates));
                                 }
                                 _ => {
                                     let updates = rows
@@ -2884,7 +2950,12 @@ where
                             write_fut = Some(
                                 persist_multi
                                     .write_handle
-                                    .write_atomic(persist_updates)
+                                    .write_atomic(|builder| {
+                                        for (handle, updates) in persist_updates {
+                                            builder.add_write(handle, updates)?;
+                                        }
+                                        Ok(())
+                                    })
                                     .map(|res| match res {
                                         Ok(_) => Ok(()),
                                         Err(err) => {
@@ -3088,6 +3159,7 @@ where
             .iter()
             .map(|k| MirScalarExpr::Column(*k))
             .collect();
+        let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
         // Two transient allocations. We could reclaim these if we don't use them, potentially.
         // TODO: reclaim transient identifiers in fast path cases.
         let view_id = self.allocate_transient_id()?;
@@ -3101,7 +3173,7 @@ where
             index_id,
             IndexDesc {
                 on_id: view_id,
-                keys: key,
+                key: key.clone(),
             },
             typ,
         );
@@ -3110,7 +3182,14 @@ where
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let fast_path = fast_path_peek::create_plan(dataflow_plan, view_id, index_id)?;
+        let fast_path = fast_path_peek::create_plan(
+            dataflow_plan,
+            view_id,
+            index_id,
+            key,
+            permutation,
+            thinning.len(),
+        )?;
 
         // Implement the peek, and capture the response.
         let resp = self
@@ -3473,7 +3552,13 @@ where
             ExplainStage::QueryGraph => {
                 // TODO add type information to the output graph
                 let model = sql::query_model::Model::from(raw_plan);
-                sql::query_model::dot::DotGenerator::new().generate(&model, "")?
+                sql::query_model::DotGenerator::new().generate(&model, "")?
+            }
+            ExplainStage::OptimizedQueryGraph => {
+                // TODO add type information to the output graph
+                let mut model = sql::query_model::Model::from(raw_plan);
+                sql::query_model::rewrite_model(&mut model);
+                sql::query_model::DotGenerator::new().generate(&model, "")?
             }
             ExplainStage::DecorrelatedPlan => {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
@@ -4261,7 +4346,7 @@ where
         // For each produced arrangement, start tracking the arrangement with
         // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            let frontiers = self.new_frontiers(
+            let frontiers = self.new_index_frontiers(
                 *global_id,
                 since.elements().to_vec(),
                 self.logical_compaction_window_ms,
@@ -4404,7 +4489,7 @@ where
         &self,
         session: &mut Session,
     ) -> Result<(), tokio::sync::TryLockError> {
-        self.write_lock.clone().try_lock_owned().map(|p| {
+        Arc::clone(&self.write_lock).try_lock_owned().map(|p| {
             session.grant_write_lock(p);
         })
     }
@@ -4527,7 +4612,8 @@ where
                 active_conns: HashMap::new(),
                 txn_reads: HashMap::new(),
                 since_handles: HashMap::new(),
-                since_updates: Rc::new(RefCell::new(HashMap::new())),
+                index_since_updates: Rc::new(RefCell::new(HashMap::new())),
+                source_since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
@@ -4759,11 +4845,22 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
+    use std::collections::HashMap;
+
     use dataflow_types::client::{ComputeClient, StorageClient};
 
     use crate::CoordError;
-    use expr::{EvalError, GlobalId, Id};
+    use expr::{EvalError, GlobalId, Id, MirScalarExpr};
     use repr::{Diff, Row};
+
+    #[derive(Debug)]
+    pub struct PeekDataflowPlan {
+        desc: dataflow_types::DataflowDescription<dataflow_types::Plan>,
+        id: GlobalId,
+        key: Vec<MirScalarExpr>,
+        permutation: HashMap<usize, usize>,
+        thinned_arity: usize,
+    }
 
     /// Possible ways in which the coordinator could produce the result for a goal view.
     #[derive(Debug)]
@@ -4773,10 +4870,7 @@ pub mod fast_path_peek {
         /// The view can be read out of an existing arrangement.
         PeekExisting(GlobalId, Option<Row>, expr::SafeMfpPlan),
         /// The view must be installed as a dataflow and then read.
-        PeekDataflow(
-            dataflow_types::DataflowDescription<dataflow_types::Plan>,
-            GlobalId,
-        ),
+        PeekDataflow(PeekDataflowPlan),
     }
 
     /// Determine if the dataflow plan can be implemented without an actual dataflow.
@@ -4788,6 +4882,9 @@ pub mod fast_path_peek {
         dataflow_plan: dataflow_types::DataflowDescription<dataflow_types::Plan>,
         view_id: GlobalId,
         index_id: GlobalId,
+        index_key: Vec<MirScalarExpr>,
+        index_permutation: HashMap<usize, usize>,
+        index_thinned_arity: usize,
     ) -> Result<Plan, CoordError> {
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -4825,11 +4922,11 @@ pub mod fast_path_peek {
                     // If `keys` is non-empty, that means we think one exists.
                     for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
                         if let Some((key, val)) = key_val {
-                            if Id::Global(desc.on_id) == *id && &desc.keys == key {
+                            if Id::Global(desc.on_id) == *id && &desc.key == key {
                                 // Indicate an early exit with a specific index and key_val.
                                 return Ok(Plan::PeekExisting(
                                     *index_id,
-                                    Some(val.clone()),
+                                    val.clone(),
                                     map_filter_project,
                                 ));
                             }
@@ -4843,7 +4940,13 @@ pub mod fast_path_peek {
                 _ => {}
             }
         }
-        return Ok(Plan::PeekDataflow(dataflow_plan, index_id));
+        return Ok(Plan::PeekDataflow(PeekDataflowPlan {
+            desc: dataflow_plan,
+            id: index_id,
+            key: index_key,
+            permutation: index_permutation,
+            thinned_arity: index_thinned_arity,
+        }));
     }
 
     impl<C> crate::coord::Coordinator<C>
@@ -4914,12 +5017,20 @@ pub mod fast_path_peek {
                     ),
                     None,
                 ),
-                Plan::PeekDataflow(dataflow, index_id) => {
+                Plan::PeekDataflow(PeekDataflowPlan {
+                    desc: dataflow,
+                    id: index_id,
+                    key: index_key,
+                    permutation: index_permutation,
+                    thinned_arity: index_thinned_arity,
+                }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client.create_dataflows(vec![dataflow]).await;
-
                     // Create an identity MFP operator.
-                    let map_filter_project = expr::MapFilterProject::new(source_arity)
+                    let mut map_filter_project = expr::MapFilterProject::new(source_arity);
+                    map_filter_project
+                        .permute(index_permutation, index_key.len() + index_thinned_arity);
+                    let map_filter_project = map_filter_project
                         .into_plan()
                         .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
                         .into_nontemporal()

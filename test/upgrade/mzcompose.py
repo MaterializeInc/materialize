@@ -50,7 +50,7 @@ SERVICES = [
 ]
 
 
-def workflow_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test upgrades from various versions."""
 
     parser.add_argument(
@@ -112,14 +112,14 @@ def test_upgrade_from_version(
     c.wait_for_materialized("materialized")
 
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
-    with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        c.run(
-            "testdrive-svc",
-            "--seed=1",
-            "--no-reset",
-            temp_dir,
-            f"create-in-{version_glob}-{filter}.td",
-        )
+    c.run(
+        "testdrive-svc",
+        "--seed=1",
+        "--no-reset",
+        f"--var=upgrade-from-version={from_version}",
+        temp_dir,
+        f"create-in-{version_glob}-{filter}.td",
+    )
 
     c.kill("materialized")
     c.rm("materialized", "testdrive-svc")
@@ -127,15 +127,15 @@ def test_upgrade_from_version(
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
-    with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        c.run(
-            "testdrive-svc",
-            "--seed=1",
-            "--no-reset",
-            temp_dir,
-            "--validate-catalog=/share/mzdata/catalog",
-            f"check-from-{version_glob}-{filter}.td",
-        )
+    c.run(
+        "testdrive-svc",
+        "--seed=1",
+        "--no-reset",
+        f"--var=upgrade-from-version={from_version}",
+        temp_dir,
+        "--validate-catalog=/share/mzdata/catalog",
+        f"check-from-{version_glob}-{filter}.td",
+    )
 
     c.kill("materialized")
     c.rm("materialized", "testdrive-svc")

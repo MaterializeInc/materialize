@@ -20,7 +20,7 @@ use dataflow_types::{
     sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
     sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
 };
-use expr::{Id, PartitionId};
+use expr::PartitionId;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use ore::collections::CollectionExt;
@@ -48,7 +48,6 @@ use sql::catalog::{
     CatalogItemType as SqlCatalogItemType, SessionCatalog,
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
-use sql::plan::HirRelationExpr;
 use sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
@@ -451,7 +450,7 @@ impl CatalogEntryMap {
                 _ => {}
             }
         }
-        MultiWriteHandle::new(&handles)
+        MultiWriteHandle::new_from_streams(handles.into_iter())
             .ok()
             .map(|write_handle| TablePersistMultiDetails {
                 all_table_ids,
@@ -554,9 +553,7 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub optimized_expr: OptimizedMirRelationExpr,
     pub connector: SourceConnector,
-    pub bare_desc: RelationDesc,
     pub desc: RelationDesc,
 }
 
@@ -986,24 +983,16 @@ impl Catalog {
                 Builtin::Log(log) if config.enable_logging => {
                     let index_name = format!("{}_primary_idx", log.name);
                     let oid = catalog.allocate_oid()?;
-                    let expr = HirRelationExpr::Get {
-                        id: Id::LocalBareSource,
-                        typ: log.variant.desc().typ().clone(),
-                    }
-                    .lower();
-                    let optimized_expr = OptimizedMirRelationExpr::declare_optimized(expr);
                     catalog.state.insert_item(
                         log.id,
                         oid,
                         name.clone(),
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
-                            optimized_expr,
                             connector: dataflow_types::sources::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
                                 persisted_name: None,
                             },
-                            bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
                     );
@@ -2314,10 +2303,6 @@ impl Catalog {
                 })
             }
             Plan::CreateSource(CreateSourcePlan { mut source, .. }) => {
-                let mut optimizer = Optimizer::logical_optimizer();
-                let optimized_expr = optimizer.optimize(source.expr)?;
-                let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
-
                 assert!(
                     table_persist_name.is_none(),
                     "got some table_persist_name while we didn't expect them for a source"
@@ -2340,10 +2325,8 @@ impl Catalog {
                 }
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
-                    optimized_expr,
                     connector: source.connector,
-                    bare_desc: source.bare_desc,
-                    desc: transformed_desc,
+                    desc: source.desc,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {

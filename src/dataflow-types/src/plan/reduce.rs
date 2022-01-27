@@ -60,11 +60,16 @@
 //! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
+use expr::permutation_for_arrangement;
 use expr::AggregateExpr;
 use expr::AggregateFunc;
+use expr::MirScalarExpr;
 use ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+
+use super::AvailableCollections;
 
 /// This enum represents the three potential types of aggregations.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -428,16 +433,17 @@ impl ReducePlan {
     /// This is likely either an empty vector, for no arrangement,
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
-    pub fn keys(&self, key_arity: usize) -> Vec<Vec<expr::MirScalarExpr>> {
-        // Accumulate keys into this vector, and return it.
-        let mut keys = Vec::new();
+    pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
         match self {
-            ReducePlan::DistinctNegated => {}
+            ReducePlan::DistinctNegated => AvailableCollections::new_raw(),
             _ => {
-                keys.push((0..key_arity).map(expr::MirScalarExpr::Column).collect());
+                let key = (0..key_arity)
+                    .map(expr::MirScalarExpr::Column)
+                    .collect::<Vec<_>>();
+                let (permutation, thinning) = permutation_for_arrangement(&key, arity);
+                AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
             }
         }
-        keys
     }
 }
 
@@ -454,18 +460,25 @@ impl KeyValPlan {
     /// Create a new [KeyValPlan] from aggregation arguments.
     pub fn new(
         input_arity: usize,
-        group_key: &[expr::MirScalarExpr],
+        group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],
+        input_permutation_and_new_arity: Option<(HashMap<usize, usize>, usize)>,
     ) -> Self {
         // Form an operator for evaluating key expressions.
         let mut key_mfp = expr::MapFilterProject::new(input_arity)
             .map(group_key.iter().cloned())
             .project(input_arity..(input_arity + group_key.len()));
+        if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity.clone() {
+            key_mfp.permute(input_permutation, new_arity);
+        }
 
         // Form an operator for evaluating value expressions.
         let mut val_mfp = expr::MapFilterProject::new(input_arity)
             .map(aggregates.iter().map(|a| a.expr.clone()))
             .project(input_arity..(input_arity + aggregates.len()));
+        if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity {
+            val_mfp.permute(input_permutation, new_arity);
+        }
 
         key_mfp.optimize();
         let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();

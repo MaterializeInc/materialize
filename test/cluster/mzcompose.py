@@ -51,11 +51,12 @@ SERVICES = [
 ]
 
 
-def workflow_cluster_smoke(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     test_cluster(c, "smoke/*.td")
 
 
-def workflow_cluster_testdrive(c: Composition) -> None:
+def workflow_nightly(c: Composition) -> None:
+    """Run cluster testdrive"""
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
     # Skip tests that use features that are not supported yet.
     files = spawn.capture(

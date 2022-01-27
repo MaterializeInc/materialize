@@ -97,7 +97,8 @@ pub enum ComputeCommand {
     /// Each entry in the vector names a view and provides a frontier after which
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    // TODO: Could be called `AllowTraceCompaction` or `AllowArrangementCompaction`?
+    AllowIndexCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -109,7 +110,8 @@ impl ComputeCommandKind {
     /// Must remain unique over all variants of `Command`.
     pub fn metric_name(&self) -> &'static str {
         match self {
-            ComputeCommandKind::AllowCompaction => "allow_compaction",
+            // TODO: This breaks metrics. Not sure that's a problem.
+            ComputeCommandKind::AllowIndexCompaction => "allow_index_compaction",
             ComputeCommandKind::CancelPeek => "cancel_peek",
             ComputeCommandKind::CreateDataflows => "create_dataflows",
             ComputeCommandKind::DropIndexes => "drop_indexes",
@@ -160,6 +162,11 @@ pub enum StorageCommand {
         /// The associated update (RT or BYO)
         update: crate::types::sources::persistence::TimestampSourceUpdate,
     },
+    /// Enable compaction in sources.
+    ///
+    /// Each entry in the vector names a source and provides a frontier after which
+    /// accumulations must be correct.
+    AllowSourceCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Drop all timestamping info for a source
     DropSourceTimestamping {
         /// The ID id of the formerly timestamped source.
@@ -188,6 +195,7 @@ impl StorageCommandKind {
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
             StorageCommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
             StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
+            StorageCommandKind::AllowSourceCompaction => "allows_source_compaction",
             StorageCommandKind::DropTables => "drop_tables",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::EnablePersistence => "enable_persistence",
@@ -356,9 +364,11 @@ pub trait ComputeClient: Client {
         self.send(Command::Compute(ComputeCommand::CancelPeek { conn_id }))
             .await
     }
-    async fn allow_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
-        self.send(Command::Compute(ComputeCommand::AllowCompaction(frontiers)))
-            .await
+    async fn allow_index_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        self.send(Command::Compute(ComputeCommand::AllowIndexCompaction(
+            frontiers,
+        )))
+        .await
     }
     async fn enable_logging(&mut self, logging_config: LoggingConfig) {
         self.send(Command::Compute(ComputeCommand::EnableLogging(
@@ -414,6 +424,12 @@ pub trait StorageClient: Client {
         }))
         .await
     }
+    async fn allow_source_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        self.send(Command::Storage(StorageCommand::AllowSourceCompaction(
+            frontiers,
+        )))
+        .await
+    }
     async fn drop_source_timestamping(&mut self, id: GlobalId) {
         self.send(Command::Storage(StorageCommand::DropSourceTimestamping {
             id,
@@ -444,18 +460,34 @@ pub struct TimestampBindingFeedback {
     pub bindings: Vec<(GlobalId, PartitionId, Timestamp, MzOffset)>,
 }
 
-/// Responses the worker can provide back to the coordinator.
+/// Responses that the worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    /// A compute response.
+    Compute(ComputeResponse),
+    /// A storage response.
+    Storage(StorageResponse),
+}
+
+/// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ComputeResponse {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
-    /// Timestamp bindings and prior and new frontiers for those bindings for all
-    /// sources
-    TimestampBindings(TimestampBindingFeedback),
     /// The worker's response to a specified (by connection id) peek.
     PeekResponse(u32, PeekResponse),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse),
+}
+
+/// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StorageResponse {
+    /// A list of identifiers, with prior and new upper frontiers.
+    Frontiers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
+    /// Timestamp bindings and prior and new frontiers for those bindings for all
+    /// sources
+    TimestampBindings(TimestampBindingFeedback),
 }
 
 /// A client to a running dataflow server.
@@ -585,7 +617,7 @@ pub mod partitioned {
     use expr::GlobalId;
     use repr::Timestamp;
 
-    use super::Client;
+    use super::{Client, ComputeResponse, StorageResponse};
     use super::{Command, PeekResponse, Response};
 
     /// A client whose implementation is sharded across a number of other clients.
@@ -641,7 +673,7 @@ pub mod partitioned {
     /// This helper type unifies the responses of multiple partitioned
     /// workers in order to present as a single worker.
     pub struct PartitionedClientState {
-        /// Upper frontiers for sources and indexes.
+        /// Upper frontiers for indexes, sources, and sinks.
         uppers: HashMap<GlobalId, MutableAntichain<Timestamp>>,
         /// Pending responses for a peek; returnable once all are available.
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
@@ -688,43 +720,34 @@ pub mod partitioned {
         /// Absorbs a response, and produces response that should be emitted.
         pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
             match message {
-                Response::FrontierUppers(mut list) => {
-                    // Fold updates into the maintained antichain, and report
-                    // any net changes to the minimal antichain itself.
-                    let mut reactions = ChangeBatch::new();
-                    for (id, changes) in list.iter_mut() {
-                        // We may receive changes to identifiers that are no longer tracked;
-                        // do not worry about them in that case (a benign race condition).
-                        if let Some(frontier) = self.uppers.get_mut(id) {
-                            for (time, diff) in frontier.update_iter(changes.drain()) {
-                                reactions.update(time, diff);
-                            }
-                            std::mem::swap(changes, &mut reactions);
-                        } else {
-                            changes.clear();
-                        }
-                    }
-                    // The following block implements a `list.retain()` of non-empty change batches.
-                    // This is more verbose than `list.retain()` because that method cannot mutate
-                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                    let mut cursor = 0;
-                    while let Some((_id, changes)) = list.get_mut(cursor) {
-                        if changes.is_empty() {
-                            list.swap_remove(cursor);
-                        } else {
-                            cursor += 1;
-                        }
-                    }
+                Response::Compute(ComputeResponse::FrontierUppers(list)) => {
+                    let mut list = fold_changes(&mut self.uppers, list);
+
                     // Only produce a result if there are any changes to report.
                     if !list.is_empty() {
                         // Put changes in order of `id` for ease of understanding.
                         list.sort_by_key(|(id, _)| *id);
-                        Some(Response::FrontierUppers(list))
+                        Some(Response::Compute(ComputeResponse::FrontierUppers(list)))
                     } else {
                         None
                     }
                 }
-                Response::PeekResponse(connection, response) => {
+                // TODO: We could also split `self.uppers` into a `compute_uppers` and
+                // `storage_uppers`, but then we'd also have to change `frontier_tracking` to add
+                // tracking antichains to the right hash map.
+                Response::Storage(StorageResponse::Frontiers(list)) => {
+                    let mut list = fold_changes(&mut self.uppers, list);
+
+                    // Only produce a result if there are any changes to report.
+                    if !list.is_empty() {
+                        // Put changes in order of `id` for ease of understanding.
+                        list.sort_by_key(|(id, _)| *id);
+                        Some(Response::Storage(StorageResponse::Frontiers(list)))
+                    } else {
+                        None
+                    }
+                }
+                Response::Compute(ComputeResponse::PeekResponse(connection, response)) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -748,7 +771,9 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&connection);
-                        Some(Response::PeekResponse(connection, response))
+                        Some(Response::Compute(ComputeResponse::PeekResponse(
+                            connection, response,
+                        )))
                     } else {
                         None
                     }
@@ -760,6 +785,42 @@ pub mod partitioned {
                 }
             }
         }
+    }
+
+    /// Folds changes given in `list` into the matching `MutableAntichain`s in `frontiers`. Only
+    /// returns changes when any of the maintained `MutableAntichain` advances.
+    fn fold_changes(
+        frontiers: &mut HashMap<GlobalId, MutableAntichain<Timestamp>>,
+        mut list: Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+    ) -> Vec<(GlobalId, ChangeBatch<Timestamp>)> {
+        // Fold updates into the maintained antichain, and report
+        // any net changes to the minimal antichain itself.
+        let mut reactions = ChangeBatch::new();
+        for (id, changes) in list.iter_mut() {
+            // We may receive changes to identifiers that are no longer tracked;
+            // do not worry about them in that case (a benign race condition).
+            if let Some(frontier) = frontiers.get_mut(id) {
+                for (time, diff) in frontier.update_iter(changes.drain()) {
+                    reactions.update(time, diff);
+                }
+                std::mem::swap(changes, &mut reactions);
+            } else {
+                changes.clear();
+            }
+        }
+        // The following block implements a `list.retain()` of non-empty change batches.
+        // This is more verbose than `list.retain()` because that method cannot mutate
+        // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
+        let mut cursor = 0;
+        while let Some((_id, changes)) = list.get_mut(cursor) {
+            if changes.is_empty() {
+                list.swap_remove(cursor);
+            } else {
+                cursor += 1;
+            }
+        }
+
+        list
     }
 }
 

@@ -94,7 +94,7 @@ SERVICES = [
 ]
 
 
-def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """ "Run testdrive against an SSL-enabled Confluent Platform."""
     parser.add_argument(
         "files",

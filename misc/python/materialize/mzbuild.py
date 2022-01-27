@@ -431,13 +431,6 @@ class Image:
                 if match:
                     self.depends_on.append(match.group(1).decode())
 
-    def env_var_name(self) -> str:
-        """Return the image name formatted for use in an environment variable.
-
-        The name is capitalized and all hyphens are replaced with underscores.
-        """
-        return self.name.upper().replace("-", "_")
-
     def docker_name(self, tag: str) -> str:
         """Return the name of the image on Docker Hub at the given tag."""
         return f"materialize/{self.name}:{tag}"
@@ -527,15 +520,16 @@ class ResolvedImage:
         Returns:
             acquired_from: How the image was acquired.
         """
-        if self.image.publish:
-            try:
-                spawn.runv(
-                    ["docker", "pull", self.spec()],
-                    stdout=sys.stderr.buffer,
-                )
-                return AcquiredFrom.REGISTRY
-            except subprocess.CalledProcessError:
-                pass
+
+        try:
+            spawn.runv(
+                ["docker", "pull", self.spec()],
+                stdout=sys.stderr.buffer,
+            )
+            return AcquiredFrom.REGISTRY
+        except subprocess.CalledProcessError:
+            pass
+
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
@@ -661,6 +655,50 @@ class DependencySet:
             self.dependencies[d.name] = ResolvedImage(
                 d, (self.dependencies[d0] for d0 in d.depends_on)
             )
+
+    def retain_only_unpushed(self) -> Set[ResolvedImage]:
+        """Retain only the dependencies that do not exist on Docker Hub.
+
+        Transitive dependencies of any images that do not exist on Docker Hub
+        are retained as well.
+
+        Returns the pruned images.
+        """
+
+        # Build the reverse dependency graph.
+        used_by: Dict[ResolvedImage, Set[ResolvedImage]] = {}
+        for image in self:
+            used_by[image] = set()
+            for dep in image.dependencies.values():
+                used_by[dep].add(image)
+
+        visited = set()
+        pruned = set()
+
+        def visit(image: ResolvedImage) -> None:
+            # Ignore already-visited images.
+            if image in visited:
+                return
+            visited.add(image)
+
+            # Visit each user of this dependency. This may prune the users.
+            for user in used_by[image].copy():
+                visit(user)
+
+            # If there are no longer any users of this image (or there never
+            # were), and it already exists on Docker Hub, prune it.
+            if len(used_by[image]) == 0 and (
+                not image.publish or is_docker_image_pushed(image.spec())
+            ):
+                for dep in image.dependencies.values():
+                    used_by[dep].remove(image)
+                del self.dependencies[image.name]
+                pruned.add(image)
+
+        for image in used_by:
+            visit(image)
+
+        return pruned
 
     def acquire(self, force_build: bool = False) -> None:
         """Download or build all of the images in the dependency set.

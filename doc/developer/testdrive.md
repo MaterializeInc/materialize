@@ -68,7 +68,7 @@ For full reference documentation on the available mzcompose optoins, consult the
 help text:
 
 ```
-./mzcompose run testdrive --help
+./mzcompose run default --help
 ```
 
 ### Common invocations
@@ -77,26 +77,26 @@ Run testdrive against all files in `test/testdrive` using Confluent Platform and
 Localstack:
 
 ```
-./mzcompose --dev run testdrive
+./mzcompose --dev run default
 ```
 
 Run using Redpanda instead of the Confluent Platform:
 
 ```
-./mzcompose --dev run testdrive --redpanda
+./mzcompose --dev run default --redpanda
 ```
 
 Run testdrive against a single file:
 
 ```
-./mzcompose --dev run testdrive FILE.td
+./mzcompose --dev run default FILE.td
 ```
 
 Run S3 tests against a real AWS region. This expects actual AWS credentials to
 be available (q.v. [our documentation][aws-creds]).
 
 ```
-./mzcompose --dev run testdrive --aws-region=us-east-2 esoteric/s3.td
+./mzcompose --dev run default --aws-region=us-east-2 esoteric/s3.td
 ```
 
 ## Running tests locally without mzcompose
@@ -561,7 +561,7 @@ Creates a named connection to SQL Server. The parameters of the connection are s
 
 ```
 $ sql-server-connect name=sql-server
-server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${env.SA_PASSWORD}
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 ```
 
 #### `$ sql-server-execute name=...`

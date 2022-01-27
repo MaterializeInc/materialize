@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List
+from typing import List, Type
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -29,6 +29,7 @@ from materialize.feature_benchmark.filter import Filter, NoFilter
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
+    RunAtMost,
     TerminationCondition,
 )
 from materialize.mzcompose import Composition, WorkflowArgumentParser
@@ -50,10 +51,11 @@ def make_filter() -> Filter:
     return NoFilter()
 
 
-def make_termination_conditions() -> List[TerminationCondition]:
+def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCondition]:
     return [
         NormalDistributionOverlap(threshold=0.99),
         ProbForMin(threshold=0.95),
+        RunAtMost(threshold=args.max_runs),
     ]
 
 
@@ -84,7 +86,7 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario: Scenario, args: argparse.Namespace
+    c: Composition, scenario: Type[Scenario], args: argparse.Namespace
 ) -> Comparator:
     name = scenario.__name__
     print(f"Now benchmarking {name} ...")
@@ -119,9 +121,10 @@ def run_one_scenario(
             benchmark = Benchmark(
                 mz_id=mz_id,
                 scenario=scenario,
+                scale=args.scale,
                 executor=executor,
                 filter=make_filter(),
-                termination_conditions=make_termination_conditions(),
+                termination_conditions=make_termination_conditions(args),
                 aggregation=make_aggregation(),
             )
 
@@ -135,7 +138,7 @@ def run_one_scenario(
     return comparator
 
 
-def workflow_feature_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
 
     parser.add_argument(
@@ -172,10 +175,27 @@ def workflow_feature_benchmark(c: Composition, parser: WorkflowArgumentParser) -
 
     parser.add_argument(
         "--root-scenario",
+        "--scenario",
         metavar="SCENARIO",
         type=str,
         default="Scenario",
         help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
+    )
+
+    parser.add_argument(
+        "--scale",
+        metavar="+N | -N | N",
+        type=str,
+        default=None,
+        help="Absolute or relative scale to apply.",
+    )
+
+    parser.add_argument(
+        "--max-runs",
+        metavar="N",
+        type=int,
+        default=99,
+        help="Limit the number of executions to N.",
     )
 
     args = parser.parse_args()

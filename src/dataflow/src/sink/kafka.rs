@@ -155,7 +155,7 @@ where
             self.value_desc.clone(),
             sink.as_of.clone(),
             source_ts_histories,
-            shared_frontier.clone(),
+            Rc::clone(&shared_frontier),
             &metrics.kafka,
         );
 
@@ -173,7 +173,6 @@ pub struct SinkMetrics {
     message_send_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     message_delivery_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    messages_in_flight: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SinkMetrics {
@@ -198,8 +197,7 @@ impl SinkMetrics {
             message_delivery_errors_counter: base
                 .message_delivery_errors_counter
                 .get_delete_on_drop_counter(labels.clone()),
-            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels.clone()),
-            messages_in_flight: base.messages_in_flight.get_delete_on_drop_gauge(labels),
+            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels),
         }
     }
 }
@@ -297,11 +295,6 @@ impl KafkaTxProducer {
         let self_timeout = self.timeout;
         task::spawn_blocking(move || self_producer.flush(self_timeout))
             .unwrap_or_else(|_| Err(KafkaError::Canceled))
-    }
-
-    fn in_flight_count(&self) -> i32 {
-        // non-blocking call
-        self.inner.in_flight_count()
     }
 
     fn send<'a, K, P>(
@@ -566,6 +559,18 @@ impl KafkaSinkState {
         Err(last_error)
     }
 
+    async fn flush(&self) -> KafkaResult<()> {
+        let self_producer = self.producer.clone();
+        Retry::default()
+            // Because we only expect to receive timeout errors, we should clamp fairly low.
+            .clamp_backoff(Duration::from_secs(60))
+            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
+            // addressing error strategy holistically.
+            .max_tries(usize::MAX)
+            .retry_async(|_| self_producer.flush())
+            .await
+    }
+
     async fn send_consistency_record(
         &self,
         transaction_id: &str,
@@ -624,7 +629,8 @@ impl KafkaSinkState {
     async fn maybe_emit_progress<'a>(
         &mut self,
         input_frontier: AntichainRef<'a, Timestamp>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<bool, anyhow::Error> {
+        let mut progress_emitted = false;
         // This only looks at the first entry of the antichain.
         // If we ever have multi-dimensional time, this is not correct
         // anymore. There might not even be progress in the first dimension.
@@ -659,6 +665,7 @@ impl KafkaSinkState {
                     if self.transactional {
                         self.commit_transaction().await?
                     }
+                    progress_emitted = true;
                 }
                 self.latest_progress_ts = min_frontier;
             }
@@ -675,7 +682,7 @@ impl KafkaSinkState {
             self.write_frontier.borrow_mut().clear();
         }
 
-        Ok(())
+        Ok(progress_emitted)
     }
 }
 
@@ -988,7 +995,7 @@ where
                     bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
                 };
 
-                bail_err!(s.retry_on_txn_error(|p| p.flush()).await);
+                bail_err!(s.flush().await);
 
                 // sanity check for the continuous updating
                 // of the write frontier below
@@ -1012,33 +1019,31 @@ where
             // updates. Only on worker receives all the updates and we don't want
             // the other workers to also emit END records.
             if is_active_worker {
-                if let Err(e) = s.maybe_emit_progress(frontier.borrow()).await {
-                    // This can happen when the producer has not been
-                    // initialized yet. This also means, that we only start
-                    // emitting continuous updates once some real data
-                    // has been emitted.
-                    debug!("Error writing out progress update: {}", e);
+                match s.maybe_emit_progress(frontier.borrow()).await {
+                    Ok(progress_emitted) => {
+                        if progress_emitted {
+                            // Don't flush if we know there were no records emitted.
+                            // It has a noticeable negative performance impact.
+                            bail_err!(s.flush().await);
+                        }
+                    }
+                    Err(e) => {
+                        // This can happen when the producer has not been
+                        // initialized yet. This also means, that we only start
+                        // emitting continuous updates once some real data
+                        // has been emitted.
+                        debug!("Error writing out progress update: {}", e);
+                    }
                 }
             }
+
+            debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
 
             if !s.pending_rows.is_empty() {
                 // We have some more rows that we need to wait for frontiers to advance before we
                 // can write them out. Let's make sure to reschedule with a small delay to give the
                 // system time to advance.
                 s.activator.activate_after(Duration::from_millis(100));
-                return true;
-            }
-
-            // N.B. Given the `flush` call above, I don't think we should ever end up in this
-            // situation but let's keep the metrics / logging here so we can verify this in real
-            // world use cases.
-            let in_flight = s.producer.in_flight_count();
-            s.metrics.messages_in_flight.set(in_flight as u64);
-            if in_flight > 0 {
-                // We still have messages that need to be flushed out to Kafka
-                // Let's make sure to keep the sink operator around until
-                // we flush them out
-                s.activator.activate_after(Duration::from_secs(5));
                 return true;
             }
 

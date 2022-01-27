@@ -448,5 +448,5 @@ pub struct TablePersistDetails {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TablePersistMultiDetails {
     pub all_table_ids: Vec<PersistId>,
-    pub write_handle: MultiWriteHandle<Row, ()>,
+    pub write_handle: MultiWriteHandle,
 }

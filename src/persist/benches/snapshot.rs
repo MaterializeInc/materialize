@@ -9,9 +9,8 @@
 
 //! Benchmarks for reading from different parts of an [Indexed]
 
-use criterion::{
-    black_box, criterion_group, criterion_main, Bencher, BenchmarkId, Criterion, Throughput,
-};
+use criterion::measurement::WallTime;
+use criterion::{black_box, Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use ore::metrics::MetricsRegistry;
 
 use persist::client::{RuntimeClient, StreamReadHandle};
@@ -47,40 +46,38 @@ fn bench_snapshot<K: Codec + Ord, V: Codec + Ord>(
     b.iter(move || black_box(read_full_snapshot(read, expected_len)))
 }
 
-fn bench_runtime_snapshots<F>(c: &mut Criterion, name: &str, mut new_fn: F)
-where
+fn bench_runtime_snapshots<F>(
+    data: &DataGenerator,
+    g: &mut BenchmarkGroup<'_, WallTime>,
+    mut new_fn: F,
+) where
     F: FnMut(usize) -> Result<RuntimeClient, Error>,
 {
-    let mut group = c.benchmark_group("snapshot");
-
     let mut runtime = new_fn(1).expect("creating index cannot fail");
     let (write, read) = runtime.create_or_load("0");
-    let data = DataGenerator::default();
 
     // Write the data out to the index's unsealed.
     let goodput_bytes = workload::load(&write, &data, false).expect("writing to index cannot fail");
-    group.throughput(Throughput::Bytes(goodput_bytes));
-    group.bench_function(
-        BenchmarkId::new(format!("{}_unsealed_snapshot", name), data.goodput_pretty()),
-        |b| bench_snapshot(&read, data.record_count, b),
-    );
+    g.throughput(Throughput::Bytes(goodput_bytes));
+    g.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
+        bench_snapshot(&read, data.record_count, b)
+    });
 
     // After a seal and a step, it's all moved into the trace part of the index.
     write.seal(u64::MAX).recv().expect("sealing update times");
-    group.bench_function(
-        BenchmarkId::new(format!("{}_trace_snapshot", name), data.goodput_pretty()),
-        |b| bench_snapshot(&read, data.record_count, b),
-    );
+    g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
+        bench_snapshot(&read, data.record_count, b)
+    });
     runtime.stop().expect("stopping runtime cannot fail");
 }
 
-pub fn bench_mem_snapshots(c: &mut Criterion) {
-    bench_runtime_snapshots(c, "mem", |_path| MemRegistry::new().runtime_no_reentrance());
+pub fn bench_mem(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
+    bench_runtime_snapshots(data, g, |_path| MemRegistry::new().runtime_no_reentrance());
 }
 
-pub fn bench_file_snapshots(c: &mut Criterion) {
+pub fn bench_file(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    bench_runtime_snapshots(c, "file", move |path| {
+    bench_runtime_snapshots(data, g, move |path| {
         let blob_dir = temp_dir
             .path()
             .join(format!("snapshot_bench_blob_{}", path));
@@ -95,6 +92,3 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
         )
     });
 }
-
-criterion_group!(benches, bench_mem_snapshots, bench_file_snapshots);
-criterion_main!(benches);

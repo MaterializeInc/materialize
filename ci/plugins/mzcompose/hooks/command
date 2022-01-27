@@ -39,7 +39,7 @@ read_list() {
     [[ ${#result[@]} -gt 0 ]] || return 1
 }
 
-service=$BUILDKITE_PLUGIN_MZCOMPOSE_RUN
+service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
 run_args=("$service")
 if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     for arg in "${result[@]}"; do

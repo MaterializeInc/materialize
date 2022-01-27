@@ -57,7 +57,7 @@ where
                 index_entry.name().to_string(),
                 dataflow_types::IndexDesc {
                     on_id: index.on,
-                    keys: index.keys.clone(),
+                    key: index.keys.clone(),
                 },
             ))
         }
@@ -86,7 +86,7 @@ impl<'a> DataflowBuilder<'a> {
             if let Some((index_id, keys)) = valid_index {
                 let index_desc = IndexDesc {
                     on_id: *id,
-                    keys: keys.to_vec(),
+                    key: keys.to_vec(),
                 };
                 let desc = self
                     .catalog
@@ -114,7 +114,7 @@ impl<'a> DataflowBuilder<'a> {
                                 name: entry.name().to_string(),
                                 connector,
                                 operators: None,
-                                bare_desc: table.desc.clone(),
+                                desc: table.desc.clone(),
                             },
                             *id,
                         );
@@ -145,29 +145,10 @@ impl<'a> DataflowBuilder<'a> {
                             name: entry.name().to_string(),
                             connector: source.connector.clone(),
                             operators: None,
-                            bare_desc: source.bare_desc.clone(),
+                            desc: source.desc.clone(),
                         };
 
-                        if source.optimized_expr.0.is_trivial_source() {
-                            dataflow.import_source(*id, source_connector, *id);
-                        } else {
-                            // From the dataflow layer's perspective, the source transformation is just a view (across which it should be able to do whole-dataflow optimizations).
-                            // Install it as such (giving the source a global transient ID by which the view/transformation can refer to it)
-                            let bare_source_id = GlobalId::Transient(transient_id);
-                            dataflow.import_source(bare_source_id, source_connector, *id);
-                            let mut transformation = source.optimized_expr.clone();
-                            transformation.0.visit_mut_post(&mut |node| {
-                                match node {
-                                    MirRelationExpr::Get { id, .. }
-                                        if *id == Id::LocalBareSource =>
-                                    {
-                                        *id = Id::Global(bare_source_id);
-                                    }
-                                    _ => {}
-                                };
-                            });
-                            self.import_view_into_dataflow(id, &transformation, dataflow)?;
-                        }
+                        dataflow.import_source(*id, source_connector, *id);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
@@ -205,7 +186,7 @@ impl<'a> DataflowBuilder<'a> {
                     let on_type = on_entry.desc().unwrap().typ().clone();
                     let index_desc = IndexDesc {
                         on_id: get_id,
-                        keys: keys.clone(),
+                        key: keys.clone(),
                     };
                     dataflow.import_index(*id, index_desc, on_type, *view_id);
                 }

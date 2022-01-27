@@ -15,9 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::measurement::WallTime;
-use criterion::{
-    criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
@@ -81,35 +79,32 @@ fn bench_set<B: Blob>(writer: &mut B, data: Vec<u8>, b: &mut Bencher) {
     })
 }
 
-pub fn bench_writes_log(c: &mut Criterion) {
+pub fn bench_log(g: &mut BenchmarkGroup<'_, WallTime>) {
     let data = "entry0".as_bytes().to_vec();
 
     let mut mem_log = MemRegistry::new()
         .log_no_reentrance()
         .expect("creating a MemLog cannot fail");
-    c.bench_function("mem_log_write_sync", |b| {
+    g.bench_function("mem_sync", |b| {
         bench_write_sync(&mut mem_log, data.clone(), b)
     });
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let mut file_log = new_file_log("file_log_write_sync", temp_dir.path());
-    c.bench_function("file_log_write_sync", |b| {
+    g.bench_function("file_sync", |b| {
         bench_write_sync(&mut file_log, data.clone(), b)
     });
 }
 
-pub fn bench_writes_blob(c: &mut Criterion) {
-    let mut group = c.benchmark_group("blob_set");
-
+pub fn bench_blob(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
     // Limit the amount of time this test gets to run in order to limit the total
     // number of iterations criterion takes, and consequently, limit the peak
     // memory usage.
-    group.warm_up_time(Duration::from_secs(1));
-    group.measurement_time(Duration::from_secs(1));
+    g.warm_up_time(Duration::from_secs(1));
+    g.measurement_time(Duration::from_secs(1));
 
     let mut blob_val = vec![];
-    let data = DataGenerator::default();
     for batch in data.batches() {
         for ((k, v), t, d) in batch.iter() {
             blob_val.extend_from_slice(k);
@@ -119,12 +114,12 @@ pub fn bench_writes_blob(c: &mut Criterion) {
         }
     }
     assert_eq!(data.goodput_bytes(), u64::cast_from(blob_val.len()));
-    group.throughput(Throughput::Bytes(data.goodput_bytes()));
+    g.throughput(Throughput::Bytes(data.goodput_bytes()));
 
     let mut mem_blob = MemRegistry::new()
         .blob_no_reentrance()
         .expect("creating a MemBlob cannot fail");
-    group.bench_with_input(
+    g.bench_with_input(
         BenchmarkId::new("mem", data.goodput_pretty()),
         &blob_val,
         |b, blob_val| bench_set(&mut mem_blob, blob_val.clone(), b),
@@ -133,7 +128,7 @@ pub fn bench_writes_blob(c: &mut Criterion) {
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let mut file_blob = new_file_blob("file_blob_set", temp_dir.path());
-    group.bench_with_input(
+    g.bench_with_input(
         BenchmarkId::new("file", data.goodput_pretty()),
         &blob_val,
         |b, blob_val| bench_set(&mut file_blob, blob_val.clone(), b),
@@ -221,11 +216,11 @@ fn bench_set_unsealed_batch<B: Blob>(
 }
 
 fn bench_writes_indexed_inner<B: Blob, L: Log>(
-    mut index: Indexed<L, B>,
-    name: &str,
+    data: &DataGenerator,
     g: &mut BenchmarkGroup<WallTime>,
+    name: &str,
+    mut index: Indexed<L, B>,
 ) -> Result<(), Error> {
-    let data = DataGenerator::default();
     let mut sorted_updates = data.records().collect::<Vec<_>>();
     sorted_updates.sort();
     let mut unsorted_updates = sorted_updates.clone();
@@ -255,16 +250,14 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
     Ok(())
 }
 
-pub fn bench_writes_indexed(c: &mut Criterion) {
-    let mut group = c.benchmark_group("indexed_write_drain");
-
+pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
     // Limit the sample size of this benchmark group to constrain it to a more
     // reasonable runtime.
-    group.sample_size(10);
+    g.sample_size(10);
     let mem_indexed = MemRegistry::new()
         .indexed_no_reentrance()
         .expect("failed to create mem indexed");
-    bench_writes_indexed_inner(mem_indexed, "mem", &mut group).expect("running benchmark failed");
+    bench_writes_indexed_inner(data, g, "mem", mem_indexed).expect("running benchmark failed");
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
@@ -275,21 +268,18 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
     let blob_cache = BlobCache::new(
         build_info::DUMMY_BUILD_INFO,
-        metrics.clone(),
-        async_runtime.clone(),
+        Arc::clone(&metrics),
+        Arc::clone(&async_runtime),
         file_blob,
     );
     let compacter = Maintainer::new(blob_cache.clone(), async_runtime);
     let file_indexed = Indexed::new(file_log, blob_cache, compacter, metrics)
         .expect("failed to create file indexed");
-    bench_writes_indexed_inner(file_indexed, "file", &mut group).expect("running benchmark failed");
+    bench_writes_indexed_inner(data, g, "file", file_indexed).expect("running benchmark failed");
 }
 
-pub fn bench_encode_batch(c: &mut Criterion) {
-    let mut group = c.benchmark_group("encode_batch");
-
-    let data = DataGenerator::default();
-    group.throughput(Throughput::Bytes(data.goodput_bytes()));
+pub fn bench_encode_batch(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
+    g.throughput(Throughput::Bytes(data.goodput_bytes()));
     let unsealed = BlobUnsealedBatch {
         desc: SeqNo(0)..SeqNo(1),
         updates: data.batches().collect::<Vec<_>>(),
@@ -300,10 +290,10 @@ pub fn bench_encode_batch(c: &mut Criterion) {
             Antichain::from_elem(1),
             Antichain::from_elem(0),
         ),
-        updates: data.records().collect::<Vec<_>>(),
+        updates: data.batches().collect::<Vec<_>>(),
     };
 
-    group.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
+    g.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
         b.iter(|| {
             // Intentionally alloc a new buf each iter.
             let mut buf = Vec::new();
@@ -311,7 +301,7 @@ pub fn bench_encode_batch(c: &mut Criterion) {
         })
     });
 
-    group.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
+    g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
         b.iter(|| {
             // Intentionally alloc a new buf each iter.
             let mut buf = Vec::new();
@@ -320,9 +310,10 @@ pub fn bench_encode_batch(c: &mut Criterion) {
     });
 }
 
-pub fn bench_writes_blob_cache(c: &mut Criterion) {
-    let mut group = c.benchmark_group("blob_cache_set_unsealed_batch");
-
+pub fn bench_blob_cache_set_unsealed_batch(
+    data: &DataGenerator,
+    g: &mut BenchmarkGroup<'_, WallTime>,
+) {
     // Limit the sample size and measurement time of this benchmark group to both
     // limit the overall runtime to a reasonable length and bound the memory
     // utilization.
@@ -332,9 +323,9 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     // because we want to have a tight limit on the number of iterations, as each
     // incurs substantial memory usage for both file and mem blobs (because of how
     // caching is currently implemented), we have to manually specify both.
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_secs(1));
-    group.measurement_time(Duration::from_secs(1));
+    g.sample_size(10);
+    g.warm_up_time(Duration::from_secs(1));
+    g.measurement_time(Duration::from_secs(1));
 
     let async_runtime = Arc::new(AsyncRuntime::new().expect("failed to create runtime"));
     let mem_blob = MemRegistry::new()
@@ -344,7 +335,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let mut mem_blob_cache = BlobCache::new(
         build_info::DUMMY_BUILD_INFO,
         metrics,
-        async_runtime.clone(),
+        Arc::clone(&async_runtime),
         mem_blob,
     );
 
@@ -360,12 +351,11 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
         file_blob,
     );
 
-    let data = DataGenerator::default();
     let batches = data.batches().collect::<Vec<_>>();
-    group.throughput(Throughput::Bytes(data.goodput_bytes()));
+    g.throughput(Throughput::Bytes(data.goodput_bytes()));
     let desc = SeqNo(0)..SeqNo(1);
 
-    group.bench_with_input(
+    g.bench_with_input(
         BenchmarkId::new("file_unsorted", data.goodput_pretty()),
         &(desc.clone(), batches.clone()),
         |b, (desc, batches)| {
@@ -373,7 +363,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
         },
     );
 
-    group.bench_with_input(
+    g.bench_with_input(
         BenchmarkId::new("mem_unsorted", data.goodput_pretty()),
         &(desc, batches),
         |b, (desc, batches)| {
@@ -381,13 +371,3 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
         },
     );
 }
-
-criterion_group!(
-    benches,
-    bench_writes_log,
-    bench_writes_blob,
-    bench_encode_batch,
-    bench_writes_blob_cache,
-    bench_writes_indexed
-);
-criterion_main!(benches);

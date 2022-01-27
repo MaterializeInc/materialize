@@ -15,5 +15,5 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies/localstack/toxics c
 {
   "name": "localstack",
   "type": "limit_data",
-  "attributes": { "bytes": ${env.TOXIPROXY_BYTES_ALLOWED} }
+  "attributes": { "bytes": ${arg.toxiproxy-bytes-allowed} }
 }

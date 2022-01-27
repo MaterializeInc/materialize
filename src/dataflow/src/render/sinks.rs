@@ -19,7 +19,7 @@ use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::Scope;
 
 use dataflow_types::sinks::*;
-use expr::GlobalId;
+use expr::{permutation_for_arrangement, GlobalId, MapFilterProject};
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use repr::{Datum, Diff, Row, Timestamp};
 
@@ -53,14 +53,33 @@ where
                 needed_additional_tokens.extend_from_slice(addls);
             }
             if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(source_token.clone());
+                needed_source_tokens.push(Rc::clone(&source_token));
             }
         }
 
-        let (collection, _err_collection) = self
+        // TODO[btv] - We should determine the key and permutation to use during planning,
+        // rather than at runtime.
+        //
+        // This is basically an inlined version of the old `as_collection`.
+        let bundle = self
             .lookup_id(expr::Id::Global(sink.from))
-            .expect("Sink source collection not loaded")
-            .as_collection();
+            .expect("Sink source collection not loaded");
+        let collection = if let Some((collection, _err_collection)) = &bundle.collection {
+            collection.clone()
+        } else {
+            let (key, _arrangement) = bundle
+                .arranged
+                .iter()
+                .next()
+                .expect("Invariant violated: at least one collection must be present.");
+            let unthinned_arity = sink.from_desc.arity();
+            let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
+            let mut mfp = MapFilterProject::new(unthinned_arity);
+            mfp.permute(permutation, thinning.len() + key.len());
+            let (collection, _err_collection) =
+                bundle.as_collection_core(mfp, Some((key.clone(), None)));
+            collection
+        };
 
         let collection = apply_sink_envelope(sink, &sink_render, collection);
 
@@ -177,7 +196,7 @@ where
             let rp = Rc::new(RefCell::new(Row::default()));
             let collection = combined.flat_map(move |(mut k, v)| {
                 let max_idx = v.len() - 1;
-                let rp = rp.clone();
+                let rp = Rc::clone(&rp);
                 v.into_iter().enumerate().map(move |(idx, dp)| {
                     let k = if idx == max_idx { k.take() } else { k.clone() };
                     (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))

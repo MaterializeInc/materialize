@@ -10,6 +10,7 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -32,7 +33,8 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use dataflow_types::client::{
-    Command, ComputeCommand, LocalClient, Response, StorageCommand, TimestampBindingFeedback,
+    Command, ComputeCommand, ComputeResponse, LocalClient, Response, StorageCommand,
+    StorageResponse, TimestampBindingFeedback,
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
@@ -237,13 +239,13 @@ where
 
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
-        let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
+        let mut t_logger = BatchLogger::new(Rc::clone(&t_linked), granularity_ms);
         let r_linked = std::rc::Rc::new(EventLink::new());
-        let mut r_logger = BatchLogger::new(r_linked.clone(), granularity_ms);
+        let mut r_logger = BatchLogger::new(Rc::clone(&r_linked), granularity_ms);
         let d_linked = std::rc::Rc::new(EventLink::new());
-        let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
+        let mut d_logger = BatchLogger::new(Rc::clone(&d_linked), granularity_ms);
         let m_linked = std::rc::Rc::new(EventLink::new());
-        let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
+        let mut m_logger = BatchLogger::new(Rc::clone(&m_linked), granularity_ms);
 
         let mut t_traces = HashMap::new();
         let mut r_traces = HashMap::new();
@@ -262,25 +264,25 @@ where
             t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
-                t_linked.clone(),
+                Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
-                r_linked.clone(),
+                Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
-                d_linked.clone(),
+                Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
-                m_linked.clone(),
+                Rc::clone(&m_linked),
                 m_activator.clone(),
             ));
         }
@@ -408,35 +410,35 @@ where
         }
 
         // Install traces as maintained indexes
-        for (log, (trace, permutation)) in t_traces {
+        for (log, trace) in t_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (trace, permutation)) in r_traces {
+        for (log, trace) in r_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (trace, permutation)) in d_traces {
+        for (log, trace) in d_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (trace, permutation)) in m_traces {
+        for (log, trace) in m_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
@@ -473,7 +475,8 @@ where
             self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
-            self.report_frontiers();
+            self.report_compute_frontiers();
+            self.report_storage_frontiers();
             self.update_rt_timestamps();
             self.report_timestamp_bindings();
 
@@ -506,7 +509,7 @@ where
     }
 
     /// Send progress information to the coordinator.
-    fn report_frontiers(&mut self) {
+    fn report_compute_frontiers(&mut self) {
         fn add_progress(
             id: GlobalId,
             new_frontier: &Antichain<Timestamp>,
@@ -550,6 +553,35 @@ where
             }
         }
 
+        if !progress.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
+        }
+    }
+
+    /// Send progress information to the coordinator.
+    fn report_storage_frontiers(&mut self) {
+        fn add_progress(
+            id: GlobalId,
+            new_frontier: &Antichain<Timestamp>,
+            prev_frontier: &Antichain<Timestamp>,
+            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+        ) {
+            let mut changes = ChangeBatch::new();
+            for time in prev_frontier.elements().iter() {
+                changes.update(time.clone(), -1);
+            }
+            for time in new_frontier.elements().iter() {
+                changes.update(time.clone(), 1);
+            }
+            changes.compact();
+            if !changes.is_empty() {
+                progress.push((id, changes));
+            }
+        }
+
+        let mut new_frontier = Antichain::new();
+        let mut progress = Vec::new();
+
         for (id, history) in self.storage_state.ts_histories.iter() {
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
@@ -567,6 +599,7 @@ where
             }
         }
 
+        // TODO: We're lying here: sinks are not sources ...
         for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
@@ -584,7 +617,7 @@ where
         }
 
         if !progress.is_empty() {
-            self.send_response(Response::FrontierUppers(progress));
+            self.send_storage_response(StorageResponse::Frontiers(progress));
         }
     }
 
@@ -643,10 +676,9 @@ where
         }
 
         if !changes.is_empty() || !bindings.is_empty() {
-            self.send_response(Response::TimestampBindings(TimestampBindingFeedback {
-                changes,
-                bindings,
-            }));
+            self.send_storage_response(StorageResponse::TimestampBindings(
+                TimestampBindingFeedback { changes, bindings },
+            ));
         }
         self.last_bindings_feedback = Instant::now();
     }
@@ -732,13 +764,10 @@ where
                 timestamp,
                 conn_id,
                 finishing,
-                mut map_filter_project,
+                map_filter_project,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.compute_state.traces.get(&id).unwrap().clone();
-                trace_bundle
-                    .permutation()
-                    .permute_safe_mfp_plan(&mut map_filter_project);
                 let timestamp_frontier = Antichain::from_elem(timestamp);
                 let empty_frontier = Antichain::new();
                 trace_bundle
@@ -790,14 +819,11 @@ where
                     }
                 }
             }
-            ComputeCommand::AllowCompaction(list) => {
+            ComputeCommand::AllowIndexCompaction(list) => {
                 for (id, frontier) in list {
                     self.compute_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
-                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
-                        ts_history.set_compaction_frontier(frontier.borrow());
-                    }
                 }
             }
             ComputeCommand::EnableLogging(config) => {
@@ -1002,6 +1028,13 @@ where
                     }
                 }
             }
+            StorageCommand::AllowSourceCompaction(list) => {
+                for (id, frontier) in list {
+                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
+                        ts_history.set_compaction_frontier(frontier.borrow());
+                    }
+                }
+            }
             StorageCommand::DropSourceTimestamping { id } => {
                 let prev = self.storage_state.ts_histories.remove(&id);
 
@@ -1043,7 +1076,7 @@ where
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.send_response(Response::PeekResponse(peek.conn_id, response));
+        self.send_compute_response(ComputeResponse::PeekResponse(peek.conn_id, response));
 
         // Log responding to the peek request.
         if let Some(logger) = self.materialized_logger.as_mut() {
@@ -1055,15 +1088,22 @@ where
     fn process_tails(&mut self) {
         let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.send_response(Response::TailResponse(sink_id, response));
+            self.send_compute_response(ComputeResponse::TailResponse(sink_id, response));
         }
     }
 
     /// Send a response to the coordinator.
-    fn send_response(&self, response: Response) {
+    fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(response);
+        let _ = self.response_tx.send(Response::Compute(response));
+    }
+
+    /// Send a response to the coordinator.
+    fn send_storage_response(&self, response: StorageResponse) {
+        // Ignore send errors because the coordinator is free to ignore our
+        // responses. This happens during shutdown.
+        let _ = self.response_tx.send(Response::Storage(response));
     }
 }
 

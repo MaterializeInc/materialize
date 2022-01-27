@@ -15,6 +15,7 @@ isort==5.10.1
 mypy==0.931
 numpy==1.22.1
 pandas==1.4.0
+parameterized==0.8.1
 pdoc3==0.10.0
 psutil==5.9.0
 # psycopg2 intentionally omitted. Use pg8000 from requirements-core.txt instead.

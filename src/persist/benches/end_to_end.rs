@@ -12,8 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
-use criterion::measurement::Measurement;
-use criterion::{criterion_group, criterion_main, Bencher, BenchmarkId, Criterion, Throughput};
+use criterion::measurement::{Measurement, WallTime};
+use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use differential_dataflow::operators::Count;
 use differential_dataflow::AsCollection;
 use ore::cast::CastFrom;
@@ -31,28 +31,25 @@ use persist::runtime::{self, RuntimeConfig};
 use persist::storage::{Blob, LockInfo};
 use persist::workload::{self, DataGenerator};
 
-pub fn bench_end_to_end(c: &mut Criterion) {
-    let mut group = c.benchmark_group("end_to_end");
-
-    let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let nonce = "end_to_end".to_string();
-    let collection_name = "end_to_end".to_string();
-    let mut runtime = create_runtime(temp_dir.path(), &nonce).expect("missing runtime");
-    let (write, _read) = runtime.create_or_load(&collection_name);
-    let data = DataGenerator::default();
-    let goodput_bytes = workload::load(&write, &data, true).expect("error writing data");
-    group.throughput(Throughput::Bytes(goodput_bytes));
-    let expected_frontier = u64::cast_from(data.record_count);
-    runtime.stop().expect("runtime shut down cleanly");
-
-    group.bench_function(
-        BenchmarkId::new("end_to_end", data.goodput_pretty()),
+pub fn bench_replay(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
+    g.throughput(Throughput::Bytes(data.goodput_bytes()));
+    g.bench_function(
+        BenchmarkId::new("replay", data.goodput_pretty()),
         move |b| {
+            let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+            let nonce = "end_to_end".to_string();
+            let collection_name = "end_to_end".to_string();
+            let mut runtime = create_runtime(temp_dir.path(), &nonce).expect("missing runtime");
+            let (write, _read) = runtime.create_or_load(&collection_name);
+            workload::load(&write, &data, true).expect("error writing data");
+            let expected_frontier = u64::cast_from(data.record_count);
+            runtime.stop().expect("runtime shut down cleanly");
+
             bench_read_persisted_source(
                 1,
                 temp_dir.path().to_path_buf(),
-                nonce.clone(),
-                collection_name.clone(),
+                nonce,
+                collection_name,
                 expected_frontier,
                 b,
             )
@@ -127,9 +124,3 @@ fn create_runtime(base_path: &Path, nonce: &str) -> Result<RuntimeClient, Error>
     )?;
     Ok(runtime)
 }
-
-criterion_group! {
-    benches,
-    bench_end_to_end,
-}
-criterion_main!(benches);

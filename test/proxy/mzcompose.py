@@ -63,7 +63,7 @@ test_cases = [
 ]
 
 
-def workflow_proxy(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run the proxy tests."""
     parser.add_argument(
         "--redpanda",

@@ -528,13 +528,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     );
 
                 #[cfg(feature = "tokio-console")]
-                if args.tokio_console {
-                    stack.with(console_subscriber::spawn()).init()
-                } else {
-                    stack.init()
-                }
+                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
 
-                #[cfg(not(feature = "tokio-console"))]
                 stack.init()
             }
             log_file => {
@@ -579,13 +574,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     );
 
                 #[cfg(feature = "tokio-console")]
-                if args.tokio_console {
-                    stack.with(console_subscriber::spawn()).init()
-                } else {
-                    stack.init()
-                }
+                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
 
-                #[cfg(not(feature = "tokio-console"))]
                 stack.init()
             }
         }
@@ -742,7 +732,7 @@ dataflow workers: {workers}",
         let min_step_interval = args.timestamp_frequency;
 
         PersistConfig {
-            runtime: Some(runtime.clone()),
+            runtime: Some(Arc::clone(&runtime)),
             storage,
             user_table_enabled,
             system_table_enabled,

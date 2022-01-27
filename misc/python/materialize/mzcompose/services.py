@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import random
 from typing import List, Optional, Union
 
@@ -33,18 +34,29 @@ class Materialized(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
+        forward_aws_credentials: bool = True,
         volumes: Optional[List[str]] = None,
         volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
     ) -> None:
         if environment is None:
             environment = [
-                "MZ_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
+                "MZ_METRICS_SCRAPING_INTERVAL=1s",
+                # Please think twice before forwarding additional environment
+                # variables from the host, as it's easy to write tests that are
+                # then accidentally dependent on the state of the host machine.
+                #
+                # To dynamically change the environment during a workflow run,
+                # use Composition.override.
+                "MZ_LOG_FILTER",
+            ]
+
+        if forward_aws_credentials:
+            environment += [
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
-                "MZ_METRICS_SCRAPING_INTERVAL=1s",
             ]
 
         # Make sure MZ_DEV=1 is always present
@@ -500,17 +512,21 @@ class Testdrive(Service):
         volumes_extra: Optional[List[str]] = None,
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
+        forward_buildkite_shard: bool = False,
     ) -> None:
         if environment is None:
             environment = [
                 "TMPDIR=/share/tmp",
+                # Please think twice before forwarding additional environment
+                # variables from the host, as it's easy to write tests that are
+                # then accidentally dependent on the state of the host machine.
+                #
+                # To pass arguments to a testdrive script, use the `--var` CLI
+                # option rather than environment variables.
                 "MZ_LOG_FILTER",
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
-                "SA_PASSWORD",
-                "TOXIPROXY_BYTES_ALLOWED",
-                "UPGRADE_FROM_VERSION",
             ]
 
         if volumes is None:
@@ -534,6 +550,14 @@ class Testdrive(Service):
             entrypoint.append("--no-reset")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
+
+        if forward_buildkite_shard:
+            shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+            shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+            if shard:
+                entrypoint += [f"--shard={shard}"]
+            if shard_count:
+                entrypoint += [f"--shard-count={shard_count}"]
 
         if seed and consistent_seed:
             raise RuntimeError("Can't pass `seed` and `consistent_seed` at same time")

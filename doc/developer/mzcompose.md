@@ -28,6 +28,8 @@ cd test/directory
 ./mzcompose run workflow-name
 ```
 
+Almost all mzcompose files have a `default` workflow, so `./mzcompose run default` should do the right thing.
+
 # Where should I put my test?
 
 Depending on the test or the workflow that you intend to create, a suitable place should be chosen:
@@ -118,12 +120,13 @@ A Python workflow is a Python function that contains the steps to execute as par
 
 ```python
 def workflow_simple_test(c: Composition):
+    "Validate that materialized starts and can serve a simple SQL query"
     c.up("materialize")
     c.wait_for_materialized("materialize")
     c.kill("materialize")
 ```
 
-A `mzcompose.py` file can contain multiple workflows.
+A `mzcompose.py` file can contain multiple workflows. All workflow files should contain a `default` workflow, if it makes sense.
 
 ## Naming
 

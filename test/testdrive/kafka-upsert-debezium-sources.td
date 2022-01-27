@@ -62,7 +62,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
   ENVELOPE DEBEZIUM
 
 ! SELECT * FROM start_offset_misconfigured
-contains:Updates and deletes are not allowed for this source! This probably means it was started with `start_offset` and without `UPSERT` semantics.
+contains:Invalid data in source, saw retractions (1) for row that does not exist
 
 ! CREATE MATERIALIZED SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
@@ -185,7 +185,7 @@ id creature
   WITH (deduplication = 'full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
-contains:Debezium deduplication does not make sense with upsert sources
+contains:unexpected parameters for CREATE SOURCE: deduplication
 
 
 # test include metadata

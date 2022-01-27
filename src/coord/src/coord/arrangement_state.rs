@@ -162,7 +162,7 @@ impl<T: Timestamp + Copy> Frontiers<T> {
         I: IntoIterator<Item = T>,
     {
         let since = Rc::clone(&self.since);
-        let since_action = self.since_action.clone();
+        let since_action = Rc::clone(&self.since_action);
         AntichainToken::new(values, move |changes| {
             let changed = since.borrow_mut().update_iter(changes).next().is_some();
             if changed {

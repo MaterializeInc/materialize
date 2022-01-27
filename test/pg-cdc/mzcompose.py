@@ -18,7 +18,7 @@ SERVICES = [
 ]
 
 
-def workflow_pg_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",
         nargs="*",

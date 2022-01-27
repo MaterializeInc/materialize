@@ -63,6 +63,6 @@ def workflow_github_8021(c: Composition) -> None:
     c.kill("materialized")
 
 
-def workflow_all_restart(c: Composition) -> None:
+def workflow_default(c: Composition) -> None:
     workflow_disable_user_indexes(c)
     workflow_github_8021(c)
