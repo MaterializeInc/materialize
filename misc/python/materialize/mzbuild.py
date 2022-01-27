@@ -431,13 +431,6 @@ class Image:
                 if match:
                     self.depends_on.append(match.group(1).decode())
 
-    def env_var_name(self) -> str:
-        """Return the image name formatted for use in an environment variable.
-
-        The name is capitalized and all hyphens are replaced with underscores.
-        """
-        return self.name.upper().replace("-", "_")
-
     def docker_name(self, tag: str) -> str:
         """Return the name of the image on Docker Hub at the given tag."""
         return f"materialize/{self.name}:{tag}"
