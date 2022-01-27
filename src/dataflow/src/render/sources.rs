@@ -22,7 +22,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
-use persist::client::StreamWriteHandle;
+use persist::client::{AtomicCompactionHandle, StreamWriteHandle};
 use persist::operators::source::PersistedSource;
 use persist::operators::stream::{AllowPersistCompaction, AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
@@ -839,19 +839,15 @@ where
         "cannot have multiple instances of a persistent source"
     );
 
-    let sealed_stream = sealed_stream.allow_compaction(
-        format!("{}", source_name).as_str(),
-        write,
-        Rc::clone(&allowed_compaction_frontier),
-    );
-
     // NOTE: It is *very* important to compact the bindings
     // only as far as we compact the data. Otherwise, we might
     // end up in a situation where we don't restore bindings
     // because they are beyond the common seal timestamp.
+    let mut compaction_handle = AtomicCompactionHandle::new(&write);
+    compaction_handle.add_stream(&bindings_write);
     let sealed_stream = sealed_stream.allow_compaction(
-        format!("{}-timestamp-bindings", source_name).as_str(),
-        bindings_write,
+        source_name,
+        compaction_handle,
         Rc::clone(&allowed_compaction_frontier),
     );
 
