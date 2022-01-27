@@ -467,7 +467,7 @@ impl Model {
         F: FnMut(&Model, &BoxId) -> Result<(), E>,
         G: FnMut(&Model, &BoxId) -> Result<(), E>,
     {
-        ore::graph::nonrecursive_dft(
+        ore::graph::try_nonrecursive_dft(
             self,
             root,
             &mut |model, box_id| {
@@ -506,7 +506,7 @@ impl Model {
         F: FnMut(&mut Model, &BoxId) -> Result<(), E>,
         G: FnMut(&mut Model, &BoxId) -> Result<(), E>,
     {
-        ore::graph::nonrecursive_dft_mut(
+        ore::graph::try_nonrecursive_dft_mut(
             self,
             root,
             &mut |model, box_id| {
