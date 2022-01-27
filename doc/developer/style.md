@@ -106,6 +106,21 @@ macros, and type definitions) should have rustdoc examples. This is a great
 standard for libraries, but total overkill for a fast-moving startup like
 Materialize.</small>
 
+### Tokio-specific
+
+You should use the `spawn` and `spawn_blocking` functions in the [`ore::task`]
+module as opposed to the native. There is also a [`RuntimeExt`] trait that adds
+`spawn_named` and `spawn_blocking_named` to [`Arc<Runtime>`] and [`Handle`] from `tokio`.
+They are named different as to avoid clashing with inherent methods.
+
+These functions require a closure that produces a _name_ for the task, to improve the use of
+[`tokio-console`]
+
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rust-api]: https://rust-lang.github.io/api-guidelines/
+[`ore::task`]: https://github.com/MaterializeInc/materialize/blob/a9f51618c950f3a1c22ce4e6096e7d1d8babe6d5/src/ore/src/task.rs
+[`RuntimeExt`]: https://github.com/MaterializeInc/materialize/blob/a9f51618c950f3a1c22ce4e6096e7d1d8babe6d5/src/ore/src/task.rs#L94
+[`Handle`]: https://docs.rs/tokio/latest/tokio/runtime/struct.Handle.html
+[`Arc<Runtime>`]: https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html
+[`tokio-console`]: /doc/developer/guide-tokio-console.md
