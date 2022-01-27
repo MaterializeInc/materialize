@@ -61,7 +61,7 @@ impl<'a> Lowerer<'a> {
         let the_box = self.model.get_box(box_id);
 
         let input = match &the_box.box_type {
-            BoxType::Get(Get { id }) => {
+            BoxType::Get(Get { id, unique_keys }) => {
                 let typ = RelationType::new(
                     the_box
                         .columns
@@ -77,7 +77,7 @@ impl<'a> Lowerer<'a> {
                         })
                         .collect::<Vec<_>>(),
                 )
-                .with_keys(the_box.unique_keys.clone());
+                .with_keys(unique_keys.clone());
                 get_outer.product(SR::Get {
                     id: expr::Id::Global(*id),
                     typ,

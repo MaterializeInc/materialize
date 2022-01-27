@@ -133,10 +133,6 @@ pub(crate) struct QueryBox {
     pub quantifiers: QuantifierSet,
     /// quantifiers ranging over this box
     pub ranging_quantifiers: QuantifierSet,
-    /// list of unique keys exposed by this box. Each unique key is made by
-    /// a list of column positions. Must be re-computed every time the box
-    /// is modified.
-    pub unique_keys: Vec<Vec<usize>>,
     /// whether this box must enforce the uniqueness of its output, it is
     /// guaranteed by structure of the box or it must preserve duplicated
     /// rows from its input boxes. See [DistinctOperation].
@@ -233,6 +229,7 @@ pub(crate) enum BoxType {
 #[derive(Debug)]
 pub(crate) struct Get {
     pub id: expr::GlobalId,
+    pub unique_keys: Vec<Vec<usize>>,
 }
 
 impl From<Get> for BoxType {
@@ -327,7 +324,6 @@ impl Model {
             columns: Vec::new(),
             quantifiers: QuantifierSet::new(),
             ranging_quantifiers: QuantifierSet::new(),
-            unique_keys: Vec::new(),
             distinct: DistinctOperation::Preserve,
         }));
         self.boxes.insert(id, b);

@@ -253,6 +253,7 @@ mod tests {
     fn get_user_id(id: u64) -> Get {
         Get {
             id: expr::GlobalId::User(id),
+            unique_keys: vec![],
         }
     }
 
