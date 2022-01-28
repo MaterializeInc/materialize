@@ -17,6 +17,7 @@ members = [
     "src/dataflowd",
     "src/expr-test-util",
     "src/expr",
+    "src/frontegg-auth",
     "src/http-proxy",
     "src/interchange",
     "src/kafka-util",

@@ -76,6 +76,7 @@ wrappers = [
     "protobuf-parse",
     "pubnub-core",
     "pubnub-hyper",
+    "simple_asn1",
     "sysctl",
     "tiberius",
     "zip",

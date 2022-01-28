@@ -196,6 +196,7 @@ impl Encoder<BackendMessage> for Codec {
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationOk => b'R',
+            BackendMessage::AuthenticationCleartextPassword => b'R',
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
@@ -249,6 +250,9 @@ impl Encoder<BackendMessage> for Codec {
             BackendMessage::CopyDone => (),
             BackendMessage::AuthenticationOk => {
                 dst.put_u32(0);
+            }
+            BackendMessage::AuthenticationCleartextPassword => {
+                dst.put_u32(3);
             }
             BackendMessage::RowDescription(fields) => {
                 dst.put_length_i16(fields.len())?;
@@ -500,6 +504,9 @@ impl Decoder for Codec {
                         // Termination.
                         b'X' => decode_terminate(buf)?,
 
+                        // Authentication.
+                        b'p' => decode_password(buf)?,
+
                         // Copy from flow.
                         b'f' => decode_copy_fail(buf)?,
                         b'd' => decode_copy_data(buf, frame_len)?,
@@ -525,6 +532,12 @@ impl Decoder for Codec {
 fn decode_terminate(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
     // Nothing more to decode.
     Ok(FrontendMessage::Terminate)
+}
+
+fn decode_password(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    Ok(FrontendMessage::Password {
+        password: buf.read_cstr()?.to_owned(),
+    })
 }
 
 fn decode_query(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {

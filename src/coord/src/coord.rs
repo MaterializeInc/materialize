@@ -1059,6 +1059,7 @@ impl Coordinator {
         match cmd {
             Command::Startup {
                 session,
+                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             } => {
@@ -1070,16 +1071,33 @@ impl Coordinator {
                     return;
                 }
 
-                let catalog = self.catalog.for_session(&session);
-                if catalog.resolve_role(session.user()).is_err() {
-                    let _ = tx.send(Response {
-                        result: Err(CoordError::UnknownLoginRole(session.user().into())),
-                        session,
-                    });
-                    return;
+                if self
+                    .catalog
+                    .for_session(&session)
+                    .resolve_role(session.user())
+                    .is_err()
+                {
+                    if !create_user_if_not_exists {
+                        let _ = tx.send(Response {
+                            result: Err(CoordError::UnknownLoginRole(session.user().into())),
+                            session,
+                        });
+                        return;
+                    }
+                    let plan = CreateRolePlan {
+                        name: session.user().to_string(),
+                    };
+                    if let Err(err) = self.sequence_create_role(plan).await {
+                        let _ = tx.send(Response {
+                            result: Err(err),
+                            session,
+                        });
+                        return;
+                    }
                 }
 
                 let mut messages = vec![];
+                let catalog = self.catalog.for_session(&session);
                 if catalog
                     .resolve_database(catalog.default_database())
                     .is_err()

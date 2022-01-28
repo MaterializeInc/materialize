@@ -31,6 +31,7 @@ use crate::session::{EndTransactionAction, RowBatchStream, Session};
 pub enum Command {
     Startup {
         session: Session,
+        create_user_if_not_exists: bool,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     },

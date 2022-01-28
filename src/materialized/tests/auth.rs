@@ -9,16 +9,23 @@
 
 //! Integration tests for TLS encryption and authentication.
 
+use std::collections::HashMap;
+use std::convert::Infallible;
 use std::error::Error;
 use std::fs;
 use std::iter;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use headers::{Authorization, Header, HeaderMapExt};
 use hyper::client::HttpConnector;
+use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use hyper::http::uri::Scheme;
-use hyper::{body, Body, Request, StatusCode, Uri};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
+use jsonwebtoken::{self, EncodingKey};
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -36,9 +43,12 @@ use postgres_openssl::MakeTlsConnector;
 use serde::Deserialize;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use uuid::Uuid;
 
 use materialized::TlsMode;
+use mz_frontegg_auth::{ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication};
 use mz_ore::assert_contains;
+use mz_ore::task::RuntimeExt;
 
 use crate::util::PostgresErrorExt;
 
@@ -183,6 +193,7 @@ enum Assert<E> {
 enum TestCase<'a> {
     Pgwire {
         user: &'static str,
+        password: Option<&'a str>,
         ssl_mode: SslMode,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<Box<dyn Fn(postgres::Error) + 'a>>,
@@ -190,6 +201,7 @@ enum TestCase<'a> {
     Http {
         user: &'static str,
         scheme: Scheme,
+        headers: &'a HeaderMap,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + 'a>>,
     },
@@ -202,6 +214,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
         match test {
             TestCase::Pgwire {
                 user,
+                password,
                 ssl_mode,
                 configure,
                 assert,
@@ -212,6 +225,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     .pg_config()
                     .ssl_mode(*ssl_mode)
                     .user(user)
+                    .password(password.unwrap_or(""))
                     .connect(make_pg_tls(configure));
 
                 match assert {
@@ -226,6 +240,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
             TestCase::Http {
                 user,
                 scheme,
+                headers,
                 configure,
                 assert,
             } => {
@@ -244,11 +259,14 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 let res = runtime.block_on(
                     hyper::Client::builder()
                         .build::<_, Body>(make_http_tls(configure))
-                        .request(
-                            Request::post(uri)
-                                .body(Body::from("sql=SELECT pg_catalog.current_user()"))
-                                .unwrap(),
-                        ),
+                        .request({
+                            let mut req = Request::post(uri);
+                            for (k, v) in headers.iter() {
+                                req.headers_mut().unwrap().insert(k, v.clone());
+                            }
+                            req.body(Body::from("sql=SELECT pg_catalog.current_user()"))
+                                .unwrap()
+                        }),
                 );
                 match assert {
                     Assert::Success => {
@@ -285,9 +303,92 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
     }
 }
 
+// Users is a mapping from (client, secret) -> email address.
+fn start_mzcloud(
+    encoding_key: EncodingKey,
+    tenant_id: Uuid,
+    users: HashMap<(String, String), String>,
+) -> Result<MzCloudServer, anyhow::Error> {
+    #[derive(Clone)]
+    struct Context {
+        encoding_key: EncodingKey,
+        tenant_id: Uuid,
+        users: HashMap<(String, String), String>,
+    }
+    let context = Context {
+        encoding_key,
+        tenant_id,
+        users,
+    };
+    async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+        let body = body::to_bytes(req.into_body()).await.unwrap();
+        let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
+        let email = match context
+            .users
+            .get(&(args.client_id.to_string(), args.secret.to_string()))
+        {
+            Some(email) => email,
+            None => {
+                return Ok(Response::builder()
+                    .status(400)
+                    .body(Body::from("unknown user"))
+                    .unwrap())
+            }
+        };
+        let access_token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+            &Claims {
+                exp: i64::MAX,
+                email: email.to_string(),
+                tenant_id: context.tenant_id,
+                roles: Vec::new(),
+                permissions: Vec::new(),
+            },
+            &context.encoding_key,
+        )
+        .unwrap();
+        let resp = ApiTokenResponse {
+            expires: "".to_string(),
+            expires_in: 0,
+            access_token,
+            refresh_token: "".to_string(),
+        };
+        Ok(Response::new(Body::from(
+            serde_json::to_vec(&resp).unwrap(),
+        )))
+    }
+
+    let runtime = Arc::new(Runtime::new()?);
+    let _guard = runtime.enter();
+    let service = make_service_fn(move |_conn| {
+        let context = context.clone();
+        let service = service_fn(move |req| handle(context.clone(), req));
+        async move { Ok::<_, Infallible>(service) }
+    });
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    let server = Server::bind(&addr).serve(service);
+    let url = format!("http://{}/", server.local_addr());
+    let _handle = runtime.spawn_named(|| "mzcloud-mock-server", server);
+    Ok(MzCloudServer {
+        url,
+        _runtime: runtime,
+    })
+}
+
+struct MzCloudServer {
+    url: String,
+    _runtime: Arc<Runtime>,
+}
+
+fn make_header<H: Header>(h: H) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    map.typed_insert(h);
+    map
+}
+
 #[allow(clippy::unit_arg)]
 #[test]
-fn test_tls() -> Result<(), Box<dyn Error>> {
+fn test_auth() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let ca = Ca::new()?;
@@ -295,9 +396,316 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
         ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
     let (client_cert, client_key) = ca.request_client_cert("materialize")?;
     let (client_cert_other, client_key_other) = ca.request_client_cert("other")?;
+    let (client_cert_cloud, client_key_cloud) = ca.request_client_cert("user@_.com")?;
 
     let bad_ca = Ca::new()?;
     let (bad_client_cert, bad_client_key) = bad_ca.request_client_cert("materialize")?;
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let users = HashMap::from([(
+        (client_id.to_string(), secret.to_string()),
+        "user@_.com".to_string(),
+    )]);
+    let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
+    let frontegg_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &Claims {
+            exp: i64::MAX,
+            email: "user@_.com".to_string(),
+            tenant_id,
+            roles: Vec::new(),
+            permissions: Vec::new(),
+        },
+        &encoding_key,
+    )
+    .unwrap();
+    let bad_tenant_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &Claims {
+            exp: i64::MAX,
+            email: "user@_.com".to_string(),
+            tenant_id: Uuid::new_v4(),
+            roles: Vec::new(),
+            permissions: Vec::new(),
+        },
+        &encoding_key,
+    )
+    .unwrap();
+    let frontegg_server = start_mzcloud(encoding_key, tenant_id, users)?;
+    let frontegg_auth = FronteggAuthentication::new(
+        frontegg_server.url,
+        &ca.pkey.public_key_to_pem()?,
+        tenant_id,
+    )?;
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("{client_id}{secret}");
+    let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
+    let frontegg_header_basic = make_header(frontegg_basic);
+
+    let no_headers = HeaderMap::new();
+
+    // Test connecting to a server that requires client TLS and uses Materialize
+    // Cloud for authentication.
+    let config = util::Config::default()
+        .with_tls(
+            TlsMode::VerifyFull {
+                ca: ca.ca_cert_path(),
+            },
+            &server_cert,
+            &server_key,
+        )
+        .with_frontegg(&frontegg_auth);
+    let server = util::start_server(config)?;
+    run_tests(
+        "TlsMode::VerifyFull, MzCloud",
+        &server,
+        &[
+            // Succeed if the cert user matches the JWT's email.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert_cloud, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key_cloud, SslFiletype::PEM)
+                }),
+                assert: Assert::Success,
+            },
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert_cloud, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key_cloud, SslFiletype::PEM)
+                }),
+                assert: Assert::Success,
+            },
+            // Fail if the cert user doesn't match the JWT's email.
+            TestCase::Pgwire {
+                user: "materialize",
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key, SslFiletype::PEM)
+                }),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "invalid password");
+                })),
+            },
+            TestCase::Http {
+                user: "materialize",
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key, SslFiletype::PEM)
+                }),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_contains!(message, "unauthorized");
+                })),
+            },
+        ],
+    );
+
+    // Test connecting to a server that requires TLS and uses Materialize Cloud for
+    // authentication.
+    let config = util::Config::default()
+        .with_tls(TlsMode::Require, &server_cert, &server_key)
+        .with_frontegg(&frontegg_auth);
+    let server = util::start_server(config)?;
+    run_tests(
+        "TlsMode::Require, MzCloud",
+        &server,
+        &[
+            // TLS with a password should succeed.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Password can be base64 encoded UUID bytes.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: {
+                    let mut buf = vec![];
+                    buf.extend(client_id.as_bytes());
+                    buf.extend(secret.as_bytes());
+                    Some(&base64::encode_config(buf, base64::URL_SAFE))
+                },
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Password can be base64 encoded UUID bytes without padding.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: {
+                    let mut buf = vec![];
+                    buf.extend(client_id.as_bytes());
+                    buf.extend(secret.as_bytes());
+                    Some(&base64::encode_config(buf, base64::URL_SAFE_NO_PAD))
+                },
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Password can include arbitrary special characters.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: {
+                    let mut password = frontegg_password.clone();
+                    password.insert(3, '-');
+                    password.insert_str(12, "@#!");
+                    Some(&password.clone())
+                },
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Bearer auth doesn't need the clientid or secret.
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::bearer(&frontegg_jwt).unwrap()),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // No TLS fails.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Disable,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    let err = err.unwrap_db_error();
+                    assert_eq!(
+                        *err.code(),
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    );
+                    assert_eq!(err.message(), "TLS encryption is required");
+                })),
+            },
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTP,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "HTTPS is required");
+                })),
+            },
+            // Wrong, but existing, username.
+            TestCase::Pgwire {
+                user: "materialize",
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    let err = err.unwrap_db_error();
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            TestCase::Http {
+                user: "materialize",
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::basic("materialize", frontegg_password)),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Wrong password.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: Some("bad password"),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    let err = err.unwrap_db_error();
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::basic(frontegg_user, "bad password")),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // No password.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: None,
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    let err = err.unwrap_db_error();
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &no_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Bad auth scheme
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &HeaderMap::from_iter(vec![(
+                    AUTHORIZATION,
+                    HeaderValue::from_static("Digest username=materialize"),
+                )]),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Bad tenant.
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::bearer(&bad_tenant_jwt).unwrap()),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+        ],
+    );
 
     // Test TLS modes with a server that does not support TLS.
     let server = util::start_server(util::Config::default())?;
@@ -308,6 +716,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Explicitly disabling TLS should succeed.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
@@ -315,12 +724,14 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTP,
+                headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
             // Preferring TLS should fall back to no TLS.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
@@ -328,6 +739,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Requiring TLS should fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
@@ -340,6 +752,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|code, message| {
                     // Connecting to an HTTP server via HTTPS does not yield
@@ -359,9 +772,31 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
         "TlsMode::Require",
         &server,
         &[
+            // Mz Cloud auth should fail.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    let err = err.unwrap_db_error();
+                    assert_eq!(err.message(), r#"role "user@_.com" does not exist"#);
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                })),
+            },
+            // Test that specifying an mzcloud header does nothing and uses the default
+            // user.
+            TestCase::Http {
+                user: "mz_system",
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
             // Disabling TLS should fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
@@ -376,6 +811,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTP,
+                headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -385,6 +821,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Preferring TLS should succeed.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -392,6 +829,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Requiring TLS should succeed.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -399,6 +837,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -428,6 +867,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Disabling TLS should fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
@@ -442,6 +882,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTP,
+                headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -452,6 +893,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
@@ -464,6 +906,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
@@ -473,6 +916,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Connecting with TLS with a bad client certificate should fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
                     b.set_ca_file(bad_ca.ca_cert_path())?;
@@ -486,6 +930,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| {
                     b.set_ca_file(bad_ca.ca_cert_path())?;
                     b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)?;
@@ -499,6 +944,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Connecting with a valid client certificate should succeed.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
@@ -512,6 +958,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 // certificate's user.
                 user: "mz_system",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
                     b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
@@ -524,6 +971,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // CN.
             TestCase::Pgwire {
                 user: "other",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
@@ -559,6 +1007,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Disabling TLS should fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
@@ -573,6 +1022,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTP,
+                headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -583,6 +1033,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
@@ -595,6 +1046,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
@@ -604,6 +1056,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Connecting with TLS with a bad client certificate should fail.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
                     b.set_ca_file(bad_ca.ca_cert_path())?;
@@ -617,6 +1070,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "mz_system",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| {
                     b.set_ca_file(bad_ca.ca_cert_path())?;
                     b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)?;
@@ -630,6 +1084,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // Connecting with a valid client certificate should succeed.
             TestCase::Pgwire {
                 user: "materialize",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
@@ -641,6 +1096,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "materialize",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
                     b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
@@ -653,6 +1109,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // CN.
             TestCase::Pgwire {
                 user: "other",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
@@ -672,6 +1129,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             // appropriate certificate.
             TestCase::Pgwire {
                 user: "other",
+                password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
@@ -683,6 +1141,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 user: "other",
                 scheme: Scheme::HTTPS,
+                headers: &no_headers,
                 configure: Box::new(|b| {
                     b.set_ca_file(ca.ca_cert_path())?;
                     b.set_certificate_file(&client_cert_other, SslFiletype::PEM)?;
