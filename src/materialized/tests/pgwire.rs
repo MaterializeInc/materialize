@@ -27,6 +27,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use ore::collections::CollectionExt;
+use ore::task;
 use pgrepr::{Numeric, Record};
 
 use crate::util::PostgresErrorExt;
@@ -169,7 +170,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
             .connect(postgres::NoTls)
             .await?;
         let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
+        task::spawn(|| "test_conn_startup", async move {
             while let Some(msg) = future::poll_fn(|cx| conn.poll_message(cx)).await {
                 match msg {
                     Ok(msg) => notice_tx.send(msg).unwrap(),

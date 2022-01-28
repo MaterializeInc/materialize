@@ -43,6 +43,7 @@ use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use ore::metrics::MetricsRegistry;
+use ore::task;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -910,7 +911,7 @@ async fn connect(server: &materialized::Server) -> tokio_postgres::Client {
     .await
     .unwrap();
 
-    tokio::spawn(async move {
+    task::spawn(|| "sqllogictest_connect", async move {
         if let Err(e) = connection.await {
             eprintln!("connection error: {}", e);
         }

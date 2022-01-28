@@ -17,7 +17,7 @@ futures = "0.3.19"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
 md-5 = "0.10.0"
-ore = { path = "../ore" }
+ore = { path = "../ore", features = ["task"] }
 pgrepr = { path = "../pgrepr" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 regex = "1.5.4"

@@ -384,7 +384,7 @@ fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, a
                         .body(Body::from(body))
                 }))
             }));
-        tokio::spawn(async {
+        ore::task::spawn(|| "start_server", async {
             match server.await {
                 Ok(()) => (),
                 Err(err) => eprintln!("server error: {}", err),

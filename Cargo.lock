@@ -782,6 +782,7 @@ dependencies = [
  "mz-http-proxy",
  "native-tls",
  "openssl",
+ "ore",
  "reqwest",
  "serde",
  "serde_json",

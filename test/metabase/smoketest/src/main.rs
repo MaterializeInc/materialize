@@ -19,6 +19,7 @@ use metabase::{
     SetupUser, Table, TableField,
 };
 use ore::retry::Retry;
+use ore::task;
 
 const DUMMY_EMAIL: &str = "ci@materialize.io";
 const DUMMY_PASSWORD: &str = "dummydummy1";
@@ -39,7 +40,7 @@ async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error>
     )
     .await
     .context("failed connecting to materialized")?;
-    tokio::spawn(async {
+    task::spawn(|| "metabase_smoketest_mz", async {
         if let Err(e) = conn.await {
             panic!("postgres connection error: {}", e);
         }

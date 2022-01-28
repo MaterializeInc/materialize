@@ -219,7 +219,12 @@ impl Server {
             // in the future itself. If Rust ever supports asynchronous
             // destructors ("AsyncDrop"), those will admit a more natural
             // solution to the problem.
-            future.spawn_if_canceled()
+            //
+            // TODO(guswynn): remove this `.to_string`
+            // It appears there is a bug in the rust compiler related to async and/or closures
+            // that prevents even an explicitly-annotated `&'static str` from
+            // being used here
+            future.spawn_if_canceled(|| "hyper_server".to_string())
         });
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await

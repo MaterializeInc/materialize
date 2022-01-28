@@ -25,6 +25,7 @@ use tokio::task::{self, JoinHandle};
 /// more details.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
+#[allow(clippy::disallowed_method)]
 pub fn spawn<Fut, Name, NameClosure>(_nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
     Name: AsRef<str>,
@@ -41,6 +42,7 @@ where
 /// more details.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
+#[allow(clippy::disallowed_method)]
 pub fn spawn<Fut, Name, NameClosure>(nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
     Name: AsRef<str>,
@@ -57,6 +59,7 @@ where
 /// for more details.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
+#[allow(clippy::disallowed_method)]
 pub fn spawn_blocking<Function, Output, Name, NameClosure>(
     _nc: NameClosure,
     function: Function,
@@ -76,6 +79,7 @@ where
 /// for more details.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
+#[allow(clippy::disallowed_method)]
 pub fn spawn_blocking<Function, Output, Name, NameClosure>(
     nc: NameClosure,
     function: Function,
