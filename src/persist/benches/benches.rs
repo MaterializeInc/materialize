@@ -17,6 +17,7 @@ mod writer;
 pub fn bench_persist(c: &mut Criterion) {
     let data = DataGenerator::default();
 
+    end_to_end::bench_load(&data, &mut c.benchmark_group("end_to_end/load"));
     end_to_end::bench_replay(&data, &mut c.benchmark_group("end_to_end/replay"));
 
     snapshot::bench_mem(&data, &mut c.benchmark_group("snapshot/mem"));
