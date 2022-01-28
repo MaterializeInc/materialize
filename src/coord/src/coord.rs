@@ -112,15 +112,14 @@ use dataflow_types::client::{ComputeClient, StorageClient};
 use dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
 use dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use dataflow_types::{sinks::SinkAsOf, sources::Timeline};
-use dataflow_types::{
-    sinks::{SinkConnector, TailSinkConnector},
-    sources::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector},
-    DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
+use dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
+use dataflow_types::sources::{
+    ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
+use dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
 use expr::{
-    permutation_for_arrangement, ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr,
-    NullaryFunc, OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, NowFn};
@@ -144,7 +143,7 @@ use sql::plan::{
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, TailPlan,
+    SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
 use sql::plan::{OptimizerConfig, StatementDesc, View};
 use transform::Optimizer;
@@ -1742,7 +1741,7 @@ impl Coordinator {
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
         let as_of = SinkAsOf {
-            frontier: self.determine_frontier(sink.from),
+            frontier: self.determine_frontier(&[sink.from]),
             strict: !sink.with_snapshot,
         };
         let ops = vec![
@@ -3219,12 +3218,11 @@ impl Coordinator {
         plan: TailPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let TailPlan {
-            id: source_id,
+            from,
             with_snapshot,
             ts,
             copy_to,
             emit_progress,
-            object_columns,
         } = plan;
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
@@ -3234,46 +3232,65 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Tail)?;
         }
 
-        // Determine the frontier of updates to tail *from*.
-        // Updates greater or equal to this frontier will be produced.
-        let frontier = if let Some(ts) = ts {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(
-                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?
-                    .0,
-            )
-        } else {
-            self.determine_frontier(source_id)
+        let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
+            // Determine the frontier of updates to tail *from*.
+            // Updates greater or equal to this frontier will be produced.
+            let frontier = if let Some(ts) = ts {
+                // If a timestamp was explicitly requested, use that.
+                let ts = coord.determine_timestamp(uses, PeekWhen::AtTimestamp(ts))?;
+                Antichain::from_elem(ts.0)
+            } else {
+                coord.determine_frontier(uses)
+            };
+
+            Ok::<_, CoordError>(SinkDesc {
+                from,
+                from_desc,
+                connector: SinkConnector::Tail(TailSinkConnector::default()),
+                envelope: None,
+                as_of: SinkAsOf {
+                    frontier,
+                    strict: !with_snapshot,
+                },
+            })
         };
-        let sink_name = format!(
-            "tail-source-{}",
-            self.catalog
-                .for_session(session)
-                .humanize_id(source_id)
-                .expect("Source id is known to exist in catalog")
-        );
-        let sink_id = self.catalog.allocate_id()?;
-        session.add_drop_sink(sink_id);
+
+        let dataflow = match from {
+            TailFrom::Id(from_id) => {
+                let from = self.catalog.get_by_id(&from_id);
+                let from_desc = from.desc().unwrap().clone();
+                let sink_id = self.catalog.allocate_id()?;
+                let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id])?;
+                let sink_name = format!("tail-{}", sink_id);
+                self.dataflow_builder()
+                    .build_sink_dataflow(sink_name, sink_id, sink_desc)?
+            }
+            TailFrom::Query {
+                expr,
+                desc,
+                depends_on,
+            } => {
+                let id = self.allocate_transient_id()?;
+                let expr = self.prep_relation_expr(expr, ExprPrepStyle::Static)?;
+                let desc = RelationDesc::new(expr.typ(), desc.iter_names());
+                let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
+                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
+                let mut dataflow_builder = self.dataflow_builder();
+                dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
+                dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
+                dataflow
+            }
+        };
+
+        let (sink_id, sink_desc) = &dataflow.sink_exports[0];
+        session.add_drop_sink(*sink_id);
+        let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
-            .insert(sink_id, PendingTail::new(tx, emit_progress, object_columns));
-        let sink_description = dataflow_types::sinks::SinkDesc {
-            from: source_id,
-            from_desc: self.catalog.get_by_id(&source_id).desc().unwrap().clone(),
-            connector: SinkConnector::Tail(TailSinkConnector::default()),
-            envelope: None,
-            as_of: SinkAsOf {
-                frontier,
-                strict: !with_snapshot,
-            },
-        };
-        let df =
-            self.dataflow_builder()
-                .build_sink_dataflow(sink_name, sink_id, sink_description)?;
-        self.ship_dataflow(df).await;
+            .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
+        self.ship_dataflow(dataflow).await;
 
         let resp = ExecuteResponse::Tailing { rx };
-
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
@@ -3439,7 +3456,7 @@ impl Coordinator {
     /// `source_id`.
     ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(&mut self, source_id: GlobalId) -> Antichain<Timestamp> {
+    fn determine_frontier(&mut self, source_ids: &[GlobalId]) -> Antichain<Timestamp> {
         // This function differs from determine_timestamp because sinks/tail don't care
         // about indexes existing or timestamps being complete. If data don't exist
         // yet (upper = 0), it is not a problem for the sink to wait for it. If the
@@ -3452,7 +3469,7 @@ impl Coordinator {
         // nearest_indexes. We don't care about the indexes being incomplete because
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
-        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(&[source_id]);
+        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(source_ids);
         let mut since = self.indexes.least_valid_since(index_ids.iter().copied());
         since.join_assign(
             &self

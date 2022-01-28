@@ -1262,7 +1262,7 @@ impl_display!(RollbackStatement);
 /// `TAIL`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TailStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub relation: TailRelation<T>,
     pub options: Vec<WithOption>,
     pub as_of: Option<Expr<T>>,
 }
@@ -1270,7 +1270,7 @@ pub struct TailStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for TailStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("TAIL ");
-        f.write_node(&self.name);
+        f.write_node(&self.relation);
         if !self.options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.options));
@@ -1283,6 +1283,26 @@ impl<T: AstInfo> AstDisplay for TailStatement<T> {
     }
 }
 impl_display_t!(TailStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TailRelation<T: AstInfo> {
+    Name(UnresolvedObjectName),
+    Query(Query<T>),
+}
+
+impl<T: AstInfo> AstDisplay for TailRelation<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            TailRelation::Name(name) => f.write_node(&name),
+            TailRelation::Query(query) => {
+                f.write_str("(");
+                f.write_node(query);
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display_t!(TailRelation);
 
 /// `EXPLAIN ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

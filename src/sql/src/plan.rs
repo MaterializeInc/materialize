@@ -33,7 +33,7 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use ::expr::{GlobalId, RowSetFinishing};
+use ::expr::{GlobalId, MirRelationExpr, RowSetFinishing};
 use dataflow_types::{sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector};
 use ore::now::{self, NOW_ZERO};
 use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
@@ -228,7 +228,7 @@ pub struct SetVariablePlan {
 
 #[derive(Debug)]
 pub struct PeekPlan {
-    pub source: ::expr::MirRelationExpr,
+    pub source: MirRelationExpr,
     pub when: PeekWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
@@ -236,12 +236,21 @@ pub struct PeekPlan {
 
 #[derive(Debug)]
 pub struct TailPlan {
-    pub id: GlobalId,
+    pub from: TailFrom,
     pub with_snapshot: bool,
     pub ts: Option<Timestamp>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
-    pub object_columns: usize,
+}
+
+#[derive(Debug)]
+pub enum TailFrom {
+    Id(GlobalId),
+    Query {
+        expr: MirRelationExpr,
+        desc: RelationDesc,
+        depends_on: Vec<GlobalId>,
+    },
 }
 
 #[derive(Debug)]

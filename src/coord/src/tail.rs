@@ -24,23 +24,23 @@ pub(crate) struct PendingTail {
     /// Whether progress information should be emitted
     emit_progress: bool,
     /// Number of columns in the output
-    object_columns: usize,
+    arity: usize,
 }
 
 impl PendingTail {
     /// Create a new [PendingTail].
     /// * The `channel` receives batches of finalized rows.
     /// * If `emit_progress` is true, the finalized rows are either data or progress updates
-    /// * `object_columns` is the arity of the sink relation.
+    /// * `arity` is the arity of the sink relation.
     pub(crate) fn new(
         channel: mpsc::UnboundedSender<Vec<Row>>,
         emit_progress: bool,
-        object_columns: usize,
+        arity: usize,
     ) -> Self {
         Self {
             channel,
             emit_progress,
-            object_columns,
+            arity,
         }
     }
 
@@ -60,7 +60,7 @@ impl PendingTail {
                     packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
                     packer.push(Datum::True);
                     // Fill in the diff column and all table columns with NULL.
-                    for _ in 0..(self.object_columns + 1) {
+                    for _ in 0..(self.arity + 1) {
                         packer.push(Datum::Null);
                     }
                     let row = packer.finish_and_reuse();
