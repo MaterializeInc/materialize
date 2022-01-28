@@ -208,15 +208,11 @@ impl SinkMetrics {
 
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
-    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl SinkProducerContext {
-    pub fn new(metrics: Arc<SinkMetrics>, shutdown_flag: Arc<AtomicBool>) -> Self {
-        SinkProducerContext {
-            metrics,
-            shutdown_flag,
-        }
+    pub fn new(metrics: Arc<SinkMetrics>) -> Self {
+        SinkProducerContext { metrics }
     }
 }
 
@@ -243,7 +239,6 @@ impl ProducerContext for SinkProducerContext {
                     msg.topic(),
                     e
                 );
-                self.shutdown_flag.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -432,7 +427,6 @@ impl KafkaSinkState {
                 config
                     .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
                         Arc::clone(&metrics),
-                        Arc::clone(&shutdown_flag),
                     ))
                     .expect("creating kafka producer for Kafka sink failed"),
             ),
@@ -606,14 +600,6 @@ impl KafkaSinkState {
             info!("shutting down kafka sink: {}", &self.name);
         }
         Err(last_error)
-    }
-
-    async fn begin_transaction(&self) -> KafkaResult<()> {
-        self.producer.begin_transaction().await
-    }
-
-    async fn commit_transaction(&self) -> KafkaResult<()> {
-        self.producer.commit_transaction().await
     }
 
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>) -> KafkaResult<()>
@@ -933,7 +919,7 @@ impl KafkaSinkState {
                 // record the write frontier in the consistency topic.
                 if let Some(consistency_state) = self.sink_state.unwrap_running() {
                     if self.transactional {
-                        self.begin_transaction().await?
+                        self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
                     self.send_consistency_record(
@@ -946,7 +932,7 @@ impl KafkaSinkState {
                     .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
-                        self.commit_transaction().await?
+                        self.retry_on_txn_error(|p| p.commit_transaction()).await?;
                     }
                     progress_emitted = true;
                 }
@@ -1093,6 +1079,8 @@ where
     // our internal state after the send loop
     let mut progress_update = None;
 
+    let shutdown_flush = AtomicBool::new(false);
+
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
     let is_active_worker = (hashed_id as usize) % scope.peers() == scope.index();
@@ -1104,8 +1092,13 @@ where
         async_op!(|_initial_capabilities, frontiers| {
             if s.shutdown_flag.load(Ordering::SeqCst) {
                 debug!("shutting down sink: {}", &s.name);
-                // One last attempt to push anything pending to kafka before closing.
-                let _ = s.producer.flush().await;
+
+                // Approximately one last attempt to push anything pending to kafka before closing.
+                if !shutdown_flush.load(Ordering::Relaxed) {
+                    debug!("flushing kafka producer for sink: {}", &s.name);
+                    let _ = s.producer.flush().await;
+                    shutdown_flush.store(true, Ordering::Relaxed);
+                }
 
                 // Indicate that the sink is closed to everyone else who
                 // might be tracking its write frontier.
