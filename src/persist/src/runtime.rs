@@ -447,15 +447,16 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             for maintenance_req in maintenance_reqs {
                 let sender = self.tx.clone();
                 let maintenance_future = maintenance_req.run_async(&self.maintainer);
-                self.async_runtime.spawn(async move {
-                    let resp = maintenance_future.recv().await;
-                    // The sender can only fail if the runtime is closed, in
-                    // which case we don't need to do anything.
-                    if let Err(crossbeam_channel::SendError(_)) =
-                        sender.send(RuntimeCmd::IndexedCmd(Cmd::Maintenance(resp)))
-                    {
-                    }
-                });
+                self.async_runtime
+                    .spawn_named(|| "persist_maintenance", async move {
+                        let resp = maintenance_future.recv().await;
+                        // The sender can only fail if the runtime is closed, in
+                        // which case we don't need to do anything.
+                        if let Err(crossbeam_channel::SendError(_)) =
+                            sender.send(RuntimeCmd::IndexedCmd(Cmd::Maintenance(resp)))
+                        {
+                        }
+                    });
             }
             self.metrics
                 .cmd_step_seconds
