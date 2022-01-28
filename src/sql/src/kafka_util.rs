@@ -521,6 +521,8 @@ pub fn generate_ccsr_client_config(
     let mut ccsr_options = extract(
         ccsr_options,
         &[
+            Config::string("username"),
+            Config::string("password"),
             // An old migration
             // (https://github.com/MaterializeInc/materialize/blob/c402917b7078a14bc0d0d6330b9c9b177aa73e47/src/coord/src/catalog/migrate.rs#L362)
             // adds this field to kafka-avro WITH options, though now in the CSR case,
