@@ -664,7 +664,11 @@ pub async fn create_state(
                 bail!("materialized catalog path is not a regular file");
             }
             Ok(_) => Some(path.to_path_buf()),
-            Err(e) => return Err(e).context("opening materialized catalog path"),
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("opening materialized catalog path '{}'", path.display())
+                })
+            }
         }
     } else {
         None

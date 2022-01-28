@@ -111,6 +111,7 @@ impl PidFile {
             if err.kind() == io::ErrorKind::AlreadyExists {
                 Err(Error::AlreadyRunning {
                     pid: (old_pid != -1).then(|| old_pid),
+                    workdir: path.as_ref().display().to_string(),
                 })
             } else {
                 Err(Error::Io(err))
@@ -151,6 +152,8 @@ pub enum Error {
     AlreadyRunning {
         /// The PID of the existing process, if it is known.
         pid: Option<i32>,
+        /// The directory that the current materialized process is trying to run in
+        workdir: String,
     },
 }
 
@@ -165,10 +168,11 @@ impl fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "unable to open PID file: {}", e),
             Error::Nul(e) => write!(f, "PID file path contained null bytes: {}", e),
-            Error::AlreadyRunning { pid } => write!(
+            Error::AlreadyRunning { pid, workdir } => write!(
                 f,
-                "process already running (PID: {})",
-                pid.display_or("<unknown>")
+                "process already running (PID: {} data directory: {})",
+                pid.display_or("<unknown>"),
+                workdir
             ),
         }
     }
