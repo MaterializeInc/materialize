@@ -8,15 +8,19 @@
 // by the Apache License, Version 2.0.
 
 //! Generates a Query Graph Model from a [HirRelationExpr].
+//!
+//! The public interface consists of the [`From<HirRelationExpr>`]
+//! implementation of for [`Model`].
 
 use itertools::Itertools;
 use std::collections::HashMap;
 
 use crate::plan::expr::{HirScalarExpr, JoinKind};
-use crate::query_model::{
+use crate::query_model::model::{
     BaseColumn, BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, DistinctOperation, Get,
-    Grouping, Model, OuterJoin, QuantifierType, Select, Values,
+    Grouping, OuterJoin, QuantifierType, Select, Values,
 };
+use crate::query_model::Model;
 
 use crate::plan::expr::HirRelationExpr;
 

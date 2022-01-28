@@ -10,7 +10,7 @@
 //! Defines [`QuantifierConstraint`] and [`QuantifierConstraintValidator`].
 
 use super::{ValidationError, ValidationResult, Validator};
-use crate::query_model::*;
+use crate::query_model::model::*;
 use std::ops::{Bound, RangeBounds};
 
 /// A model for constraints imposed on the input or ranging quantifiers of a query box.
@@ -270,6 +270,7 @@ impl Validator for QuantifierConstraintValidator {
 mod tests {
     use super::constants::*;
     use super::*;
+    use std::collections::HashSet;
 
     /// Tests constraints for quantifiers incident with [`BoxType::Get`],
     /// [`BoxType::TableFunction`], and [`BoxType::Values`] boxes (happy case).

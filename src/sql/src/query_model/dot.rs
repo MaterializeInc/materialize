@@ -8,24 +8,35 @@
 // by the Apache License, Version 2.0.
 
 //! Generates a graphviz graph from a Query Graph Model.
+//!
+//! The public interface consists of the [`Model::as_dot`] method.
 
-use crate::query_model::{BoxId, BoxType, Model, Quantifier, QuantifierId, QueryBox};
+use crate::query_model::model::{
+    BoxId, BoxType, ColumnReference, Quantifier, QuantifierId, QueryBox,
+};
+use crate::query_model::Model;
 use itertools::Itertools;
 use ore::str::separated;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Write};
+
+impl Model {
+    pub fn as_dot(&self, label: &str) -> Result<String, anyhow::Error> {
+        DotGenerator::new().generate(self, label)
+    }
+}
 
 /// Generates a graphviz graph from a Query Graph Model, defined in the DOT language.
 /// See <https://graphviz.org/doc/info/lang.html>.
 #[derive(Debug)]
-pub struct DotGenerator {
+struct DotGenerator {
     output: String,
     indent: u32,
 }
 
 /// Generates a label for a graphviz graph.
 #[derive(Debug)]
-pub enum DotLabel<'a> {
+enum DotLabel<'a> {
     /// Plain label
     SingleRow(&'a str),
     /// A single-column table that has a row for each string in the array.
@@ -38,7 +49,7 @@ pub enum DotLabel<'a> {
 struct DotLabelEscapedString<'a>(&'a str);
 
 impl DotGenerator {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             output: String::new(),
             indent: 0,
@@ -46,12 +57,12 @@ impl DotGenerator {
     }
 
     /// Generates a graphviz graph for the given model, labeled with `label`.
-    pub fn generate(self, model: &Model, label: &str) -> Result<String, anyhow::Error> {
+    fn generate(self, model: &Model, label: &str) -> Result<String, anyhow::Error> {
         self.generate_subgraph(model, model.top_box, label)
     }
 
     /// Generates a graphviz graph for the given subgraph of the model, labeled with `label`.
-    pub fn generate_subgraph(
+    fn generate_subgraph(
         mut self,
         model: &Model,
         start_box: BoxId,
@@ -69,10 +80,9 @@ impl DotGenerator {
         let mut quantifiers = Vec::new();
 
         model
-            .visit_pre_boxes_in_subgraph(
-                &mut |b| -> Result<(), ()> {
-                    let box_id = b.id;
-
+            .try_visit_pre_post_descendants(
+                &mut |m, box_id| -> Result<(), ()> {
+                    let b = m.get_box(*box_id);
                     self.new_line(&format!("subgraph cluster{} {{", box_id));
                     self.inc();
                     self.new_line(
@@ -89,27 +99,26 @@ impl DotGenerator {
                     self.inc();
                     self.new_line("rank = same");
 
-                    if b.quantifiers.len() > 0 {
+                    if b.input_quantifiers().count() > 0 {
                         self.new_line("node [ shape = circle ]");
                     }
 
-                    for q_id in b.quantifiers.iter() {
-                        quantifiers.push(*q_id);
+                    for q in b.input_quantifiers() {
+                        quantifiers.push(q.id);
 
-                        let q = model.get_quantifier(*q_id);
                         self.new_line(&format!(
                             "Q{0} [ {1} ]",
-                            q_id,
+                            q.id,
                             DotLabel::SingleRow(&format!(
                                 "Q{0}({1}){2}",
-                                q_id,
+                                q.id,
                                 q.quantifier_type,
                                 Self::get_quantifier_alias(&q)
                             ))
                         ));
                     }
 
-                    self.add_correlation_info(model, &b);
+                    self.add_correlation_info(b.correlation_info());
 
                     self.dec();
                     self.new_line("}");
@@ -118,6 +127,7 @@ impl DotGenerator {
 
                     Ok(())
                 },
+                &mut |_, _| Ok(()),
                 start_box,
             )
             .unwrap();
@@ -207,24 +217,23 @@ impl DotGenerator {
 
     /// Adds red arrows from correlated quantifiers to the sibling quantifiers they
     /// are correlated with.
-    fn add_correlation_info(&mut self, model: &Model, b: &QueryBox) {
-        let correlation_info: BTreeMap<QuantifierId, Vec<QuantifierId>> = b
-            .correlation_info(model)
-            .into_iter()
-            .map(|(id, column_refs)| {
-                (
-                    id,
-                    column_refs
-                        .iter()
-                        .map(|c| c.quantifier_id)
-                        .sorted()
-                        .unique()
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect();
+    fn add_correlation_info(
+        &mut self,
+        correlation_info: BTreeMap<QuantifierId, HashSet<ColumnReference>>,
+    ) {
+        let q_correlation_info = correlation_info.into_iter().map(|(id, column_refs)| {
+            (
+                id,
+                column_refs
+                    .iter()
+                    .map(|c| c.quantifier_id)
+                    .sorted()
+                    .unique()
+                    .collect::<Vec<_>>(),
+            )
+        });
 
-        for (correlated_q, quantifiers) in correlation_info.iter() {
+        for (correlated_q, quantifiers) in q_correlation_info {
             for q in quantifiers.iter() {
                 self.new_line(&format!(
                     "Q{0} -> Q{1} [ {2}, style = filled, color = red ]",

@@ -7,14 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod dot;
-mod hir;
-mod mir;
-mod model;
-mod rewrite;
-#[cfg(test)]
-mod test;
-mod validator;
+mod graph;
+mod scalar;
 
-pub use model::{BoxId, DistinctOperation, Model, QuantifierId};
-pub use validator::{ValidationError, ValidationResult};
+pub use self::graph::*;
+pub(crate) use scalar::*;

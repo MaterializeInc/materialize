@@ -16,7 +16,7 @@
 
 mod quantifier;
 
-use crate::query_model::*;
+use crate::query_model::model::*;
 use quantifier::*;
 
 impl Model {
@@ -82,7 +82,7 @@ struct ValidatorChain {
 }
 
 impl Validator for ValidatorChain {
-    fn validate(&self, model: &Model) -> Result<(), Vec<validator::ValidationError>> {
+    fn validate(&self, model: &Model) -> Result<(), Vec<ValidationError>> {
         let mut result = Ok(());
 
         for validator in &self.validators {

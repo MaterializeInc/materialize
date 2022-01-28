@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Parts of the Query Graph Model that involve scalar expressions.
+//!
+//! All types in this module are crate-private.
+
 use std::collections::HashSet;
 use std::fmt;
 
@@ -14,7 +18,7 @@ use ore::str::separated;
 use repr::*;
 
 use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::query_model::{QuantifierId, QuantifierSet};
+use crate::query_model::model::{QuantifierId, QuantifierSet};
 use expr::AggregateFunc;
 
 /// Representation for scalar expressions within a query graph model.
@@ -30,9 +34,9 @@ use expr::AggregateFunc;
 ///   the projection of BaseTables and TableFunctions.
 ///
 /// Scalar expressions only make sense within the context of a
-/// [`crate::query_model::QueryBox`], and hence, their name.
+/// [`super::graph::QueryBox`], and hence, their name.
 #[derive(Debug, PartialEq, Clone)]
-pub enum BoxScalarExpr {
+pub(crate) enum BoxScalarExpr {
     /// A reference to a column from a quantifier that either lives in
     /// the same box as the expression or is a sibling quantifier of
     /// an ascendent box of the box that contains the expression.
@@ -73,13 +77,13 @@ pub enum BoxScalarExpr {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
-pub struct ColumnReference {
+pub(crate) struct ColumnReference {
     pub quantifier_id: QuantifierId,
     pub position: usize,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct BaseColumn {
+pub(crate) struct BaseColumn {
     pub position: usize,
     pub column_type: repr::ColumnType,
 }
@@ -166,7 +170,7 @@ impl BoxScalarExpr {
     /// The function `post` runs on child `BoxScalarExpr`s first before the
     /// parent. Optionally, `pre` can return which child `BoxScalarExpr`s, if
     /// any, should be visited (default is to visit all children).
-    pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    pub fn try_visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&Self) -> Option<Vec<&Self>>,
         F2: FnMut(&Self),
@@ -174,10 +178,10 @@ impl BoxScalarExpr {
         let to_visit = pre(self);
         if let Some(to_visit) = to_visit {
             for e in to_visit {
-                e.visit_pre_post(pre, post);
+                e.try_visit_pre_post(pre, post);
             }
         } else {
-            self.visit_children(|e| e.visit_pre_post(pre, post));
+            self.visit_children(|e| e.try_visit_pre_post(pre, post));
         }
         post(self);
     }
@@ -223,7 +227,7 @@ impl BoxScalarExpr {
         context: &QuantifierSet,
         column_refs: &mut HashSet<ColumnReference>,
     ) {
-        self.visit_pre_post(&mut |_| None, &mut |expr| {
+        self.try_visit_pre_post(&mut |_| None, &mut |expr| {
             if let BoxScalarExpr::ColumnReference(c) = expr {
                 if context.contains(&c.quantifier_id) {
                     column_refs.insert(c.clone());

@@ -7,7 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::query_model::{
+//! Converts a Query Graph Model into a [expr::MirRelationExpr].
+//!
+//! The public interface consists of the implementation of
+//! [`Into<expr::MirRelationExpr>`] for [`Model`].
+
+use crate::query_model::model::{
     BaseColumn, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get, Model,
     QuantifierId, QuantifierSet, QuantifierType,
 };
@@ -17,23 +22,23 @@ use ore::id_gen::IdGen;
 use repr::{Datum, RelationType, ScalarType};
 use std::collections::HashMap;
 
+impl From<Model> for expr::MirRelationExpr {
+    fn from(model: Model) -> expr::MirRelationExpr {
+        let mut lowerer = Lowerer::new(&model);
+        let mut id_gen = IdGen::default();
+        expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+            .let_in(&mut id_gen, |id_gen, get_outer| {
+                lowerer.apply(model.top_box, get_outer, &ColumnMap::new(), id_gen)
+            })
+    }
+}
+
 /// Maps a column reference to a specific column position.
 ///
 /// This is used for resolving column references when lowering expressions
 /// on top of a `MirRelationExpr`, where it maps each column reference with
 /// with a column position within the projection of that `MirRelationExpr`.
 type ColumnMap = HashMap<ColumnReference, usize>;
-
-impl Model {
-    pub fn lower(&self) -> expr::MirRelationExpr {
-        let mut lowerer = Lowerer::new(self);
-        let mut id_gen = IdGen::default();
-        expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
-            .let_in(&mut id_gen, |id_gen, get_outer| {
-                lowerer.apply(self.top_box, get_outer, &ColumnMap::new(), id_gen)
-            })
-    }
-}
 
 struct Lowerer<'a> {
     model: &'a Model,
@@ -98,7 +103,7 @@ impl<'a> Lowerer<'a> {
                 // and then apply the correlated ones one by one in order of dependency
                 // on top the join built so far, adding the predicates as soon as their
                 // dependencies are satisfied.
-                let correlation_info = the_box.correlation_info(&self.model);
+                let correlation_info = the_box.correlation_info();
                 if !correlation_info.is_empty() {
                     panic!("correlated joins are not supported yet");
                 }
