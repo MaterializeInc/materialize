@@ -60,7 +60,7 @@ def cli() -> None:
 @OPT_AFFECT_REMOTE
 @click.argument(
     "level",
-    type=click.Choice(["major", "feature", "weekly", "rc"]),
+    type=click.Choice(["major", "weekly", "patch", "rc"]),
 )
 def new_rc(
     create_branch: Optional[str],
