@@ -120,6 +120,8 @@ changes that have not yet been documented.
 
 - Add the `array_cat` function.
 
+- Support casting [`array`] types to [`list`] types.
+
 {{< comment >}}
 Only add new release notes above this line.
 

@@ -3237,6 +3237,7 @@ pub enum UnaryFunc {
         // The expression to cast List1's elements to List2's elements' type
         cast_expr: Box<MirScalarExpr>,
     },
+    CastArrayToListOneDim(CastArrayToListOneDim),
     CastMapToString {
         ty: ScalarType,
     },
@@ -3425,6 +3426,7 @@ derive_unary!(
     CastStringToVarChar,
     CastCharToString,
     CastUuidToString,
+    CastArrayToListOneDim,
     Cos,
     Cosh,
     Sin,
@@ -3597,6 +3599,7 @@ impl UnaryFunc {
             | CastIntervalToTime(_)
             | NegInterval(_)
             | CastUuidToString(_)
+            | CastArrayToListOneDim(_)
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
@@ -3799,6 +3802,7 @@ impl UnaryFunc {
             | CastIntervalToTime(_)
             | NegInterval(_)
             | CastUuidToString(_)
+            | CastArrayToListOneDim(_)
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
@@ -4034,6 +4038,7 @@ impl UnaryFunc {
             | CastIntervalToTime(_)
             | NegInterval(_)
             | CastUuidToString(_)
+            | CastArrayToListOneDim(_)
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
@@ -4285,6 +4290,7 @@ impl UnaryFunc {
             | CastIntervalToTime(_)
             | NegInterval(_)
             | CastUuidToString(_)
+            | CastArrayToListOneDim(_)
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
@@ -5733,6 +5739,7 @@ mod test {
         let mut rti = lowertest::ReflectedTypeInfo::default();
         UnaryFunc::add_to_reflected_type_info(&mut rti);
         for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
+            println!("f_types {:?}", f_types);
             if f_types.is_empty() {
                 let unary_unit_variant: UnaryFunc =
                     serde_json::from_str(&format!("\"{}\"", variant)).unwrap();
