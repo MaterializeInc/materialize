@@ -7,16 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
-use interchange::avro::get_debezium_transaction_schema;
-use mz_avro::types::Value;
+use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::config::ClientConfig;
-use rdkafka::{Message, Offset, TopicPartitionList};
 
 use dataflow_types::sinks::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
@@ -26,9 +22,6 @@ use dataflow_types::sinks::{
 use expr::GlobalId;
 use kafka_util::client::MzClientContext;
 use ore::collections::CollectionExt;
-use rdkafka::consumer::{BaseConsumer, Consumer};
-use rdkafka::error::KafkaError;
-use repr::Timestamp;
 
 use crate::error::CoordError;
 
@@ -39,156 +32,6 @@ pub async fn build(
     match builder {
         SinkConnectorBuilder::Kafka(k) => build_kafka(k, id).await,
         SinkConnectorBuilder::AvroOcf(a) => build_avro_ocf(a, id),
-    }
-}
-
-/// Polls a message from a Kafka Source
-fn get_next_message(
-    consumer: &mut BaseConsumer,
-    timeout: Duration,
-) -> Result<Option<(Vec<u8>, i64)>, anyhow::Error> {
-    if let Some(result) = consumer.poll(timeout) {
-        match result {
-            Ok(message) => match message.payload() {
-                Some(p) => Ok(Some((p.to_vec(), message.offset()))),
-                None => bail!("unexpected null payload"),
-            },
-            Err(KafkaError::PartitionEOF(_)) => Ok(None),
-            Err(err) => bail!("Failed to process message {}", err),
-        }
-    } else {
-        Ok(None)
-    }
-}
-
-// Retrieves the latest committed timestamp from the consistency topic
-fn get_latest_ts(
-    consistency_topic: &str,
-    mut consumer_config: ClientConfig,
-    timeout: Duration,
-) -> Result<Option<Timestamp>, anyhow::Error> {
-    let mut consumer = consumer_config
-        .set(
-            "group.id",
-            format!("materialize-bootstrap-{}", consistency_topic),
-        )
-        .set("isolation.level", "read_committed")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .set("enable.partition.eof", "true")
-        .create::<BaseConsumer>()
-        .context("creating consumer client failed")?;
-
-    // ensure the consistency topic has exactly one partition
-    let partitions =
-        kafka_util::client::get_partitions(consumer.client(), consistency_topic, timeout)
-            .with_context(|| {
-                format!(
-                    "Unable to fetch metadata about consistency topic {}",
-                    consistency_topic
-                )
-            })?;
-
-    if partitions.len() != 1 {
-        bail!(
-            "Consistency topic {} should contain a single partition, but instead contains {} partitions",
-            consistency_topic, partitions.len(),
-            );
-    }
-
-    let partition = partitions.into_element();
-
-    // We scan from the beginning and see if we can find an END record. We have
-    // to do it like this because Kafka Control Batches mess with offsets. We
-    // therefore cannot simply take the last offset from the back and expect an
-    // END message there. With a transactional producer, the OffsetTail(1) will
-    // not point to an END message but a control message. With aborted
-    // transactions, there might even be a lot of garbage at the end of the
-    // topic or in between.
-
-    let mut tps = TopicPartitionList::new();
-    tps.add_partition(consistency_topic, partition);
-    tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
-
-    consumer.assign(&tps).with_context(|| {
-        format!(
-            "Error seeking in consistency topic {}:{}",
-            consistency_topic, partition
-        )
-    })?;
-
-    let (lo, hi) = consumer
-        .fetch_watermarks(consistency_topic, 0, timeout)
-        .map_err(|e| {
-            anyhow!(
-                "Failed to fetch metadata while reading from consistency topic: {}",
-                e
-            )
-        })?;
-
-    // Empty topic.  Return early to avoid unnecesasry call to kafka below.
-    if hi == 0 {
-        return Ok(None);
-    }
-
-    let mut latest_ts = None;
-    let mut latest_offset = None;
-    while let Some((message, offset)) = get_next_message(&mut consumer, timeout)? {
-        debug_assert!(offset >= latest_offset.unwrap_or(0));
-        latest_offset = Some(offset);
-
-        if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)? {
-            if ts >= latest_ts.unwrap_or(0) {
-                latest_ts = Some(ts);
-            }
-        }
-    }
-
-    // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
-    // have no reason to rely on kafka not inserting any internal messages at the beginning.
-    if latest_offset.is_none() {
-        tracing::debug!(
-            "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
-            consistency_topic,
-            partition,
-            lo,
-            hi
-        );
-    }
-    Ok(latest_ts)
-}
-
-// There may be arbitrary messages in this topic that we cannot decode.  We only
-// return an error when we know we've found an END message but cannot decode it.
-fn maybe_decode_consistency_end_record(
-    bytes: &[u8],
-    consistency_topic: &str,
-) -> Result<Option<Timestamp>, anyhow::Error> {
-    // The first 5 bytes are reserved for the schema id/schema registry information
-    let mut bytes = &bytes[5..];
-    let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
-        .context("Failed to decode consistency topic message")?;
-
-    if let Value::Record(ref r) = record {
-        let m: HashMap<String, Value> = r.clone().into_iter().collect();
-        let status = m.get("status");
-        let id = m.get("id");
-        match (status, id) {
-            (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
-                if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Some(ts))
-                } else {
-                    bail!(
-                        "Malformed consistency record, failed to parse timestamp {} in topic {}",
-                        id,
-                        consistency_topic
-                    );
-                }
-            }
-            _ => Ok(None),
-        }
-    } else {
-        Ok(None)
     }
 }
 
@@ -461,18 +304,9 @@ async fn build_kafka(
             .await
             .context("error publishing kafka consistency schemas for sink")?;
 
-            // get latest committed timestamp from consistency topic
-            let gate_ts = if builder.reuse_topic {
-                get_latest_ts(&consistency_topic, config.clone(), Duration::from_secs(10))
-                    .context("error restarting from existing kafka consistency topic for sink")?
-            } else {
-                None
-            };
-
             Some(KafkaSinkConsistencyConnector {
                 topic: consistency_topic,
                 schema_id: consistency_schema_id,
-                gate_ts,
             })
         }
         Some(other) => unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other),

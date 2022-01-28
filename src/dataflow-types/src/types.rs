@@ -1468,10 +1468,6 @@ pub mod sinks {
     pub struct KafkaSinkConsistencyConnector {
         pub topic: String,
         pub schema_id: i32,
-        // gate_ts is the most recent high watermark tailed from the consistency topic
-        // Exactly-once sinks use this to determine when they should start publishing again. This
-        // tells them when they have caught up to where the previous materialize instance stopped.
-        pub gate_ts: Option<Timestamp>,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

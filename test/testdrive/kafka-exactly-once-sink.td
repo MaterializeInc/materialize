@@ -363,5 +363,4 @@ $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key_2 key=tr
 # Verify compaction of exactly once sinks.
 $ verify-timestamp-compaction source=input_csv max-size=3 permit-progress=true
 $ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3 permit-progress=true
-# TODO: Enable when #9514 is fixed!
-#$ verify-timestamp-compaction source=input_kafka_no_byo max-size=3
+$ verify-timestamp-compaction source=input_kafka_no_byo max-size=3

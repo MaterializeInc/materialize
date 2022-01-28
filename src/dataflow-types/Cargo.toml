@@ -31,6 +31,7 @@ num_enum = "0.5.6"
 mz-aws-util = { path = "../aws-util" }
 ore = { path = "../ore" }
 persist = { path = "../persist" }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 repr = { path = "../repr" }
 serde = { version = "1.0.135", features = ["derive"] }
