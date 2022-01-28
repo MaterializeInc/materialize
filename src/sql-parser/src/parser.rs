@@ -1843,7 +1843,7 @@ impl<'a> Parser<'a> {
             parser.expect_keyword(AS)?;
             let tbl_name = UnresolvedObjectName::unqualified(parser.parse_identifier()?.as_str());
             let (col_def, _constraints) = parser.parse_columns(Optional)?;
-            tables.push(PgTable{oid: oid, name: tbl_name, columns: col_def});
+            tables.push(PgTable{oid, name: tbl_name, columns: col_def});
             if parser.consume_token(&Token::Comma) {
                 continue
             } else {
