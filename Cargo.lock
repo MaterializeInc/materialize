@@ -4083,9 +4083,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf-src"
-version = "1.0.4+3.19.1"
+version = "1.0.5+3.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "152161ab96ab8f66c4faeda5179798cc03a6c55c653d314d0e6d2f3ae7a46f1f"
+checksum = "fe57f68bf9767f48f8cbcbceb5da21524e2b1330a821c1c2502c447d8043f078"
 dependencies = [
  "autotools",
 ]
