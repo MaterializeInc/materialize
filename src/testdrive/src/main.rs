@@ -65,6 +65,14 @@ struct Args {
     #[clap(long, value_name = "PASSWORD")]
     cert_password: Option<String>,
 
+    // === CCSR-specific options. ===
+    /// An optional username for the basic auth for the Confluent Schema Registry
+    #[clap(long, value_name = "CCSR_USERNAME")]
+    ccsr_username: Option<String>,
+    /// An optional password for the basic auth for the Confluent Schema Registry
+    #[clap(long, value_name = "CCSR_PASSWORD")]
+    ccsr_password: Option<String>,
+
     // === AWS options. ===
     /// Named AWS region to target for AWS API requests.
     ///
@@ -226,6 +234,8 @@ async fn main() {
         schema_registry_url: args.schema_registry_url,
         cert_path: args.cert,
         cert_pass: args.cert_password,
+        ccsr_password: args.ccsr_password,
+        ccsr_username: args.ccsr_username,
         aws_config,
         aws_account,
         materialized_pgconfig: args.materialized_url,

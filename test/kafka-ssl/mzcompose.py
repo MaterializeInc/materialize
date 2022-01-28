@@ -63,8 +63,16 @@ SERVICES = [
             "SCHEMA_REGISTRY_SSL_TRUSTSTORE_PASSWORD=mzmzmz",
             "SCHEMA_REGISTRY_SCHEMA_REGISTRY_INTER_INSTANCE_PROTOCOL=https",
             "SCHEMA_REGISTRY_SSL_CLIENT_AUTH=true",
+            "SCHEMA_REGISTRY_AUTHENTICATION_METHOD=BASIC",
+            "SCHEMA_REGISTRY_AUTHENTICATION_ROLES=user",
+            "SCHEMA_REGISTRY_AUTHENTICATION_REALM=SchemaRegistry",
+            "SCHEMA_REGISTRY_OPTS=-Djava.security.auth.login.config=/etc/schema-registry/jaas_config.conf",
         ],
-        volumes=["secrets:/etc/schema-registry/secrets"],
+        volumes=[
+            "secrets:/etc/schema-registry/secrets",
+            "./jaas_config.conf:/etc/schema-registry/jaas_config.conf",
+            "./users.properties:/etc/schema-registry/users.properties",
+        ],
         bootstrap_server_type="SSL",
     ),
     Materialized(
@@ -85,6 +93,8 @@ SERVICES = [
             "--materialized-url=postgres://materialize@materialized:6875 "
             "--cert=/share/secrets/producer.p12 "
             "--cert-password=mzmzmz "
+            "--ccsr-password=sekurity "
+            "--ccsr-username=materialize "
             '"$$@"',
         ],
         volumes_extra=["secrets:/share/secrets"],
