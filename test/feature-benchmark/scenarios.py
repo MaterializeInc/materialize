@@ -670,6 +670,10 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 # Make sure we are fully caught up before continuing
 > SELECT COUNT(*) FROM s1;
 {self.n()}
+
+# Give time for any background tasks (e.g. compaction) to settle down
+> SELECT mz_internal.mz_sleep(10)
+<null>
 """
         )
 
