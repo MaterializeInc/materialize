@@ -114,6 +114,30 @@ from materialize.mzcompose import PythonService
 SERVICES = [PythonService(image = "vendor/container")]
 ```
 
+## Dealing with volumes
+
+All compositions have a set of default volumes, but it is possible to add to these or completely replace them.
+
+Equivalently to the declaration of services via the `SERVICES` top-level constant, you may specify a `VOLUMES` variable to declare all volumes within a composition. This will overwrite the default volumes.
+
+You may instead specify `VOLUMES_EXTRA` to preserve the default volumes and add arbitrary extra volumes.
+
+The type of both `VOLUMES` and `VOLUMES` extra is a dict from name to optional volume spec, as a dict. See [the docker-compose docs][volumes-doc] for full details of possible values. Setting the value to `None` will create a named persistent volume which should be sufficient for most uses:
+
+```python
+SERVICES = [
+    Materialized(volumes=["unique-workdir:/share/mzdata"])
+]
+
+VOLUMES_EXTRA = {
+    "unique-workdir": None
+}
+```
+
+Note that you can specify at most one explicit volume declaration: either `volumes:` in `mzcompose.yml`, `VOLUMES`, or `VOLUMES_EXTRA`.
+
+[volumes-doc]: https://docs.docker.com/compose/compose-file/compose-file-v3/#volume-configuration-reference
+
 # Dealing with workflows
 
 A Python workflow is a Python function that contains the steps to execute as part of the workflow

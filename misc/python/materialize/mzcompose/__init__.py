@@ -223,6 +223,15 @@ class Composition:
             for python_service in getattr(module, "SERVICES", []):
                 compose["services"][python_service.name] = python_service.config
 
+            if volumes := getattr(module, "VOLUMES", None):
+                compose["volumes"] = volumes
+            if volumes_extra := getattr(module, "VOLUMES_EXTRA", None):
+                if "volumes" in compose:
+                    raise UIError(
+                        "VOLUMES_EXTRA cannot be set with other explicit volumes"
+                    )
+                compose["volumes"] = volumes_extra
+
         # Add default volumes
         compose.setdefault("volumes", {}).update(
             {
