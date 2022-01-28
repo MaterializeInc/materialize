@@ -23,7 +23,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
-use tokio_postgres::types::{PgLsn, Type};
+use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
