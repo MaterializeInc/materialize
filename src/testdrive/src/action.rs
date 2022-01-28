@@ -72,6 +72,10 @@ pub struct Config {
     pub cert_path: Option<String>,
     /// An optional password for the TLS certificate.
     pub cert_pass: Option<String>,
+    /// An optional username for the basic auth for the Confluent Schema Registry
+    pub ccsr_username: Option<String>,
+    /// An optional password for the basic auth for the Confluent Schema Registry
+    pub ccsr_password: Option<String>,
     /// The account for testdrive to use when connecting to AWS.
     pub aws_account: String,
     /// The configuration for testdrive to use when connecting to AWS.
@@ -704,6 +708,10 @@ pub async fn create_state(
             let ident = ccsr::tls::Identity::from_pkcs12_der(cert, pass)
                 .context("reading keystore file as pkcs12")?;
             ccsr_config = ccsr_config.identity(ident);
+        }
+
+        if let Some(ccsr_username) = &config.ccsr_username {
+            ccsr_config = ccsr_config.auth(ccsr_username.clone(), config.ccsr_password.clone());
         }
 
         ccsr_config.build().context("Creating CCSR client")?

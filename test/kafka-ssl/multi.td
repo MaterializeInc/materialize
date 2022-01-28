@@ -46,7 +46,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   WITH (
       ssl_key_location = '/share/secrets/materialized-schema-registry.key',
       ssl_certificate_location = '/share/secrets/materialized-schema-registry.crt',
-      ssl_ca_location = '/share/secrets/ca.crt'
+      ssl_ca_location = '/share/secrets/ca.crt',
+      username = "materialize",
+      password = "sekurity"
   )
   ENVELOPE DEBEZIUM
 
@@ -73,7 +75,9 @@ a
       ssl_key_location = '/share/secrets/materialized-kafka.key',
       ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
       ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password = 'mzmzmz'
+      ssl_key_password = 'mzmzmz',
+      username = "materialize",
+      password = "sekurity"
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
