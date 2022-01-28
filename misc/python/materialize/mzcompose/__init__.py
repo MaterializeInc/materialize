@@ -221,7 +221,10 @@ class Composition:
                     self.workflows[name] = fn
 
             for python_service in getattr(module, "SERVICES", []):
-                compose["services"][python_service.name] = python_service.config
+                name = python_service.name
+                if name in compose["services"]:
+                    raise UIError(f"service {name!r} specified more than once")
+                compose["services"][name] = python_service.config
 
         # Add default volumes
         compose.setdefault("volumes", {}).update(
