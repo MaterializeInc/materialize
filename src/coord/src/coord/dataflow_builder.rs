@@ -116,7 +116,6 @@ impl<'a> DataflowBuilder<'a> {
                                 operators: None,
                                 desc: table.desc.clone(),
                             },
-                            *id,
                         );
                     }
                     CatalogItem::Source(source) => {
@@ -172,7 +171,7 @@ impl<'a> DataflowBuilder<'a> {
                             desc: source.desc.clone(),
                         };
 
-                        dataflow.import_source(*id, source_connector, *id);
+                        dataflow.import_source(*id, source_connector);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();

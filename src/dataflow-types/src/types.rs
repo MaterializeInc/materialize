@@ -79,7 +79,7 @@ pub struct BuildDesc<View> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DataflowDescription<View> {
     /// Sources made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, (crate::types::sources::SourceDesc, GlobalId)>,
+    pub source_imports: BTreeMap<GlobalId, crate::types::sources::SourceDesc>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -139,16 +139,8 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     }
 
     /// Imports a source and makes it available as `id`.
-    ///
-    /// The `orig_id` identifier must be set correctly, and is used to index various
-    /// internal data structures. Little else is known about it.
-    pub fn import_source(
-        &mut self,
-        id: GlobalId,
-        description: crate::types::sources::SourceDesc,
-        orig_id: GlobalId,
-    ) {
-        self.source_imports.insert(id, (description, orig_id));
+    pub fn import_source(&mut self, id: GlobalId, description: crate::types::sources::SourceDesc) {
+        self.source_imports.insert(id, description);
     }
 
     /// Binds to `id` the relation expression `view`.
@@ -230,7 +222,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
+        for (source_id, desc) in self.source_imports.iter() {
             if source_id == id {
                 return desc.desc.arity();
             }

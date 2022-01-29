@@ -91,7 +91,7 @@ where
             .source_imports
             .iter()
             .filter_map(|(id, source_desc)| {
-                if let Some(operator) = &source_desc.0.operators {
+                if let Some(operator) = &source_desc.operators {
                     Some((*id, operator))
                 } else {
                     None

@@ -877,7 +877,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 .arranged
                 .push((key, permutation, thinning));
         }
-        for (_source_desc, id) in desc.source_imports.values() {
+        for id in desc.source_imports.keys() {
             arrangements
                 .entry(Id::Global(*id))
                 .or_insert_with(AvailableCollections::new_raw);
