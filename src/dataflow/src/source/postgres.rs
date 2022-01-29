@@ -209,36 +209,33 @@ impl PostgresSourceReader {
                 .await?;
 
             pin_mut!(reader);
-            let mut data = vec![];
             while let Some(Ok(b)) = reader.next().await {
-                data.extend(b.as_ref());
-            }
+                // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
+                // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
+                let mut parser = pgwire::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+                while !parser.is_eof() && !parser.is_end_of_copy_marker() {
+                    let mut mz_row = Row::default();
+                    mz_row.push(relation_id);
 
-            // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
-            // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
-            let mut parser = pgwire::CopyTextFormatParser::new(&data, "\t", "\\N");
-            while !parser.is_eof() && !parser.is_end_of_copy_marker() {
-                let mut mz_row = Row::default();
-                mz_row.push(relation_id);
-
-                try_fatal!(mz_row.push_list_with(|rp| -> Result<(), io::Error> {
-                    for col in 0..info.schema.len() {
-                        if col > 0 {
-                            parser.expect_column_delimiter()?;
+                    try_fatal!(mz_row.push_list_with(|rp| -> Result<(), io::Error> {
+                        for col in 0..info.schema.len() {
+                            if col > 0 {
+                                parser.expect_column_delimiter()?;
+                            }
+                            let raw_value = parser.consume_raw_value()?;
+                            if let Some(raw_value) = raw_value {
+                                rp.push(Datum::String(std::str::from_utf8(raw_value).unwrap()));
+                            } else {
+                                rp.push(Datum::Null);
+                            }
                         }
-                        let raw_value = parser.consume_raw_value()?;
-                        if let Some(raw_value) = raw_value {
-                            rp.push(Datum::String(std::str::from_utf8(raw_value).unwrap()));
-                        } else {
-                            rp.push(Datum::Null);
-                        }
-                    }
-                    parser.expect_end_of_line()?;
-                    Ok(())
-                }));
+                        parser.expect_end_of_line()?;
+                        Ok(())
+                    }));
 
-                try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+                    try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
+                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+                }
             }
 
             self.metrics.tables.inc();
