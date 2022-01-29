@@ -1583,6 +1583,18 @@ where
             .collect();
 
         if !index_since_updates.is_empty() {
+            // TEMPORARY HACK: When since_updates got split into
+            // index_since_updates and source_since_updates, it looks like the
+            // ones persist was looking for ended up here (the wrong one). This
+            // means the compaction frontier for persisted tables never
+            // advances. Since we run a background test of persist on two system
+            // tables, this means unbounded storage (disk) usage, which is very
+            // much not correct. Putting this call to persist back in as a
+            // workaround while we fix the bug the proper way, which is making
+            // sure the messages end up in source_since_updates instead.
+            //
+            // See #10300 for context.
+            self.persisted_table_allow_compaction(&index_since_updates);
             self.dataflow_client
                 .allow_index_compaction(index_since_updates)
                 .await;
