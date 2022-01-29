@@ -4093,7 +4093,7 @@ where
             for &id in &tables_to_drop {
                 self.sources.remove(&id);
             }
-            self.dataflow_client.drop_tables(tables_to_drop).await;
+            self.dataflow_client.drop_sources(tables_to_drop).await;
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {

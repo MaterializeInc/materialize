@@ -262,7 +262,7 @@ fn get_decoder(
         | DataEncoding::Regex(_) => {
             let after_delimiting = match encoding {
                 DataEncoding::Regex(RegexEncoding { regex }) => {
-                    PreDelimitedFormat::Regex(regex, Default::default())
+                    PreDelimitedFormat::Regex(regex.0, Default::default())
                 }
                 DataEncoding::Protobuf(encoding) => {
                     PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(

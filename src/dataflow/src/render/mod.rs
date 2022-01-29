@@ -165,6 +165,10 @@ pub struct ComputeState {
 pub struct StorageState {
     /// Handles to local inputs, keyed by ID.
     pub local_inputs: HashMap<GlobalId, LocalInput>,
+    /// Source descriptions that have been created and not yet dropped.
+    ///
+    /// The second `GlobalId` is the `orig_id` which I do not understand.
+    pub source_descriptions: HashMap<GlobalId, (dataflow_types::sources::SourceDesc, GlobalId)>,
     /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.

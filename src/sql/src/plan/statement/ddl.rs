@@ -1218,7 +1218,9 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         },
         Format::Regex(regex) => {
             let regex = Regex::new(&regex)?;
-            DataEncoding::Regex(RegexEncoding { regex })
+            DataEncoding::Regex(RegexEncoding {
+                regex: repr::adt::regex::Regex(regex),
+            })
         }
         Format::Csv { columns, delimiter } => {
             let columns = match columns {

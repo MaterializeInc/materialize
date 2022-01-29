@@ -144,6 +144,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
             },
             storage_state: StorageState {
                 local_inputs: HashMap::new(),
+                source_descriptions: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 sink_write_frontiers: HashMap::new(),
@@ -834,9 +835,26 @@ where
 
     fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::DropTables(names) => {
+            StorageCommand::CreateSources(sources) => {
+                for (source_id, (description, orig_id)) in sources.into_iter() {
+                    // Assert that a source is not recreated with a new description.
+                    if let Some((d, o)) = self.storage_state.source_descriptions.get(&source_id) {
+                        assert_eq!(d, &description);
+                        assert_eq!(o, &orig_id);
+                    }
+                    self.storage_state
+                        .source_descriptions
+                        .insert(source_id, (description, orig_id));
+                }
+            }
+            StorageCommand::DropSources(names) => {
+                // The only sources that currently require actions are local inputs.
                 for name in names {
                     self.storage_state.local_inputs.remove(&name);
+                    let prior = self.storage_state.source_descriptions.remove(&name);
+                    if prior.is_none() {
+                        panic!("Source dropped without prior creation: {}", name);
+                    }
                 }
             }
 
