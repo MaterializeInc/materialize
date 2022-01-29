@@ -258,11 +258,13 @@ pub struct LoggingConfig {
 }
 
 /// Configures a coordinator.
-pub struct Config<'a, C>
+pub struct Config<'a, C, S>
 where
-    C: dataflow_types::client::Client,
+    C: dataflow_types::client::ComputeClient,
+    S: dataflow_types::client::StorageClient,
 {
-    pub dataflow_client: C,
+    pub compute_client: C,
+    pub storage_client: S,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
     pub timestamp_frequency: Duration,
@@ -278,12 +280,15 @@ where
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<C>
+pub struct Coordinator<C, S>
 where
-    C: dataflow_types::client::Client,
+    C: dataflow_types::client::ComputeClient,
+    S: dataflow_types::client::StorageClient,
 {
     /// A client to a running dataflow cluster.
-    dataflow_client: C,
+    compute_client: C,
+    /// A client to a running storage layer.
+    storage_client: S,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -409,9 +414,10 @@ macro_rules! guard_write_critical_section {
     };
 }
 
-impl<C> Coordinator<C>
+impl<C, S> Coordinator<C, S>
 where
-    C: ComputeClient + StorageClient + 'static,
+    C: ComputeClient + 'static,
+    S: StorageClient + 'static,
 {
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
@@ -742,7 +748,8 @@ where
                 biased;
 
                 Some(m) = internal_cmd_rx.recv() => m,
-                Some(m) = self.dataflow_client.recv() => Message::Worker(m),
+                Some(m) = self.storage_client.recv() => Message::Worker(m),
+                Some(m) = self.compute_client.recv() => Message::Worker(m),
                 Some(m) = metric_scraper_stream.next() => m,
                 m = cmd_rx.recv() => match m {
                     None => break,
@@ -826,7 +833,7 @@ where
             );
         }
 
-        self.dataflow_client
+        self.storage_client
             .advance_all_table_timestamps(advance_to)
             .await;
     }
@@ -928,7 +935,7 @@ where
 
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
-                    self.dataflow_client
+                    self.storage_client
                         .update_durability_frontiers(durability_updates)
                         .await;
                 }
@@ -1037,7 +1044,7 @@ where
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
-        self.dataflow_client
+        self.storage_client
             .advance_source_timestamp(id, update)
             .await;
     }
@@ -1583,7 +1590,7 @@ where
             .collect();
 
         if !index_since_updates.is_empty() {
-            self.dataflow_client
+            self.compute_client
                 .allow_index_compaction(index_since_updates)
                 .await;
         }
@@ -1597,7 +1604,7 @@ where
 
         if !source_since_updates.is_empty() {
             self.persisted_table_allow_compaction(&source_since_updates);
-            self.dataflow_client
+            self.storage_client
                 .allow_source_compaction(source_since_updates)
                 .await;
         }
@@ -1717,7 +1724,7 @@ where
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
             // Allow dataflow to cancel any pending peeks.
-            self.dataflow_client.cancel_peek(conn_id).await;
+            self.compute_client.cancel_peek(conn_id).await;
         }
     }
 
@@ -2971,7 +2978,7 @@ where
                             );
                         } else {
                             for (id, updates) in volatile_updates {
-                                self.dataflow_client.table_insert(id, updates).await;
+                                self.storage_client.table_insert(id, updates).await;
                             }
                         }
                     }
@@ -4081,13 +4088,13 @@ where
             for &id in &tables_to_drop {
                 self.sources.remove(&id);
             }
-            self.dataflow_client.drop_tables(tables_to_drop).await;
+            self.storage_client.drop_tables(tables_to_drop).await;
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {
                 self.sink_writes.remove(id);
             }
-            self.dataflow_client.drop_sinks(sinks_to_drop).await;
+            self.compute_client.drop_sinks(sinks_to_drop).await;
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop).await;
@@ -4159,7 +4166,7 @@ where
                 let write_fut = persist.write_handle.write(&updates);
                 let _ = task::spawn(|| "builtin_table_updates_write_fut:{id}", write_fut);
             } else {
-                self.dataflow_client.table_insert(id, updates).await
+                self.storage_client.table_insert(id, updates).await
             }
         }
     }
@@ -4175,7 +4182,7 @@ where
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            self.dataflow_client.drop_sinks(dataflow_names).await;
+            self.compute_client.drop_sinks(dataflow_names).await;
         }
     }
 
@@ -4187,7 +4194,7 @@ where
             }
         }
         if !trace_keys.is_empty() {
-            self.dataflow_client.drop_indexes(trace_keys).await
+            self.compute_client.drop_indexes(trace_keys).await
         }
     }
 
@@ -4301,7 +4308,7 @@ where
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow)?);
         }
-        self.dataflow_client.create_dataflows(dataflow_plans).await;
+        self.compute_client.create_dataflows(dataflow_plans).await;
         Ok(())
     }
 
@@ -4403,7 +4410,7 @@ where
                         .send(TimestampMessage::Add(source_id, s.connector.clone()))
                         .expect("Failed to send CREATE Instance notice to timestamper");
                     let connector = s.connector.clone();
-                    self.dataflow_client
+                    self.storage_client
                         .add_source_timestamping(source_id, connector, bindings)
                         .await;
                 }
@@ -4412,7 +4419,7 @@ where
             self.ts_tx
                 .send(TimestampMessage::Drop(source_id))
                 .expect("Failed to send DROP Instance notice to timestamper");
-            self.dataflow_client
+            self.storage_client
                 .drop_source_timestamping(source_id)
                 .await;
         }
@@ -4533,9 +4540,10 @@ where
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve<C>(
+pub async fn serve<C, S>(
     Config {
-        dataflow_client,
+        compute_client,
+        storage_client,
         logging,
         data_directory,
         timestamp_frequency,
@@ -4547,10 +4555,11 @@ pub async fn serve<C>(
         metrics_registry,
         persist,
         now,
-    }: Config<'_, C>,
+    }: Config<'_, C, S>,
 ) -> Result<(Handle, Client), CoordError>
 where
-    C: dataflow_types::client::ComputeClient + dataflow_types::client::StorageClient + 'static,
+    C: dataflow_types::client::ComputeClient + 'static,
+    S: dataflow_types::client::StorageClient + 'static,
 {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
@@ -4602,7 +4611,8 @@ where
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
-                dataflow_client,
+                compute_client,
+                storage_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 indexes: ArrangementFrontiers::default(),
@@ -4631,7 +4641,7 @@ where
             };
             if let Some(config) = &logging {
                 handle.block_on(
-                    coord.dataflow_client.enable_logging(DataflowLoggingConfig {
+                    coord.compute_client.enable_logging(DataflowLoggingConfig {
                         granularity_ns: config.granularity.as_nanos(),
                         active_logs: BUILTINS
                             .logs()
@@ -4642,7 +4652,7 @@ where
                 );
             }
             if let Some(persister) = persister {
-                handle.block_on(coord.dataflow_client.enable_persistence(persister));
+                handle.block_on(coord.storage_client.enable_persistence(persister));
             }
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -4958,9 +4968,10 @@ pub mod fast_path_peek {
         }));
     }
 
-    impl<C> crate::coord::Coordinator<C>
+    impl<C, S> crate::coord::Coordinator<C, S>
     where
-        C: ComputeClient + StorageClient + 'static,
+        C: ComputeClient + 'static,
+        S: StorageClient + 'static,
     {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
@@ -5034,7 +5045,7 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    self.dataflow_client.create_dataflows(vec![dataflow]).await;
+                    self.compute_client.create_dataflows(vec![dataflow]).await;
                     // Create an identity MFP operator.
                     let mut map_filter_project = expr::MapFilterProject::new(source_arity);
                     map_filter_project
@@ -5072,7 +5083,7 @@ pub mod fast_path_peek {
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks.insert(conn_id, rows_tx);
             let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
-            self.dataflow_client
+            self.compute_client
                 .peek(
                     id,
                     key,

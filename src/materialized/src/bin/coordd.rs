@@ -38,6 +38,7 @@ struct Args {
     /// The address of the dataflowd servers to connect to.
     #[clap()]
     dataflowd_addr: Vec<String>,
+    /// The address of the dataflowd servers to connect to.
     /// Number of dataflow worker threads. This must match the number of
     /// workers that the targeted dataflowd was started with.
     #[clap(
@@ -74,16 +75,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
         .init();
 
-    info!(
-        "connecting to dataflowd server at {:?}...",
-        args.dataflowd_addr
-    );
-
-    let dataflow_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+    let compute_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+    let storage_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
 
     let mut metrics_registry = MetricsRegistry::new();
     let (coord_handle, coord_client) = coord::serve(coord::Config {
-        dataflow_client,
+        compute_client,
+        storage_client,
         logging: None,
         data_directory: &args.data_directory,
         timestamp_frequency: Duration::from_secs(1),

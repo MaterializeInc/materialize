@@ -22,7 +22,7 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-    /// Construct a client backed by multiple tcp connections
+    /// Constructs compute and storage clients backed by multiple tcp connections
     pub async fn connect(addrs: &[impl tokio::net::ToSocketAddrs]) -> Result<Self, anyhow::Error> {
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {

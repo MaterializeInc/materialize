@@ -147,10 +147,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         listener.local_addr()?
     );
 
-    let (conn, _addr) = listener.accept().await?;
+    let (compute_conn, _addr) = listener.accept().await?;
+    let (storage_conn, _addr) = listener.accept().await?;
     info!("coordinator connection accepted");
 
-    let (_server, mut client) = dataflow::serve(dataflow::Config {
+    let (_server, mut compute_client, mut storage_client) = dataflow::serve(dataflow::Config {
         workers: args.workers,
         timely_config,
         experimental_mode: false,
@@ -158,14 +159,24 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
     })?;
 
-    let mut conn = dataflowd::tcp::framed_server(conn);
+    use dataflow_types::client::Command;
+
+    let mut compute_conn = dataflowd::tcp::framed_server(compute_conn);
+    let mut storage_conn = dataflowd::tcp::framed_server(storage_conn);
     loop {
         select! {
-            cmd = conn.try_next() => match cmd? {
+            cmd = compute_conn.try_next() => match cmd? {
                 None => break,
-                Some(cmd) => client.send(cmd).await,
+                Some(Command::Compute(cmd)) => compute_client.send(Command::Compute(cmd)).await,
+                Some(Command::Storage(cmd)) => storage_client.send(Command::Storage(cmd)).await,
             },
-            Some(response) = client.recv() => conn.send(response).await?,
+            cmd = storage_conn.try_next() => match cmd? {
+                None => break,
+                Some(Command::Compute(cmd)) => compute_client.send(Command::Compute(cmd)).await,
+                Some(Command::Storage(cmd)) => storage_client.send(Command::Storage(cmd)).await,
+            },
+            Some(response) = compute_client.recv() => compute_conn.send(response).await?,
+            Some(response) = storage_client.recv() => storage_conn.send(response).await?,
         }
     }
 

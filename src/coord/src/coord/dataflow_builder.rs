@@ -25,9 +25,10 @@ pub struct DataflowBuilder<'a> {
     pub transient_id_counter: &'a mut u64,
 }
 
-impl<C> Coordinator<C>
+impl<C, S> Coordinator<C, S>
 where
-    C: dataflow_types::client::Client,
+    C: dataflow_types::client::ComputeClient,
+    S: dataflow_types::client::StorageClient,
 {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder<'a>(&'a mut self) -> DataflowBuilder {

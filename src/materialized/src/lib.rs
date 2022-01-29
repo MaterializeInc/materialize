@@ -223,7 +223,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let local_addr = listener.local_addr()?;
 
     // Initialize dataflow server.
-    let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
+    let (dataflow_server, compute_client, storage_client) = dataflow::serve(dataflow::Config {
         workers,
         timely_config: timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -236,7 +236,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = coord::serve(coord::Config {
-        dataflow_client,
+        compute_client,
+        storage_client,
         logging: config.logging,
         data_directory: &config.data_directory,
         timestamp_frequency: config.timestamp_frequency,

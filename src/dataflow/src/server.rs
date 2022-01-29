@@ -92,7 +92,7 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, LocalClient, LocalClient), anyhow::Error> {
     assert!(config.workers > 0);
 
     let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
@@ -105,17 +105,32 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     // TODO(benesch): package up this idiom of handing out ownership of N items
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
-    let (response_txs, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+    let (compute_response_txs, compute_response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| mpsc::unbounded_channel())
         .unzip();
-    let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+    let (compute_command_txs, compute_command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| crossbeam_channel::unbounded())
         .unzip();
     // A mutex around a vector of optional (take-able) pairs of (tx, rx) for worker/client communication.
-    let channels: Mutex<Vec<_>> = Mutex::new(
-        response_txs
+    let compute_channels: Mutex<Vec<_>> = Mutex::new(
+        compute_response_txs
             .into_iter()
-            .zip(command_rxs)
+            .zip(compute_command_rxs)
+            .map(Some)
+            .collect(),
+    );
+
+    let (storage_response_txs, storage_response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+        .map(|_| mpsc::unbounded_channel())
+        .unzip();
+    let (storage_command_txs, storage_command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+        .map(|_| crossbeam_channel::unbounded())
+        .unzip();
+    // A mutex around a vector of optional (take-able) pairs of (tx, rx) for worker/client communication.
+    let storage_channels: Mutex<Vec<_>> = Mutex::new(
+        storage_response_txs
+            .into_iter()
+            .zip(storage_command_rxs)
             .map(Some)
             .collect(),
     );
@@ -126,10 +141,16 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let _tokio_guard = tokio_executor.enter();
-        let (response_tx, command_rx) = channels.lock().unwrap()
+        // extract communication channels for compute and storage commands.
+        let (compute_response_tx, compute_command_rx) = compute_channels.lock().unwrap()
             [timely_worker.index() % config.workers]
             .take()
             .unwrap();
+        let (storage_response_tx, storage_command_rx) = storage_channels.lock().unwrap()
+            [timely_worker.index() % config.workers]
+            .take()
+            .unwrap();
+
         let worker_idx = timely_worker.index();
         let metrics = metrics.clone();
         let trace_metrics = trace_metrics.clone();
@@ -151,9 +172,11 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 persist: None,
             },
             materialized_logger: None,
-            command_rx,
+            compute_command_rx,
+            storage_command_rx,
             pending_peeks: Vec::new(),
-            response_tx,
+            compute_response_tx,
+            storage_response_tx,
             reported_frontiers: HashMap::new(),
             reported_bindings_frontiers: HashMap::new(),
             last_bindings_feedback: Instant::now(),
@@ -165,19 +188,29 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
         .run()
     })
     .map_err(|e| anyhow!("{}", e))?;
-    let client = LocalClient::new(
-        response_rxs,
-        command_txs,
+    let compute_client = LocalClient::new(
+        compute_response_rxs,
+        compute_command_txs,
         worker_guards
             .guards()
             .iter()
             .map(|g| g.thread().clone())
             .collect(),
     );
+    let storage_client = LocalClient::new(
+        storage_response_rxs,
+        storage_command_txs,
+        worker_guards
+            .guards()
+            .iter()
+            .map(|g| g.thread().clone())
+            .collect(),
+    );
+
     let server = Server {
         _worker_guards: worker_guards,
     };
-    Ok((server, client))
+    Ok((server, compute_client, storage_client))
 }
 
 /// State maintained for each worker thread.
@@ -197,11 +230,15 @@ where
     /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<Command>,
+    compute_command_rx: crossbeam_channel::Receiver<Command>,
+    /// The channel from which commands are drawn.
+    storage_command_rx: crossbeam_channel::Receiver<Command>,
     /// Peek commands that are awaiting fulfillment.
     pending_peeks: Vec<PendingPeek>,
     /// The channel over which frontier information is reported.
-    response_tx: mpsc::UnboundedSender<Response>,
+    compute_response_tx: mpsc::UnboundedSender<Response>,
+    /// The channel over which frontier information is reported.
+    storage_response_tx: mpsc::UnboundedSender<Response>,
     /// Tracks the frontier information that has been sent over `response_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Tracks the timestamp binding durability information that has been sent over `response_tx`.
@@ -484,7 +521,7 @@ where
             let mut cmds = vec![];
             let mut empty = false;
             while !empty {
-                match self.command_rx.try_recv() {
+                match self.compute_command_rx.try_recv() {
                     Ok(cmd) => cmds.push(cmd),
                     Err(TryRecvError::Empty) => empty = true,
                     Err(TryRecvError::Disconnected) => {
@@ -493,6 +530,18 @@ where
                     }
                 }
             }
+            empty = false;
+            while !empty {
+                match self.storage_command_rx.try_recv() {
+                    Ok(cmd) => cmds.push(cmd),
+                    Err(TryRecvError::Empty) => empty = true,
+                    Err(TryRecvError::Disconnected) => {
+                        empty = true;
+                        shutdown = true;
+                    }
+                }
+            }
+
             self.metrics.observe_command_queue(&cmds);
             for cmd in cmds {
                 self.metrics.observe_command(&cmd);
@@ -1096,14 +1145,14 @@ where
     fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(Response::Compute(response));
+        let _ = self.compute_response_tx.send(Response::Compute(response));
     }
 
     /// Send a response to the coordinator.
     fn send_storage_response(&self, response: StorageResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(Response::Storage(response));
+        let _ = self.storage_response_tx.send(Response::Storage(response));
     }
 }
 

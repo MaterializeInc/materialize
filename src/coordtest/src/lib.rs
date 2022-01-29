@@ -90,7 +90,8 @@ use timely::progress::change_batch::ChangeBatch;
 // The field order matters a lot here so the various threads/tasks are shut
 // down without ever panicing.
 pub struct CoordTest {
-    dataflow_client: InterceptingDataflowClient<dataflow_types::client::LocalClient>,
+    compute_client: InterceptingDataflowClient<dataflow_types::client::LocalClient>,
+    storage_client: InterceptingDataflowClient<dataflow_types::client::LocalClient>,
     coord_client: coord::Client,
     _coord_handle: coord::Handle,
     _dataflow_server: dataflow::Server,
@@ -115,21 +116,24 @@ impl CoordTest {
             NowFn::from(move || *timestamp.lock().unwrap())
         };
         let metrics_registry = MetricsRegistry::new();
-        let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
-            workers: 1,
-            timely_config: timely::Config {
-                communication: timely::CommunicationConfig::Process(1),
-                worker: timely::WorkerConfig::default(),
-            },
-            experimental_mode,
-            now: now.clone(),
-            metrics_registry: metrics_registry.clone(),
-        })?;
-        let dataflow_client = InterceptingDataflowClient::new(dataflow_client);
+        let (dataflow_server, compute_client, storage_client) =
+            dataflow::serve(dataflow::Config {
+                workers: 1,
+                timely_config: timely::Config {
+                    communication: timely::CommunicationConfig::Process(1),
+                    worker: timely::WorkerConfig::default(),
+                },
+                experimental_mode,
+                now: now.clone(),
+                metrics_registry: metrics_registry.clone(),
+            })?;
+        let compute_client = InterceptingDataflowClient::new(compute_client);
+        let storage_client = InterceptingDataflowClient::new(storage_client);
 
         let data_directory = tempfile::tempdir()?;
         let (coord_handle, coord_client) = coord::serve(coord::Config {
-            dataflow_client: dataflow_client.clone(),
+            compute_client: compute_client.clone(),
+            storage_client: storage_client.clone(),
             data_directory: data_directory.path(),
             logging: None,
             logical_compaction_window: None,
@@ -144,7 +148,8 @@ impl CoordTest {
         })
         .await?;
         let coordtest = CoordTest {
-            dataflow_client,
+            compute_client,
+            storage_client,
             _coord_handle: coord_handle,
             coord_client,
             _dataflow_server: dataflow_server,
@@ -210,11 +215,12 @@ impl CoordTest {
 
     async fn drain_feedback_msgs(&mut self) {
         loop {
-            if let Some(msg) = self.dataflow_client.intercepting_recv().await {
-                self.queued_feedback.push(msg);
-            } else {
-                return;
-            }
+            unimplemented!()
+            // if let Some(msg) = self.dataflow_client.intercepting_recv().await {
+            //     self.queued_feedback.push(msg);
+            // } else {
+            //     return;
+            // }
         }
     }
 
@@ -239,7 +245,8 @@ impl CoordTest {
             to_send.push(msg);
         }
         for msg in to_send {
-            self.dataflow_client.forward_response(msg);
+            unimplemented!()
+            // self.dataflow_client.forward_response(msg);
         }
         self.queued_feedback = to_queue;
     }
@@ -270,7 +277,8 @@ impl CoordTest {
             }
         }
         for msg in to_send {
-            self.dataflow_client.forward_response(msg);
+            unimplemented!()
+            // self.dataflow_client.forward_response(msg);
         }
         self.queued_feedback = to_queue;
     }
@@ -493,9 +501,10 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                         batch.update(ts, 1);
                         updates.push((id, batch));
                     }
-                    ct.dataflow_client.forward_response(Response::Compute(
-                        ComputeResponse::FrontierUppers(updates),
-                    ));
+                    unimplemented!();
+                    // ct.dataflow_client.forward_response(Response::Compute(
+                    //     ComputeResponse::FrontierUppers(updates),
+                    // ));
                     "".into()
                 }
                 "inc-timestamp" => {
