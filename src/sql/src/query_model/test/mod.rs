@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 pub(crate) mod catalog;
+pub(crate) mod util;
 
 use crate::plan::query::QueryLifetime;
 use crate::plan::StatementContext;

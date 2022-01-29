@@ -270,6 +270,7 @@ impl Validator for QuantifierConstraintValidator {
 mod tests {
     use super::constants::*;
     use super::*;
+    use crate::query_model::test::util::*;
     use std::collections::HashSet;
 
     /// Tests constraints for quantifiers incident with [`BoxType::Get`],
@@ -278,7 +279,7 @@ mod tests {
     fn test_invalid_get_table_fn_values_ok() {
         let mut model = Model::new();
 
-        let box_get = model.make_box(get_user_id(1).into());
+        let box_get = model.make_box(qgm::get(1).into());
         let box_table_fn = model.make_box(TableFunction::default().into());
         let box_values = model.make_box(Values::default().into());
         let box_tgt = model.make_box(Select::default().into());
@@ -297,8 +298,8 @@ mod tests {
     fn test_invalid_get_table_fn_values_not_ok() {
         let mut model = Model::new();
 
-        let box_src = model.make_box(get_user_id(0).into());
-        let box_get = model.make_box(get_user_id(1).into());
+        let box_src = model.make_box(qgm::get(0).into());
+        let box_get = model.make_box(qgm::get(1).into());
         let box_table_fn = model.make_box(TableFunction::default().into());
         let box_values = model.make_box(Values::default().into());
 
@@ -324,7 +325,7 @@ mod tests {
     fn test_invalid_union_except_intersect_ok() {
         let mut model = Model::new();
 
-        let box_src = model.make_box(get_user_id(0).into());
+        let box_src = model.make_box(qgm::get(0).into());
         let box_union = model.make_box(BoxType::Union);
         let box_except = model.make_box(BoxType::Except);
         let box_intersect = model.make_box(BoxType::Intersect);
@@ -346,7 +347,7 @@ mod tests {
     fn test_invalid_union_except_intersect_not_ok() {
         let mut model = Model::new();
 
-        let box_src = model.make_box(get_user_id(0).into());
+        let box_src = model.make_box(qgm::get(0).into());
         let box_union = model.make_box(BoxType::Union);
         let box_except = model.make_box(BoxType::Except);
         let box_intersect = model.make_box(BoxType::Intersect);
@@ -375,7 +376,7 @@ mod tests {
     fn test_invalid_grouping_ok() {
         let mut model = Model::new();
 
-        let box_src = model.make_box(get_user_id(0).into());
+        let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
         let box_grouping = model.make_box(Grouping::default().into());
         let box_dst = model.make_box(Select::default().into());
@@ -393,7 +394,7 @@ mod tests {
     fn test_invalid_grouping_not_ok() {
         let mut model = Model::new();
 
-        let box_src = model.make_box(get_user_id(0).into());
+        let box_src = model.make_box(qgm::get(0).into());
         let box_grouping = model.make_box(Grouping::default().into());
         let box_dst = model.make_box(BoxType::Union);
 
@@ -419,7 +420,7 @@ mod tests {
     fn test_invalid_select_ok() {
         let mut model = Model::new();
 
-        let box_src = model.make_box(get_user_id(0).into());
+        let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
 
         model.make_quantifier(QuantifierType::Foreach, box_src, box_select);
@@ -435,7 +436,7 @@ mod tests {
     fn test_invalid_select_not_ok() {
         let mut model = Model::new();
 
-        let box_src = model.make_box(get_user_id(0).into());
+        let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
 
         model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_select);
@@ -456,8 +457,8 @@ mod tests {
     fn test_outer_join_ok() {
         let mut model = Model::new();
 
-        let box_lhs = model.make_box(get_user_id(0).into());
-        let box_rhs = model.make_box(get_user_id(1).into());
+        let box_lhs = model.make_box(qgm::get(0).into());
+        let box_rhs = model.make_box(qgm::get(1).into());
         let box_outer_join_1 = model.make_box(OuterJoin::default().into());
         let box_outer_join_2 = model.make_box(OuterJoin::default().into());
 
@@ -475,8 +476,8 @@ mod tests {
     fn test_outer_join_not_ok() {
         let mut model = Model::new();
 
-        let box_lhs = model.make_box(get_user_id(0).into());
-        let box_rhs = model.make_box(get_user_id(1).into());
+        let box_lhs = model.make_box(qgm::get(0).into());
+        let box_rhs = model.make_box(qgm::get(1).into());
         let box_outer_join_1 = model.make_box(OuterJoin::default().into());
         let box_outer_join_2 = model.make_box(OuterJoin::default().into());
 
@@ -497,12 +498,5 @@ mod tests {
             ValidationError::InvalidInputQuantifiers(box_outer_join_2, ZERO_OR_ONE_FOREACH),
         ]);
         assert_eq!(errors_act, errors_exp);
-    }
-
-    fn get_user_id(id: u64) -> Get {
-        Get {
-            id: expr::GlobalId::User(id),
-            unique_keys: vec![],
-        }
     }
 }
