@@ -139,10 +139,6 @@ pub(crate) fn import_source<G>(
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
     mut src: SourceDesc,
-    // The original ID of the source, before it was decomposed into a bare source (which might
-    // have its own transient ID) and a relational transformation (which has the original source
-    // ID).
-    orig_id: GlobalId,
     now: NowFn,
     base_metrics: &SourceBaseMetrics,
 ) -> (
@@ -202,7 +198,7 @@ where
 
             // This uid must be unique across all different instantiations of a source
             let uid = SourceInstanceId {
-                source_id: orig_id,
+                source_id: src_id,
                 dataflow_id,
             };
 
@@ -236,7 +232,7 @@ where
 
             let timestamp_histories = storage_state
                 .ts_histories
-                .get(&orig_id)
+                .get(&src_id)
                 .map(|history| history.clone());
             let source_name = format!("{}-{}", connector.name(), uid);
             let source_config = SourceConfig {
@@ -640,7 +636,7 @@ where
             // on timestamp advancement queries
             storage_state
                 .ts_source_mapping
-                .entry(orig_id)
+                .entry(src_id)
                 .or_insert_with(Vec::new)
                 .push(Rc::downgrade(&source_token));
 
