@@ -839,7 +839,14 @@ where
                 for (source_id, description) in sources.into_iter() {
                     // Assert that a source is not recreated with a new description.
                     if let Some(d) = self.storage_state.source_descriptions.get(&source_id) {
-                        assert_eq!(d, &description);
+                        if d != &description {
+                            log::error!(
+                                "Multiple registration of source id {}: {:?} and {:?}",
+                                source_id,
+                                d,
+                                description
+                            );
+                        }
                     }
                     self.storage_state
                         .source_descriptions
