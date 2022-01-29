@@ -226,7 +226,7 @@ steps:
   - id: debezium-postgres
     label: "Debezium test (Postgres)"
     depends_on: build-x86_64
-    inputs: [test/debezium-avro]
+    inputs: [test/debezium]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: debezium
@@ -235,7 +235,7 @@ steps:
   - id: debezium-sql-server
     label: "Debezium test (SQL Server)"
     depends_on: build-x86_64
-    inputs: [test/debezium-avro]
+    inputs: [test/debezium]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: debezium
