@@ -836,15 +836,14 @@ where
     fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::CreateSources(sources) => {
-                for (source_id, (description, orig_id)) in sources.into_iter() {
+                for (source_id, description) in sources.into_iter() {
                     // Assert that a source is not recreated with a new description.
-                    if let Some((d, o)) = self.storage_state.source_descriptions.get(&source_id) {
+                    if let Some(d) = self.storage_state.source_descriptions.get(&source_id) {
                         assert_eq!(d, &description);
-                        assert_eq!(o, &orig_id);
                     }
                     self.storage_state
                         .source_descriptions
-                        .insert(source_id, (description, orig_id));
+                        .insert(source_id, description);
                 }
             }
             StorageCommand::DropSources(names) => {

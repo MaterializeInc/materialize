@@ -131,10 +131,7 @@ impl ComputeCommandKind {
 )]
 pub enum StorageCommand {
     /// Create the enumerated sources, each associated with its identifier.
-    ///
-    /// Paired with each source description is its `orig_id`, a thing that has
-    /// unknown properties, but must be set correctly as used in dataflows.
-    CreateSources(Vec<(GlobalId, (crate::types::sources::SourceDesc, GlobalId))>),
+    CreateSources(Vec<(GlobalId, crate::types::sources::SourceDesc)>),
 
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
@@ -390,7 +387,7 @@ pub trait ComputeClient: Client {
 pub trait StorageClient: Client {
     async fn create_sources(
         &mut self,
-        source_descriptions: Vec<(GlobalId, (crate::sources::SourceDesc, GlobalId))>,
+        source_descriptions: Vec<(GlobalId, crate::sources::SourceDesc)>,
     ) {
         self.send(Command::Storage(StorageCommand::CreateSources(
             source_descriptions,

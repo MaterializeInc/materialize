@@ -4319,8 +4319,8 @@ where
         // TODO: Delete the following through `create_sources` once that lands.
         let mut source_descriptions = Vec::new();
         for plan in dataflow_plans.iter() {
-            for (global_id, (desc, orig_id)) in plan.source_imports.iter() {
-                source_descriptions.push((*global_id, (desc.clone(), *orig_id)));
+            for (global_id, desc) in plan.source_imports.iter() {
+                source_descriptions.push((*global_id, desc.clone()));
             }
         }
         self.dataflow_client
@@ -5063,8 +5063,8 @@ pub mod fast_path_peek {
                     // and CREATE TABLE, but for starters we'll do this here to get it working.
                     // TODO: Delete the following through `create_sources` once that lands.
                     let mut source_descriptions = Vec::new();
-                    for (global_id, (desc, orig_id)) in dataflow.source_imports.iter() {
-                        source_descriptions.push((*global_id, (desc.clone(), *orig_id)));
+                    for (global_id, desc) in dataflow.source_imports.iter() {
+                        source_descriptions.push((*global_id, desc.clone()));
                     }
                     self.dataflow_client
                         .create_sources(source_descriptions)
