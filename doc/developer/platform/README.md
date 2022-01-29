@@ -7,3 +7,4 @@ Initial design work has begun in the documents below.
 
 * [Overview](overview.md)
 * [SQL Catalog Mapping](sql-catalog.md)
+* [User Experience Design](ux.md)

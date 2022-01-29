@@ -32,25 +32,6 @@ This concept is analogous to "multiversioning" in traditional databases, in whic
 Multiversioning similarly decouples data updates and query execution in its setting.
 We are doing the same thing, at a substantially larger scale than is traditional.
 
-## User experience design
-
-The intended user experience drives some of the concepts that we'll want to reflect in our code.
-The intended user experience in turn reflects the practical realities of the tools we have access to.
-
-The coarsest level of granularity of Materialize Platform is the ACCOUNT.
-Within an ACCOUNT there may be multiple REGIONs, which correspond roughly to availability zones.
-A REGION is the unit within which it is reasonable to transfer data, and across which that expectation doesn't exist.
-
-Within each REGION there may be multiple CLUSTERs, which correspond roughly to timely dataflow instances.
-A CLUSTER contains indexes and is the unit within which it is possible to share indexes.
-
-Within each REGION there may be multiple TIMELINEs, which correspond roughly to coordinator timelines.
-A TIMELINE contains collections, and is the unit within which it is possible to query across multiple collections
-
-The main restrictions we plan to impose on users is that their access to data is always associated with a REGION, CLUSTER, and TIMELINE, and attempts to access data across these may result in poorer performance, or explicit query rejection.
-
-There is some work to do to present these concepts to users, but prior work exists with e.g. SQL `database`s for TIMELINE and Snowflake's `USE WAREHOUSE` command to pilot CLUSTER.
-
 ## Logical architecture design
 
 Materialize Platform is broken into three logical components.
@@ -85,7 +66,7 @@ For example, STORAGE may reasonably conclude that it cannot rely on determinism 
 
 There are any number of secondary requirements and additional commands that can be exposed (for example, to drop sources, manage timeouts of subscriptions, advance compaction of collections, set and modify rendition reconciliation policies, etc).
 
-STORAGE can be sharded into REGIONs.
+STORAGE can be sharded into STORAGE INSTANCEs.
 
 ### COMPUTE
 
@@ -94,16 +75,16 @@ The COMPUTE layer is tasked with creating and maintaining views over definite co
 It relies on STORAGE to provide definite collections (sources) and receive updates to be written back (sinks).
 
 Its primary requirements include (all from CONTROL)
-1. define and respond to commands from CONTROL to spin up or shut down a CLUSTER (the atom of COMPUTE).
+1. define and respond to commands from CONTROL to spin up or shut down a COMPUTE INSTANCE (the atom of COMPUTE).
 2. define and respond to commands from CONTROL to install and modify maintained views over data.
 3. define and respond to commands from CONTROL to inspect the contents of maintained data (peeks).
 4. define and respond to commands from CONTROL to inspect the metadata of maintained data (frontiers).
 
-Each CLUSTER is by design stateless, and should be explicitly instructed in what is required of it.
+Each COMPUTE INSTANCE is by design stateless, and should be explicitly instructed in what is required of it.
 
-COMPUTE can be sharded into CLUSTERs.
-Each CLUSTER is bound to one REGION.
-Views installed in one CLUSTER can be used in that same CLUSTER, but cannot be used by others without a round-trip through STORAGE.
+COMPUTE can be sharded into COMPUTE INSTANCEs.
+Each COMPUTE INSTANCE is bound to one STORAGE INSTANCE.
+Views installed in one COMPUTE INSTANCE can be used in that same COMPUTE INSTANCE, but cannot be used by others without a round-trip through STORAGE.
 
 ### CONTROL
 
@@ -183,13 +164,13 @@ However, it seems premature to plan this work at this point.
 We expect Materialize Platform to evolve and improve, which means that we will need to turn it off and on again, repeatedly.
 
 Each of the components that layers spin up should be able to be started, stopped, and restarted correctly.
-This need not be efficient at first, e.g. a CLUSTER could simply be turned off and then restarted and reissued commands.
+This need not be efficient at first, e.g. a COMPUTE INSTANCE could simply be turned off and then restarted and reissued commands.
 However, a long-running Kafka ingestion worker in STORAGE should be able to stop and restart correctly, without re-reading the entire Kafka topic.
 
 We also want the orchestration to be able to stop and restart correctly, which means that the orchestration of each layer must have similar properties.
 For example, we might expect:
 * STORAGE durably records the definitions of sources it is maintaining.
-* COMPUTE durably records the CLUSTERs that should be running and the views maintained on each.
+* COMPUTE durably records the COMPUTE INSTANCEs that should be running and the views maintained on each.
 * CONTROL durably records sufficient state to reconstruct whatever users expect (e.g. catalog contents, timeline timestamp).
 
 Ideally, the orchestration could stop and restart without forcing the same of its orchestrated resources.
