@@ -388,6 +388,15 @@ pub trait ComputeClient: Client {
 /// Methods that reflect actions that can be performed against the storage layer.
 #[async_trait::async_trait]
 pub trait StorageClient: Client {
+    async fn create_sources(
+        &mut self,
+        source_descriptions: Vec<(GlobalId, (crate::sources::SourceDesc, GlobalId))>,
+    ) {
+        self.send(Command::Storage(StorageCommand::CreateSources(
+            source_descriptions,
+        )))
+        .await
+    }
     async fn drop_sources(&mut self, source_identifiers: Vec<GlobalId>) {
         self.send(Command::Storage(StorageCommand::DropSources(
             source_identifiers,
