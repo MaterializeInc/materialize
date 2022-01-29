@@ -1,4 +1,4 @@
-# Materialize Platform
+# Materialize Platform: Overview
 
 The intended experience with Materialize Platform is that many independent users can establish changing data sets, create and interrogate views over these data, and share the data, views, and results with each other in a consistent fashion.
 The intent is that in each dimension we remove limits to scaling:
