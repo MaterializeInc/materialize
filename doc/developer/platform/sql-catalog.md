@@ -3,9 +3,9 @@
 The following is a candidate proposal for how to map the SQL catalog to Platform
 concepts.
 
-An ACCOUNT contains REGIONS. Each REGION contains an independent SQL catalog.
-A SQL catalog contains DATABASES, which each contain SCHEMAS, which each contain
-OBJECTS. An OBJECT is a SOURCE, SINK, VIEW, TABLE, or INDEX.
+An ACCOUNT contains ENVIRONMENTs. Each ENVIRONMENT contains an independent SQL
+catalog. A SQL catalog contains DATABASEs, which each contain SCHEMAs, which
+each contain OBJECTs. An OBJECT is a SOURCE, SINK, VIEW, TABLE, or INDEX.
 
 At the moment, a DATABASE or SCHEMA is a simple namespace and confers no
 additional semantics. We plan to soon think about how DATABASES map to

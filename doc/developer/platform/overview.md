@@ -38,16 +38,17 @@ The intended user experience drives some of the concepts that we'll want to refl
 The intended user experience in turn reflects the practical realities of the tools we have access to.
 
 The coarsest level of granularity of Materialize Platform is the ACCOUNT.
-Within an ACCOUNT there may be multiple REGIONs, which correspond roughly to availability zones.
-A REGION is the unit within which it is reasonable to transfer data, and across which that expectation doesn't exist.
+Within an ACCOUNT there may be multiple ENVIRONMENTs.
+Each ENVIRONMENT is bound to a region of a specific cloud provider, e.g. AWS us-east-1.
+An ENVIRONMENT is the unit within which it is reasonable to transfer data, and across which that expectation doesn't exist.
 
-Within each REGION there may be multiple CLUSTERs, which correspond roughly to timely dataflow instances.
+Within each ENVIRONMENT there may be multiple CLUSTERs, which correspond roughly to timely dataflow instances.
 A CLUSTER contains indexes and is the unit within which it is possible to share indexes.
 
-Within each REGION there may be multiple TIMELINEs, which correspond roughly to coordinator timelines.
+Within each ENVIRONMENT there may be multiple TIMELINEs, which correspond roughly to coordinator timelines.
 A TIMELINE contains collections, and is the unit within which it is possible to query across multiple collections
 
-The main restrictions we plan to impose on users is that their access to data is always associated with a REGION, CLUSTER, and TIMELINE, and attempts to access data across these may result in poorer performance, or explicit query rejection.
+The main restrictions we plan to impose on users is that their access to data is always associated with a ENVIRONMENT, CLUSTER, and TIMELINE, and attempts to access data across these may result in poorer performance, or explicit query rejection.
 
 There is some work to do to present these concepts to users, but prior work exists with e.g. SQL `database`s for TIMELINE and Snowflake's `USE WAREHOUSE` command to pilot CLUSTER.
 
@@ -85,7 +86,7 @@ For example, STORAGE may reasonably conclude that it cannot rely on determinism 
 
 There are any number of secondary requirements and additional commands that can be exposed (for example, to drop sources, manage timeouts of subscriptions, advance compaction of collections, set and modify rendition reconciliation policies, etc).
 
-STORAGE can be sharded into REGIONs.
+STORAGE can be sharded into ENVIRONMENTs.
 
 ### COMPUTE
 
@@ -102,7 +103,7 @@ Its primary requirements include (all from CONTROL)
 Each CLUSTER is by design stateless, and should be explicitly instructed in what is required of it.
 
 COMPUTE can be sharded into CLUSTERs.
-Each CLUSTER is bound to one REGION.
+Each CLUSTER is bound to one ENVIRONMENT.
 Views installed in one CLUSTER can be used in that same CLUSTER, but cannot be used by others without a round-trip through STORAGE.
 
 ### CONTROL
