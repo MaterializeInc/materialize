@@ -7,110 +7,98 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
-
-$ set schema={
-    "type": "record",
-    "name": "envelope",
-    "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
+$ set schema=[
+  {
+    "type": "array",
+    "items": {
+      "type": "record",
+      "name": "update",
+      "namespace": "com.materialize.cdc",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
             "type": "record",
+            "name": "data",
             "fields": [
               {"name": "a", "type": "long"},
               {"name": "b", "type": "long"}
             ]
-          },
-          "null"
-        ]
+          }
+        },
+        {
+          "name": "time",
+          "type": "long"
+        },
+        {
+          "name": "diff",
+          "type": "long"
+        }
+      ]
+    }
+  },
+  {
+    "type": "record",
+    "name": "progress",
+    "namespace": "com.materialize.cdc",
+    "fields": [
+      {
+        "name": "lower",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
       },
-      { "name": "after", "type": ["row", "null"] }
+      {
+        "name": "upper",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "counts",
+        "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "counts",
+            "fields": [
+              {
+                "name": "time",
+                "type": "long"
+              },
+              {
+                "name": "count",
+                "type": "long"
+              }
+            ]
+          }
+        }
+      }
     ]
   }
+  ]
 
-$ set trxschemakey={
-      "name": "io.debezium.connector.common.TransactionMetadataKey",
-      "type": "record",
-      "fields": [
-          {
-              "name": "id",
-              "type": "string"
-          }
-      ]
-  }
+$ kafka-ingest format=avro topic=input schema=${schema}
+{"array":[{"data":{"a":4,"b":1},"time":4,"diff":1}]}
+{"array":[{"data":{"a":5,"b":2},"time":4,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[4],"upper":[5],"counts":[{"time":4,"count":2}]}}
 
-$ set trxschema={
-    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
-    "fields":[
-    {"name":"status","type":"string"},
-    {"name":"id","type": "string"},
-    {"name": "event_count",
-    "type": ["null", "long"],
-    "default": null
-    },
-    {"name":"data_collections","type":["null",{"type":"array",
-    "items": {"type":"record",
-    "name":"ConnectDefault",
-    "namespace":"io.confluent.connect.Avro",
-    "fields": [ {
-    "name": "data_collection",
-    "type": "string"
-    },
-    {
-    "name": "event_count",
-    "type": "long" }]}}],
-    "default": null}],
-    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
-    }
-
-$ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschemakey}
-{"id": "52"}
-
-$ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschema}
-{"status":"BEGIN","id":"52","event_count":null,"data_collections":null}
-{"status":"END","id":"52","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
-
-$ kafka-ingest format=avro topic=input schema=${schema} timestamp=14
-{"before": null, "after": {"row": {"a": 4, "b": 1}}}
-{"before": null, "after": {"row": {"a": 5, "b": 2}}}
-
-$ kafka-verify format=avro sink=materialize.public.output_byo sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "1"}}
 
-$ kafka-verify format=avro sink=materialize.public.output_byo sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "2"}}
 {"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "2"}}
 
-$ kafka-verify format=avro sink=materialize.public.output_byo sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "3"}}
 {"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "3"}}
 
-$ kafka-verify format=avro sink=materialize.public.output_byo sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 4, "b": 1}}, "transaction": {"id": "4"}}
 {"before": null, "after": {"row": {"a": 5, "b": 2}}, "transaction": {"id": "4"}}
-
-# can't distinguish "transactions" with real-time timestamping
-
-# this first batch definitely comes first, though
-
-$ kafka-verify format=avro sink=materialize.public.output_rt sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "<TIMESTAMP>"}}
-
-# these are the new messages
-
-$ kafka-verify format=avro sink=materialize.public.output_rt sort-messages=true
-{"before": null, "after": {"row": {"a": 4, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 5, "b": 2}}, "transaction": {"id": "<TIMESTAMP>"}}

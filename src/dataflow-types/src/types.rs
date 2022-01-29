@@ -561,15 +561,6 @@ pub mod sources {
 
         use expr::PartitionId;
 
-        /// A struct to hold more specific information about where a BYO source
-        /// came from so we can differentiate between topics of the same name across
-        /// different brokers.
-        #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
-        pub struct BringYourOwn {
-            pub broker: String,
-            pub topic: String,
-        }
-
         /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct SourcePersistDesc {
@@ -637,25 +628,14 @@ pub mod sources {
             pub since_ts: u64,
         }
 
-        #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-        pub enum Consistency {
-            BringYourOwn(BringYourOwn),
-            RealTime,
-        }
-
         /// Structure wrapping a timestamp update from a source
         /// If RT, contains a partition count
-        /// If BYO, contains a tuple (PartitionCount, PartitionID, Timestamp, Offset),
         /// which informs workers that messages with Offset on PartititionId will be timestamped
         /// with Timestamp.
         #[derive(Clone, Debug, Serialize, Deserialize)]
         pub enum TimestampSourceUpdate {
             /// Update for an RT source: contains a new partition to add to this source.
             RealTime(PartitionId),
-            /// Timestamp update for a BYO source: contains a PartitionID, Timestamp,
-            /// MzOffset tuple. This tuple informs workers that messages with Offset on
-            /// PartitionId will be timestamped with Timestamp.
-            BringYourOwn(PartitionId, u64, super::MzOffset),
         }
     }
 
@@ -757,10 +737,6 @@ pub mod sources {
         /// EpochMilliseconds means the timestamp is the number of milliseconds since
         /// the Unix epoch.
         EpochMilliseconds,
-        /// Counter means the timestamp starts at 1 and is incremented for each
-        /// transaction. It holds the BYO source so different instantiations can be
-        /// differentiated.
-        Counter(crate::types::sources::persistence::BringYourOwn),
         /// External means the timestamp comes from an external data source and we
         /// don't know what the number means. The attached String is the source's name,
         /// which will result in different sources being incomparable.
@@ -1069,7 +1045,6 @@ pub mod sources {
             connector: ExternalSourceConnector,
             encoding: encoding::SourceDataEncoding,
             envelope: SourceEnvelope,
-            consistency: persistence::Consistency,
             ts_frequency: Duration,
             timeline: Timeline,
         },
@@ -1104,7 +1079,7 @@ pub mod sources {
         /// even when failures/restarts happen.
         pub fn yields_stable_input(&self) -> bool {
             if let SourceConnector::External { connector, .. } = self {
-                // Conservatively, set all Kafka (BYO or RT), File, or AvroOcf sources as having stable inputs because
+                // Conservatively, set all Kafka, File, or AvroOcf sources as having stable inputs because
                 // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
                 match connector {
                     ExternalSourceConnector::Kafka(_)

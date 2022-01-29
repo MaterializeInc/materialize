@@ -93,7 +93,7 @@ $ set schema=[
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":10}},"time":5,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":4,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
@@ -105,7 +105,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[3],"counts":[]}}
 {"com.materialize.cdc.progress":{"lower":[3],"upper":[10],"counts":[{"time":4,"count":1},{"time":5,"count":2}, {"time": 6, "count": 1}]}}
 
@@ -114,7 +114,7 @@ id price
 --------
 5 10
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":10}},"time":6,"diff":-1}]}
 
 > SELECT * FROM data_schema_inline
@@ -122,19 +122,19 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
 # Inject "junk" with a previous timestamp, which could simulate a materialized
 # that restarted and emits previously emitted data at a compacted timestamp
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":10}},"time":5,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":4,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[3],"upper":[6],"counts":[{"time":4,"count":1},{"time":5,"count":2}]}}
 
 > SELECT * FROM data_schema_inline
 
 # and now, new data again
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=4
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"array":[{"data":{"id":6,"price":{"int":10}},"time":10,"diff":1}]}
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=5

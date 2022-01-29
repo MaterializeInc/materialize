@@ -8,7 +8,80 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set schema={
+$ set cdcv2-schema=[
+  {
+    "type": "array",
+    "items": {
+      "type": "record",
+      "name": "update",
+      "namespace": "com.materialize.cdc",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "type": "record",
+            "name": "data",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          }
+        },
+        {
+          "name": "time",
+          "type": "long"
+        },
+        {
+          "name": "diff",
+          "type": "long"
+        }
+      ]
+    }
+  },
+  {
+    "type": "record",
+    "name": "progress",
+    "namespace": "com.materialize.cdc",
+    "fields": [
+      {
+        "name": "lower",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "upper",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "counts",
+        "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "counts",
+            "fields": [
+              {
+                "name": "time",
+                "type": "long"
+              },
+              {
+                "name": "count",
+                "type": "long"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+  ]
+
+$ set dbz-schema={
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -30,51 +103,26 @@ $ set schema={
     ]
   }
 
-$ set trxschema={
-    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
-    "fields":[
-    {"name":"status","type":"string"},
-    {"name":"id","type": "string"},
-    {"name": "event_count",
-    "type": ["null", "long"],
-    "default": null
-    },
-    {"name":"data_collections","type":["null",{"type":"array",
-    "items": {"type":"record",
-    "name":"ConnectDefault",
-    "namespace":"io.confluent.connect.Avro",
-    "fields": [ {
-    "name": "data_collection",
-    "type": "string"
-    },
-    {
-    "name": "event_count",
-    "type": "long" }]}}],
-    "default": null}],
-    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
-    }
+$ kafka-create-topic topic=input_dbz
+$ kafka-create-topic topic=input_cdcv2
 
-$ kafka-create-topic topic=input-consistency
-$ kafka-create-topic topic=input
+> CREATE MATERIALIZED SOURCE input_kafka_cdcv2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_cdcv2-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED SOURCE input_kafka_byo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-input-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
-
-> CREATE MATERIALIZED SOURCE input_kafka_no_byo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+> CREATE MATERIALIZED SOURCE input_kafka_dbz
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_dbz-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
 > CREATE TABLE input_table (a bigint, b bigint)
 
-> CREATE MATERIALIZED VIEW input_kafka_byo_mview AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_byo;
+> CREATE MATERIALIZED VIEW input_kafka_cdcv2_mview AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_cdcv2;
 
-> CREATE MATERIALIZED VIEW input_kafka_byo_mview_view AS SELECT * FROM input_kafka_byo_mview;
+> CREATE MATERIALIZED VIEW input_kafka_cdcv2_mview_view AS SELECT * FROM input_kafka_cdcv2_mview;
 
-> CREATE VIEW input_kafka_no_byo_mview AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_no_byo;
+> CREATE VIEW input_kafka_dbz_mview AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_dbz;
 
-> CREATE MATERIALIZED VIEW input_kafka_no_byo_mview_view AS SELECT * FROM input_kafka_no_byo_mview;
+> CREATE MATERIALIZED VIEW input_kafka_dbz_mview_view AS SELECT * FROM input_kafka_dbz_mview;
 
 > CREATE MATERIALIZED VIEW input_table_mview AS SELECT a + 2 AS a , b + 10 AS b from input_table;
 
@@ -82,7 +130,7 @@ $ kafka-create-topic topic=input
 
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
-> CREATE MATERIALIZED VIEW input_kafka_no_byo_derived_table AS SELECT * FROM ( SELECT * FROM input_kafka_no_byo ) AS a1;
+> CREATE MATERIALIZED VIEW input_kafka_dbz_derived_table AS SELECT * FROM ( SELECT * FROM input_kafka_dbz ) AS a1;
 
 $ file-append path=static.csv
 city,state,zip
@@ -94,12 +142,12 @@ New York,NY,10004
   FROM FILE '${testdrive.temp-dir}/static.csv'
   FORMAT CSV WITH 3 COLUMNS
 
-> CREATE SINK output1 FROM input_kafka_byo
+> CREATE SINK output1 FROM input_kafka_cdcv2
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output1-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE SINK output2 FROM input_kafka_no_byo
+> CREATE SINK output2 FROM input_kafka_dbz
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output2-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -110,22 +158,22 @@ New York,NY,10004
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
 
-> CREATE SINK output4 FROM input_kafka_byo_mview
+> CREATE SINK output4 FROM input_kafka_cdcv2_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output4-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE SINK output4_view FROM input_kafka_byo_mview_view
+> CREATE SINK output4_view FROM input_kafka_cdcv2_mview_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output4b-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE SINK output5 FROM input_kafka_no_byo_mview
+> CREATE SINK output5 FROM input_kafka_dbz_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE SINK output5_view FROM input_kafka_no_byo_mview_view
+> CREATE SINK output5_view FROM input_kafka_dbz_mview_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5b-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -148,7 +196,7 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_mview is not
 
-> CREATE SINK output12 FROM input_kafka_no_byo_derived_table
+> CREATE SINK output12 FROM input_kafka_dbz_derived_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output12-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -158,14 +206,13 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE SINK output14_custom_consistency_topic FROM input_kafka_byo
+> CREATE SINK output14_custom_consistency_topic FROM input_kafka_cdcv2
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output1-view-${testdrive.seed}'
   WITH (reuse_topic=true, consistency_topic='output14-custom-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # ensure that the sink works with log compaction enabled on the consistency topic
 
-$ kafka-create-topic topic=compaction-test-input-consistency
 $ kafka-create-topic topic=compaction-test-input
 
 # create topic with known compaction settings, instead of letting
@@ -174,21 +221,17 @@ $ kafka-create-topic topic=compaction-test-output-consistency compaction=true
 
 > CREATE MATERIALIZED SOURCE compaction_test_input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-compaction-test-input-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-compaction-test-input-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK compaction_test_sink FROM compaction_test_input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
   WITH (reuse_topic=true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
 
-$ kafka-ingest format=avro topic=compaction-test-input schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}}
-
-$ kafka-ingest format=avro topic=compaction-test-input-consistency timestamp=1 schema=${trxschema}
-{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-compaction-test-input-${testdrive.seed}"}]}}
+$ kafka-ingest format=avro topic=compaction-test-input schema=${cdcv2-schema}
+{"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
+{"array":[{"data":{"a":2,"b":2},"time":1,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
 
 # We cannot observe the consistency topic, because compaction is not deterministic.
 # We indirectly test this by verifying that the data output is correct. If this
@@ -207,14 +250,14 @@ $ kafka-create-topic topic=rt-binding-consistency-test-input
 
 > CREATE MATERIALIZED SOURCE rt_binding_consistency_test_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-rt-binding-consistency-test-input-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
 > CREATE SINK rt_binding_consistency_test_sink FROM rt_binding_consistency_test_source
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'rt-binding-consistency-test-output-${testdrive.seed}'
   WITH (reuse_topic=true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
 
-$ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${schema} timestamp=1
+$ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${dbz-schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
 
 $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink
@@ -363,4 +406,4 @@ $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key_2 key=tr
 # Verify compaction of exactly once sinks.
 $ verify-timestamp-compaction source=input_csv max-size=3 permit-progress=true
 $ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3 permit-progress=true
-$ verify-timestamp-compaction source=input_kafka_no_byo max-size=3
+$ verify-timestamp-compaction source=input_kafka_dbz max-size=3

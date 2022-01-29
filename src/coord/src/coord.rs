@@ -4476,7 +4476,7 @@ where
     /// be used to prevent users from doing things that are either meaningless
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
-    /// byo and realtime data).
+    /// cdcv2 and realtime data).
     fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<Option<Timeline>, CoordError> {
         let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
 

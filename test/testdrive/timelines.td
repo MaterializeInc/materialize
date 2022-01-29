@@ -31,23 +31,7 @@ $ set schema={
     ]
   }
 
-$ kafka-create-topic topic=input-consistency
 $ kafka-create-topic topic=input-system
-
-> CREATE MATERIALIZED SOURCE source_byo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-input-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
-
-> CREATE MATERIALIZED SOURCE source_byo_user
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-input-consistency-${testdrive.seed}', timeline = 'user')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
-
-> CREATE MATERIALIZED SOURCE source_byo_user2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-input-consistency-${testdrive.seed}', timeline = 'user2')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED SOURCE source_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
@@ -142,7 +126,7 @@ $ set schema=[
 
 $ kafka-create-topic topic=input-cdcv2
 
-$ kafka-ingest format=avro topic=input-cdcv2 schema=${schema} timestamp=1
+$ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":10}},"time":5,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":4,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
@@ -185,28 +169,11 @@ contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
-! CREATE VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_system;
-contains:multiple timelines within one dataflow are not supported
-
-! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_byo;
-contains:multiple timelines within one dataflow are not supported
-
-! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_byo;
-contains:multiple timelines within one dataflow are not supported
-
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_cdcv2;
-contains:multiple timelines within one dataflow are not supported
-
-! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_cdcv2;
-contains:multiple timelines within one dataflow are not supported
-
-! CREATE MATERIALIZED VIEW must_fail AS SELECT (SELECT a FROM source_system LIMIT 1) FROM source_byo;
 contains:multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_system_user;
-contains:multiple timelines within one dataflow are not supported
-! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_byo_user;
 contains:multiple timelines within one dataflow are not supported
 
 # Can join static view with anything.
@@ -215,51 +182,33 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW values_system_view AS SELECT * FROM input_values_view, source_system;
 > CREATE VIEW values_system_user_view AS SELECT * FROM input_values_view, source_system_user;
 > CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
-> CREATE VIEW values_byo_view AS SELECT * FROM input_values_view, source_byo;
-> CREATE VIEW values_byo_user_view AS SELECT * FROM input_values_view, source_byo_user;
 > CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM input_values_view, mz_catalog_names, mz_views, mz_source_info;
 
 # System sources, tables, and logs should be joinable with eachother.
 > CREATE VIEW various_system (a, b, c, d, e, f, g, h, i, j, k, l, m) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info;
 
 # System things should be joinable only with system sources.
-! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_byo;
-contains:multiple timelines within one dataflow are not supported
 ! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
-> CREATE VIEW various_system_no_byo (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
+> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
 > CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, input_table;
 
 # EXPLAIN should complain too.
-! EXPLAIN SELECT * FROM source_system, source_byo;
+! EXPLAIN SELECT * FROM source_system, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
 
 # Can join user-specified timelines.
-> CREATE MATERIALIZED VIEW source_system_byo_user (a, b, c, d, e, f) AS SELECT * FROM source_system_user, source_byo_user, source_cdcv2_user;
-
-# Unless they are from different user timelines.
-! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo_user, source_byo_user2;
-contains:multiple timelines within one dataflow are not supported
+> CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c, d) AS SELECT * FROM source_system_user, source_cdcv2_user;
 
 # CDCv2 can only be joined with system time stuff if specified
 > CREATE MATERIALIZED VIEW source_cdcv2_table_system AS SELECT * FROM source_cdcv2_system, input_table;
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2, input_table;
 contains:multiple timelines within one dataflow are not supported
 
-# Verify that timedomains don't cross timelines. In the case that
-# source_byo is grouped in the same timedomain as epoch ms sources,
-# the SELECT will hang forever. We expect the error here since we have
-# not written any rows so its upper is still 0, which determine_timestamp
-# complains about.
-> BEGIN;
-! SELECT * FROM source_byo;
-contains:At least one input has no complete timestamps yet
-> ROLLBACK;
-
 # Verify that if the transaction starts on some timeline (epoch ms here),
 # things outside that are not there due to timedomain reasons.
 > BEGIN;
 > SELECT * FROM input_table;
-! SELECT * FROM source_byo;
+! SELECT * FROM source_cdcv2;
 contains:Transactions can only reference objects in the same timedomain
 > ROLLBACK;

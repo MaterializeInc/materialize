@@ -36,7 +36,6 @@ use dataflow_types::{
             included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding,
             DataEncoding, ProtobufEncoding, RegexEncoding, SourceDataEncoding,
         },
-        persistence::{BringYourOwn, Consistency},
         provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
         DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
         KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
@@ -298,8 +297,6 @@ pub fn plan_create_source(
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options);
 
-    let mut consistency = Consistency::RealTime;
-
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val {
             Value::Number(n) => match n.parse::<u64>() {
@@ -318,24 +315,12 @@ pub fn plan_create_source(
         CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
-            consistency = match with_options.remove("consistency_topic") {
-                None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(BringYourOwn {
-                    broker: broker.clone(),
-                    topic,
-                }),
-                Some(_) => bail!("consistency_topic must be a string"),
-            };
-
             let group_id_prefix = match with_options.remove("group_id_prefix") {
                 None => None,
                 Some(Value::String(s)) => Some(s),
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
-            if with_options.contains_key("start_offset") && consistency != Consistency::RealTime {
-                bail!("`start_offset` is not yet implemented for non-realtime consistency sources.")
-            }
             let parse_offset = |s: &str| match s.parse::<i64>() {
                 Ok(n) if n >= 0 => Ok(n),
                 _ => bail!("start_offset must be a nonnegative integer"),
@@ -424,14 +409,6 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::Kafka(connector);
 
-            if consistency != Consistency::RealTime
-                && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
-            {
-                // TODO: does it make sense to support BYO with upsert? It doesn't seem obvious that
-                // the timestamp topic will support the upsert semantics of the value topic
-                bail!("BYO consistency only supported for plain Debezium Kafka sources");
-            }
-
             (connector, encoding)
         }
         CreateSourceConnector::Kinesis { arn, .. } => {
@@ -461,10 +438,6 @@ pub fn plan_create_source(
                 None => false,
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
-            };
-            consistency = match with_options.remove("consistency_topic") {
-                None => Consistency::RealTime,
-                Some(_) => bail!("BYO consistency not supported for file sources"),
             };
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
@@ -564,18 +537,6 @@ pub fn plan_create_source(
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
             };
-            consistency = match with_options.remove("consistency_topic") {
-                None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(BringYourOwn {
-                    broker: path.clone(),
-                    topic,
-                }),
-                Some(_) => bail!("consistency_topic must be a string"),
-            };
-
-            if consistency != Consistency::RealTime {
-                bail!("BYO consistency is not supported for Avro OCF sources");
-            }
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
@@ -842,14 +803,13 @@ pub fn plan_create_source(
             v => bail!("unsupported timeline value {}", v.to_ast_string()),
         }
     } else {
-        match (&consistency, &envelope) {
-            (_, SourceEnvelope::CdcV2) => match with_options.remove("epoch_ms_timeline") {
+        match envelope {
+            SourceEnvelope::CdcV2 => match with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
                 Some(Value::Boolean(true)) => Timeline::EpochMilliseconds,
                 Some(v) => bail!("unsupported epoch_ms_timeline value {}", v),
             },
-            (Consistency::RealTime, _) => Timeline::EpochMilliseconds,
-            (Consistency::BringYourOwn(byo), _) => Timeline::Counter(byo.clone()),
+            _ => Timeline::EpochMilliseconds,
         }
     };
 
@@ -865,7 +825,6 @@ pub fn plan_create_source(
             connector: external_connector,
             encoding,
             envelope,
-            consistency,
             ts_frequency,
             timeline,
         },

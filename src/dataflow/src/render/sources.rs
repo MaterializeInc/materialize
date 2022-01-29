@@ -188,7 +188,6 @@ where
             connector,
             encoding,
             envelope,
-            consistency,
             ts_frequency,
             timeline: _,
         } => {
@@ -242,7 +241,6 @@ where
                 // Distribute read responsibility among workers.
                 active: active_read_worker,
                 timestamp_histories,
-                consistency,
                 timestamp_frequency: ts_frequency,
                 worker_id: scope.index(),
                 worker_count: scope.peers(),

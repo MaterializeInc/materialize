@@ -27,64 +27,79 @@ $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 # all the possible combinations of user-specified sink key and
 # natural (primary) relation key.
 
-$ set schema={
-    "type": "record",
-    "name": "envelope",
-    "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
+$ set schema=[
+  {
+    "type": "array",
+    "items": {
+      "type": "record",
+      "name": "update",
+      "namespace": "com.materialize.cdc",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
             "type": "record",
+            "name": "data",
             "fields": [
               {"name": "a", "type": "long"},
               {"name": "b", "type": "long"}
             ]
-          },
-          "null"
-        ]
+          }
+        },
+        {
+          "name": "time",
+          "type": "long"
+        },
+        {
+          "name": "diff",
+          "type": "long"
+        }
+      ]
+    }
+  },
+  {
+    "type": "record",
+    "name": "progress",
+    "namespace": "com.materialize.cdc",
+    "fields": [
+      {
+        "name": "lower",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
       },
-      { "name": "after", "type": ["row", "null"] }
+      {
+        "name": "upper",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "counts",
+        "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "counts",
+            "fields": [
+              {
+                "name": "time",
+                "type": "long"
+              },
+              {
+                "name": "count",
+                "type": "long"
+              }
+            ]
+          }
+        }
+      }
     ]
   }
+  ]
 
-$ set trxschemakey={
-      "name": "io.debezium.connector.common.TransactionMetadataKey",
-      "type": "record",
-      "fields": [
-          {
-              "name": "id",
-              "type": "string"
-          }
-      ]
-  }
-
-$ set trxschema={
-    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
-    "fields":[
-    {"name":"status","type":"string"},
-    {"name":"id","type": "string"},
-    {"name": "event_count",
-    "type": ["null", "long"],
-    "default": null
-    },
-    {"name":"data_collections","type":["null",{"type":"array",
-    "items": {"type":"record",
-    "name":"ConnectDefault",
-    "namespace":"io.confluent.connect.Avro",
-    "fields": [ {
-    "name": "data_collection",
-    "type": "string"
-    },
-    {
-    "name": "event_count",
-    "type": "long" }]}}],
-    "default": null}],
-    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
-    }
-
-$ kafka-create-topic topic=consistency
 $ kafka-create-topic topic=input
 
 # first create all the sinks, then ingest data, to ensure that
@@ -92,8 +107,7 @@ $ kafka-create-topic topic=input
 
 > CREATE MATERIALIZED SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK non_keyed_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'non-keyed-sink'
@@ -124,22 +138,13 @@ $ kafka-create-topic topic=input
   WITH (consistency_topic = 'multi-keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}}
-
-$ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 3, "b": 1}}}
-{"before": null, "after": {"row": {"a": 4, "b": 2}}}
-{"before": null, "after": {"row": {"a": 1, "b": 7}}}
-
-$ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
-{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
-{"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
-{"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
+$ kafka-ingest format=avro topic=input schema=${schema}
+{"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
+{"array":[{"data":{"a":2,"b":2},"time":1,"diff":1}]}
+{"array":[{"data":{"a":3,"b":1},"time":2,"diff":1}]}
+{"array":[{"data":{"a":4,"b":2},"time":2,"diff":1}]}
+{"array":[{"data":{"a":1,"b":7},"time":3,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":2},{"time":2,"count":2},{"time":3,"count":1}]}}
 
 > SELECT * FROM input;
 a  b

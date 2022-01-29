@@ -107,6 +107,10 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- **Breaking change.** Drop support for the `consistency_topic` option when
+  creating a `DEBEZIUM` source. This was an undocumented option that is no
+  longer relevant.
+
 - **Breaking change.** Fix parsing of certain `INTERVAL head_time_unit TO tail_time_unit`
   expressions involving two-component time expressions {{% gh 7918 %}}.
 
