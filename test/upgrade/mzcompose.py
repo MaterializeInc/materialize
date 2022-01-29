@@ -7,9 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
+import random
 from typing import List
-from unittest.mock import patch
 
 from semver import Version
 
@@ -95,6 +94,9 @@ def test_upgrade_from_version(
     version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
 
+    c.rm("materialized", "testdrive-svc", stop=True)
+    c.rm_volumes("mzdata", "tmp")
+
     if from_version != "current_source":
         mz_from = Materialized(
             image=f"materialize/materialized:{from_version}",
@@ -112,12 +114,13 @@ def test_upgrade_from_version(
     c.wait_for_materialized("materialized")
 
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
+    seed = f"--seed={random.getrandbits(32)}"
     c.run(
         "testdrive-svc",
-        "--seed=1",
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
+        seed,
         f"create-in-{version_glob}-{filter}.td",
     )
 
@@ -129,14 +132,10 @@ def test_upgrade_from_version(
 
     c.run(
         "testdrive-svc",
-        "--seed=1",
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
+        seed,
         "--validate-catalog=/share/mzdata/catalog",
         f"check-from-{version_glob}-{filter}.td",
     )
-
-    c.kill("materialized")
-    c.rm("materialized", "testdrive-svc")
-    c.rm_volumes("mzdata", "tmp")
