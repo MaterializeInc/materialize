@@ -134,11 +134,12 @@ pub(crate) fn import_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<repr::Timestamp>,
+    mut linear_operators: Option<dataflow_types::LinearOperator>,
     storage_state: &mut crate::render::StorageState,
     scope: &mut G,
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
-    mut src: SourceDesc,
+    src: SourceDesc,
     now: NowFn,
     base_metrics: &SourceBaseMetrics,
 ) -> (
@@ -151,11 +152,6 @@ pub(crate) fn import_source<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Extract the linear operators, as we will need to manipulate them.
-    // extracting them reduces the change we might accidentally communicate
-    // them through `src`.
-    let mut linear_operators = src.operators.take();
-
     // Blank out trivial linear operators.
     if let Some(operator) = &linear_operators {
         if operator.is_trivial(src.desc.arity()) {

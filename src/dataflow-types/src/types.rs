@@ -79,7 +79,16 @@ pub struct BuildDesc<View> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DataflowDescription<View> {
     /// Sources made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, crate::types::sources::SourceDesc>,
+    ///
+    /// Each identifier is associated with a source description, and an optional
+    /// bundle of linear operators to apply to the source once instantiated.
+    pub source_imports: BTreeMap<
+        GlobalId,
+        (
+            crate::types::sources::SourceDesc,
+            Option<crate::types::LinearOperator>,
+        ),
+    >,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -140,7 +149,9 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
 
     /// Imports a source and makes it available as `id`.
     pub fn import_source(&mut self, id: GlobalId, description: crate::types::sources::SourceDesc) {
-        self.source_imports.insert(id, description);
+        // Import the source with no linear operators applied to it.
+        // They may be populated by whole-dataflow optimization.
+        self.source_imports.insert(id, (description, None));
     }
 
     /// Binds to `id` the relation expression `view`.
@@ -222,7 +233,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, desc) in self.source_imports.iter() {
+        for (source_id, (desc, _operators)) in self.source_imports.iter() {
             if source_id == id {
                 return desc.desc.arity();
             }
@@ -1028,9 +1039,6 @@ pub mod sources {
     pub struct SourceDesc {
         pub name: String,
         pub connector: SourceConnector,
-        /// Optionally, filtering and projection that may optimistically be applied
-        /// to the output of the source.
-        pub operators: Option<crate::types::LinearOperator>,
         pub desc: RelationDesc,
     }
 

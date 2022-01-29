@@ -113,7 +113,6 @@ impl<'a> DataflowBuilder<'a> {
                             dataflow_types::sources::SourceDesc {
                                 name: entry.name().to_string(),
                                 connector,
-                                operators: None,
                                 desc: table.desc.clone(),
                             },
                         );
@@ -167,7 +166,6 @@ impl<'a> DataflowBuilder<'a> {
                         let source_connector = dataflow_types::sources::SourceDesc {
                             name: entry.name().to_string(),
                             connector,
-                            operators: None,
                             desc: source.desc.clone(),
                         };
 

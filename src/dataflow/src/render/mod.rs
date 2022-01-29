@@ -232,17 +232,18 @@ pub fn build_dataflow<A: Allocate>(
             );
 
             // Import declared sources into the rendering context.
-            for (src_id, src) in &dataflow.source_imports {
+            for (src_id, (src_desc, operators)) in &dataflow.source_imports {
                 let (collection_bundle, (source_token, additional_tokens)) =
                     crate::render::sources::import_source(
                         &context.debug_name,
                         context.dataflow_id,
                         &context.as_of_frontier,
+                        operators.clone(),
                         storage_state,
                         region,
                         materialized_logging.clone(),
                         src_id.clone(),
-                        src.clone(),
+                        src_desc.clone(),
                         now.clone(),
                         source_metrics,
                     );
