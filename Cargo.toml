@@ -38,6 +38,7 @@ members = [
     "src/repr-test-util",
     "src/repr",
     "src/s3-datagen",
+    "src/stash",
     "src/sql-parser",
     "src/sql",
     "src/sqllogictest",
