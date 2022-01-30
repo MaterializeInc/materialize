@@ -8,7 +8,7 @@ rust-version = "1.58.0"
 
 [dependencies]
 anyhow = "1.0.52"
-backtrace = "0.3.63"
+backtrace = "0.3.64"
 bincode = { version = "1.3.3", optional = true }
 build-info = { path = "../build-info" }
 byteorder = "1.4.3"
