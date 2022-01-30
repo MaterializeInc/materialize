@@ -37,7 +37,7 @@ from materialize import ROOT, mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
 
 MIN_COMPOSE_VERSION = (1, 24, 0)
-RECOMMENDED_MIN_MEM = 8 * 1024 ** 3  # 8GiB
+RECOMMENDED_MIN_MEM = 8 * 1024**3  # 8GiB
 RECOMMENDED_MIN_CPUS = 2
 
 
