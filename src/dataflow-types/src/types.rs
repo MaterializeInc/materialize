@@ -75,20 +75,24 @@ pub struct BuildDesc<View> {
     pub view: View,
 }
 
+/// A description of an instantation of a source.
+///
+/// This includes a description of the source, but additionally any
+/// context-dependent options like the ability to apply filtering and
+/// projection to the records as they emerge.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceInstanceDesc {
+    /// A description of the source to construct.
+    pub description: crate::types::sources::SourceDesc,
+    /// Optional linear operators that can be applied record-by-record.
+    pub operators: Option<crate::types::LinearOperator>,
+}
+
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DataflowDescription<View> {
-    /// Sources made available to the dataflow.
-    ///
-    /// Each identifier is associated with a source description, and an optional
-    /// bundle of linear operators to apply to the source once instantiated.
-    pub source_imports: BTreeMap<
-        GlobalId,
-        (
-            crate::types::sources::SourceDesc,
-            Option<crate::types::LinearOperator>,
-        ),
-    >,
+    /// Sources instantiations made available to the dataflow.
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -151,7 +155,13 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     pub fn import_source(&mut self, id: GlobalId, description: crate::types::sources::SourceDesc) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
-        self.source_imports.insert(id, (description, None));
+        self.source_imports.insert(
+            id,
+            SourceInstanceDesc {
+                description,
+                operators: None,
+            },
+        );
     }
 
     /// Binds to `id` the relation expression `view`.
@@ -233,9 +243,9 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (desc, _operators)) in self.source_imports.iter() {
+        for (source_id, source) in self.source_imports.iter() {
             if source_id == id {
-                return desc.desc.arity();
+                return source.description.desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {

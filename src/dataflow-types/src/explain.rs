@@ -90,8 +90,8 @@ where
         let sources = dataflow
             .source_imports
             .iter()
-            .filter_map(|(id, (_source_desc, operators))| {
-                if let Some(operator) = operators {
+            .filter_map(|(id, source)| {
+                if let Some(operator) = &source.operators {
                     Some((*id, operator))
                 } else {
                     None

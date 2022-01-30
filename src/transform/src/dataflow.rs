@@ -217,17 +217,17 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
     )?;
 
     // Push demand information into the SourceDesc.
-    for (source_id, (source_desc, operators)) in dataflow.source_imports.iter_mut() {
+    for (source_id, source) in dataflow.source_imports.iter_mut() {
         if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
             // Install no-op demand information if none exists.
-            if operators.is_none() {
-                *operators = Some(LinearOperator {
+            if source.operators.is_none() {
+                source.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source_desc.desc.arity()).collect(),
+                    projection: (0..source.description.desc.arity()).collect(),
                 })
             }
             // Restrict required columns by those identified as demanded.
-            if let Some(operator) = operators {
+            if let Some(operator) = &mut source.operators {
                 operator.projection.retain(|col| columns.contains(col));
             }
         }
@@ -301,17 +301,17 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     )?;
 
     // Push predicate information into the SourceDesc.
-    for (source_id, (source_desc, operators)) in dataflow.source_imports.iter_mut() {
+    for (source_id, source) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
             // Install no-op predicate information if none exists.
-            if operators.is_none() {
-                *operators = Some(LinearOperator {
+            if source.operators.is_none() {
+                source.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source_desc.desc.arity()).collect(),
+                    projection: (0..source.description.desc.arity()).collect(),
                 })
             }
             // Add any predicates that can be pushed to the source.
-            if let Some(operator) = operators {
+            if let Some(operator) = &mut source.operators {
                 operator.predicates.extend(list.iter().cloned());
                 operator.predicates.sort();
             }
@@ -347,11 +347,11 @@ where
 /// Propagates information about monotonic inputs through views.
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     let mut monotonic = std::collections::HashSet::new();
-    for (source_id, (source_desc, _operators)) in dataflow.source_imports.iter_mut() {
+    for (source_id, source) in dataflow.source_imports.iter_mut() {
         if let dataflow_types::sources::SourceConnector::External {
             envelope: dataflow_types::sources::SourceEnvelope::None(_),
             ..
-        } = source_desc.connector
+        } = source.description.connector
         {
             monotonic.insert(source_id.clone());
         }
