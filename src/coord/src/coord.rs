@@ -4100,6 +4100,7 @@ where
                 self.catalog.delete_timestamp_bindings(id)?;
                 self.sources.remove(&id);
             }
+            self.dataflow_client.drop_sources(sources_to_drop).await;
         }
         if !tables_to_drop.is_empty() {
             // NOTE: When creating a persistent table we insert its compaction frontier (aka since)

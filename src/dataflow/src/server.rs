@@ -859,7 +859,7 @@ where
                     // Check that the source has been previously created.
                     // Do not remove it, so that we can continue to check for rebinding.
                     if !self.storage_state.source_descriptions.contains_key(&name) {
-                        panic!("DropSource for id that was not created: {:?}", name);
+                        panic!("DropSource for id that was not created: {:?}; created source ids are: {:?}", name, self.storage_state.source_descriptions.keys());
                     }
                 }
             }
