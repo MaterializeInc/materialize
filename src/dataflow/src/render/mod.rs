@@ -167,7 +167,10 @@ pub struct StorageState {
     pub local_inputs: HashMap<GlobalId, LocalInput>,
     /// Source descriptions that have been created and not yet dropped.
     ///
-    /// The second `GlobalId` is the `orig_id` which I do not understand.
+    /// For the moment we retain all source descriptions, even those that have been
+    /// dropped, as this is used to check for rebinding of previous identifiers.
+    /// Once we have a better mechanism to avoid that, for example that identifiers
+    /// must strictly increase, we can clean up descriptions when sources are dropped.
     pub source_descriptions: HashMap<GlobalId, dataflow_types::sources::SourceDesc>,
     /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
