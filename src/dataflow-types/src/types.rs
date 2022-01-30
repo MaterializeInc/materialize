@@ -75,11 +75,24 @@ pub struct BuildDesc<View> {
     pub view: View,
 }
 
+/// A description of an instantation of a source.
+///
+/// This includes a description of the source, but additionally any
+/// context-dependent options like the ability to apply filtering and
+/// projection to the records as they emerge.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceInstanceDesc {
+    /// A description of the source to construct.
+    pub description: crate::types::sources::SourceDesc,
+    /// Optional linear operators that can be applied record-by-record.
+    pub operators: Option<crate::types::LinearOperator>,
+}
+
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DataflowDescription<View> {
-    /// Sources made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, crate::types::sources::SourceDesc>,
+    /// Sources instantiations made available to the dataflow.
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -140,7 +153,15 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
 
     /// Imports a source and makes it available as `id`.
     pub fn import_source(&mut self, id: GlobalId, description: crate::types::sources::SourceDesc) {
-        self.source_imports.insert(id, description);
+        // Import the source with no linear operators applied to it.
+        // They may be populated by whole-dataflow optimization.
+        self.source_imports.insert(
+            id,
+            SourceInstanceDesc {
+                description,
+                operators: None,
+            },
+        );
     }
 
     /// Binds to `id` the relation expression `view`.
@@ -222,9 +243,9 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, desc) in self.source_imports.iter() {
+        for (source_id, source) in self.source_imports.iter() {
             if source_id == id {
-                return desc.desc.arity();
+                return source.description.desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {
@@ -294,7 +315,6 @@ pub mod sources {
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
         use anyhow::Context;
-        use regex::Regex;
         use serde::{Deserialize, Serialize};
 
         use interchange::{avro, protobuf};
@@ -304,7 +324,7 @@ pub mod sources {
         ///
         /// Almost all sources only present values as part of their records, but Kafka allows a key to be
         /// associated with each record, which has a possibly independent encoding.
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum SourceDataEncoding {
             Single(DataEncoding),
             KeyValue {
@@ -315,7 +335,7 @@ pub mod sources {
 
         /// A description of how each row should be decoded, from a string of bytes to a sequence of
         /// Differential updates.
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum DataEncoding {
             Avro(AvroEncoding),
             AvroOcf(AvroOcfEncoding),
@@ -464,14 +484,14 @@ pub mod sources {
         }
 
         /// Encoding in Avro format.
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct AvroEncoding {
             pub schema: String,
             pub schema_registry_config: Option<ccsr::ClientConfig>,
             pub confluent_wire_format: bool,
         }
 
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct AvroOcfEncoding {
             pub reader_schema: String,
         }
@@ -485,14 +505,14 @@ pub mod sources {
         }
 
         /// Arguments necessary to define how to decode from CSV format
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct CsvEncoding {
             pub columns: ColumnSpec,
             pub delimiter: u8,
         }
 
         /// Determines the RelationDesc and decoding of CSV objects
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum ColumnSpec {
             /// The first row is not a header row, and all columns get default names like `columnN`.
             Count(usize),
@@ -519,10 +539,9 @@ pub mod sources {
             }
         }
 
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct RegexEncoding {
-            #[serde(with = "serde_regex")]
-            pub regex: Regex,
+            pub regex: repr::adt::regex::Regex,
         }
     }
 
@@ -541,7 +560,7 @@ pub mod sources {
         }
 
         /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
-        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct SourcePersistDesc {
             /// Name of the primary persisted stream of this source. This is what a consumer of the
             /// persisted data would be interested in while the secondary stream(s) of the source are an
@@ -562,14 +581,14 @@ pub mod sources {
         /// also because there is already a `NONE` envelope.
         ///
         /// Some envelopes will require additional streams, which should be listed in the variant.
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
         pub enum EnvelopePersistDesc {
             Upsert,
             None,
         }
 
         /// Description of a single persistent stream.
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
         pub struct PersistStreamDesc {
             /// Name of the persistent stream.
             pub name: String,
@@ -741,7 +760,7 @@ pub mod sources {
         User(String),
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceEnvelope {
         /// If present, include the key columns as an output column of the source with the given properties.
         None(KeyEnvelope),
@@ -750,7 +769,7 @@ pub mod sources {
         CdcV2,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumEnvelope {
         /// The column index containing the `before` row
         pub before_idx: usize,
@@ -787,7 +806,7 @@ pub mod sources {
     /// instances pointing at the same Kafka topic that mean that the Debezium guarantees do
     /// not hold, in which case we are required to track individual messages, instead of just
     /// the highest-ever-seen message.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum DebeziumMode {
         /// Do not perform any deduplication
         None,
@@ -805,7 +824,7 @@ pub mod sources {
         },
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumDedupProjection {
         /// The column index containing the debezium source metadata
         pub source_idx: usize,
@@ -823,7 +842,7 @@ pub mod sources {
     /// this metadata depends on the type of connector used. This struct records the relevant indices
     /// in the record, calculated during planning, so that the dataflow operator can unpack the
     /// structure and extract the relevant information.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum DebeziumSourceProjection {
         MySql {
             file: usize,
@@ -1026,17 +1045,14 @@ pub mod sources {
     /// A source contains enough information to instantiate a stream of changes,
     /// as well as related metadata about the columns, their types, and properties
     /// of the collection.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SourceDesc {
         pub name: String,
         pub connector: SourceConnector,
-        /// Optionally, filtering and projection that may optimistically be applied
-        /// to the output of the source.
-        pub operators: Option<crate::types::LinearOperator>,
         pub desc: RelationDesc,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceConnector {
         External {
             connector: ExternalSourceConnector,

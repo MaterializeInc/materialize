@@ -165,6 +165,13 @@ pub struct ComputeState {
 pub struct StorageState {
     /// Handles to local inputs, keyed by ID.
     pub local_inputs: HashMap<GlobalId, LocalInput>,
+    /// Source descriptions that have been created and not yet dropped.
+    ///
+    /// For the moment we retain all source descriptions, even those that have been
+    /// dropped, as this is used to check for rebinding of previous identifiers.
+    /// Once we have a better mechanism to avoid that, for example that identifiers
+    /// must strictly increase, we can clean up descriptions when sources are dropped.
+    pub source_descriptions: HashMap<GlobalId, dataflow_types::sources::SourceDesc>,
     /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
@@ -228,17 +235,18 @@ pub fn build_dataflow<A: Allocate>(
             );
 
             // Import declared sources into the rendering context.
-            for (src_id, src) in &dataflow.source_imports {
+            for (src_id, source) in &dataflow.source_imports {
                 let (collection_bundle, (source_token, additional_tokens)) =
                     crate::render::sources::import_source(
                         &context.debug_name,
                         context.dataflow_id,
                         &context.as_of_frontier,
+                        source.operators.clone(),
                         storage_state,
                         region,
                         materialized_logging.clone(),
                         src_id.clone(),
-                        src.clone(),
+                        source.description.clone(),
                         now.clone(),
                         source_metrics,
                     );

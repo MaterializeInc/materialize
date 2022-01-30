@@ -130,8 +130,11 @@ impl ComputeCommandKind {
     doc = "the kind of storage command that was received"
 )]
 pub enum StorageCommand {
-    /// Drop the tables bound to these names.
-    DropTables(Vec<GlobalId>),
+    /// Create the enumerated sources, each associated with its identifier.
+    CreateSources(Vec<(GlobalId, crate::types::sources::SourceDesc)>),
+
+    /// Drop the sources bound to these names.
+    DropSources(Vec<GlobalId>),
 
     /// Insert `updates` into the local input named `id`.
     Insert {
@@ -196,7 +199,8 @@ impl StorageCommandKind {
             StorageCommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
             StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
             StorageCommandKind::AllowSourceCompaction => "allows_source_compaction",
-            StorageCommandKind::DropTables => "drop_tables",
+            StorageCommandKind::CreateSources => "create_sources",
+            StorageCommandKind::DropSources => "drop_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::EnablePersistence => "enable_persistence",
             StorageCommandKind::Insert => "insert",
@@ -381,9 +385,18 @@ pub trait ComputeClient: Client {
 /// Methods that reflect actions that can be performed against the storage layer.
 #[async_trait::async_trait]
 pub trait StorageClient: Client {
-    async fn drop_tables(&mut self, table_identifiers: Vec<GlobalId>) {
-        self.send(Command::Storage(StorageCommand::DropTables(
-            table_identifiers,
+    async fn create_sources(
+        &mut self,
+        source_descriptions: Vec<(GlobalId, crate::sources::SourceDesc)>,
+    ) {
+        self.send(Command::Storage(StorageCommand::CreateSources(
+            source_descriptions,
+        )))
+        .await
+    }
+    async fn drop_sources(&mut self, source_identifiers: Vec<GlobalId>) {
+        self.send(Command::Storage(StorageCommand::DropSources(
+            source_identifiers,
         )))
         .await
     }

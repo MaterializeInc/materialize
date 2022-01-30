@@ -4088,7 +4088,7 @@ where
             for &id in &tables_to_drop {
                 self.sources.remove(&id);
             }
-            self.dataflow_client.drop_tables(tables_to_drop).await;
+            self.dataflow_client.drop_sources(tables_to_drop).await;
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {
@@ -4308,6 +4308,20 @@ where
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow)?);
         }
+
+        // Explicitly create sources. Ideally we do this closer to CREATE SOURCE
+        // and CREATE TABLE, but for starters we'll do this here to get it working.
+        // TODO: Delete the following through `create_sources` once that lands.
+        let mut source_descriptions = Vec::new();
+        for plan in dataflow_plans.iter() {
+            for (global_id, source) in plan.source_imports.iter() {
+                source_descriptions.push((*global_id, source.description.clone()));
+            }
+        }
+        self.dataflow_client
+            .create_sources(source_descriptions)
+            .await;
+
         self.dataflow_client.create_dataflows(dataflow_plans).await;
         Ok(())
     }
@@ -5040,6 +5054,17 @@ pub mod fast_path_peek {
                     permutation: index_permutation,
                     thinned_arity: index_thinned_arity,
                 }) => {
+                    // Explicitly create sources. Ideally we do this closer to CREATE SOURCE
+                    // and CREATE TABLE, but for starters we'll do this here to get it working.
+                    // TODO: Delete the following through `create_sources` once that lands.
+                    let mut source_descriptions = Vec::new();
+                    for (global_id, source) in dataflow.source_imports.iter() {
+                        source_descriptions.push((*global_id, source.description.clone()));
+                    }
+                    self.dataflow_client
+                        .create_sources(source_descriptions)
+                        .await;
+
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client.create_dataflows(vec![dataflow]).await;
                     // Create an identity MFP operator.
