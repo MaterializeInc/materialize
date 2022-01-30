@@ -856,10 +856,12 @@ where
             StorageCommand::DropSources(names) => {
                 // The only sources that currently require actions are local inputs.
                 for name in names {
+                    // Drop table-related state.
                     self.storage_state.local_inputs.remove(&name);
-                    let prior = self.storage_state.source_descriptions.remove(&name);
-                    if prior.is_none() {
-                        panic!("Source dropped without prior creation: {}", name);
+                    // Check that the source has been previously created.
+                    // Do not remove it, so that we can continue to check for rebinding.
+                    if !self.storage_state.source_descriptions.contains_key(&name) {
+                        log::error!("DropSource for id that was not created: {:?}", name);
                     }
                 }
             }
