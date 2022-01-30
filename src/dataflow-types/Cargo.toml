@@ -10,7 +10,7 @@ rust-version = "1.58.0"
 anyhow = "1.0.52"
 async-trait = "0.1.52"
 aws-config = { version = "0.5.0", default-features = false, features = ["native-tls"] }
-aws-types = { version = "0.5.0", features = ["hardcoded-credentials"] }
+aws-types = { version = "0.6.0", features = ["hardcoded-credentials"] }
 aws-smithy-http = "0.35.1"
 bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
