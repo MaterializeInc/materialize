@@ -2224,6 +2224,16 @@ where
             .await;
         match df {
             Ok(df) => {
+                // Announce the creation of the table source.
+                let source_description = self
+                    .catalog
+                    .state()
+                    .source_description_for(table_id)
+                    .unwrap();
+                self.dataflow_client
+                    .create_sources(vec![(table_id, source_description)])
+                    .await;
+                // Install the dataflow if so required.
                 if let Some(df) = df {
                     let since_ts = {
                         match &table.persist {
@@ -2299,6 +2309,15 @@ where
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
+                let catalog_state = self.catalog.state();
+                let source_descriptions = source_ids
+                    .iter()
+                    .map(|id| (*id, catalog_state.source_description_for(*id).unwrap()))
+                    .collect::<Vec<_>>();
+                self.dataflow_client
+                    .create_sources(source_descriptions)
+                    .await;
+                // Continue to do those things.
                 for source_id in source_ids {
                     self.update_timestamper(source_id, true).await;
                     let since_ts = since_ts.unwrap_or(0);
@@ -2310,6 +2329,7 @@ where
                     );
                     self.sources.insert(source_id, frontiers);
                 }
+
                 self.ship_dataflows(dfs).await?;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
@@ -4308,20 +4328,6 @@ where
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow)?);
         }
-
-        // Explicitly create sources. Ideally we do this closer to CREATE SOURCE
-        // and CREATE TABLE, but for starters we'll do this here to get it working.
-        // TODO: Delete the following through `create_sources` once that lands.
-        let mut source_descriptions = Vec::new();
-        for plan in dataflow_plans.iter() {
-            for (global_id, source) in plan.source_imports.iter() {
-                source_descriptions.push((*global_id, source.description.clone()));
-            }
-        }
-        self.dataflow_client
-            .create_sources(source_descriptions)
-            .await;
-
         self.dataflow_client.create_dataflows(dataflow_plans).await;
         Ok(())
     }
@@ -5054,17 +5060,6 @@ pub mod fast_path_peek {
                     permutation: index_permutation,
                     thinned_arity: index_thinned_arity,
                 }) => {
-                    // Explicitly create sources. Ideally we do this closer to CREATE SOURCE
-                    // and CREATE TABLE, but for starters we'll do this here to get it working.
-                    // TODO: Delete the following through `create_sources` once that lands.
-                    let mut source_descriptions = Vec::new();
-                    for (global_id, source) in dataflow.source_imports.iter() {
-                        source_descriptions.push((*global_id, source.description.clone()));
-                    }
-                    self.dataflow_client
-                        .create_sources(source_descriptions)
-                        .await;
-
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client.create_dataflows(vec![dataflow]).await;
                     // Create an identity MFP operator.
