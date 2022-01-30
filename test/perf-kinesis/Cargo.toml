@@ -20,5 +20,5 @@ mz-aws-util = { path = "../../src/aws-util", features = ["kinesis"] }
 ore = { path = "../../src/ore", features = ["task"] }
 rand = "0.8.4"
 test-util = { path = "../test-util" }
-tokio = "1.15.0"
+tokio = "1.16.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

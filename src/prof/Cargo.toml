@@ -14,7 +14,7 @@ lazy_static = "1.4.0"
 pprof = "0.6.2"
 serde = { version = "1.0.135", features = ["derive"] }
 tempfile = "3.2.0"
-tokio = { version = "1.15.0", features = ["time"] }
+tokio = { version = "1.16.1", features = ["time"] }
 
 [features]
 # Whether to enable profiling features that depend on jemalloc.

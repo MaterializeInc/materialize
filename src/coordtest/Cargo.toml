@@ -23,4 +23,4 @@ serde_json = "1.0.78"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.15.0"
+tokio = "1.16.1"
