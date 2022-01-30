@@ -56,7 +56,7 @@ sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
 termcolor = "1.1.2"
 tiberius = { version = "0.7.1", default-features = false }
-tokio = { version = "1.15.0", features = ["process"] }
+tokio = { version = "1.16.1", features = ["process"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.8"
 tokio-util = { version = "0.6.9", features = ['compat'] }

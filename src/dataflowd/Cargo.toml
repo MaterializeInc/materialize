@@ -16,7 +16,7 @@ tracing = "0.1.29"
 ore = { path = "../ore" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tracing-subscriber = "0.3.6"
-tokio = { version = "1.15.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.16.1", features = ["macros", "rt-multi-thread"] }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.6.9", features = ["codec"] }
 futures = "0.3.19"

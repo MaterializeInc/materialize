@@ -80,7 +80,7 @@ sysctl = "0.4.3"
 sysinfo = "0.23.0"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.15.0", features = ["sync"] }
+tokio = { version = "1.16.1", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
 tracing = "0.1.29"

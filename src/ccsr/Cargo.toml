@@ -21,6 +21,6 @@ url = { version = "2.2.2", features = ["serde"] }
 hyper = { version = "0.14.16", features = ["server"] }
 lazy_static = "1.4.0"
 serde_json = "1.0.78"
-tokio = { version = "1.15.0", features = ["macros"] }
+tokio = { version = "1.16.1", features = ["macros"] }
 tracing = "0.1.29"
 ore = { path = "../ore", features = ["task"] }
