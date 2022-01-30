@@ -95,19 +95,9 @@ impl<'a> DataflowBuilder<'a> {
             } else {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
-                    CatalogItem::Table(table) => {
-                        let connector = SourceConnector::Local {
-                            timeline: table.timeline(),
-                            persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
-                        };
-                        dataflow.import_source(
-                            *id,
-                            dataflow_types::sources::SourceDesc {
-                                name: entry.name().to_string(),
-                                connector,
-                                desc: table.desc.clone(),
-                            },
-                        );
+                    CatalogItem::Table(_) => {
+                        let source_description = self.catalog.source_description_for(*id).unwrap();
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::Source(source) => {
                         if source.connector.requires_single_materialization() {
@@ -131,37 +121,29 @@ impl<'a> DataflowBuilder<'a> {
                             }
                         }
 
-                        let mut connector = source.connector.clone();
+                        let mut source_description =
+                            self.catalog.source_description_for(*id).unwrap();
 
-                        let persist_details = self
-                            .catalog
-                            .persist()
-                            .source_persist_desc_from_serialized(
-                                &source.connector,
-                                source.persist_details.clone(),
-                            )
-                            .map_err(CoordError::Persistence)?;
+                        // Manipulate the source description, if something about persistence is true.
+                        // TODO: explain what is going on here better.
+                        if let SourceConnector::External { persist, .. } =
+                            &mut source_description.connector
+                        {
+                            assert!(persist.is_none());
 
-                        // TODO: I don't like that we're injecting this into the otherwise "pristine"
-                        // immutable SourceConnector. We should clean this up once we have an
-                        // ingestd/dataflowd split, where we probably want to send SourceConnector only to
-                        // ingestd (and always with persistence details) and dataflowd will never see the
-                        // current style of SourceConnector.
-                        match &mut connector {
-                            SourceConnector::External { persist, .. } => {
-                                assert!(persist.is_none());
-                                *persist = persist_details;
-                            }
-                            SourceConnector::Local { .. } => unreachable!(),
+                            let persist_details = self
+                                .catalog
+                                .persist()
+                                .source_persist_desc_from_serialized(
+                                    &source.connector,
+                                    source.persist_details.clone(),
+                                )
+                                .map_err(CoordError::Persistence)?;
+
+                            *persist = persist_details;
                         }
 
-                        let source_connector = dataflow_types::sources::SourceDesc {
-                            name: entry.name().to_string(),
-                            connector,
-                            desc: source.desc.clone(),
-                        };
-
-                        dataflow.import_source(*id, source_connector);
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
