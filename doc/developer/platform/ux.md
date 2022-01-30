@@ -1,4 +1,4 @@
-## Materialize Platform: User Experience Design
+## Materialize Platform: User Experience
 
 ⚠️ **WARNING!** ⚠️ This doc is a work in progress!
 

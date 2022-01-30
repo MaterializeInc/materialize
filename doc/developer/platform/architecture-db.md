@@ -1,14 +1,18 @@
-# Materialize Platform: Overview
+# Materialize Platform: Database Architecture
 
-The intended experience with Materialize Platform is that many independent users can establish changing data sets, create and interrogate views over these data, and share the data, views, and results with each other in a consistent fashion.
-The intent is that in each dimension we remove limits to scaling:
-* We aim to support unbounded numbers of concurrent users and sessions
-* We aim to support unbounded numbers of data sources, and with unbounded rates
-* We aim to support unbounded numbers of views over these data
+## How to read this document
 
-Here "unbounded" does not mean "infinite", only "can be increased by spending more resources".
+The architecture proposed in this document is "firm", in that we are relatively
+confident that it is the correct layering of responsibilities for Materialize
+Platform. The exact sequence of events in the proposed roadmap is subject to
+change, however.
 
-The above are goals, and the path to Materialize Platform starts with none being the case yet.
+Phrases in ALL CAPS are terms of art specific to Materialize Platform. They are
+written in ALL CAPS to indicate that the actual term is not important, subject
+to change, and should not be conflated with how that term or similar terms are
+used outside of this document.
+
+## Overview
 
 The approach to remove scaling limits is "decoupling".
 Specifically, we want to remove as much artificial coupling as possible from the design of Materialize Platform.
@@ -102,7 +106,7 @@ Users that write to STORAGE and then view COMPUTE may expect to see results refl
 Users that view COMPUTE then tell their coworker may expect them to see compatible results.
 
 CONTROL can be sharded into TIMELINEs.
-Users on the same TIMELINE can be provided with consistency guarantees, whereas users on independently timelines cannot.
+Users on the same TIMELINE can be provided with consistency guarantees, whereas users on independent timelines cannot.
 
 ## Physical architecture design
 
@@ -112,8 +116,11 @@ The physical architecture tracks the logical architecture somewhat, in that each
 * The CONTROL layer is expected to spin up threads, processes, containers for each user session, timeline, frontend, etc.
 
 Each of these layers needs to orchestrate its resources: spinning up, instructing, spinning down, etc.
-However, this orchestration is not required to by physically isolated.
+However, this orchestration is not required to be physically isolated.
 Until scaling requires, we can imagine each of these orchestrators co-located in the same process.
+
+When running on premise, orchestrators will manage their own threads and processes.
+When running in Materialize Cloud, orchestrators will communicate with a CLOUD OPERATOR to launch containers. See [Cloud Architecture](architecture-cloud.md).
 
 ### Roadmap to Platform
 
