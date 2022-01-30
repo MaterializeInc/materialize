@@ -566,6 +566,15 @@ where
                         self.logical_compaction_window_ms,
                     );
                     self.sources.insert(entry.id(), frontiers);
+                    // Re-announce the source description.
+                    let source_description = self
+                        .catalog
+                        .state()
+                        .source_description_for(entry.id())
+                        .unwrap();
+                    self.dataflow_client
+                        .create_sources(vec![(entry.id(), source_description)])
+                        .await;
                 }
                 CatalogItem::Table(table) => {
                     let since_ts = {
@@ -585,6 +594,15 @@ where
                     // NOTE: Tables are not sources, but to a large part of the system they look
                     // like they are, e.g. they are rendered as a SourceConnector::Local.
                     self.sources.insert(entry.id(), frontiers);
+                    // Re-announce the source description.
+                    let source_description = self
+                        .catalog
+                        .state()
+                        .source_description_for(entry.id())
+                        .unwrap();
+                    self.dataflow_client
+                        .create_sources(vec![(entry.id(), source_description)])
+                        .await;
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
