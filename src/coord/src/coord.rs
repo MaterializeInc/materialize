@@ -4067,14 +4067,9 @@ where
         }
 
         let indexes = &self.indexes;
-        let transient_id_counter = &mut self.transient_id_counter;
 
         let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
-            let builder = DataflowBuilder {
-                catalog,
-                indexes,
-                transient_id_counter,
-            };
+            let builder = DataflowBuilder { catalog, indexes };
             f(builder)
         })?;
         self.send_builtin_table_updates(builtin_table_updates).await;

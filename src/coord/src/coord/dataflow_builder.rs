@@ -22,7 +22,6 @@ use ore::stack::maybe_grow;
 pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     pub indexes: &'a ArrangementFrontiers<Timestamp>,
-    pub transient_id_counter: &'a mut u64,
 }
 
 impl<C> Coordinator<C>
@@ -34,7 +33,6 @@ where
         DataflowBuilder {
             catalog: self.catalog.state(),
             indexes: &self.indexes,
-            transient_id_counter: &mut self.transient_id_counter,
         }
     }
 
@@ -95,12 +93,6 @@ impl<'a> DataflowBuilder<'a> {
                     .expect("indexes can only be built on items with descs");
                 dataflow.import_index(*index_id, index_desc, desc.typ().clone(), *id);
             } else {
-                // This is only needed in the case of a source with a transformation, but we generate it now to
-                // get around borrow checker issues.
-                let transient_id = *self.transient_id_counter;
-                *self.transient_id_counter = transient_id
-                    .checked_add(1)
-                    .expect("id counter overflows i64");
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
