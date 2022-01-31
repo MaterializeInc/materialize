@@ -445,7 +445,7 @@ pub struct TablePersistDetails {
     pub write_handle: StreamWriteHandle<Row, ()>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TablePersistMultiDetails {
     pub all_table_ids: Vec<PersistId>,
     pub write_handle: MultiWriteHandle,
