@@ -97,7 +97,8 @@ impl<'a> DataflowBuilder<'a> {
                 match entry.item() {
                     CatalogItem::Table(_) => {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
-                        dataflow.import_source(*id, source_description);
+                        let persist_details = None;
+                        dataflow.import_source(*id, source_description, persist_details);
                     }
                     CatalogItem::Source(source) => {
                         if source.connector.requires_single_materialization() {
@@ -121,29 +122,15 @@ impl<'a> DataflowBuilder<'a> {
                             }
                         }
 
-                        let mut source_description =
-                            self.catalog.source_description_for(*id).unwrap();
+                        let source_description = self.catalog.source_description_for(*id).unwrap();
 
-                        // Manipulate the source description, if something about persistence is true.
-                        // TODO: explain what is going on here better.
-                        if let SourceConnector::External { persist, .. } =
-                            &mut source_description.connector
-                        {
-                            assert!(persist.is_none());
+                        let persist_desc = self
+                            .catalog
+                            .persist()
+                            .load_source_persist_desc(&source)
+                            .map_err(CoordError::Persistence)?;
 
-                            let persist_details = self
-                                .catalog
-                                .persist()
-                                .source_persist_desc_from_serialized(
-                                    &source.connector,
-                                    source.persist_details.clone(),
-                                )
-                                .map_err(CoordError::Persistence)?;
-
-                            *persist = persist_details;
-                        }
-
-                        dataflow.import_source(*id, source_description);
+                        dataflow.import_source(*id, source_description, persist_desc);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();

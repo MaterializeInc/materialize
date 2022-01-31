@@ -848,10 +848,18 @@ impl CatalogEntry {
         self.item.func(&self.name)
     }
 
-    /// Return the [`Index`] if this entry is an Index, else None.
+    /// Returns the inner [`Index`] if this entry is an index, else `None`.
     pub fn index(&self) -> Option<&Index> {
         match self.item() {
             CatalogItem::Index(idx) => Some(idx),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`Source`] if this entry is a source, else `None`.
+    pub fn source(&self) -> Option<&Source> {
+        match self.item() {
+            CatalogItem::Source(src) => Some(src),
             _ => None,
         }
     }
@@ -2540,17 +2548,6 @@ impl Catalog {
 
     pub fn persist_multi_details(&self) -> Option<&TablePersistMultiDetails> {
         self.state.by_id.persist_multi_details()
-    }
-
-    pub fn source_persist_desc(
-        &self,
-        id: GlobalId,
-        connector: &SourceConnector,
-        name: &FullName,
-    ) -> Result<Option<SourcePersistDesc>, PersistError> {
-        self.state
-            .persist
-            .source_persist_desc(id, connector, &name.to_string())
     }
 }
 

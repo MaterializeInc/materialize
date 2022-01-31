@@ -241,12 +241,11 @@ pub fn build_dataflow<A: Allocate>(
                         &context.debug_name,
                         context.dataflow_id,
                         &context.as_of_frontier,
-                        source.operators.clone(),
+                        source.clone(),
                         storage_state,
                         region,
                         materialized_logging.clone(),
                         src_id.clone(),
-                        source.description.clone(),
                         now.clone(),
                         source_metrics,
                     );

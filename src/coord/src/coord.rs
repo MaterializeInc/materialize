@@ -99,6 +99,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
+use itertools::Itertools;
 use rand::Rng;
 use repr::adt::interval::Interval;
 use timely::order::PartialOrder;
@@ -147,7 +148,7 @@ use sql::plan::{
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    SetVariablePlan, ShowVariablePlan, TailPlan,
 };
 use sql::plan::{OptimizerConfig, StatementDesc, View};
 use transform::Optimizer;
@@ -549,16 +550,14 @@ where
                 CatalogItem::Source(source) => {
                     // Inform the timestamper about this source.
                     self.update_timestamper(entry.id(), true).await;
-                    let since_ts = {
-                        match &source.connector {
-                            SourceConnector::External { persist, .. } => {
-                                persist.as_ref().map(|p| p.primary_stream.since_ts)
-                            }
-                            _ => None,
-                        }
-                    };
-
-                    let since_ts = since_ts.unwrap_or(0);
+                    let since_ts = self
+                        .catalog
+                        .state()
+                        .persist()
+                        .load_source_persist_desc(&source)
+                        .map_err(CoordError::Persistence)?
+                        .map(|p| p.primary_stream.since_ts)
+                        .unwrap_or(0);
 
                     let frontiers = self.new_source_frontiers(
                         entry.id(),
@@ -2288,20 +2287,6 @@ where
         session: &mut Session,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let since_ts = {
-            match &plan {
-                CreateSourcePlan {
-                    source:
-                        Source {
-                            connector: SourceConnector::External { persist, .. },
-                            ..
-                        },
-                    ..
-                } => persist.as_ref().map(|p| p.primary_stream.since_ts),
-                _ => None,
-            }
-        };
-
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
         match self
@@ -2335,10 +2320,28 @@ where
                 self.dataflow_client
                     .create_sources(source_descriptions)
                     .await;
+
+                // Ask persistence if it has a since timestamps for any
+                // of the new sources.
+                let since_timestamps = source_ids
+                    .iter()
+                    .map(|id| {
+                        let source = catalog_state.get_by_id(&id).source().ok_or_else(|| {
+                            CoordError::Internal(format!("ID {} unexpectedly not a source", id))
+                        })?;
+                        let since_ts = catalog_state
+                            .persist()
+                            .load_source_persist_desc(&source)
+                            .map_err(CoordError::Persistence)?
+                            .map(|p| p.primary_stream.since_ts)
+                            .unwrap_or(0);
+                        Ok::<_, CoordError>(since_ts)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 // Continue to do those things.
-                for source_id in source_ids {
+                for (source_id, since_ts) in source_ids.into_iter().zip_eq(since_timestamps) {
                     self.update_timestamper(source_id, true).await;
-                    let since_ts = since_ts.unwrap_or(0);
 
                     let frontiers = self.new_source_frontiers(
                         source_id,
@@ -2378,9 +2381,13 @@ where
 
             let persist_details = self
                 .catalog
-                .source_persist_desc(source_id, &source.connector, &name)
-                .map_err(|err| anyhow!("{}", err))?
-                .map(|persist| persist.into());
+                .state()
+                .persist()
+                .new_serialized_source_persist_details(
+                    source_id,
+                    &source.connector,
+                    &name.to_string(),
+                );
 
             let source = catalog::Source {
                 create_sql: source.create_sql,

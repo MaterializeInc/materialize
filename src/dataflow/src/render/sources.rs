@@ -134,12 +134,15 @@ pub(crate) fn import_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<repr::Timestamp>,
-    mut linear_operators: Option<dataflow_types::LinearOperator>,
+    SourceInstanceDesc {
+        description: src,
+        operators: mut linear_operators,
+        persist,
+    }: SourceInstanceDesc,
     storage_state: &mut crate::render::StorageState,
     scope: &mut G,
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
-    src: SourceDesc,
     now: NowFn,
     base_metrics: &SourceBaseMetrics,
 ) -> (
@@ -187,7 +190,6 @@ where
             envelope,
             consistency,
             ts_frequency,
-            persist,
             timeline: _,
         } => {
             // TODO(benesch): this match arm is hard to follow. Refactor.
