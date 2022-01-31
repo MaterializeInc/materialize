@@ -234,6 +234,22 @@ pub fn load(
     Ok(data.goodput_bytes())
 }
 
+/// Encodes the given data into a flat buffer that is exactly
+/// `data.goodput_bytes()` long.
+pub fn flat_blob(data: &DataGenerator) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(usize::cast_from(data.goodput_bytes()));
+    for batch in data.batches() {
+        for ((k, v), t, d) in batch.iter() {
+            buf.extend_from_slice(k);
+            buf.extend_from_slice(v);
+            buf.extend_from_slice(&t.to_le_bytes());
+            buf.extend_from_slice(&d.to_le_bytes());
+        }
+    }
+    assert_eq!(buf.len(), usize::cast_from(data.goodput_bytes()));
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use differential_dataflow::trace::Description;
-use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use persist::indexed::columnar::ColumnarRecords;
 use persist::s3::{S3Blob, S3BlobConfig};
@@ -36,8 +35,8 @@ use persist::indexed::metrics::Metrics;
 use persist::indexed::{Cmd, Indexed};
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};
-use persist::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
-use persist::workload::DataGenerator;
+use persist::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use persist::workload::{self, DataGenerator};
 
 fn new_file_log(name: &str, parent: &Path) -> FileLog {
     let file_log_dir = parent.join(name);
@@ -88,6 +87,7 @@ pub fn bench_log(g: &mut BenchmarkGroup<'_, WallTime>) {
     g.bench_function("mem_sync", |b| {
         bench_write_sync(&mut mem_log, data.clone(), b)
     });
+    mem_log.close().expect("failed to close mem_log");
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
@@ -97,23 +97,14 @@ pub fn bench_log(g: &mut BenchmarkGroup<'_, WallTime>) {
     });
 }
 
-pub fn bench_blob(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
+pub fn bench_blob_set(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
     // Limit the amount of time this test gets to run in order to limit the total
     // number of iterations criterion takes, and consequently, limit the peak
     // memory usage.
     g.warm_up_time(Duration::from_secs(1));
     g.measurement_time(Duration::from_secs(1));
 
-    let mut blob_val = vec![];
-    for batch in data.batches() {
-        for ((k, v), t, d) in batch.iter() {
-            blob_val.extend_from_slice(k);
-            blob_val.extend_from_slice(v);
-            blob_val.extend_from_slice(&t.to_le_bytes());
-            blob_val.extend_from_slice(&d.to_le_bytes());
-        }
-    }
-    assert_eq!(data.goodput_bytes(), u64::cast_from(blob_val.len()));
+    let blob_val = workload::flat_blob(&data);
     g.throughput(Throughput::Bytes(data.goodput_bytes()));
 
     let mut mem_blob = MemRegistry::new()
@@ -124,6 +115,7 @@ pub fn bench_blob(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
         &blob_val,
         |b, blob_val| bench_set(&mut mem_blob, blob_val.clone(), b),
     );
+    futures_executor::block_on(mem_blob.close()).expect("failed to close mem_blob");
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
@@ -264,7 +256,7 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
         },
     );
 
-    Ok(())
+    index.close()
 }
 
 pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
@@ -386,4 +378,5 @@ pub fn bench_blob_cache_set_unsealed_batch(
             bench_set_unsealed_batch(b, &mut mem_blob_cache, desc, batches);
         },
     );
+    mem_blob_cache.close().expect("failed to close mem_blob");
 }
