@@ -110,7 +110,7 @@ changes that have not yet been documented.
 - **Breaking change.** Fix parsing of certain `INTERVAL head_time_unit TO tail_time_unit`
   expressions involving two-component time expressions {{% gh 7918 %}}.
 
-  Previous versions of Materialize would incorrectly assume the head time unit
+  Previous versions of Materialize would assume the head time unit
   to always be hours. The new behavior matches PostgreSQL.
 
 - Fix planning of repeat constant expressions in a `GROUP BY` clause

@@ -197,6 +197,16 @@ SELECT INTERVAL '12:34:56' MINUTE TO SECOND;
 ----
 00:34:56
 
+query T
+SELECT INTERVAL '12:34' DAY TO SECOND;
+----
+12:34:00
+
+query T
+SELECT INTERVAL '12:34' MONTH TO SECOND;
+----
+12:34:00
+
 # Disallow ranges where trailing element is greater than lead.
 statement error
 SELECT INTERVAL '1-2 3 4:5:6.7' MINUTE TO MONTH;
