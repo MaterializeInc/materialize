@@ -72,7 +72,7 @@ class RepositoryDetails:
 
     def cargo(self, subcommand: str, rustflags: List[str]) -> List[str]:
         """Start a cargo invocation for the configured architecture."""
-        return xcompile.cargo(self.arch, subcommand, rustflags)
+        return xcompile.cargo(self.arch, self.coverage, subcommand, rustflags)
 
     def tool(self, name: str) -> List[str]:
         """Start a binutils tool invocation for the configured architecture."""
@@ -211,7 +211,6 @@ class CargoBuild(CargoPreImage):
         if rd.coverage:
             self.rustflags += [
                 "-Zinstrument-coverage",
-                "-Clink-dead-code",
                 # Nix generates some unresolved symbols that -Zinstrument-coverage
                 # somehow causes the linker to complain about, so just disable
                 # warnings about unresolved symbols and hope it all works out.
@@ -624,6 +623,7 @@ class ResolvedImage:
             self_hash.update(b"\0")
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
+        self_hash.update(f"coverage={self.image.rd.coverage}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())

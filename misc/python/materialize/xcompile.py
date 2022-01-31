@@ -64,7 +64,9 @@ def target(arch: Arch) -> str:
     return f"{arch}-unknown-linux-gnu"
 
 
-def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
+def cargo(
+    arch: Arch, coverage: bool, subcommand: str, rustflags: List[str]
+) -> List[str]:
     """Construct a Cargo invocation for cross compiling.
 
     Args:
@@ -112,7 +114,7 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
     }
 
     return [
-        *_enter_builder(arch),
+        *_enter_builder(arch, coverage),
         "env",
         *(f"{k}={v}" for k, v in env.items()),
         "cargo",
@@ -138,7 +140,7 @@ def tool(arch: Arch, name: str) -> List[str]:
     ]
 
 
-def _enter_builder(arch: Arch) -> List[str]:
+def _enter_builder(arch: Arch, coverage: bool = False) -> List[str]:
     assert (
         arch == Arch.host()
     ), f"target architecture {arch} does not match host architecture {Arch.host()}"
@@ -150,7 +152,8 @@ def _enter_builder(arch: Arch) -> List[str]:
         _bootstrap_darwin(arch)
         return []
     else:
-        return ["bin/ci-builder", "run", "stable"]
+        channel = "nightly" if coverage else "stable"
+        return ["bin/ci-builder", "run", channel]
 
 
 def _bootstrap_darwin(arch: Arch) -> None:
