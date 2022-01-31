@@ -563,7 +563,10 @@ impl Coordinator {
                         .source_description_for(entry.id())
                         .unwrap();
                     self.dataflow_client
-                        .create_sources(vec![(entry.id(), source_description)])
+                        .create_sources(vec![(
+                            entry.id(),
+                            (source_description, Antichain::from_elem(since_ts)),
+                        )])
                         .await;
                 }
                 CatalogItem::Table(table) => {
@@ -591,7 +594,10 @@ impl Coordinator {
                         .source_description_for(entry.id())
                         .unwrap();
                     self.dataflow_client
-                        .create_sources(vec![(entry.id(), source_description)])
+                        .create_sources(vec![(
+                            entry.id(),
+                            (source_description, Antichain::from_elem(since_ts)),
+                        )])
                         .await;
                 }
                 CatalogItem::Index(_) => {
@@ -2232,6 +2238,15 @@ impl Coordinator {
             .await;
         match df {
             Ok(df) => {
+                // Determine the initial validity for the table.
+                let since_ts = {
+                    match &table.persist {
+                        Some(persist) => Some(persist.since_ts),
+                        _ => None,
+                    }
+                };
+                let since_ts = since_ts.unwrap_or(0);
+
                 // Announce the creation of the table source.
                 let source_description = self
                     .catalog
@@ -2239,18 +2254,13 @@ impl Coordinator {
                     .source_description_for(table_id)
                     .unwrap();
                 self.dataflow_client
-                    .create_sources(vec![(table_id, source_description)])
+                    .create_sources(vec![(
+                        table_id,
+                        (source_description, Antichain::from_elem(since_ts)),
+                    )])
                     .await;
                 // Install the dataflow if so required.
                 if let Some(df) = df {
-                    let since_ts = {
-                        match &table.persist {
-                            Some(persist) => Some(persist.since_ts),
-                            _ => None,
-                        }
-                    };
-
-                    let since_ts = since_ts.unwrap_or(0);
                     let frontiers = self.new_source_frontiers(
                         table_id,
                         [since_ts],
@@ -2304,13 +2314,6 @@ impl Coordinator {
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
                 let catalog_state = self.catalog.state();
-                let source_descriptions = source_ids
-                    .iter()
-                    .map(|id| (*id, catalog_state.source_description_for(*id).unwrap()))
-                    .collect::<Vec<_>>();
-                self.dataflow_client
-                    .create_sources(source_descriptions)
-                    .await;
 
                 // Ask persistence if it has a since timestamps for any
                 // of the new sources.
@@ -2330,8 +2333,18 @@ impl Coordinator {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
+                let descriptions = source_ids
+                    .iter()
+                    .map(|id| catalog_state.source_description_for(*id).unwrap())
+                    .collect::<Vec<_>>();
+
                 // Continue to do those things.
-                for (source_id, since_ts) in source_ids.into_iter().zip_eq(since_timestamps) {
+                let mut source_descriptions = Vec::with_capacity(source_ids.len());
+                for ((source_id, since_ts), description) in source_ids
+                    .into_iter()
+                    .zip_eq(since_timestamps)
+                    .zip(descriptions)
+                {
                     self.update_timestamper(source_id, true).await;
 
                     let frontiers = self.new_source_frontiers(
@@ -2340,8 +2353,13 @@ impl Coordinator {
                         self.logical_compaction_window_ms,
                     );
                     self.sources.insert(source_id, frontiers);
+                    source_descriptions
+                        .push((source_id, (description, Antichain::from_elem(since_ts))));
                 }
 
+                self.dataflow_client
+                    .create_sources(source_descriptions)
+                    .await;
                 self.ship_dataflows(dfs).await?;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }

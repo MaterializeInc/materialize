@@ -134,7 +134,14 @@ impl ComputeCommandKind {
 )]
 pub enum StorageCommand {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<(GlobalId, crate::types::sources::SourceDesc)>),
+    ///
+    /// For each identifier, there is a source description and a valid `since` frontier.
+    CreateSources(
+        Vec<(
+            GlobalId,
+            (crate::types::sources::SourceDesc, Antichain<Timestamp>),
+        )>,
+    ),
 
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
@@ -390,7 +397,7 @@ pub trait ComputeClient: Client {
 pub trait StorageClient: Client {
     async fn create_sources(
         &mut self,
-        source_descriptions: Vec<(GlobalId, crate::sources::SourceDesc)>,
+        source_descriptions: Vec<(GlobalId, (crate::sources::SourceDesc, Antichain<Timestamp>))>,
     ) {
         self.send(Command::Storage(StorageCommand::CreateSources(
             source_descriptions,
@@ -522,10 +529,10 @@ pub trait Client: Send {
 #[async_trait::async_trait]
 impl Client for Box<dyn Client> {
     async fn send(&mut self, cmd: Command) {
-        self.send(cmd).await
+        (**self).send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
-        self.recv().await
+        (**self).recv().await
     }
 }
 

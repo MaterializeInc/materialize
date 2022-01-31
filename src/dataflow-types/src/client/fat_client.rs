@@ -47,7 +47,7 @@ impl<C: Client> FatClient<C> {
                 // Maintain the list of bindings, and complain if one attempts to either
                 // 1. create a dropped source identifier, or
                 // 2. create an existing source identifier with a new description.
-                for (id, description) in bindings.iter() {
+                for (id, (description, since)) in bindings.iter() {
                     let description = Some(description.clone());
                     match self.source_descriptions.get(&id) {
                         Some(None) => {
@@ -69,6 +69,9 @@ impl<C: Client> FatClient<C> {
                     }
 
                     self.source_descriptions.insert(*id, description.clone());
+                    // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
+                    self.storage_since_uppers
+                        .insert(*id, (since.clone(), Antichain::from_elem(0)));
                 }
             }
             Command::Storage(StorageCommand::DropSources(identifiers)) => {
@@ -78,6 +81,12 @@ impl<C: Client> FatClient<C> {
                     } else {
                         self.source_descriptions.insert(*id, None);
                     }
+                }
+            }
+            Command::Compute(ComputeCommand::EnableLogging(logging_config)) => {
+                for id in logging_config.log_identifiers() {
+                    self.compute_since_uppers
+                        .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
                 }
             }
             Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
@@ -92,7 +101,9 @@ impl<C: Client> FatClient<C> {
                     // Validate sources have `since.less_equal(as_of)`.
                     // TODO(mcsherry): Instead, return an error from the constructing method.
                     for (source_id, _) in dataflow.source_imports.iter() {
-                        let (since, _upper) = self.source_since_upper_for(*source_id).unwrap();
+                        let (since, _upper) = self
+                            .source_since_upper_for(*source_id)
+                            .expect("Source frontiers absent in dataflow construction");
                         assert!(<_ as timely::order::PartialOrder>::less_equal(
                             &since,
                             &as_of.borrow()
@@ -101,8 +112,10 @@ impl<C: Client> FatClient<C> {
 
                     // Validate indexes have `since.less_equal(as_of)`.
                     // TODO(mcsherry): Instead, return an error from the constructing method.
-                    for (source_id, _) in dataflow.index_imports.iter() {
-                        let (since, _upper) = self.index_since_upper_for(*source_id).unwrap();
+                    for (index_id, _) in dataflow.index_imports.iter() {
+                        let (since, _upper) = self
+                            .index_since_upper_for(*index_id)
+                            .expect("Index frontiers absent in dataflow construction");
                         assert!(<_ as timely::order::PartialOrder>::less_equal(
                             &since,
                             &as_of.borrow()
