@@ -12,7 +12,6 @@
 
 use std::collections::BTreeMap;
 
-use dataflow_types::plan::AvailableCollections;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
@@ -30,6 +29,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use crate::operator::CollectionExt;
+use dataflow_types::plan::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
 use repr::{DatumVec, Diff, Row, RowArena};
@@ -146,7 +146,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// A dataflow-local arrangement.
-    Local(Arrangement<S, V>, ErrArrangement<S>),
+    Local(Arrangement<S, V>, ErrArrangement<S>, Permutation),
     /// An imported trace from outside the dataflow.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
@@ -155,6 +155,7 @@ where
         GlobalId,
         ArrangementImport<S, V, T>,
         ErrArrangementImport<S, T>,
+        Permutation,
     ),
 }
 
@@ -172,22 +173,30 @@ where
         let mut datum_vec = DatumVec::new();
         let mut row_builder = Row::default();
         match &self {
-            ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(move |k, v| {
-                    let borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_builder.extend(&*borrow);
-                    row_builder.finish_and_reuse()
-                }),
-                errs.as_collection(|k, &()| k.clone()),
-            ),
-            ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(move |k, v| {
-                    let borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_builder.extend(&*borrow);
-                    row_builder.finish_and_reuse()
-                }),
-                errs.as_collection(|k, &()| k.clone()),
-            ),
+            ArrangementFlavor::Local(oks, errs, permutation) => {
+                let permutation = permutation.clone();
+                (
+                    oks.as_collection(move |k, v| {
+                        let mut borrow = datum_vec.borrow_with_many(&[k, v]);
+                        permutation.permute_in_place(&mut borrow);
+                        row_builder.extend(&*borrow);
+                        row_builder.finish_and_reuse()
+                    }),
+                    errs.as_collection(|k, &()| k.clone()),
+                )
+            }
+            ArrangementFlavor::Trace(_, oks, errs, permutation) => {
+                let permutation = permutation.clone();
+                (
+                    oks.as_collection(move |k, v| {
+                        let mut borrow = datum_vec.borrow_with_many(&[k, v]);
+                        permutation.permute_in_place(&mut borrow);
+                        row_builder.extend(&*borrow);
+                        row_builder.finish_and_reuse()
+                    }),
+                    errs.as_collection(|k, &()| k.clone()),
+                )
+            }
         }
     }
 
@@ -211,7 +220,7 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        C: FnOnce() -> L,
+        C: FnOnce(Option<Permutation>) -> L,
         L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
             + 'static,
     {
@@ -221,8 +230,8 @@ where
         let refuel = 1000000;
 
         match &self {
-            ArrangementFlavor::Local(oks, errs) => {
-                let mut logic = constructor();
+            ArrangementFlavor::Local(oks, errs, permutation) => {
+                let mut logic = constructor(Some(permutation.clone()));
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
                     &oks,
                     key,
@@ -232,8 +241,8 @@ where
                 let errs = errs.as_collection(|k, &()| k.clone());
                 return (oks, errs);
             }
-            ArrangementFlavor::Trace(_, oks, errs) => {
-                let mut logic = constructor();
+            ArrangementFlavor::Trace(_, oks, errs, permutation) => {
+                let mut logic = constructor(Some(permutation.clone()));
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
                     &oks,
                     key,
@@ -308,33 +317,20 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
-    /// Asserts that the arrangement for a specific key
-    /// (or the raw collection for no key) exists,
-    /// and returns the corresponding collection.
+    /// Presents `self` as a stream of updates.
     ///
-    /// This returns the collection as-is, without
-    /// doing any unthinning transformation.
-    /// Therefore, it should be used when the appropriate transformation
-    /// was planned as part of a following MFP.
-    pub fn as_specific_collection(
-        &self,
-        key: Option<&[MirScalarExpr]>,
-    ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
-        // Any operator that uses this method was told to use a particular
-        // collection during LIR planning, where we should have made
-        // sure that that collection exists.
-        //
-        // If it doesn't, we panic.
-        match key {
-            None => self
-                .collection
-                .clone()
-                .expect("The unarranged collection doesn't exist."),
-            Some(key) => self
-                .arranged
-                .get(key)
-                .unwrap_or_else(|| panic!("The collection arranged by {:?} doesn't exist.", key))
-                .as_collection(),
+    /// This method presents the contents as they are, without further computation.
+    /// If you have logic that could be applied to each record, consider using the
+    /// `as_collection_core` methods which allows this and can reduce the work done.
+    pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+        if let Some(collection) = &self.collection {
+            collection.clone()
+        } else {
+            self.arranged
+                .values()
+                .next()
+                .expect("Invariant violated: CollectionBundle contains no collection.")
+                .as_collection()
         }
     }
 
@@ -352,7 +348,7 @@ where
     /// that arrangement.
     pub fn flat_map<I, C, L>(
         &self,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        key_val: Option<(Vec<MirScalarExpr>, Row)>,
         constructor: C,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
@@ -361,25 +357,28 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        C: FnOnce() -> L,
+        C: FnOnce(Option<Permutation>) -> L,
         L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
             + 'static,
     {
-        // If `key_val` is set, we should have use the corresponding arrangement.
-        // If there isn't one, that implies an error in the contract between
-        // key-production and available arrangements.
+        // If `key_val` is set, and we have the arrangement by that key, we should
+        // use that arrangement.
         if let Some((key, val)) = key_val {
-            let flavor = self
-                .arrangement(&key)
-                .expect("Should have ensured during planning that this arrangement exists.");
-            flavor.flat_map(val, constructor)
+            if let Some(flavor) = self.arrangement(&key) {
+                return flavor.flat_map(Some(val), constructor);
+            }
+        }
+
+        // No key, or a key but no matching arrangement (the latter would likely imply
+        // an error in the contract between key-production and available arrangements).
+        // We should now prefer to use an arrangement if available (avoids allocation),
+        // and resort to using a collection if not available (copies all rows).
+        if let Some(flavor) = self.arranged.values().next() {
+            flavor.flat_map(None, constructor)
         } else {
             use timely::dataflow::operators::Map;
-            let (oks, errs) = self
-                .collection
-                .clone()
-                .expect("Invariant violated: CollectionBundle contains no collection.");
-            let mut logic = constructor();
+            let (oks, errs) = self.as_collection();
+            let mut logic = constructor(None);
             (
                 oks.inner
                     .flat_map(move |(mut v, t, d)| logic(&[&RefOrMut::Mut(&mut v)], &t, &d)),
@@ -394,7 +393,8 @@ where
     /// once, and thereby avoid any skew in the two uses of the logic.
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
-    /// where key and value are rows.
+    /// where key and value are rows. Often, a [Permutation] is approriate to present the row's
+    /// columns in the expected order.
     fn flat_map_core<Tr, I, L>(
         trace: &Arranged<S, Tr>,
         key: Option<Row>,
@@ -466,92 +466,24 @@ where
     pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, Row, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
-}
 
-impl<S> CollectionBundle<S, repr::Row, repr::Timestamp>
-where
-    S: Scope<Timestamp = repr::Timestamp>,
-{
-    /// Presents `self` as a stream of updates, having been subjected to `mfp`.
-    ///
-    /// This operator is able to apply the logic of `mfp` early, which can substantially
-    /// reduce the amount of data produced when `mfp` is non-trivial.
-    ///
-    /// The `key_val` argument, when present, indicates that a specific arrangement should
-    /// be used, and if, in addition, the `val` component is present,
-    /// that we can seek to the supplied row.
-    pub fn as_collection_core(
-        &self,
-        mut mfp: MapFilterProject,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
-    ) -> (
-        Collection<S, repr::Row, Diff>,
-        Collection<S, DataflowError, Diff>,
-    ) {
-        mfp.optimize();
-        let mfp_plan = mfp.into_plan().unwrap();
-        let (stream, errors) = self.flat_map(key_val, || {
-            let mut row_builder = Row::default();
-            let mut datum_vec = DatumVec::new();
-
-            move |row_parts, time, diff| {
-                let temp_storage = RowArena::new();
-                let mut datums_local = datum_vec.borrow_with_many(row_parts);
-                mfp_plan.evaluate(
-                    &mut datums_local,
-                    &temp_storage,
-                    time.clone(),
-                    diff.clone(),
-                    &mut row_builder,
-                )
-            }
-        });
-
-        use timely::dataflow::operators::ok_err::OkErr;
-        let (oks, errs) = stream.ok_err(|x| x);
-
-        use differential_dataflow::AsCollection;
-        let oks = oks.as_collection();
-        let errs = errs.as_collection();
-        (oks, errors.concat(&errs))
-    }
-    pub fn ensure_collections(
+    /// Ensures that arrangements in `keys` are present, creating them if they do not exist.
+    pub fn ensure_arrangements<K: IntoIterator<Item = dataflow_types::plan::EnsureArrangement>>(
         mut self,
-        collections: AvailableCollections,
-        input_key: Option<Vec<MirScalarExpr>>,
-        input_mfp: MapFilterProject,
+        keys: K,
     ) -> Self {
-        if collections == Default::default() {
-            return self;
-        }
-        // Cache collection to avoid reforming it each time.
-        //
-        // TODO(mcsherry): In theory this could be faster run out of another arrangement,
-        // as the `map_fallible` that follows could be run against an arrangement itself.
-        //
-        // Note(btv): If we ever do that, we would then only need to make the raw collection here
-        // if `collections.raw` is true.
-
-        // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
-        let form_raw_collection = collections.raw
-            || collections
-                .arranged
-                .iter()
-                .any(|(key, _, _)| !self.arranged.contains_key(key));
-        if form_raw_collection {
-            self.collection =
-                Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None))));
-        }
-        for (key, _, thinning) in collections.arranged {
+        for (key, permutation, thinning) in keys {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
                 let key2 = key.clone();
-                let (oks, errs) = self
-                    .collection
-                    .clone()
-                    .expect("Collection constructed above");
-
+                if self.collection.is_none() {
+                    // Cache collection to avoid reforming it each time.
+                    // TODO(mcsherry): In theory this could be faster run out of another arrangement,
+                    // as the `map_fallible` that follows could be run against an arrangement itself.
+                    self.collection = Some(self.as_collection());
+                }
+                let (oks, errs) = self.as_collection();
                 let mut row_packer = Row::default();
 
                 let mut datums = DatumVec::new();
@@ -571,10 +503,65 @@ where
                     .concat(&errs_keyed)
                     .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
-                    .insert(key, ArrangementFlavor::Local(oks, errs));
+                    .insert(key, ArrangementFlavor::Local(oks, errs, permutation));
             }
         }
         self
+    }
+}
+
+impl<S> CollectionBundle<S, repr::Row, repr::Timestamp>
+where
+    S: Scope<Timestamp = repr::Timestamp>,
+{
+    /// Presents `self` as a stream of updates, having been subjected to `mfp`.
+    ///
+    /// This operator is able to apply the logic of `mfp` early, which can substantially
+    /// reduce the amount of data produced when `mfp` is non-trivial.
+    ///
+    /// The `key_val` argument, when present, indicates that a specific arrangement should
+    /// be used, and that we can seek to the supplied row.
+    pub fn as_collection_core(
+        &self,
+        mut mfp: MapFilterProject,
+        key_val: Option<(Vec<MirScalarExpr>, Row)>,
+    ) -> (
+        Collection<S, repr::Row, Diff>,
+        Collection<S, DataflowError, Diff>,
+    ) {
+        if mfp.is_identity() {
+            self.as_collection()
+        } else {
+            mfp.optimize();
+            let mut mfp_plan = mfp.into_plan().unwrap();
+            let (stream, errors) = self.flat_map(key_val, |permutation| {
+                let mut row_builder = Row::default();
+                let mut datum_vec = DatumVec::new();
+
+                if let Some(permutation) = &permutation {
+                    permutation.permute_mfp_plan(&mut mfp_plan);
+                }
+                move |row_parts, time, diff| {
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datum_vec.borrow_with_many(row_parts);
+                    mfp_plan.evaluate(
+                        &mut datums_local,
+                        &temp_storage,
+                        time.clone(),
+                        diff.clone(),
+                        &mut row_builder,
+                    )
+                }
+            });
+
+            use timely::dataflow::operators::ok_err::OkErr;
+            let (oks, errs) = stream.ok_err(|x| x);
+
+            use differential_dataflow::AsCollection;
+            let oks = oks.as_collection();
+            let errs = errs.as_collection();
+            (oks, errors.concat(&errs))
+        }
     }
 }
 

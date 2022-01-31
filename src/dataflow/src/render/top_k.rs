@@ -37,7 +37,7 @@ where
         input: CollectionBundle<G, Row, G::Timestamp>,
         top_k_plan: TopKPlan,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
-        let (ok_input, err_input) = input.as_specific_collection(None);
+        let (ok_input, err_input) = input.as_collection();
 
         // We create a new region to compartmentalize the topk logic.
         let ok_result = ok_input.scope().region_named("TopK", |inner| {

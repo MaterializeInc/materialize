@@ -9,15 +9,10 @@
 
 //! Planning of linear joins.
 
-use std::collections::HashMap;
-
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
-use crate::plan::AvailableCollections;
+use crate::plan::Permutation;
 use expr::MapFilterProject;
-
-use expr::join_permutations;
-use expr::permutation_for_arrangement;
 use expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 
@@ -29,8 +24,6 @@ use serde::{Deserialize, Serialize};
 pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     pub source_relation: usize,
-    /// The arrangement to use for the source relation, if any
-    pub source_key: Option<Vec<MirScalarExpr>>,
     /// An initial closure to apply before any stages.
     ///
     /// Values of `None` indicate the identity closure.
@@ -58,12 +51,16 @@ pub struct LinearStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     pub stream_key: Vec<MirScalarExpr>,
-    /// The thinning expression to
-    /// use to remove redundant value columns when
-    /// arranging the stream.
+    /// The permutation of the stream
+    pub stream_permutation: Permutation,
+    /// The thinning expression to apply on the value part of the stream
     pub stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
     pub lookup_key: Vec<MirScalarExpr>,
+    /// The lookup key permutation
+    pub lookup_permutation: Permutation,
+    /// The thinning expression to apply on the lookup relation
+    pub lookup_thinning: Vec<usize>,
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
@@ -73,77 +70,36 @@ impl LinearJoinPlan {
     /// Create a new join plan from the required arguments.
     pub fn create_from(
         source_relation: usize,
-        source_arrangement: Option<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>)],
         input_mapper: expr::JoinInputMapper,
-        mfp_above: &mut MapFilterProject,
-        available: &[AvailableCollections],
-    ) -> (Self, Vec<AvailableCollections>) {
-        let mut requested: Vec<AvailableCollections> =
-            vec![Default::default(); input_mapper.total_inputs()];
-        let temporal_mfp = mfp_above.extract_temporal();
+        map_filter_project: &mut MapFilterProject,
+    ) -> Self {
+        let temporal_mfp = map_filter_project.extract_temporal();
+
         // Construct initial join build state.
         // This state will evolves as we build the join dataflow.
         let mut join_build_state = JoinBuildState::new(
             input_mapper.global_columns(source_relation),
             &equivalences,
-            &mfp_above,
+            &map_filter_project,
         );
 
-        let unthinned_source_arity = input_mapper.input_arity(source_relation);
-        let (initial_closure, source_key) =
-            if let Some((key, permutation, thinning)) = source_arrangement {
-                let mut mfp = MapFilterProject::new(unthinned_source_arity);
-                mfp.permute(permutation.clone(), key.len() + thinning.len());
-                let mfp = mfp.into_plan().unwrap().into_nontemporal().unwrap();
-                (
-                    Some(JoinClosure {
-                        ready_equivalences: vec![],
-                        before: mfp,
-                    }),
-                    Some(key.clone()),
-                )
-            } else {
-                (None, None)
-            };
-        let mut unthinned_stream_arity = initial_closure
-            .as_ref()
-            .map(|closure| closure.before.projection.len())
-            .unwrap_or(unthinned_source_arity);
+        // We would prefer to extract a closure here, but we do not know if
+        // the input will be arranged or not.
+        let initial_closure = None;
+
         // Sequence of steps to apply.
         let mut stage_plans = Vec::with_capacity(join_order.len());
 
         // Track the set of bound input relations, for equivalence resolution.
         let mut bound_inputs = vec![source_relation];
 
+        // The arity of the stream of updates, to be modified for each lookup relation
+        let mut stream_arity = input_mapper.input_arity(source_relation);
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
         for (lookup_relation, lookup_key) in join_order.iter() {
-            let available = &available[*lookup_relation];
-
-            let (lookup_permutation, lookup_thinning) = available
-                .arranged
-                .iter()
-                .find_map(|(key, permutation, thinning)| {
-                    if key == lookup_key {
-                        Some((permutation.clone(), thinning.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| {
-                    let (permutation, thinning) = permutation_for_arrangement::<HashMap<_, _>>(
-                        lookup_key,
-                        input_mapper.input_arity(*lookup_relation),
-                    );
-                    requested[*lookup_relation].arranged.push((
-                        lookup_key.clone(),
-                        permutation.clone(),
-                        thinning.clone(),
-                    ));
-                    (permutation, thinning)
-                });
             // rebase the intended key to use global column identifiers.
             let lookup_key_rebased = lookup_key
                 .iter()
@@ -166,23 +122,19 @@ impl LinearJoinPlan {
                     bound_expr
                 })
                 .collect::<Vec<_>>();
-            let (stream_permutation, stream_thinning) =
-                permutation_for_arrangement::<HashMap<_, _>>(&stream_key, unthinned_stream_arity);
-            let key_arity = stream_key.len();
-            let permutation = join_permutations(
-                key_arity,
-                stream_permutation.clone(),
-                stream_thinning.len(),
-                lookup_permutation.clone(),
-            );
+
             // Introduce new columns and expressions they enable. Form a new closure.
             let closure = join_build_state.add_columns(
                 input_mapper.global_columns(*lookup_relation),
                 &lookup_key_rebased,
-                key_arity + stream_thinning.len() + lookup_thinning.len(),
-                permutation,
             );
-            let new_unthinned_stream_arity = closure.before.projection.len();
+            let (stream_permutation, stream_thinning) =
+                Permutation::construct_from_expr(&stream_key, stream_arity);
+            let (lookup_permutation, lookup_thinning) = Permutation::construct_from_expr(
+                &lookup_key,
+                input_mapper.input_arity(*lookup_relation),
+            );
+            stream_arity = closure.before.projection.len();
 
             bound_inputs.push(*lookup_relation);
 
@@ -190,11 +142,13 @@ impl LinearJoinPlan {
             stage_plans.push(LinearStagePlan {
                 lookup_relation: *lookup_relation,
                 stream_key,
+                stream_permutation,
                 stream_thinning,
                 lookup_key: lookup_key.clone(),
+                lookup_permutation,
+                lookup_thinning,
                 closure,
             });
-            unthinned_stream_arity = new_unthinned_stream_arity;
         }
 
         // determine a final closure, and complete the path plan.
@@ -207,16 +161,14 @@ impl LinearJoinPlan {
 
         // Now that `map_filter_project` has been captured in the state builder,
         // assign the remaining temporal predicates to it, for the caller's use.
-        *mfp_above = temporal_mfp;
+        *map_filter_project = temporal_mfp;
 
         // Form and return the complete join plan.
-        let plan = LinearJoinPlan {
+        LinearJoinPlan {
             source_relation,
-            source_key,
             initial_closure,
             stage_plans,
             final_closure,
-        };
-        (plan, requested)
+        }
     }
 }

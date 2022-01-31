@@ -318,26 +318,16 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
         "User": 2
       }
     },
-    "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
       ]
-    },
+    ],
     "mfp": {
       "expressions": [],
       "predicates": [],
@@ -347,17 +337,7 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 
@@ -373,26 +353,16 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
         "User": 2
       }
     },
-    "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
       ]
-    },
+    ],
     "mfp": {
       "expressions": [],
       "predicates": [],
@@ -402,17 +372,7 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 
@@ -424,69 +384,23 @@ EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
 {
   "TopK": {
     "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                "User": 2
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    },
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  {
-                    "0": 0,
-                    "1": 1
-                  },
-                  []
-                ]
-              ]
-            },
-            "mfp": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                0,
-                1
-              ],
-              "input_arity": 2
-            },
-            "key_val": [
-              [
-                {
-                  "Column": 0
-                },
-                {
-                  "Column": 1
-                }
-              ],
-              null
-            ]
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 2
           }
         },
-        "forms": {
-          "raw": true,
-          "arranged": []
-        },
-        "input_key": [
-          {
-            "Column": 0
-          },
-          {
-            "Column": 1
-          }
+        "keys": [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ]
         ],
-        "input_mfp": {
+        "mfp": {
           "expressions": [],
           "predicates": [],
           "projection": [
@@ -494,7 +408,8 @@ EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
             1
           ],
           "input_arity": 2
-        }
+        },
+        "key_val": null
       }
     },
     "top_k_plan": {
@@ -526,69 +441,23 @@ EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
 {
   "TopK": {
     "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                "User": 2
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    },
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  {
-                    "0": 0,
-                    "1": 1
-                  },
-                  []
-                ]
-              ]
-            },
-            "mfp": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                0,
-                1
-              ],
-              "input_arity": 2
-            },
-            "key_val": [
-              [
-                {
-                  "Column": 0
-                },
-                {
-                  "Column": 1
-                }
-              ],
-              null
-            ]
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 2
           }
         },
-        "forms": {
-          "raw": true,
-          "arranged": []
-        },
-        "input_key": [
-          {
-            "Column": 0
-          },
-          {
-            "Column": 1
-          }
+        "keys": [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ]
         ],
-        "input_mfp": {
+        "mfp": {
           "expressions": [],
           "predicates": [],
           "projection": [
@@ -596,7 +465,8 @@ EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
             1
           ],
           "input_arity": 2
-        }
+        },
+        "key_val": null
       }
     },
     "top_k_plan": {
@@ -632,26 +502,16 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
         "User": 2
       }
     },
-    "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
       ]
-    },
+    ],
     "mfp": {
       "expressions": [],
       "predicates": [],
@@ -661,17 +521,7 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 
@@ -689,26 +539,16 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIM
         "User": 2
       }
     },
-    "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
       ]
-    },
+    ],
     "mfp": {
       "expressions": [],
       "predicates": [],
@@ -718,17 +558,7 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIM
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 

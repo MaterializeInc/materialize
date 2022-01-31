@@ -411,35 +411,35 @@ where
         }
 
         // Install traces as maintained indexes
-        for (log, trace) in t_traces {
+        for (log, (trace, permutation)) in t_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, trace) in r_traces {
+        for (log, (trace, permutation)) in r_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, trace) in d_traces {
+        for (log, (trace, permutation)) in d_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, trace) in m_traces {
+        for (log, (trace, permutation)) in m_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
@@ -765,10 +765,13 @@ where
                 timestamp,
                 conn_id,
                 finishing,
-                map_filter_project,
+                mut map_filter_project,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.compute_state.traces.get(&id).unwrap().clone();
+                trace_bundle
+                    .permutation()
+                    .permute_safe_mfp_plan(&mut map_filter_project);
                 let timestamp_frontier = Antichain::from_elem(timestamp);
                 let empty_frontier = Antichain::new();
                 trace_bundle

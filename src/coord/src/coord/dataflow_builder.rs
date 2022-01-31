@@ -55,7 +55,7 @@ where
                 index_entry.name().to_string(),
                 dataflow_types::IndexDesc {
                     on_id: index.on,
-                    key: index.keys.clone(),
+                    keys: index.keys.clone(),
                 },
             ))
         }
@@ -84,7 +84,7 @@ impl<'a> DataflowBuilder<'a> {
             if let Some((index_id, keys)) = valid_index {
                 let index_desc = IndexDesc {
                     on_id: *id,
-                    key: keys.to_vec(),
+                    keys: keys.to_vec(),
                 };
                 let desc = self
                     .catalog
@@ -181,7 +181,7 @@ impl<'a> DataflowBuilder<'a> {
                     let on_type = on_entry.desc().unwrap().typ().clone();
                     let index_desc = IndexDesc {
                         on_id: get_id,
-                        key: keys.clone(),
+                        keys: keys.clone(),
                     };
                     dataflow.import_index(*id, index_desc, on_type, *view_id);
                 }
