@@ -12,7 +12,7 @@ backtrace = "0.3.64"
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
 pprof = "0.6.2"
-serde = { version = "1.0.135", features = ["derive"] }
+serde = { version = "1.0.136", features = ["derive"] }
 tempfile = "3.2.0"
 tokio = { version = "1.16.1", features = ["time"] }
 
