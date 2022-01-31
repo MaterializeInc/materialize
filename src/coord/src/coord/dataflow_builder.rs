@@ -175,6 +175,7 @@ impl<'a> DataflowBuilder<'a> {
             }
         }
         dataflow.insert_view(*view_id, view.clone());
+
         Ok(())
     }
 
@@ -190,6 +191,10 @@ impl<'a> DataflowBuilder<'a> {
         let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
         dataflow.export_index(id, index_description, on_type);
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+
         Ok(dataflow)
     }
 
@@ -208,6 +213,10 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, &mut dataflow)?;
         dataflow.export_sink(id, sink_description);
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+
         Ok(dataflow)
     }
 }

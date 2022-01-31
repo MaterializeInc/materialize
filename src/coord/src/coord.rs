@@ -623,7 +623,7 @@ impl Coordinator {
                                 index_id,
                                 description,
                             )?;
-                            self.ship_dataflow(df).await?;
+                            self.ship_dataflow(df).await;
                         }
                     }
                 }
@@ -1844,7 +1844,7 @@ impl Coordinator {
             let sink_writes = SinkWrites::new(tokens);
             self.sink_writes.insert(id, sink_writes);
         }
-        self.ship_dataflow(df).await
+        Ok(self.ship_dataflow(df).await)
     }
 
     async fn sequence_plan(
@@ -2271,7 +2271,7 @@ impl Coordinator {
                     // like they are, e.g. they are rendered as a SourceConnector::Local.
                     self.sources.insert(table_id, frontiers);
 
-                    self.ship_dataflow(df).await?;
+                    self.ship_dataflow(df).await;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -2360,7 +2360,7 @@ impl Coordinator {
                 self.dataflow_client
                     .create_sources(source_descriptions)
                     .await;
-                self.ship_dataflows(dfs).await?;
+                self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2653,7 +2653,7 @@ impl Coordinator {
         {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df).await?;
+                    self.ship_dataflow(df).await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2698,7 +2698,7 @@ impl Coordinator {
             .await
         {
             Ok(dfs) => {
-                self.ship_dataflows(dfs).await?;
+                self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -2749,7 +2749,7 @@ impl Coordinator {
         {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df).await?;
+                    self.ship_dataflow(df).await;
                     self.set_index_options(id, options).expect("index enabled");
                 }
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -3248,8 +3248,12 @@ impl Coordinator {
             },
             typ,
         );
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+
         // Finalization optimizes the dataflow as much as possible.
-        let dataflow_plan = self.finalize_dataflow(dataflow)?;
+        let dataflow_plan = self.finalize_dataflow(dataflow);
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -3326,7 +3330,7 @@ impl Coordinator {
         let df =
             self.dataflow_builder()
                 .build_sink_dataflow(sink_name, sink_id, sink_description)?;
-        self.ship_dataflow(df).await?;
+        self.ship_dataflow(df).await;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -4051,7 +4055,7 @@ impl Coordinator {
                     Ok(df)
                 })
                 .await?;
-            self.ship_dataflow(df).await?;
+            self.ship_dataflow(df).await;
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
@@ -4350,18 +4354,17 @@ impl Coordinator {
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) -> Result<(), CoordError> {
+    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
         self.ship_dataflows(vec![dataflow]).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) -> Result<(), CoordError> {
+    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            dataflow_plans.push(self.finalize_dataflow(dataflow)?);
+            dataflow_plans.push(self.finalize_dataflow(dataflow));
         }
         self.dataflow_client.create_dataflows(dataflow_plans).await;
-        Ok(())
     }
 
     /// Finalizes a dataflow.
@@ -4382,7 +4385,7 @@ impl Coordinator {
     fn finalize_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
-    ) -> Result<dataflow_types::DataflowDescription<dataflow_types::Plan>, CoordError> {
+    ) -> dataflow_types::DataflowDescription<dataflow_types::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -4443,10 +4446,8 @@ impl Coordinator {
             dataflow.set_as_of(since);
         }
 
-        // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
-        Ok(dataflow_types::Plan::finalize_dataflow(dataflow)
-            .expect("Dataflow planning failed; unrecoverable error"))
+        dataflow_types::Plan::finalize_dataflow(dataflow)
+            .expect("Dataflow planning failed; unrecoverable error")
     }
 
     // Notify the timestamper thread that a source has been created or dropped.
@@ -5145,5 +5146,22 @@ pub mod fast_path_peek {
 
             Ok(crate::ExecuteResponse::SendingRows(Box::pin(rows_rx)))
         }
+    }
+}
+
+#[cfg(test)]
+impl Coordinator {
+    #[allow(dead_code)]
+    async fn verify_ship_dataflow_no_error(&mut self) {
+        // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed
+        // to have a `Result` return because these functions are called after
+        // `catalog_transact`, after which no errors are allowed. This test exists to
+        // prevent us from incorrectly teaching those functions how to return errors
+        // (which has happened twice and is the motivation for this test).
+
+        let df = DataflowDesc::new("".into());
+        let _: () = self.ship_dataflow(df.clone()).await;
+        let _: () = self.ship_dataflows(vec![df.clone()]).await;
+        let _: DataflowDescription<dataflow_types::plan::Plan> = self.finalize_dataflow(df);
     }
 }
