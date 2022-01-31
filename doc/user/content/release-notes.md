@@ -126,7 +126,7 @@ changes that have not yet been documented.
   Previous versions of Materialize would incorrectly return `0` in these cases.
   The new behavior matches PostgreSQL.
 
-  [`date_part`](/sql/functions/date_part/) still returns a `0` in these cases,
+  [`date_part`](/sql/functions/date-part/) still returns a `0` in these cases,
   which matches the PostgreSQL behavior.
 
 - **Breaking change.** Change the return type of [`extract`](/sql/functions/extract/)
