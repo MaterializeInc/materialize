@@ -29,3 +29,33 @@
         "environment": "scratch"
     }
 }
+
+{
+    "name": "kafka-ingest-open-loop",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find kafka-ingest-open-loop run default --num-seconds=86400 --records-per-second=1000",
+    "instance_type": "r5a.4xlarge",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 200,
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "lt_name": "release-kafka-ingest-open-loop",
+        "purpose": "load_test",
+        "test": "kafka-ingest-open-loop",
+        "environment": "scratch"
+    }
+}
+
+{
+    "name": "kafka-ingest-open-loop-persist",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find kafka-ingest-open-loop run default --num-seconds=86400 --records-per-second=1000 --enable-persistence --s3-storage=release-$(echo $RANDOM)",
+    "instance_type": "r5a.4xlarge",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 200,
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "lt_name": "release-kafka-ingest-open-loop-persist",
+        "purpose": "load_test",
+        "test": "kafka-ingest-open-loop-persist",
+        "environment": "scratch"
+    }
+}
