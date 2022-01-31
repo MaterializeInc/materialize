@@ -28,6 +28,9 @@ use expr::{GlobalId, PartitionId, RowSetFinishing};
 use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
+pub mod fat_client;
+pub use fat_client::FatClient;
+
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {

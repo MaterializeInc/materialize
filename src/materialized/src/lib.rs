@@ -236,7 +236,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = coord::serve(coord::Config {
-        dataflow_client,
+        dataflow_client: Box::new(dataflow_client),
         logging: config.logging,
         data_directory: &config.data_directory,
         timestamp_frequency: config.timestamp_frequency,

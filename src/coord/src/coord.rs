@@ -259,11 +259,8 @@ pub struct LoggingConfig {
 }
 
 /// Configures a coordinator.
-pub struct Config<'a, C>
-where
-    C: dataflow_types::client::Client,
-{
-    pub dataflow_client: C,
+pub struct Config<'a> {
+    pub dataflow_client: Box<dyn dataflow_types::client::Client>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
     pub timestamp_frequency: Duration,
@@ -279,12 +276,9 @@ where
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<C>
-where
-    C: dataflow_types::client::Client,
-{
+pub struct Coordinator {
     /// A client to a running dataflow cluster.
-    dataflow_client: C,
+    dataflow_client: dataflow_types::client::FatClient<Box<dyn dataflow_types::client::Client>>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -410,10 +404,7 @@ macro_rules! guard_write_critical_section {
     };
 }
 
-impl<C> Coordinator<C>
-where
-    C: ComputeClient + StorageClient + 'static,
-{
+impl Coordinator {
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
@@ -4104,9 +4095,14 @@ where
         }
 
         let indexes = &self.indexes;
+        let storage = &self.dataflow_client;
 
         let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
-            let builder = DataflowBuilder { catalog, indexes };
+            let builder = DataflowBuilder {
+                catalog,
+                indexes,
+                storage,
+            };
             f(builder)
         })?;
         self.send_builtin_table_updates(builtin_table_updates).await;
@@ -4578,7 +4574,7 @@ where
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve<C>(
+pub async fn serve(
     Config {
         dataflow_client,
         logging,
@@ -4592,11 +4588,8 @@ pub async fn serve<C>(
         metrics_registry,
         persist,
         now,
-    }: Config<'_, C>,
-) -> Result<(Handle, Client), CoordError>
-where
-    C: dataflow_types::client::ComputeClient + dataflow_types::client::StorageClient + 'static,
-{
+    }: Config<'_>,
+) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
@@ -4647,7 +4640,7 @@ where
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
-                dataflow_client,
+                dataflow_client: dataflow_types::client::FatClient::new(dataflow_client),
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 indexes: ArrangementFrontiers::default(),
@@ -4899,7 +4892,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use dataflow_types::client::{ComputeClient, StorageClient};
+    use dataflow_types::client::ComputeClient;
 
     use crate::CoordError;
     use expr::{EvalError, GlobalId, Id};
@@ -4986,10 +4979,7 @@ pub mod fast_path_peek {
         return Ok(Plan::PeekDataflow(dataflow_plan, index_id));
     }
 
-    impl<C> crate::coord::Coordinator<C>
-    where
-        C: ComputeClient + StorageClient + 'static,
-    {
+    impl crate::coord::Coordinator {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
             &mut self,
