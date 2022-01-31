@@ -38,7 +38,7 @@ use persist::file::FileBlob;
 use persist::runtime::{self, RuntimeConfig};
 use uuid::Uuid;
 
-use crate::catalog::{SerializedEnvelopePersistDetails, SerializedSourcePersistDetails};
+use crate::catalog::{self, SerializedEnvelopePersistDetails, SerializedSourcePersistDetails};
 
 #[derive(Clone, Debug)]
 pub enum PersistStorage {
@@ -279,12 +279,13 @@ impl PersisterWithConfig {
         }))
     }
 
-    pub fn source_persist_desc(
+    /// Creates a [`SerializedSourcePersistDetails`] for a new source.
+    pub fn new_serialized_source_persist_details(
         &self,
         id: GlobalId,
         connector: &SourceConnector,
         pretty: &str,
-    ) -> Result<Option<SourcePersistDesc>, Error> {
+    ) -> Option<SerializedSourcePersistDetails> {
         // NB: This gets written down in the catalog, so it should be
         // safe to change the naming, if necessary. See
         // Catalog::deserialize_item.
@@ -292,7 +293,7 @@ impl PersisterWithConfig {
         let primary_stream = format!("{}", name_prefix);
         let timestamp_bindings_stream = format!("{}-timestamp-bindings", name_prefix);
 
-        let serialized_details = match connector {
+        match connector {
             SourceConnector::External {
                 connector: ExternalSourceConnector::Kafka(_),
                 envelope: SourceEnvelope::Upsert(_),
@@ -312,24 +313,25 @@ impl PersisterWithConfig {
                 envelope_details: crate::catalog::SerializedEnvelopePersistDetails::None,
             }),
             _ => None,
-        };
-
-        self.source_persist_desc_from_serialized(connector, serialized_details)
+        }
     }
 
-    // NOTE: This is not a From<SerializedSourcePersistDetails> because we also need access to the
-    // connector and the persist runtime in future changes.
-    pub fn source_persist_desc_from_serialized(
+    /// Loads a source persist descriptor for an existing catalog source that
+    /// reflects current frontier information.
+    pub fn load_source_persist_desc(
         &self,
-        connector: &SourceConnector,
-        serialized_details: Option<SerializedSourcePersistDetails>,
+        catalog::Source {
+            connector,
+            persist_details,
+            ..
+        }: &catalog::Source,
     ) -> Result<Option<SourcePersistDesc>, Error> {
         let persister = match self.persister.as_ref() {
             Some(x) => x,
             None => return Ok(None),
         };
 
-        let details = serialized_details.map(|serialized_details| {
+        let details = persist_details.as_ref().map(|serialized_details| {
             let envelope_desc = match connector {
                 SourceConnector::External {
                     envelope: SourceEnvelope::Upsert(_),
@@ -370,9 +372,11 @@ impl PersisterWithConfig {
             // descriptions for a batch of IDs in one go instead of getting them all separately. It
             // shouldn't be an issue right now, though.
             let primary_stream =
-                stream_desc_from_name(serialized_details.primary_stream, persister)?;
-            let timestamp_bindings_stream =
-                stream_desc_from_name(serialized_details.timestamp_bindings_stream, persister)?;
+                stream_desc_from_name(serialized_details.primary_stream.clone(), persister)?;
+            let timestamp_bindings_stream = stream_desc_from_name(
+                serialized_details.timestamp_bindings_stream.clone(),
+                persister,
+            )?;
 
             Ok(SourcePersistDesc {
                 primary_stream,

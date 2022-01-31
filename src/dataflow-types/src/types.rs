@@ -21,6 +21,9 @@ use timely::progress::frontier::Antichain;
 use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{Diff, RelationType, Row, Timestamp};
 
+use crate::sources::persistence::SourcePersistDesc;
+use crate::types::sources::SourceDesc;
+
 /// The response from a `Peek`.
 ///
 /// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
@@ -86,6 +89,8 @@ pub struct SourceInstanceDesc {
     pub description: crate::types::sources::SourceDesc,
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::types::LinearOperator>,
+    /// A description of how to persist the source.
+    pub persist: Option<sources::persistence::SourcePersistDesc>,
 }
 
 /// A description of a dataflow to construct and results to surface.
@@ -152,7 +157,12 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(&mut self, id: GlobalId, description: crate::types::sources::SourceDesc) {
+    pub fn import_source(
+        &mut self,
+        id: GlobalId,
+        description: SourceDesc,
+        persist: Option<SourcePersistDesc>,
+    ) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         self.source_imports.insert(
@@ -160,6 +170,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
             SourceInstanceDesc {
                 description,
                 operators: None,
+                persist,
             },
         );
     }
@@ -1061,7 +1072,6 @@ pub mod sources {
             consistency: persistence::Consistency,
             ts_frequency: Duration,
             timeline: Timeline,
-            persist: Option<persistence::SourcePersistDesc>,
         },
 
         /// A local "source" is either fed by a local input handle, or by reading from a

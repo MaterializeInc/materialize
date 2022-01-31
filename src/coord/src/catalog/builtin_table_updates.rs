@@ -179,13 +179,10 @@ impl CatalogState {
         source: &Source,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let persist_name = match &source.connector {
-            dataflow_types::sources::SourceConnector::External { persist, .. } => persist
-                .as_ref()
-                .map(|persist| persist.primary_stream.name.as_str()),
-            dataflow_types::sources::SourceConnector::Local { .. } => None,
-        };
-        let persisted_name_datum = Datum::from(persist_name);
+        let persist_name = source
+            .persist_details
+            .as_ref()
+            .map(|persist| &*persist.primary_stream);
         vec![BuiltinTableUpdate {
             id: MZ_SOURCES.id,
             row: Row::pack_slice(&[
@@ -195,7 +192,7 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source.connector.name()),
                 Datum::String(self.is_volatile(id).as_str()),
-                persisted_name_datum,
+                Datum::from(persist_name),
             ]),
             diff,
         }]

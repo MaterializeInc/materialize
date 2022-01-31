@@ -41,6 +41,8 @@ pub enum CoordError {
     Eval(EvalError),
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
+    /// Unexpected internal state was encountered.
+    Internal(String),
     /// At least one input has no complete timestamps yet
     IncompleteTimestamp(Vec<expr::GlobalId>),
     /// Specified index is disabled, but received non-enabling update request
@@ -276,6 +278,7 @@ impl fmt::Display for CoordError {
                 "At least one input has no complete timestamps yet: {:?}",
                 unstarted
             ),
+            CoordError::Internal(e) => write!(f, "internal error: {}", e),
             CoordError::InvalidAlterOnDisabledIndex(name) => {
                 write!(f, "invalid ALTER on disabled index {}", name.quoted())
             }
