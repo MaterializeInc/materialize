@@ -569,9 +569,11 @@ class Composition:
         self,
         *,
         host: str = "localhost",
-        port: int,
+        port: Union[int, str],
         timeout_secs: int = 240,
     ) -> None:
+        if isinstance(port, str):
+            port = int(port.split(":")[0])
         ui.progress(f"waiting for {host}:{port}", "C")
         for remaining in ui.timeout_loop(timeout_secs):
             cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
