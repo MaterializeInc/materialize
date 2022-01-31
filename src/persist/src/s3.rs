@@ -11,7 +11,7 @@
 
 use std::cmp;
 use std::ops::Range;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use aws_config::default_provider::{credentials, region};
@@ -22,7 +22,7 @@ use aws_sdk_s3::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::SdkError;
 use aws_types::credentials::SharedCredentialsProvider;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures_executor::block_on;
 use futures_util::FutureExt;
 use ore::task::RuntimeExt;
@@ -163,30 +163,227 @@ impl S3BlobCore {
     }
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        let start_overall = Instant::now();
         let client = self.ensure_open()?;
         let path = self.get_path(key);
+
+        // S3 advises that it's fastest to download large objects along the part
+        // boundaries they were originally uploaded with [1].
+        //
+        // [1]: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/use-byte-range-fetches.html
+        //
+        // One option is to run the same logic as multipart does and do the
+        // requests using the resulting byte ranges, but if we ever changed the
+        // multipart chunking logic, they wouldn't line up for old blobs written
+        // by a previous version.
+        //
+        // Another option is to store the part boundaries in the metadata we
+        // keep about the batch, but this would be large and wasteful.
+        //
+        // Luckily, s3 exposes a part_number param on GetObject requests that we
+        // can use. If an object was created with multipart, it allows
+        // requesting each part as they were originally uploaded by the part
+        // number index. With this, we can simply send off requests for part
+        // number 1..=num_parts and reassemble the results.
+        //
+        // We could roundtrip the number of parts through persist batch
+        // metadata, but with some cleverness, we can avoid even this. Turns
+        // out, if multipart upload wasn't used (it was just a normal PutObject
+        // request), s3 will still happily return it for a request specifying a
+        // part_number of 1. This lets us fire off a first request, which
+        // contains the metadata we need to determine how many additional parts
+        // we need, if any.
+        //
+        // So, the following call sends this first request. The SDK even returns
+        // the headers before the full data body has completed. This gives us
+        // the number of parts. We can then proceed to fetch the body of the
+        // first request concurrently with the rest of the parts of the object.
         let object = client
             .get_object()
             .bucket(&self.bucket)
-            .key(path)
+            .key(&path)
+            .part_number(1)
             .send()
             .await;
-        let object = match object {
+        let first_part = match object {
             Ok(object) => object,
             Err(SdkError::ServiceError { err, .. }) if err.is_no_such_key() => return Ok(None),
-            Err(err) => return Err(Error::from(err.to_string())),
+            Err(err) => return Err(Error::from(format!("s3 get meta err: {}", err))),
         };
+        let num_parts = if first_part.parts_count() == 0 {
+            // For a non-multipart upload, parts_count will be 0. The rest of
+            // the code works perfectly well if we just pretend this was a
+            // multipart upload of 1 part.
+            1
+        } else {
+            first_part.parts_count()
+        };
+        tracing::trace!(
+            "s3 download first header took {:?} ({} parts)",
+            start_overall.elapsed(),
+            num_parts
+        );
+        if num_parts < 1 {
+            return Err(format!("unexpected number of s3 object parts: {}", num_parts).into());
+        }
 
-        let val = object
-            .body
-            .collect()
-            .await
-            .map_err(|e| format!("collecting byte buffer: {}", e))?
-            // TODO: `into_bytes().to_vec()` results in one extra copy than
-            // necessary. Changing `Blob::get` to return `Bytes` directly would
-            // be more efficient, or adding a `into_vec()` method upstream.
-            .into_bytes()
-            .to_vec();
+        // TODO: Plumb an Arc<AsyncRuntime> on S3BlobCore instead. I tried but
+        // was getting a "Cannot drop a runtime in a context where blocking is
+        // not allowed" error that I didn't want to get distracted with. All the
+        // calls into the s3 library require that this context is set anyway, so
+        // I suppose this is no worse than where we started.
+        let async_runtime = AsyncHandle::try_current().map_err(|err| err.to_string())?;
+
+        // Continue to fetch the first part's body while we fetch the other
+        // parts.
+        let start_part_body = Instant::now();
+        let mut part_bodies = Vec::new();
+        let first_body_len = usize::try_from(first_part.content_length)
+            .map_err(|err| format!("unexpected s3 content_length: {}", err))?;
+        let mut total_body_len = first_body_len;
+        part_bodies.push(
+            // TODO: Add the key and part number once this can be annotated with
+            // metadata.
+            async_runtime.spawn_named(
+                || "persist_s3blob_get_body",
+                first_part
+                    .body
+                    .collect()
+                    .map(move |res| (start_part_body.elapsed(), first_body_len, res)),
+            ),
+        );
+
+        if num_parts > 1 {
+            // Fetch the headers of the rest of the parts. (Starting at part 2
+            // because we already did part 1.)
+            let start_headers = Instant::now();
+            let mut part_futs = Vec::new();
+            for part_num in 2..=num_parts {
+                // TODO: Add the key and part number once this can be annotated
+                // with metadata.
+                let part_fut = async_runtime.spawn_named(
+                    || "persist_s3blob_get_header",
+                    client
+                        .get_object()
+                        .bucket(&self.bucket)
+                        .key(&path)
+                        .part_number(part_num)
+                        .send()
+                        .map(move |res| (start_headers.elapsed(), res)),
+                );
+                part_futs.push(part_fut);
+            }
+
+            // As each part header comes back, first off a task to fetch the
+            // body.
+            //
+            // TODO: Doing this in part order isn't optimal. Perhaps better
+            // would be do it as each header finishes. Once we do the below TODO
+            // about not copying everything into one Vec, then we won't need to
+            // compute the total_body_len and this can just chain the two
+            // futures together.
+            let mut min_header_elapsed = MinElapsed::default();
+            for part_fut in part_futs {
+                let (this_header_elapsed, part_res) = part_fut
+                    .await
+                    .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?;
+                let part_res =
+                    part_res.map_err(|err| Error::from(format!("s3 get meta err: {}", err)))?;
+                let this_body_len = usize::try_from(part_res.content_length)
+                    .map_err(|err| format!("unexpected s3 content_length: {}", err))?;
+                total_body_len += this_body_len;
+
+                let min_header_elapsed = min_header_elapsed.observe(this_header_elapsed);
+                if this_header_elapsed >= min_header_elapsed * 8 {
+                    tracing::debug!(
+                        "s3 download part header took {:?} more than 8x the min {:?}",
+                        this_header_elapsed,
+                        min_header_elapsed
+                    );
+                } else {
+                    tracing::trace!("s3 download part header took {:?}", this_header_elapsed);
+                }
+
+                let start_part_body = Instant::now();
+                part_bodies.push(
+                    // TODO: Add the key and part number once this can be
+                    // annotated with metadata.
+                    async_runtime.spawn_named(
+                        || "persist_s3blob_get_body",
+                        part_res
+                            .body
+                            .collect()
+                            .map(move |res| (start_part_body.elapsed(), this_body_len, res)),
+                    ),
+                );
+            }
+            tracing::trace!(
+                "s3 download part headers took {:?} ({} parts)",
+                start_headers.elapsed(),
+                num_parts
+            );
+        }
+
+        let start_bodies = Instant::now();
+        let mut min_body_elapsed = MinElapsed::default();
+        let mut val = vec![0u8; total_body_len];
+        let mut val_offset = 0;
+        let mut body_copy_elapsed = Duration::ZERO;
+        for part_body in part_bodies {
+            let (this_body_elapsed, this_body_len, part_body_res) = part_body
+                .await
+                .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?;
+            let mut part_body_res =
+                part_body_res.map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+
+            let min_body_elapsed = min_body_elapsed.observe(this_body_elapsed);
+            if this_body_elapsed >= min_body_elapsed * 8 {
+                tracing::debug!(
+                    "s3 download part body took {:?} more than 8x the min {:?}",
+                    this_body_elapsed,
+                    min_body_elapsed
+                );
+            } else {
+                tracing::trace!("s3 download part body took {:?}", this_body_elapsed);
+            }
+
+            // TODO: It'd be lovely if we could push these copies into the
+            // part_bodies futures so these last copies weren't all done
+            // serially. Alternatively, we could change the return type of
+            // `Blob::get` to something that can represent a chain of buffers.
+            //
+            // For example: A 6GiB blob takes ~6s to download and ~3s to collect
+            // into this single Vec.
+            let start_body_copy = Instant::now();
+            if part_body_res.remaining() != this_body_len {
+                return Err(format!(
+                    "s3 expected body length {} got: {}",
+                    this_body_len,
+                    part_body_res.remaining()
+                )
+                .into());
+            }
+            let part_range = val_offset..val_offset + this_body_len;
+            val_offset = part_range.end;
+            part_body_res.copy_to_slice(&mut val[part_range]);
+            body_copy_elapsed += start_body_copy.elapsed();
+        }
+        tracing::trace!(
+            "s3 download part bodies took {:?} ({} parts)",
+            start_bodies.elapsed(),
+            num_parts
+        );
+        tracing::trace!(
+            "s3 copy part bodies took {:?} ({} parts)",
+            body_copy_elapsed,
+            num_parts
+        );
+
+        tracing::debug!(
+            "s3 GetObject took {:?} ({} parts)",
+            start_overall.elapsed(),
+            num_parts
+        );
         Ok(Some(val))
     }
 
@@ -286,11 +483,11 @@ impl S3Blob {
     }
 
     async fn set_single_part(&self, key: &str, value: Vec<u8>) -> Result<(), Error> {
+        let start_overall = Instant::now();
         let client = self.core.ensure_open()?;
         let path = self.core.get_path(key);
 
         let value_len = value.len();
-        let start_overall = Instant::now();
         client
             .put_object()
             .bucket(&self.core.bucket)
@@ -308,11 +505,9 @@ impl S3Blob {
     }
 
     async fn set_multi_part(&self, key: &str, value: Vec<u8>) -> Result<(), Error> {
+        let start_overall = Instant::now();
         let client = self.core.ensure_open()?;
         let path = self.core.get_path(key);
-
-        let value = Bytes::from(value);
-        let start_overall = Instant::now();
 
         // Start the multi part request and get an upload id.
         tracing::trace!("s3 PutObject multi start {}b", value.len());
@@ -345,13 +540,16 @@ impl S3Blob {
         // TODO: The aws cli throttles how many of these are outstanding at any
         // given point. We'll likely want to do the same at some point.
         let start_parts = Instant::now();
+        let value = Bytes::from(value);
         let mut part_futs = Vec::new();
         for (part_num, part_range) in self.core.multipart_config.part_iter(value.len()) {
             // NB: Without this spawn, these will execute serially. This is rust
             // async 101 stuff, but there isn't much async in the persist
             // codebase (yet?) so I thought it worth calling out.
             let part_fut = async_runtime.spawn_named(
-                || "persist_s3blob_multipart",
+                // TODO: Add the key and part number once this can be annotated
+                // with metadata.
+                || "persist_s3blob_put_part",
                 client
                     .upload_part()
                     .bucket(&self.core.bucket)
@@ -373,7 +571,7 @@ impl S3Blob {
         // this. That would cancel outstanding requests for us if any of them
         // fails. However, it might not play well with using retries for tail
         // latencies. Investigate.
-        let mut min_part_elapsed = None;
+        let mut min_part_elapsed = MinElapsed::default();
         let mut parts = Vec::with_capacity(parts_len);
         for (part_num, part_fut) in part_futs.into_iter() {
             let (this_part_elapsed, part_res) = part_fut
@@ -391,11 +589,8 @@ impl S3Blob {
                     .build(),
             );
 
-            let min_part_elapsed = min_part_elapsed.get_or_insert(this_part_elapsed);
-            if this_part_elapsed < *min_part_elapsed {
-                *min_part_elapsed = this_part_elapsed;
-            }
-            if this_part_elapsed >= *min_part_elapsed * 8 {
+            let min_part_elapsed = min_part_elapsed.observe(this_part_elapsed);
+            if this_part_elapsed >= min_part_elapsed * 8 {
                 tracing::debug!(
                     "s3 upload_part took {:?} more than 8x the min {:?}",
                     this_part_elapsed,
@@ -654,6 +849,21 @@ impl Iterator for MultipartChunkIter {
         let end = cmp::min(start + self.part_size, self.total_len);
         let part_num = part_idx + 1;
         Some((part_num, start..end))
+    }
+}
+
+/// A helper for tracking the minimum of a set of Durations.
+#[derive(Debug, Default)]
+struct MinElapsed(Option<Duration>);
+
+impl MinElapsed {
+    /// Records a new Duration and returns the minimum seen so far.
+    fn observe(&mut self, x: Duration) -> Duration {
+        let min = self.0.get_or_insert(x);
+        if x < *min {
+            *min = x;
+        }
+        *min
     }
 }
 
