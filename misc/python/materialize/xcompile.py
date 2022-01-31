@@ -13,7 +13,7 @@ import os
 import platform
 import sys
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from materialize import ROOT, spawn
 
@@ -64,7 +64,9 @@ def target(arch: Arch) -> str:
     return f"{arch}-unknown-linux-gnu"
 
 
-def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
+def cargo(
+    arch: Arch, subcommand: str, rustflags: List[str], channel: Optional[str] = None
+) -> List[str]:
     """Construct a Cargo invocation for cross compiling.
 
     Args:
@@ -72,6 +74,7 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
         subcommand: The Cargo subcommand to invoke.
         rustflags: Override the flags passed to the Rust compiler. If the list
             is empty, the default flags are used.
+        channel: The Rust toolchain channel to use. Either None/"stable" or "nightly".
 
     Returns:
         A list of arguments specifying the beginning of the command to invoke.
@@ -112,7 +115,7 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
     }
 
     return [
-        *_enter_builder(arch),
+        *_enter_builder(arch, channel),
         "env",
         *(f"{k}={v}" for k, v in env.items()),
         "cargo",
@@ -122,23 +125,24 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
     ]
 
 
-def tool(arch: Arch, name: str) -> List[str]:
+def tool(arch: Arch, name: str, channel: Optional[str] = None) -> List[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
     Args:
         arch: The CPU architecture to build for.
         name: The name of the binutils tool to invoke.
+        channel: The Rust toolchain channel to use. Either None/"stable" or "nightly".
 
     Returns:
         A list of arguments specifying the beginning of the command to invoke.
     """
     return [
-        *_enter_builder(arch),
+        *_enter_builder(arch, channel),
         f"{target(arch)}-{name}",
     ]
 
 
-def _enter_builder(arch: Arch) -> List[str]:
+def _enter_builder(arch: Arch, channel: Optional[str] = None) -> List[str]:
     assert (
         arch == Arch.host()
     ), f"target architecture {arch} does not match host architecture {Arch.host()}"
@@ -150,7 +154,7 @@ def _enter_builder(arch: Arch) -> List[str]:
         _bootstrap_darwin(arch)
         return []
     else:
-        return ["bin/ci-builder", "run", "stable"]
+        return ["bin/ci-builder", "run", channel if channel else "stable"]
 
 
 def _bootstrap_darwin(arch: Arch) -> None:

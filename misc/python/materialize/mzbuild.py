@@ -29,7 +29,7 @@ from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import IO, Any, Dict, Iterable, Iterator, List, Sequence, Set
+from typing import IO, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set
 
 import yaml
 
@@ -70,9 +70,13 @@ class RepositoryDetails:
         self.coverage = coverage
         self.cargo_workspace = cargo.Workspace(root)
 
-    def cargo(self, subcommand: str, rustflags: List[str]) -> List[str]:
+    def cargo(
+        self, subcommand: str, rustflags: List[str], channel: Optional[str] = None
+    ) -> List[str]:
         """Start a cargo invocation for the configured architecture."""
-        return xcompile.cargo(self.arch, subcommand, rustflags)
+        return xcompile.cargo(
+            arch=self.arch, channel=channel, subcommand=subcommand, rustflags=rustflags
+        )
 
     def tool(self, name: str) -> List[str]:
         """Start a binutils tool invocation for the configured architecture."""
@@ -208,21 +212,26 @@ class CargoBuild(CargoPreImage):
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
         self.rustflags = config.pop("rustflags", [])
+        self.channel = None
         if rd.coverage:
             self.rustflags += [
                 "-Zinstrument-coverage",
-                "-Clink-dead-code",
                 # Nix generates some unresolved symbols that -Zinstrument-coverage
                 # somehow causes the linker to complain about, so just disable
                 # warnings about unresolved symbols and hope it all works out.
                 # See: https://github.com/nix-rust/nix/issues/1116
                 "-Clink-arg=-Wl,--warn-unresolved-symbols",
             ]
+            self.channel = "nightly"
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
     def build(self) -> None:
-        cargo_build = [*self.rd.cargo("build", self.rustflags), "--bin", self.bin]
+        cargo_build = [
+            *self.rd.cargo("build", channel=self.channel, rustflags=self.rustflags),
+            "--bin",
+            self.bin,
+        ]
         if self.rd.release_mode:
             cargo_build.append("--release")
         spawn.runv(cargo_build, cwd=self.rd.root)
@@ -624,6 +633,7 @@ class ResolvedImage:
             self_hash.update(b"\0")
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
+        self_hash.update(f"coverage={self.image.rd.coverage}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
