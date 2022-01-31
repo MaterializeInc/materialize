@@ -114,7 +114,10 @@ async fn run_line_reader(
 
         for a in &actions {
             let redo = a.action.redo(&mut state);
-            redo.await.map_err(|e| PosError::new(e, a.pos))?
+            redo.await.map_err(|e| PosError::new(e, a.pos))?;
+            if state.skip_rest {
+                break;
+            }
         }
 
         if config.reset {
