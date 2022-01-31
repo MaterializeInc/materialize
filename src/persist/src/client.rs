@@ -396,24 +396,58 @@ impl<'a, K: Codec, V: Codec, T: Borrow<((K, V), u64, isize)>> FromIterator<T>
 }
 
 /// A handle for writing to multiple streams.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct MultiWriteHandle {
     stream_ids: HashSet<Id>,
-    client: RuntimeClient,
+    // This is an `Err` in case any (potentially recoverable) setup operation failed. We don't fail
+    // on those setup calls because we cannot fail when setting up dataflows.
+    //
+    // We do return an `Err` from initialization code on usage errors or unrecoverable errors, such
+    // as using two different runtime clients with the same `MultiWriteHandle`.
+    client: Result<RuntimeClient, Error>,
+}
+
+// Errored handles are never equal to another handle. If there are no errors, defer to
+// `RuntimeClient` and compare contained stream IDs.
+impl PartialEq for MultiWriteHandle {
+    fn eq(&self, other: &Self) -> bool {
+        if self.client.is_err() || other.client.is_err() {
+            return false;
+        }
+
+        self.stream_ids.eq(&other.stream_ids) && self.client.eq(&other.client)
+    }
 }
 
 impl MultiWriteHandle {
+    /// Returns `Some(Error)` in case any initialization operation on this [`MultiWriteHandle`]
+    /// resulted in an `Error`.
+    pub fn err(&self) -> Option<Error> {
+        self.client.as_ref().err().cloned()
+    }
+
     /// Returns a new [MultiWriteHandle] for the given stream.
-    pub fn new<K: Codec, V: Codec>(handle: &StreamWriteHandle<K, V>) -> Result<Self, Error> {
+    pub fn new<K: Codec, V: Codec>(handle: &StreamWriteHandle<K, V>) -> Self {
         let mut stream_ids = HashSet::new();
-        stream_ids.insert(handle.stream_id()?);
-        let client = handle.client.clone();
-        Ok(MultiWriteHandle { stream_ids, client })
+
+        let client = match handle.stream_id() {
+            Ok(id) => {
+                stream_ids.insert(id);
+                Ok(handle.client.clone())
+            }
+            Err(e) => Err(e),
+        };
+
+        MultiWriteHandle { stream_ids, client }
     }
 
     /// Returns a new [MultiWriteHandle] for the given streams.
     ///
     /// Convenience function for when all the streams have matching K and V.
+    ///
+    /// NOTE: This only returns an `Error` in case the passed iterator contains no handles or when
+    /// passing in handles from different persist runtimes. All other errors are handled
+    /// internally.
     pub fn new_from_streams<K, V, H, I>(mut handles: I) -> Result<Self, Error>
     where
         K: Codec,
@@ -423,30 +457,55 @@ impl MultiWriteHandle {
     {
         // Manually pop the first handle to construct the MultiWriteHandle, then
         // continue with the same iter to add the rest.
-        let first_handle = handles
-            .next()
-            .ok_or_else(|| Error::from("MultiWriteHandle requires at least one stream"))?;
-        let mut ret = Self::new(first_handle.borrow())?;
+        let mut ret = match handles.next() {
+            Some(handle) => Self::new(handle.borrow()),
+            None => return Err(Error::from("MultiWriteHandle requires at least one stream")),
+        };
+
         for handle in handles {
             ret.add_stream(handle.borrow())?;
         }
+
         Ok(ret)
     }
 
     /// Adds the given stream to the set
+    ///
+    /// NOTE: This only returns an `Error` when passing in handles from different persist runtimes.
+    /// All other errors are handled internally.
     pub fn add_stream<K: Codec, V: Codec>(
         &mut self,
         handle: &StreamWriteHandle<K, V>,
     ) -> Result<(), Error> {
-        if handle.client != self.client {
+        let client = match self.client.as_ref() {
+            Ok(client) => client,
+            Err(_) => {
+                // Return, because we already are in an errored state.
+                // NOTE: The errors we keep in `client` are potentially recoverable/are not usage
+                // errors, so we only surface them when calling the methods that use the handle.
+                return Ok(());
+            }
+        };
+
+        if handle.client != *client {
             return Err(Error::from(format!(
                 "MultiWriteHandle got handles from two runtimes: {:?} and {:?}",
                 self.client, handle.client
             )));
         }
-        // It's odd if there are duplicates but the semantics of what that
-        // means are straightforward, so for now we support it.
-        self.stream_ids.insert(handle.stream_id()?);
+
+        match handle.stream_id() {
+            Ok(id) => {
+                // It's odd if there are duplicates but the semantics of what that
+                // means are straightforward, so for now we support it.
+                self.stream_ids.insert(id);
+            }
+            Err(e) => {
+                // Remember the error for future calls.
+                self.client = Err(e);
+            }
+        }
+
         Ok(())
     }
 
@@ -458,16 +517,26 @@ impl MultiWriteHandle {
         &self,
         f: F,
     ) -> PFuture<SeqNo> {
+        let (tx, rx) = PFuture::new();
+
+        let client = match self.client.as_ref() {
+            Ok(client) => client,
+            Err(e) => {
+                tx.fill(Err(e.clone()));
+                return rx;
+            }
+        };
+
         let mut builder = AtomicWriteBuilder {
             stream_ids: &self.stream_ids,
             records: Vec::new(),
         };
-        let (tx, rx) = PFuture::new();
+
         if let Err(err) = f(&mut builder) {
             tx.fill(Err(err));
             return rx;
         }
-        self.client
+        client
             .sender
             .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Write(builder.records, tx)));
         rx
@@ -480,6 +549,15 @@ impl MultiWriteHandle {
     /// twice at the same timestamp, which we currently disallow).
     pub fn seal(&self, ids: &[Id], upper: u64) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
+
+        let client = match self.client.as_ref() {
+            Ok(client) => client,
+            Err(e) => {
+                tx.fill(Err(e.clone()));
+                return rx;
+            }
+        };
+
         for stream_id in ids {
             if !self.stream_ids.contains(stream_id) {
                 tx.fill(Err(Error::from(format!(
@@ -489,7 +567,7 @@ impl MultiWriteHandle {
                 return rx;
             }
         }
-        self.client
+        client
             .sender
             .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Seal(ids.to_vec(), upper, tx)));
         rx
@@ -502,6 +580,15 @@ impl MultiWriteHandle {
     /// the stream twice at the same timestamp, which we currently disallow).
     pub fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)]) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
+
+        let client = match self.client.as_ref() {
+            Ok(client) => client,
+            Err(e) => {
+                tx.fill(Err(e.clone()));
+                return rx;
+            }
+        };
+
         for (stream_id, _) in id_sinces {
             if !self.stream_ids.contains(stream_id) {
                 tx.fill(Err(Error::from(format!(
@@ -511,7 +598,7 @@ impl MultiWriteHandle {
                 return rx;
             }
         }
-        self.client
+        client
             .sender
             .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::AllowCompaction(
                 id_sinces.to_vec(),

@@ -708,7 +708,7 @@ mod tests {
         // Verify that we can atomically write to streams with mismatched types.
         let (c1s3, c1s3_read) = client1.create_or_load::<String, ()>("3");
         let (c1s4, c1s4_read) = client1.create_or_load::<(), String>("4");
-        let mut multi = MultiWriteHandle::new(&c1s3)?;
+        let mut multi = MultiWriteHandle::new(&c1s3);
         multi.add_stream(&c1s4)?;
         multi
             .write_atomic(|b| {
