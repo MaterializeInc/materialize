@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Encoding and decoding for PostgreSQL COPY format
+//! Encoding and decoding for PostgreSQL COPY data format
+//!
+//! # Useful references
+//!
+//!   * [PostgreSQL COPY](https://www.postgresql.org/docs/14/sql-copy.html)
 
 mod copy;
 

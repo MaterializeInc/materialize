@@ -1,6 +1,6 @@
 [package]
 name = "pgcopy"
-description = "Library for parsing PostgreSQL COPY formatted data"
+description = "Encoding/decoding of PostgreSQL COPY formats."
 version = "0.0.0"
 edition = "2021"
 publish = false
