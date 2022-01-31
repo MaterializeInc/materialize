@@ -840,11 +840,9 @@ where
                     // Assert that a source is not recreated with a new description.
                     if let Some(d) = self.storage_state.source_descriptions.get(&source_id) {
                         if d != &description {
-                            log::error!(
+                            panic!(
                                 "Multiple registration of source id {}: {:?} and {:?}",
-                                source_id,
-                                d,
-                                description
+                                source_id, d, description
                             );
                         }
                     }
@@ -861,7 +859,7 @@ where
                     // Check that the source has been previously created.
                     // Do not remove it, so that we can continue to check for rebinding.
                     if !self.storage_state.source_descriptions.contains_key(&name) {
-                        log::error!("DropSource for id that was not created: {:?}", name);
+                        panic!("DropSource for id that was not created: {:?}; created source ids are: {:?}", name, self.storage_state.source_descriptions.keys());
                     }
                 }
             }

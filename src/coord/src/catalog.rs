@@ -132,6 +132,37 @@ pub struct CatalogState {
 }
 
 impl CatalogState {
+    /// Encapsulates the logic for creating a source description for a source or table in the catalog.
+    pub fn source_description_for(
+        &self,
+        id: GlobalId,
+    ) -> Option<dataflow_types::sources::SourceDesc> {
+        let entry = self.get_by_id(&id);
+
+        match entry.item() {
+            CatalogItem::Table(table) => {
+                let connector = SourceConnector::Local {
+                    timeline: table.timeline(),
+                    persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                };
+                Some(dataflow_types::sources::SourceDesc {
+                    name: entry.name().to_string(),
+                    connector,
+                    desc: table.desc.clone(),
+                })
+            }
+            CatalogItem::Source(source) => {
+                let connector = source.connector.clone();
+                Some(dataflow_types::sources::SourceDesc {
+                    name: entry.name().to_string(),
+                    connector,
+                    desc: source.desc.clone(),
+                })
+            }
+            _ => None,
+        }
+    }
+
     pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
         &self.enabled_indexes
     }
