@@ -321,10 +321,10 @@ pub fn purify(
                                             expr: Box::new(Expr::Identifier(vec![Ident::new(
                                                 "row_data",
                                             )])),
-                                            subscript: Box::new(Expr::Value(Value::Number(
+                                            indexes: vec![Expr::Value(Value::Number(
                                                 // LIST is one based
                                                 (i + 1).to_string(),
-                                            ))),
+                                            ))],
                                         }),
                                         data_type: column.data_type.clone(),
                                     },

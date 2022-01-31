@@ -1055,6 +1055,7 @@ impl<'a> Parser<'a> {
         } else if Token::DoubleColon == tok {
             self.parse_pg_cast(expr)
         } else if Token::LBracket == tok {
+            self.prev_token();
             self.parse_subscript(expr)
         } else if Token::Dot == tok {
             match self.next_token() {
@@ -1085,50 +1086,75 @@ impl<'a> Parser<'a> {
     fn parse_subscript(&mut self, expr: Expr<Raw>) -> Result<Expr<Raw>, ParserError> {
         let mut is_slice = false;
         let mut positions = Vec::new();
-        loop {
-            let start = if self.consume_token(&Token::Colon) {
-                is_slice = true;
+        let mut explicit_positions = Vec::new();
+
+        // Brackets are an option as long as we don't see commas.
+        while self.consume_token(&Token::LBracket) {
+            let start = if self.peek_token() == Some(Token::Colon) {
                 None
             } else {
-                let e = Some(self.parse_expr()?);
-                if is_slice {
-                    self.expect_token(&Token::Colon)?;
-                } else {
-                    is_slice = self.consume_token(&Token::Colon);
-                }
-                e
+                Some(self.parse_expr()?)
             };
 
-            let end = if is_slice
-                && (Some(Token::RBracket) != self.peek_token()
-                    && Some(Token::Comma) != self.peek_token())
-            {
-                Some(self.parse_expr()?)
+            let (end, explicit_pos) = if self.consume_token(&Token::Colon) {
+                // Presence of a colon means these positions were explicit
+                // and should not be moved.
+                is_slice = true;
+                (
+                    // Terminated expr
+                    if self.peek_token() == Some(Token::RBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expr()?)
+                    },
+                    true,
+                )
             } else {
-                None
+                (None, false)
             };
+
+            assert!(
+                start.is_some() || end.is_some() || explicit_pos,
+                "user typed something between brackets"
+            );
+
+            self.expect_token(&Token::RBracket)?;
 
             positions.push(SubscriptPosition { start, end });
-
-            if !is_slice || !self.consume_token(&Token::Comma) {
-                break;
-            }
+            explicit_positions.push(explicit_pos);
         }
 
-        self.expect_token(&Token::RBracket)?;
-
         Ok(if is_slice {
+            // From pg:
+            // > If any dimension is written as a slice, i.e.,
+            // > contains a colon, then all dimensions are treated as slices.
+            // > Any dimension that has only a single number (no colon) is
+            // > treated as being from 1 to the number specified. For
+            // > example, [2] is treated as [1:2]
+            // https://www.postgresql.org/docs/14/arrays.html
+            for (pos, explicit) in positions.iter_mut().zip_eq(explicit_positions) {
+                // If we encountered a single element, but some _other_ element
+                // was a slice, the single element was actually the end.
+                if !explicit && pos.start.is_some() {
+                    assert!(pos.end.is_none());
+                    std::mem::swap(&mut pos.start, &mut pos.end);
+                }
+            }
             Expr::SubscriptSlice {
                 expr: Box::new(expr),
                 positions,
             }
         } else {
-            assert!(
-                positions.len() == 1 && positions[0].start.is_some() && positions[0].end.is_none(),
-            );
+            let indexes = positions
+                .into_iter()
+                .map(|v| {
+                    assert!(v.end.is_none(), "does not have end position");
+                    v.start.expect("has start positions")
+                })
+                .collect();
             Expr::SubscriptScalar {
                 expr: Box::new(expr),
-                subscript: Box::new(positions.remove(0).start.unwrap()),
+                indexes,
             }
         })
     }

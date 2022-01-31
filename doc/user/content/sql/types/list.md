@@ -237,10 +237,10 @@ Layered slices
 {{< /experimental >}}
 
 To slice on layers beyond the first, indicate the range you want to slice along
-each layer, separating the ranges with commas:
+each layer, separating the ranges with square brackets:
 
 ```sql
-SELECT LIST[[1,2], [3,4]][1:2, 2:2] AS slice_second_lyr;
+SELECT LIST[[1,2], [3,4]][1:2][2:2] AS slice_second_lyr;
 ```
 ```nofmt
  slice_second_lyr
@@ -251,7 +251,7 @@ SELECT LIST[[1,2], [3,4]][1:2, 2:2] AS slice_second_lyr;
 You can only slice into as many layers as the list contains:
 
 ```sql
-SELECT LIST[[1,2], [3,4]][1:2, 2:2, 1:1] AS failed_third_dim_slice;
+SELECT LIST[[1,2], [3,4]][1:2][2:2][1:1] AS failed_third_dim_slice;
 ```
 ```nofmt
 ERROR:  cannot slice into 3 layers; list only has 2 layers

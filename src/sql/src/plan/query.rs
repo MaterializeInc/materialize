@@ -3077,7 +3077,7 @@ fn plan_expr_inner<'a>(
         .into()),
         Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
-        Expr::SubscriptScalar { expr, subscript } => plan_subscript_scalar(ecx, expr, subscript),
+        Expr::SubscriptScalar { expr, indexes } => plan_subscript_scalar(ecx, expr, indexes),
         Expr::SubscriptSlice { expr, positions } => plan_subscript_slice(ecx, expr, positions),
 
         // Subqueries.
@@ -3240,24 +3240,64 @@ fn plan_field_access(
 fn plan_subscript_scalar(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
-    subscript: &Expr<Aug>,
+    indexes: &[Expr<Aug>],
 ) -> Result<CoercibleScalarExpr, PlanError> {
+    assert!(
+        !indexes.is_empty(),
+        "subscript expression must contain at least one index"
+    );
     let ecx = &ecx.with_name("subscript (indexing)");
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
-    let func = match &ty {
-        ScalarType::List { .. } => BinaryFunc::ListIndex,
-        ScalarType::Array(_) => BinaryFunc::ArrayIndex,
-        ScalarType::Jsonb => return plan_subscript_jsonb(ecx, expr, subscript),
-        ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
-    };
 
-    Ok(expr
-        .call_binary(
-            plan_expr(ecx, subscript)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?,
-            func,
-        )
-        .into())
+    Ok(match &ty {
+        ScalarType::Array(..) => {
+            if indexes.len() > 1 {
+                CoercibleScalarExpr::LiteralNull
+            } else {
+                expr.call_binary(
+                    plan_expr(ecx, &indexes[0])?.cast_to(
+                        ecx,
+                        CastContext::Explicit,
+                        &ScalarType::Int64,
+                    )?,
+                    BinaryFunc::ArrayIndex,
+                )
+                .into()
+            }
+        }
+        ScalarType::List { .. } => {
+            let depth = indexes.len();
+            let n_dims = ty.unwrap_list_n_dims();
+            if depth > n_dims {
+                sql_bail!(
+                    "cannot index into {} layers; list only has {} layer{}",
+                    depth,
+                    n_dims,
+                    if n_dims == 1 { "" } else { "s" }
+                )
+            }
+
+            let mut exprs = Vec::with_capacity(depth + 1);
+            exprs.push(expr);
+
+            for i in indexes {
+                exprs.push(plan_expr(ecx, i)?.cast_to(
+                    ecx,
+                    CastContext::Explicit,
+                    &ScalarType::Int64,
+                )?);
+            }
+
+            HirScalarExpr::CallVariadic {
+                func: VariadicFunc::ListIndex,
+                exprs,
+            }
+            .into()
+        }
+        ScalarType::Jsonb => return plan_subscript_jsonb(ecx, expr, indexes),
+        ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
+    })
 }
 
 fn plan_subscript_slice(
@@ -3265,9 +3305,8 @@ fn plan_subscript_slice(
     expr: &Expr<Aug>,
     positions: &[SubscriptPosition<Aug>],
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    assert_ne!(
-        positions.len(),
-        0,
+    assert!(
+        !positions.is_empty(),
         "subscript expression must contain at least one position"
     );
     if positions.len() > 1 {
@@ -3322,22 +3361,26 @@ fn plan_subscript_slice(
 fn plan_subscript_jsonb(
     ecx: &ExprContext,
     expr: HirScalarExpr,
-    subscript: &Expr<Aug>,
+    subscripts: &[Expr<Aug>],
 ) -> Result<CoercibleScalarExpr, PlanError> {
     use CastContext::Implicit;
     use ScalarType::{Int64, String};
 
-    let subscript = plan_expr(ecx, subscript)?;
-    let subscript = if let Ok(subscript) = subscript.clone().cast_to(ecx, Implicit, &String) {
-        subscript
-    } else if let Ok(subscript) = subscript.cast_to(ecx, Implicit, &Int64) {
-        // Integers are converted to a string here and then re-parsed as an
-        // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
-        // do it.
-        typeconv::to_string(ecx, subscript)
-    } else {
-        sql_bail!("jsonb subscript type must be coercible to integer or text");
-    };
+    let mut exprs = Vec::with_capacity(subscripts.len());
+    for s in subscripts {
+        let subscript = plan_expr(ecx, s)?;
+        let subscript = if let Ok(subscript) = subscript.clone().cast_to(ecx, Implicit, &String) {
+            subscript
+        } else if let Ok(subscript) = subscript.cast_to(ecx, Implicit, &Int64) {
+            // Integers are converted to a string here and then re-parsed as an
+            // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
+            // do it.
+            typeconv::to_string(ecx, subscript)
+        } else {
+            sql_bail!("jsonb subscript type must be coercible to integer or text");
+        };
+        exprs.push(subscript);
+    }
 
     // Subscripting works like `expr #> ARRAY[subscript]` rather than
     // `expr->subscript` as you might expect.
@@ -3346,7 +3389,7 @@ fn plan_subscript_jsonb(
             func: VariadicFunc::ArrayCreate {
                 elem_type: ScalarType::String,
             },
-            exprs: vec![subscript],
+            exprs,
         },
         BinaryFunc::JsonbGetPath { stringify: false },
     );

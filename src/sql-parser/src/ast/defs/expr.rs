@@ -177,12 +177,12 @@ pub enum Expr<T: AstInfo> {
     /// `LIST[<expr>*]`
     List(Vec<Expr<T>>),
     ListSubquery(Box<Query<T>>),
-    /// `<expr>[<expr>]`
+    /// `<expr>([<expr>])+`
     SubscriptScalar {
         expr: Box<Expr<T>>,
-        subscript: Box<Expr<T>>,
+        indexes: Vec<Expr<T>>,
     },
-    /// `<expr>[<expr>:<expr>(, <expr>?:<expr>?)*]`
+    /// `<expr>([<expr>:<expr>])+`
     SubscriptSlice {
         expr: Box<Expr<T>>,
         positions: Vec<SubscriptPosition<T>>,
@@ -446,17 +446,21 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(&s);
                 f.write_str(")");
             }
-            Expr::SubscriptScalar { expr, subscript } => {
+            Expr::SubscriptScalar { expr, indexes } => {
                 f.write_node(&expr);
-                f.write_str("[");
-                f.write_node(subscript);
-                f.write_str("]");
+                for i in indexes {
+                    f.write_str("[");
+                    f.write_node(i);
+                    f.write_str("]");
+                }
             }
             Expr::SubscriptSlice { expr, positions } => {
                 f.write_node(&expr);
-                f.write_str("[");
-                f.write_node(&display::comma_separated(positions));
-                f.write_str("]");
+                for p in positions {
+                    f.write_str("[");
+                    f.write_node(p);
+                    f.write_str("]");
+                }
             }
         }
     }

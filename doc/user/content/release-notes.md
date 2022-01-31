@@ -140,6 +140,12 @@ changes that have not yet been documented.
 - Add the `md5`, `sha224`, `sha256`, `sha384`, and `sha512` [cryptography
   functions](/sql/functions/#cryptography-func).
 
+- Support sequences of subscript operations on [`array`] values when
+  indexing/accessing individual elements (as opposed to taking slices/ranges of
+  values). However, because Materialize does not currently support
+  multi-dimensional arrays, subscripting more than once always returns _NULL_
+  {{% gh 9815 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 

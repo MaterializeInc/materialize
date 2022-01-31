@@ -213,34 +213,13 @@ error: Expected an expression, found right square bracket
 SELECT LIST[1][]
                ^
 
-# Multi-dimensional subscripts must all be slices
+# Previous experimental syntax for multi-dimensional subscripts
 parse-statement
-SELECT LIST[1][1:2, 1]
-----
-error: Expected colon, found right square bracket
-SELECT LIST[1][1:2, 1]
-                     ^
-
-parse-statement
-SELECT LIST[1][1, 1]
+SELECT LIST[1][1:1, 1:1]
 ----
 error: Expected right square bracket, found comma
-SELECT LIST[1][1, 1]
-                ^
-
-parse-statement
-SELECT LIST[1][1, 1:1]
-----
-error: Expected right square bracket, found comma
-SELECT LIST[1][1, 1:1]
-                ^
-
-parse-statement
-SELECT LIST[1][1:1, ]
-----
-error: Expected an expression, found right square bracket
-SELECT LIST[1][1:1, ]
-                    ^
+SELECT LIST[1][1:1, 1:1]
+                  ^
 
 parse-scalar
 ARRAY[]::int[1 + 1]

@@ -59,7 +59,7 @@ E'lots\tof\nescapes\bin\nhere\r.\f\U0001f64a\u2048'
 ----
 'lots	of
 escapesin
-here.🙊⁈'
+here.🙊⁈'
 
 # Numbers
 
@@ -261,6 +261,63 @@ parse-scalar
 LIST[[[[1], [2]]], [[[3]]]]
 ----
 List([List([List([List([Value(Number("1"))]), List([Value(Number("2"))])])]), List([List([List([Value(Number("3"))])])])])
+
+# Lists w/ subscripts
+
+parse-scalar
+LIST[1][1]
+----
+SubscriptScalar { expr: List([Value(Number("1"))]), indexes: [Value(Number("1"))] }
+
+parse-scalar
+LIST[1][1][2]
+----
+SubscriptScalar { expr: List([Value(Number("1"))]), indexes: [Value(Number("1")), Value(Number("2"))] }
+
+parse-scalar
+LIST[1][1:2][2:2]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("2"))) }, SubscriptPosition { start: Some(Value(Number("2"))), end: Some(Value(Number("2"))) }] }
+
+parse-scalar
+LIST[1][2][2:2]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: Some(Value(Number("2"))) }, SubscriptPosition { start: Some(Value(Number("2"))), end: Some(Value(Number("2"))) }] }
+
+parse-scalar
+LIST[1][:2][2:2]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: Some(Value(Number("2"))) }, SubscriptPosition { start: Some(Value(Number("2"))), end: Some(Value(Number("2"))) }] }
+
+parse-scalar
+LIST[1][:2][2:]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: Some(Value(Number("2"))) }, SubscriptPosition { start: Some(Value(Number("2"))), end: None }] }
+
+parse-scalar
+LIST[1][:][2:]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: None }, SubscriptPosition { start: Some(Value(Number("2"))), end: None }] }
+
+parse-scalar
+LIST[1][:][2]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: None }, SubscriptPosition { start: None, end: Some(Value(Number("2"))) }] }
+
+parse-scalar
+LIST[1][:2][2:]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: Some(Value(Number("2"))) }, SubscriptPosition { start: Some(Value(Number("2"))), end: None }] }
+
+parse-scalar
+LIST[1][:][2:]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: None }, SubscriptPosition { start: Some(Value(Number("2"))), end: None }] }
+
+parse-scalar
+LIST[1][2][2:]
+----
+SubscriptSlice { expr: List([Value(Number("1"))]), positions: [SubscriptPosition { start: None, end: Some(Value(Number("2"))) }, SubscriptPosition { start: Some(Value(Number("2"))), end: None }] }
 
 # Arrays
 

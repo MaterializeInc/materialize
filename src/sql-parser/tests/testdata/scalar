@@ -444,7 +444,7 @@ List([List([Op { op: Bare("+"), expr1: Value(Number("1")), expr2: Some(Value(Num
 parse-scalar
 LIST[1,2,3][1]
 ----
-SubscriptScalar { expr: List([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), subscript: Value(Number("1")) }
+SubscriptScalar { expr: List([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), indexes: [Value(Number("1"))] }
 
 parse-scalar
 LIST[1,2,3][1:1]
@@ -462,17 +462,17 @@ LIST[1,2,3][1:]
 SubscriptSlice { expr: List([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: None }] }
 
 parse-scalar
-LIST[[1],[2],[3]][1:1, 1:1]
+LIST[[1],[2],[3]][1:1][1:1]
 ----
 SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }
 
 parse-scalar
-LIST[[1],[2],[3]][1:1, 1:1][1]
+LIST[[1],[2],[3]][1:1][1:1][1]
 ----
-SubscriptScalar { expr: SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }, subscript: Value(Number("1")) }
+SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: None, end: Some(Value(Number("1"))) }] }
 
 parse-scalar
-LIST[[1],[2],[3]][1:1, 1:1, 1:1]
+LIST[[1],[2],[3]][1:1][1:1][1:1]
 ----
 SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }
 
@@ -626,7 +626,7 @@ Nested(FieldAccess { expr: Nested(FieldAccess { expr: FieldAccess { expr: Nested
 parse-scalar
 (((x).a.b)[1].c)
 ----
-Nested(FieldAccess { expr: SubscriptScalar { expr: Nested(FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }), subscript: Value(Number("1")) }, field: Ident("c") })
+Nested(FieldAccess { expr: SubscriptScalar { expr: Nested(FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }), indexes: [Value(Number("1"))] }, field: Ident("c") })
 
 parse-scalar roundtrip
 (((x).a.b)[1].c)

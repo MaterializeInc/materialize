@@ -2245,7 +2245,6 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
-    ListIndex,
     ListLengthMax { max_dim: usize },
     ArrayContains,
     ArrayIndex,
@@ -2496,7 +2495,6 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
-            BinaryFunc::ListIndex => Ok(eager!(list_index)),
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
             BinaryFunc::ArrayLength => Ok(eager!(array_length)),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
@@ -2646,12 +2644,6 @@ impl BinaryFunc {
                 input1_type.scalar_type.unwrap_map_value_type().clone(),
             ))
             .nullable(true),
-
-            ListIndex => input1_type
-                .scalar_type
-                .unwrap_list_element_type()
-                .clone()
-                .nullable(true),
 
             ArrayIndex => input1_type
                 .scalar_type
@@ -2875,7 +2867,6 @@ impl BinaryFunc {
             | MapContainsAnyKeys
             | MapContainsMap
             | TextConcat
-            | ListIndex
             | IsRegexpMatch { .. }
             | ArrayContains
             | ArrayIndex
@@ -3077,7 +3068,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
-            BinaryFunc::ListIndex => f.write_str("list_index"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
             BinaryFunc::ArrayIndex => f.write_str("array_index"),
@@ -5109,6 +5099,27 @@ where
     }
 }
 
+fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    let mut buf = datums[0];
+
+    for i in datums[1..].iter() {
+        let i = i.unwrap_int64();
+        if i < 1 {
+            return Datum::Null;
+        }
+
+        buf = buf
+            .unwrap_list()
+            .iter()
+            .nth(i as usize - 1)
+            .unwrap_or(Datum::Null);
+        if buf.is_null() {
+            break;
+        }
+    }
+    buf
+}
+
 fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     // Return value indicates whether this level's slices are empty results.
     fn slice_and_descend(d: Datum, ranges: &[(usize, usize)], row: &mut Row) -> bool {
@@ -5337,17 +5348,6 @@ fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let trim_chars = b.unwrap_str();
 
     Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
-}
-
-fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Datum::Null;
-    }
-    a.unwrap_list()
-        .iter()
-        .nth(i as usize - 1)
-        .unwrap_or(Datum::Null)
 }
 
 fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -5711,6 +5711,7 @@ pub enum VariadicFunc {
         field_names: Vec<ColumnName>,
     },
     ListSlice,
+    ListIndex,
     SplitPart,
     RegexpMatch,
     HmacString,
@@ -5761,6 +5762,7 @@ impl VariadicFunc {
                 Ok(eager!(list_create, temp_storage))
             }
             VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
+            VariadicFunc::ListIndex => Ok(eager!(list_index)),
             VariadicFunc::SplitPart => eager!(split_part),
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
             VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
@@ -5823,6 +5825,11 @@ impl VariadicFunc {
                 }
                 .nullable(false)
             }
+            ListIndex => input_types[0]
+                .scalar_type
+                .unwrap_list_nth_dimension_type(input_types.len() - 1)
+                .clone()
+                .nullable(true),
             ListSlice { .. } => input_types[0].scalar_type.clone().nullable(true),
             RecordCreate { field_names } => ScalarType::Record {
                 fields: field_names
@@ -5876,6 +5883,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ArrayToString { .. } => f.write_str("array_to_string"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
+            VariadicFunc::ListIndex => f.write_str("list_index"),
             VariadicFunc::ListSlice => f.write_str("list_slice"),
             VariadicFunc::SplitPart => f.write_str("split_string"),
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
