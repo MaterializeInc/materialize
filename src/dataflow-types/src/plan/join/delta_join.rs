@@ -17,13 +17,9 @@
 //! This implementation strategy allows us to re-use existing arrangements, and
 //! not create any new stateful operators.
 
-use std::collections::HashMap;
-
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
-use crate::plan::AvailableCollections;
-use expr::join_permutations;
-use expr::permutation_for_arrangement;
+use crate::plan::Permutation;
 use expr::JoinInputMapper;
 use expr::MapFilterProject;
 use expr::MirScalarExpr;
@@ -49,8 +45,6 @@ pub struct DeltaJoinPlan {
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     pub source_relation: usize,
-    /// The key we expect the source relation to be arranged by.
-    pub source_key: Vec<MirScalarExpr>,
     /// An initial closure to apply before any stages.
     pub initial_closure: JoinClosure,
     /// A *sequence* of stages to apply one after the other.
@@ -76,6 +70,10 @@ pub struct DeltaStagePlan {
     pub stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
     pub lookup_key: Vec<MirScalarExpr>,
+    /// The permutation of the lookup relation
+    pub lookup_permutation: Permutation,
+    /// The permutation of the output
+    pub join_permutation: Permutation,
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
@@ -88,28 +86,8 @@ impl DeltaJoinPlan {
         join_orders: &[Vec<(usize, Vec<MirScalarExpr>)>],
         input_mapper: JoinInputMapper,
         map_filter_project: &mut MapFilterProject,
-        available: &[AvailableCollections],
-    ) -> (Self, Vec<AvailableCollections>) {
-        let mut requested: Vec<AvailableCollections> =
-            vec![Default::default(); input_mapper.total_inputs()];
-        let number_of_inputs = input_mapper.total_inputs();
-        assert_eq!(number_of_inputs, join_orders.len());
-
-        // Pick the "first" (by `Ord`) key for the source relation of each path.
-        // (This matches the probably arbitrary historical practice from `mod render`.)
-        let mut source_keys = vec![None; number_of_inputs];
-        for source_relation in 0..number_of_inputs {
-            for (lookup_relation, lookup_key) in &join_orders[source_relation] {
-                let key = &mut source_keys[*lookup_relation];
-                if key.is_none() || key.as_ref().unwrap() > lookup_key {
-                    *key = Some(lookup_key.clone())
-                }
-            }
-        }
-        let source_keys: Vec<_> = source_keys
-            .into_iter()
-            .map(|k| k.expect("There should be at least one arrangement for each relation!"))
-            .collect();
+    ) -> Self {
+        let number_of_inputs = join_orders.len();
 
         // Create an empty plan, with capacity for the intended number of path plans.
         let mut join_plan = DeltaJoinPlan {
@@ -128,14 +106,8 @@ impl DeltaJoinPlan {
                 &map_filter_project,
             );
 
-            let source_key = &source_keys[source_relation];
             // Initial action we can take on the source relation before joining.
-            let (initial_permutation, initial_thinning) =
-                permutation_for_arrangement(source_key, input_mapper.input_arity(source_relation));
-            let initial_closure = join_build_state.extract_closure(
-                initial_permutation,
-                source_key.len() + initial_thinning.len(),
-            );
+            let initial_closure = join_build_state.extract_closure();
 
             // Sequence of steps to apply.
             let mut stage_plans = Vec::with_capacity(number_of_inputs - 1);
@@ -146,33 +118,9 @@ impl DeltaJoinPlan {
             // We use the order specified by the implementation.
             let order = &join_orders[source_relation];
 
-            let mut unthinned_stream_arity = initial_closure.before.projection.len();
+            let mut stream_arity = initial_closure.before.projection.len();
 
-            // TODO[btv] - Can we deduplicate this with the very similar code in `linear_join.rs` ?
             for (lookup_relation, lookup_key) in order.iter() {
-                let available = &available[*lookup_relation];
-                let (lookup_permutation, lookup_thinning) = available
-                    .arranged
-                    .iter()
-                    .find_map(|(key, permutation, thinning)| {
-                        if key == lookup_key {
-                            Some((permutation.clone(), thinning.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        let (permutation, thinning) = permutation_for_arrangement::<HashMap<_, _>>(
-                            lookup_key,
-                            input_mapper.input_arity(*lookup_relation),
-                        );
-                        requested[*lookup_relation].arranged.push((
-                            lookup_key.clone(),
-                            permutation.clone(),
-                            thinning.clone(),
-                        ));
-                        (permutation, thinning)
-                    });
                 // rebase the intended key to use global column identifiers.
                 let lookup_key_rebased = lookup_key
                     .iter()
@@ -195,35 +143,30 @@ impl DeltaJoinPlan {
                         bound_expr
                     })
                     .collect::<Vec<_>>();
-                let (stream_permutation, stream_thinning) = permutation_for_arrangement::<
-                    HashMap<_, _>,
-                >(
-                    &stream_key, unthinned_stream_arity
-                );
-                let key_arity = stream_key.len();
-                let permutation = join_permutations(
-                    key_arity,
-                    stream_permutation.clone(),
-                    stream_thinning.len(),
-                    lookup_permutation.clone(),
-                );
 
                 // Introduce new columns and expressions they enable. Form a new closure.
                 let closure = join_build_state.add_columns(
                     input_mapper.global_columns(*lookup_relation),
                     &lookup_key_rebased,
-                    key_arity + stream_thinning.len() + lookup_thinning.len(),
-                    permutation,
                 );
-                unthinned_stream_arity = closure.before.projection.len();
+                let (stream_permutation, stream_thinning) =
+                    Permutation::construct_from_expr(&stream_key, stream_arity);
+                let (lookup_permutation, _) = Permutation::construct_from_expr(
+                    &lookup_key,
+                    input_mapper.input_arity(*lookup_relation),
+                );
+                let join_permutation = stream_permutation.join(&lookup_permutation);
+                stream_arity = closure.before.projection.len();
 
                 bound_inputs.push(*lookup_relation);
                 // record the stage plan as next in the path.
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
                     stream_key,
-                    lookup_key: lookup_key.clone(),
                     stream_thinning,
+                    lookup_key: lookup_key.clone(),
+                    lookup_permutation,
+                    join_permutation,
                     closure,
                 });
             }
@@ -241,7 +184,6 @@ impl DeltaJoinPlan {
                 initial_closure,
                 stage_plans,
                 final_closure,
-                source_key: source_key.to_vec(),
             });
         }
 
@@ -249,6 +191,6 @@ impl DeltaJoinPlan {
         // assign the remaining temporal predicates to it, for the caller's use.
         *map_filter_project = temporal_mfp;
 
-        (join_plan, requested)
+        join_plan
     }
 }

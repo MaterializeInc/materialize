@@ -17,6 +17,7 @@ use timely::dataflow::Scope;
 
 use dataflow_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use dataflow_types::plan::join::JoinClosure;
+use dataflow_types::plan::Permutation;
 use dataflow_types::DataflowError;
 
 use expr::MirScalarExpr;
@@ -64,6 +65,7 @@ where
                 for stage_plan in path_plan.stage_plans.iter() {
                     let lookup_idx = stage_plan.lookup_relation;
                     let lookup_key = stage_plan.lookup_key.clone();
+                    let lookup_permutation = stage_plan.lookup_permutation.clone();
                     arrangements
                         .entry((lookup_idx, lookup_key.clone()))
                         .or_insert_with(|| {
@@ -75,17 +77,17 @@ where
                                         lookup_idx, lookup_key,
                                     )
                                 }) {
-                                ArrangementFlavor::Local(oks, errs) => {
+                                ArrangementFlavor::Local(oks, errs, _) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         scope_errs.push(errs.as_collection(|k, _v| k.clone()));
                                     }
-                                    Ok(oks.enter(inner))
+                                    (lookup_permutation, Ok(oks.enter(inner)))
                                 }
-                                ArrangementFlavor::Trace(_gid, oks, errs) => {
+                                ArrangementFlavor::Trace(_gid, oks, errs, _) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         scope_errs.push(errs.as_collection(|k, _v| k.clone()));
                                     }
-                                    Err(oks.enter(inner))
+                                    (lookup_permutation, Err(oks.enter(inner)))
                                 }
                             }
                         });
@@ -94,14 +96,13 @@ where
 
             // Collects error streams for the inner scope. Concats before leaving.
             let mut inner_errs = Vec::with_capacity(inputs.len());
-            for path_plan in join_plan.path_plans {
+            for path_plan in join_plan.path_plans.into_iter() {
                 // Deconstruct the stages of the path plan.
                 let DeltaPathPlan {
                     source_relation,
                     initial_closure,
                     stage_plans,
                     final_closure,
-                    source_key,
                 } = path_plan;
 
                 // This collection determines changes that result from updates inbound
@@ -129,35 +130,73 @@ where
                     use timely::dataflow::operators::Map;
 
                     // Ensure this input is rendered, and extract its update stream.
-                    let (_key, val) = arrangements
+                    let update_stream = if let Some((_key, (permutation, val))) = arrangements
                         .iter()
-                        .find(|(key, _val)| key.0 == source_relation && key.1 == source_key)
-                        .expect("Arrangement promised by the planner is absent!");
-                    let as_of = self.as_of_frontier.clone();
-                    let update_stream = match val {
-                        Ok(local) => {
-                            let arranged = local.enter(region);
-                            let (update_stream, err_stream) = build_update_stream(
-                                arranged,
-                                as_of,
-                                source_relation,
-                                initial_closure,
-                            );
-                            region_errs.push(err_stream);
-                            update_stream
+                        .find(|(key, _val)| key.0 == source_relation)
+                    {
+                        let as_of = self.as_of_frontier.clone();
+                        match val {
+                            Ok(local) => {
+                                let arranged = local.enter(region);
+                                let (update_stream, err_stream) = build_update_stream(
+                                    arranged,
+                                    as_of,
+                                    source_relation,
+                                    initial_closure,
+                                    permutation.clone(),
+                                );
+                                region_errs.push(err_stream);
+                                update_stream
+                            }
+                            Err(trace) => {
+                                let arranged = trace.enter(region);
+                                let (update_stream, err_stream) = build_update_stream(
+                                    arranged,
+                                    as_of,
+                                    source_relation,
+                                    initial_closure,
+                                    permutation.clone(),
+                                );
+                                region_errs.push(err_stream);
+                                update_stream
+                            }
                         }
-                        Err(trace) => {
-                            let arranged = trace.enter(region);
-                            let (update_stream, err_stream) = build_update_stream(
-                                arranged,
-                                as_of,
-                                source_relation,
-                                initial_closure,
-                            );
-                            region_errs.push(err_stream);
-                            update_stream
+                    } else {
+                        // If this branch is reached, it means that the optimizer, specifically the
+                        // transform `JoinImplementation`, has made a mistake and the plan may be
+                        // suboptimal, but it is still possible to render the plan.
+                        let mut update_stream = inputs[source_relation]
+                            .as_collection()
+                            .0
+                            .enter(inner)
+                            .enter_region(region);
+
+                        // Apply what `closure` we are able to, and record any errors.
+                        if !initial_closure.is_identity() {
+                            let (stream, errs) =
+                                update_stream.flat_map_fallible("DeltaJoinInitialization", {
+                                    let mut row_builder = Row::default();
+                                    let mut datums = DatumVec::new();
+                                    move |row| {
+                                        let temp_storage = RowArena::new();
+                                        let mut datums_local = datums.borrow_with(&row);
+                                        // TODO(mcsherry): re-use `row` allocation.
+                                        initial_closure
+                                            .apply(
+                                                &mut datums_local,
+                                                &temp_storage,
+                                                &mut row_builder,
+                                            )
+                                            .transpose()
+                                    }
+                                });
+                            update_stream = stream;
+                            region_errs.push(errs.map(DataflowError::from));
                         }
+
+                        update_stream
                     };
+
                     // Promote `time` to a datum element.
                     //
                     // The `half_join` operator manipulates as "data" a pair `(data, time)`,
@@ -170,12 +209,14 @@ where
 
                     // Repeatedly update `update_stream` to reflect joins with more and more
                     // other relations, in the specified order.
-                    for stage_plan in stage_plans {
+                    for stage_plan in stage_plans.into_iter() {
                         let DeltaStagePlan {
                             lookup_relation,
                             stream_key,
                             stream_thinning,
                             lookup_key,
+                            lookup_permutation: _,
+                            join_permutation,
                             closure,
                         } = stage_plan;
 
@@ -188,13 +229,14 @@ where
                         // we might have: either dataflow-local or an imported trace.
                         let (oks, errs) =
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
-                                Ok(local) => {
+                                (_, Ok(local)) => {
                                     if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
                                             local.enter_region(region),
                                             stream_key,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -204,18 +246,20 @@ where
                                             local.enter_region(region),
                                             stream_key,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
                                     }
                                 }
-                                Err(trace) => {
+                                (_, Err(trace)) => {
                                     if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
                                             trace.enter_region(region),
                                             stream_key,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -225,6 +269,7 @@ where
                                             trace.enter_region(region),
                                             stream_key,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
@@ -313,8 +358,9 @@ fn build_halfjoin<G, Tr, CF>(
     trace: Arranged<G, Tr>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
+    permutation: Permutation,
     comparison: CF,
-    closure: JoinClosure,
+    mut closure: JoinClosure,
 ) -> (
     Collection<G, (Row, G::Timestamp)>,
     Collection<G, DataflowError>,
@@ -326,6 +372,7 @@ where
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
+    closure.permute(&permutation);
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -340,9 +387,10 @@ where
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
             let row_key = row_packer.finish_and_reuse();
-            row_packer.extend(prev_thinning.iter().map(|&c| datums_local[c]));
+            row_packer.extend(prev_thinning.iter().map(|e| datums_local[*e]));
             let row_value = row_packer.finish_and_reuse();
-
+            // Explicit drop to release borrow on `row` so that it can be returned.
+            drop(datums_local);
             Ok((row_key, row_value, time))
         }
     });
@@ -395,7 +443,8 @@ fn build_update_stream<G, Tr>(
     trace: Arranged<G, Tr>,
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
-    initial_closure: JoinClosure,
+    mut initial_closure: JoinClosure,
+    permutation: Permutation,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope<Timestamp = repr::Timestamp>,
@@ -408,6 +457,7 @@ where
     use timely::dataflow::channels::pact::Pipeline;
 
     let mut row_builder = Row::default();
+    initial_closure.permute(&permutation);
     let (ok_stream, err_stream) =
         trace
             .stream

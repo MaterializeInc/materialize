@@ -15,7 +15,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Consolidate;
-use expr::MirScalarExpr;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
@@ -27,6 +26,7 @@ use crate::render::context::{ArrangementFlavor, Context};
 use dataflow_types::plan::threshold::{
     BasicThresholdPlan, RetractionsThresholdPlan, ThresholdPlan,
 };
+use dataflow_types::plan::EnsureArrangement;
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, T, R, L>(
@@ -56,26 +56,34 @@ where
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
 pub fn build_threshold_basic<G, T>(
     input: CollectionBundle<G, Row, T>,
-    key: Vec<MirScalarExpr>,
+    arrangement: EnsureArrangement,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
+    let all_columns = arrangement.0.clone();
+    let input = input.ensure_arrangements(Some(arrangement));
     let arrangement = input
-        .arrangement(&key)
+        .arrangement(&all_columns)
         .expect("Arrangement ensured to exist");
     match arrangement {
-        ArrangementFlavor::Local(oks, errs) => {
+        ArrangementFlavor::Local(oks, errs, permutation) => {
             let oks = threshold_arrangement(&oks, "Threshold local", |count| *count > 0);
-            CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_expressions(
+                all_columns,
+                ArrangementFlavor::Local(oks, errs, permutation),
+            )
         }
-        ArrangementFlavor::Trace(_, oks, errs) => {
+        ArrangementFlavor::Trace(_, oks, errs, permutation) => {
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
             use differential_dataflow::operators::arrange::ArrangeBySelf;
             let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
-            CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_expressions(
+                all_columns,
+                ArrangementFlavor::Local(oks, errs, permutation),
+            )
         }
     }
 }
@@ -87,26 +95,27 @@ where
 /// which itself is not an arrangement.
 pub fn build_threshold_retractions<G, T>(
     input: CollectionBundle<G, Row, T>,
-    key: Vec<MirScalarExpr>,
+    arrangement: EnsureArrangement,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
+    let all_columns = arrangement.0.clone();
+    let input = input.ensure_arrangements(Some(arrangement));
     let arrangement = input
-        .arrangement(&key)
+        .arrangement(&all_columns)
         .expect("Arrangement ensured to exist");
     let negatives = match &arrangement {
-        ArrangementFlavor::Local(oks, _) => {
+        ArrangementFlavor::Local(oks, _, _) => {
             threshold_arrangement(oks, "Threshold retractions local", |count| *count < 0)
         }
-        ArrangementFlavor::Trace(_, oks, _) => {
+        ArrangementFlavor::Trace(_, oks, _, _) => {
             threshold_arrangement(oks, "Threshold retractions trace", |count| *count < 0)
         }
     };
     let (oks, errs) = arrangement.as_collection();
-
     let oks = negatives
         .as_collection(|k, _| k.clone())
         .negate()
@@ -128,13 +137,10 @@ where
     ) -> CollectionBundle<G, Row, T> {
         match threshold_plan {
             ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement }) => {
-                // We do not need to apply the permutation here,
-                // since threshold doesn't inspect the values, but only
-                // their counts.
-                build_threshold_basic(input, ensure_arrangement.0)
+                build_threshold_basic(input, ensure_arrangement)
             }
             ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement }) => {
-                build_threshold_retractions(input, ensure_arrangement.0)
+                build_threshold_retractions(input, ensure_arrangement)
             }
         }
     }

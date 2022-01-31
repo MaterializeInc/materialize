@@ -21,7 +21,6 @@ use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::Collection;
-use expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
@@ -33,6 +32,7 @@ use dataflow_types::plan::reduce::{
     ReducePlan, ReductionType,
 };
 
+use dataflow_types::plan::Permutation;
 use dec::OrderedDecimal;
 use expr::{AggregateExpr, AggregateFunc};
 use ore::cast::CastFrom;
@@ -58,6 +58,7 @@ fn render_reduce_plan<G, T>(
     collection: Collection<G, (Row, Row)>,
     err_input: Collection<G, DataflowError>,
     key_arity: usize,
+    permutation: Permutation,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
@@ -110,7 +111,7 @@ where
             build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
         }
     };
-    arrangement_or_bundle.into_bundle(key_arity, err_input)
+    arrangement_or_bundle.into_bundle(key_arity, permutation, err_input)
 }
 
 /// A type wrapping either an arrangement or a single collection.
@@ -138,6 +139,7 @@ where
     fn into_bundle<T>(
         self,
         key_arity: usize,
+        permutation: Permutation,
         err_input: Collection<G, DataflowError>,
     ) -> CollectionBundle<G, Row, T>
     where
@@ -147,7 +149,7 @@ where
         match self {
             ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
                 0..key_arity,
-                ArrangementFlavor::Local(arrangement, err_input.arrange()),
+                ArrangementFlavor::Local(arrangement, err_input.arrange(), permutation),
             ),
             ArrangementOrCollection::Collection(oks) => {
                 CollectionBundle::from_collections(oks, err_input)
@@ -189,7 +191,7 @@ where
         input: CollectionBundle<G, Row, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
-        input_key: Option<Vec<MirScalarExpr>>,
+        permutation: Permutation,
     ) -> CollectionBundle<G, Row, T> {
         let KeyValPlan {
             mut key_plan,
@@ -203,7 +205,11 @@ where
         let (key_val_input, err_input): (
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
-        ) = input.flat_map(input_key.map(|k| (k, None)), || {
+        ) = input.flat_map(None, |permutation| {
+            if let Some(permutation) = permutation {
+                permutation.permute_safe_mfp_plan(&mut key_plan);
+                permutation.permute_safe_mfp_plan(&mut val_plan);
+            }
             // Determine the columns we'll need from the row.
             let mut demand = Vec::new();
             demand.extend(key_plan.demand());
@@ -266,7 +272,7 @@ where
         err = err.concat(&err_input);
 
         // Render the reduce plan
-        render_reduce_plan(reduce_plan, ok, err, key_arity)
+        render_reduce_plan(reduce_plan, ok, err, key_arity, permutation)
     }
 }
 

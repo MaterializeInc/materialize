@@ -23,6 +23,7 @@ use ore::metrics::{
 };
 use timely::progress::frontier::{Antichain, AntichainRef};
 
+use dataflow_types::plan::Permutation;
 use dataflow_types::DataflowError;
 use expr::GlobalId;
 use repr::{Diff, Row, Timestamp};
@@ -205,15 +206,17 @@ pub struct TraceBundle {
     oks: KeysValsHandle,
     errs: ErrsHandle,
     to_drop: Option<Rc<dyn Any>>,
+    permutation: Permutation,
 }
 
 impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
-    pub fn new(oks: KeysValsHandle, errs: ErrsHandle) -> TraceBundle {
+    pub fn new(oks: KeysValsHandle, errs: ErrsHandle, permutation: Permutation) -> TraceBundle {
         TraceBundle {
             oks,
             errs,
             to_drop: None,
+            permutation,
         }
     }
 
@@ -241,5 +244,9 @@ impl TraceBundle {
     /// Returns a reference to the `to_drop` tokens.
     pub fn to_drop(&self) -> &Option<Rc<dyn Any>> {
         &self.to_drop
+    }
+
+    pub fn permutation(&self) -> &Permutation {
+        &self.permutation
     }
 }
