@@ -2406,9 +2406,7 @@ fn invent_column_name(
                 Some((normalize::column_name(field.clone()), NameQuality::High))
             }
             Expr::Exists { .. } => Some(("exists".into(), NameQuality::High)),
-            Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
-                invent(ecx, expr, table_func_names)
-            }
+            Expr::Subscript { expr, .. } => invent(ecx, expr, table_func_names),
             Expr::Subquery(query) | Expr::ListSubquery(query) => {
                 // A bit silly to have to plan the query here just to get its column
                 // name, since we throw away the planned expression, but fixing this
@@ -2830,8 +2828,7 @@ fn plan_expr_inner<'a>(
         .into()),
         Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
-        Expr::SubscriptScalar { expr, subscript } => plan_subscript_scalar(ecx, expr, subscript),
-        Expr::SubscriptSlice { expr, positions } => plan_subscript_slice(ecx, expr, positions),
+        Expr::Subscript { expr, positions } => plan_subscript(ecx, expr, positions),
         Expr::Like {
             expr,
             pattern,
@@ -3005,86 +3002,198 @@ fn plan_field_access(
     }
 }
 
-fn plan_subscript_scalar(
-    ecx: &ExprContext,
-    expr: &Expr<Aug>,
-    subscript: &Expr<Aug>,
-) -> Result<CoercibleScalarExpr, PlanError> {
-    let ecx = &ecx.with_name("subscript (indexing)");
-    let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
-    let ty = ecx.scalar_type(&expr);
-    let func = match &ty {
-        ScalarType::List { .. } => BinaryFunc::ListIndex,
-        ScalarType::Array(_) => BinaryFunc::ArrayIndex,
-        ScalarType::Jsonb => return plan_subscript_jsonb(ecx, expr, subscript),
-        ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
-    };
-
-    Ok(expr
-        .call_binary(
-            plan_expr(ecx, subscript)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?,
-            func,
-        )
-        .into())
-}
-
-fn plan_subscript_slice(
+// Currently, slicing subscripts only work on `list`s, but should be expanded
+// to arrays.
+fn plan_subscript(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
     positions: &[SubscriptPosition<Aug>],
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    assert_ne!(
-        positions.len(),
-        0,
+    assert!(
+        !positions.is_empty(),
         "subscript expression must contain at least one position"
     );
-    if positions.len() > 1 {
-        ecx.require_experimental_mode("layered/multidimensional slicing")?;
-    }
-    let ecx = &ecx.with_name("subscript (slicing)");
+
+    let ecx = &ecx.with_name("subscripting");
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
     match &ty {
-        ScalarType::List { .. } => {
-            let pos_len = positions.len();
-            let n_dims = ty.unwrap_list_n_dims();
-            if pos_len > n_dims {
-                sql_bail!(
-                    "cannot slice into {} layers; list only has {} layer{}",
-                    pos_len,
-                    n_dims,
-                    if n_dims == 1 { "" } else { "s" }
-                )
-            }
+        ScalarType::Array(..) => plan_subscript_array(ecx, expr, positions),
+        ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
+        ScalarType::List { element_type, .. } => {
+            let elem_type_name = ecx.humanize_scalar_type(&element_type);
+            let ndims = ty.unwrap_list_n_dims();
+            plan_subscript_list(ecx, expr, positions, ndims, &elem_type_name)
         }
-        ScalarType::Jsonb => sql_bail!("jsonb subscript does not support slices"),
         ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
-    };
+    }
+}
 
-    let mut exprs = vec![expr];
-
+// All subscript positions are of the form [<expr>(:<expr>?)?]; extract all
+// expressions from those that look like indexes (i.e. `[<expr>]`) or error if
+// any were slices (i.e. included colon).
+fn extract_scalar_subscript_from_positions<'a>(
+    positions: &'a [SubscriptPosition<Aug>],
+    expr_type_name: &str,
+) -> Result<Vec<&'a Expr<Aug>>, PlanError> {
+    let mut scalar_subscripts = Vec::with_capacity(positions.len());
     for p in positions {
-        let start = if let Some(start) = &p.start {
-            plan_expr(ecx, start)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?
-        } else {
-            HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)
-        };
+        if p.explicit_slice {
+            sql_bail!("{} subscript does not support slices", expr_type_name);
+        }
+        assert!(
+            p.end.is_none(),
+            "index-appearing subscripts cannot have end value"
+        );
+        scalar_subscripts.push(p.start.as_ref().expect("has start if not slice"));
+    }
+    Ok(scalar_subscripts)
+}
 
-        let end = if let Some(end) = &p.end {
-            plan_expr(ecx, end)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?
-        } else {
-            HirScalarExpr::literal(Datum::Int64(i64::MAX - 1), ScalarType::Int64)
-        };
+fn plan_subscript_array(
+    ecx: &ExprContext,
+    expr: HirScalarExpr,
+    positions: &[SubscriptPosition<Aug>],
+) -> Result<CoercibleScalarExpr, PlanError> {
+    let mut exprs = Vec::with_capacity(positions.len() + 1);
+    exprs.push(expr);
 
+    // Subscripting arrays doesn't yet support slicing, so we always want to
+    // extract scalars or error.
+    let indexes = extract_scalar_subscript_from_positions(positions, "array")?;
+
+    for i in indexes {
+        exprs.push(plan_expr(ecx, i)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?);
+    }
+
+    Ok(HirScalarExpr::CallVariadic {
+        func: VariadicFunc::ArrayIndex,
+        exprs,
+    }
+    .into())
+}
+
+fn plan_subscript_list(
+    ecx: &ExprContext,
+    mut expr: HirScalarExpr,
+    positions: &[SubscriptPosition<Aug>],
+    mut remaining_layers: usize,
+    elem_type_name: &str,
+) -> Result<CoercibleScalarExpr, PlanError> {
+    let mut i = 0;
+
+    while i < positions.len() {
+        // Take all contiguous index operations, i.e. find next slice operation.
+        let j = positions[i..]
+            .iter()
+            .position(|p| p.explicit_slice)
+            .unwrap_or(positions.len() - i);
+        if j != 0 {
+            let indexes = extract_scalar_subscript_from_positions(&positions[i..i + j], "")?;
+            let (n, e) = plan_index_list(
+                ecx,
+                expr,
+                indexes.as_slice(),
+                remaining_layers,
+                &elem_type_name,
+            )?;
+            remaining_layers = n;
+            expr = e;
+            i += j;
+        }
+
+        // Take all contiguous slice operations, i.e. find next index operation.
+        let j = positions[i..]
+            .iter()
+            .position(|p| !p.explicit_slice)
+            .unwrap_or(positions.len() - i);
+        if j != 0 {
+            expr = plan_slice_list(
+                ecx,
+                expr,
+                &positions[i..i + j],
+                remaining_layers,
+                &elem_type_name,
+            )?;
+            i += j;
+        }
+    }
+
+    Ok(expr.into())
+}
+
+fn plan_index_list(
+    ecx: &ExprContext,
+    expr: HirScalarExpr,
+    indexes: &[&Expr<Aug>],
+    n_layers: usize,
+    elem_type_name: &str,
+) -> Result<(usize, HirScalarExpr), PlanError> {
+    let depth = indexes.len();
+
+    if depth > n_layers {
+        if n_layers == 0 {
+            sql_bail!("cannot subscript type {}", elem_type_name)
+        } else {
+            sql_bail!(
+                "cannot index into {} layers; list only has {} layer{}",
+                depth,
+                n_layers,
+                if n_layers == 1 { "" } else { "s" }
+            )
+        }
+    }
+
+    let mut exprs = Vec::with_capacity(depth + 1);
+    exprs.push(expr);
+
+    for i in indexes {
+        exprs.push(plan_expr(ecx, i)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?);
+    }
+
+    Ok((
+        n_layers - depth,
+        HirScalarExpr::CallVariadic {
+            func: VariadicFunc::ListIndex,
+            exprs,
+        },
+    ))
+}
+
+fn plan_slice_list(
+    ecx: &ExprContext,
+    expr: HirScalarExpr,
+    slices: &[SubscriptPosition<Aug>],
+    n_layers: usize,
+    elem_type_name: &str,
+) -> Result<HirScalarExpr, PlanError> {
+    if n_layers == 0 {
+        sql_bail!("cannot subscript type {}", elem_type_name)
+    }
+
+    // first arg will be list
+    let mut exprs = Vec::with_capacity(slices.len() + 1);
+    exprs.push(expr);
+    // extract (start, end) parts from collected slices
+    let extract_position_or_default = |position, default| -> Result<HirScalarExpr, PlanError> {
+        Ok(match position {
+            Some(p) => {
+                plan_expr(ecx, p)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?
+            }
+            None => HirScalarExpr::literal(Datum::Int64(default), ScalarType::Int64),
+        })
+    };
+    for p in slices {
+        let start = extract_position_or_default(p.start.as_ref(), 1)?;
+        let end = extract_position_or_default(p.end.as_ref(), i64::MAX - 1)?;
         exprs.push(start);
         exprs.push(end);
     }
 
     Ok(HirScalarExpr::CallVariadic {
-        func: VariadicFunc::ListSlice,
+        func: VariadicFunc::ListSliceLinear,
         exprs,
-    }
-    .into())
+    })
 }
 
 fn plan_like(
@@ -3122,22 +3231,30 @@ fn plan_like(
 fn plan_subscript_jsonb(
     ecx: &ExprContext,
     expr: HirScalarExpr,
-    subscript: &Expr<Aug>,
+    positions: &[SubscriptPosition<Aug>],
 ) -> Result<CoercibleScalarExpr, PlanError> {
     use CastContext::Implicit;
     use ScalarType::{Int64, String};
 
-    let subscript = plan_expr(ecx, subscript)?;
-    let subscript = if let Ok(subscript) = subscript.clone().cast_to(ecx, Implicit, &String) {
-        subscript
-    } else if let Ok(subscript) = subscript.cast_to(ecx, Implicit, &Int64) {
-        // Integers are converted to a string here and then re-parsed as an
-        // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
-        // do it.
-        typeconv::to_string(ecx, subscript)
-    } else {
-        sql_bail!("jsonb subscript type must be coercible to integer or text");
-    };
+    // JSONB doesn't support the slicing syntax, so simply error if you
+    // encounter any explicit slices.
+    let subscripts = extract_scalar_subscript_from_positions(positions, "jsonb")?;
+
+    let mut exprs = Vec::with_capacity(subscripts.len());
+    for s in subscripts {
+        let subscript = plan_expr(ecx, s)?;
+        let subscript = if let Ok(subscript) = subscript.clone().cast_to(ecx, Implicit, &String) {
+            subscript
+        } else if let Ok(subscript) = subscript.cast_to(ecx, Implicit, &Int64) {
+            // Integers are converted to a string here and then re-parsed as an
+            // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
+            // do it.
+            typeconv::to_string(ecx, subscript)
+        } else {
+            sql_bail!("jsonb subscript type must be coercible to integer or text");
+        };
+        exprs.push(subscript);
+    }
 
     // Subscripting works like `expr #> ARRAY[subscript]` rather than
     // `expr->subscript` as you might expect.
@@ -3146,7 +3263,7 @@ fn plan_subscript_jsonb(
             func: VariadicFunc::ArrayCreate {
                 elem_type: ScalarType::String,
             },
-            exprs: vec![subscript],
+            exprs,
         },
         BinaryFunc::JsonbGetPath { stringify: false },
     );

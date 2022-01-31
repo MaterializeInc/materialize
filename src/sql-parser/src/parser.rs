@@ -1050,6 +1050,7 @@ impl<'a> Parser<'a> {
         } else if Token::DoubleColon == tok {
             self.parse_pg_cast(expr)
         } else if Token::LBracket == tok {
+            self.prev_token();
             self.parse_subscript(expr)
         } else if Token::Dot == tok {
             match self.next_token() {
@@ -1078,53 +1079,51 @@ impl<'a> Parser<'a> {
 
     /// Parse subscript expression, i.e. either an index value or slice range.
     fn parse_subscript(&mut self, expr: Expr<Raw>) -> Result<Expr<Raw>, ParserError> {
-        let mut is_slice = false;
         let mut positions = Vec::new();
-        loop {
-            let start = if self.consume_token(&Token::Colon) {
-                is_slice = true;
+
+        while self.consume_token(&Token::LBracket) {
+            let start = if self.peek_token() == Some(Token::Colon) {
                 None
             } else {
-                let e = Some(self.parse_expr()?);
-                if is_slice {
-                    self.expect_token(&Token::Colon)?;
-                } else {
-                    is_slice = self.consume_token(&Token::Colon);
-                }
-                e
-            };
-
-            let end = if is_slice
-                && (Some(Token::RBracket) != self.peek_token()
-                    && Some(Token::Comma) != self.peek_token())
-            {
                 Some(self.parse_expr()?)
-            } else {
-                None
             };
 
-            positions.push(SubscriptPosition { start, end });
+            let (end, explicit_slice) = if self.consume_token(&Token::Colon) {
+                // Presence of a colon means these positions were explicit
+                (
+                    // Terminated expr
+                    if self.peek_token() == Some(Token::RBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expr()?)
+                    },
+                    true,
+                )
+            } else {
+                (None, false)
+            };
 
-            if !is_slice || !self.consume_token(&Token::Comma) {
-                break;
-            }
+            assert!(
+                start.is_some() || explicit_slice,
+                "user typed something between brackets"
+            );
+
+            assert!(
+                explicit_slice || end.is_none(),
+                "if end is some, must have an explicit slice"
+            );
+
+            positions.push(SubscriptPosition {
+                start,
+                end,
+                explicit_slice,
+            });
+            self.expect_token(&Token::RBracket)?;
         }
 
-        self.expect_token(&Token::RBracket)?;
-
-        Ok(if is_slice {
-            Expr::SubscriptSlice {
-                expr: Box::new(expr),
-                positions,
-            }
-        } else {
-            assert!(
-                positions.len() == 1 && positions[0].start.is_some() && positions[0].end.is_none(),
-            );
-            Expr::SubscriptScalar {
-                expr: Box::new(expr),
-                subscript: Box::new(positions.remove(0).start.unwrap()),
-            }
+        Ok(Expr::Subscript {
+            expr: Box::new(expr),
+            positions,
         })
     }
 

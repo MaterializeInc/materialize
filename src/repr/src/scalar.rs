@@ -1374,6 +1374,30 @@ impl<'a> ScalarType {
         }
     }
 
+    /// Returns the [`ScalarType`] of elements in the nth dimension a
+    /// [`ScalarType::List`].
+    ///
+    /// For example, in an `int list list`, the:
+    /// - 0th dimension is `int list list`
+    /// - 1st dimension is `int list`
+    /// - 2nd dimension is `int`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the nth-1 dimension is anything other than a
+    /// [`ScalarType::List`].
+    pub fn unwrap_list_nth_dimension_type(&self, dim: usize) -> &ScalarType {
+        if dim == 0 {
+            return self;
+        }
+        match self {
+            ScalarType::List { element_type, .. } => {
+                element_type.unwrap_list_nth_dimension_type(dim - 1)
+            }
+            _ => panic!("ScalarType::unwrap_list_element_type called on {:?}", self),
+        }
+    }
+
     /// Returns number of dimensions/axes (also known as "rank") on a
     /// [`ScalarType::List`].
     ///
