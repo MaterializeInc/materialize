@@ -3906,6 +3906,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgcopy"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "csv",
+ "pgrepr",
+ "postgres",
+ "repr",
+ "sql",
+]
+
+[[package]]
 name = "pgrepr"
 version = "0.0.0"
 dependencies = [
@@ -3954,6 +3966,7 @@ dependencies = [
  "openssl",
  "ordered-float",
  "ore",
+ "pgcopy",
  "pgrepr",
  "postgres",
  "repr",

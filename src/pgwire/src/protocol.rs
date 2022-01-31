@@ -34,19 +34,19 @@ use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
 use ore::str::StrExt;
+use pgcopy::copy;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
-use crate::message::CopyFormatParams;
 use crate::message::{
-    self, decode_copy_format, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS,
-    VERSION_3,
+    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
 use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
+use pgcopy::copy::{decode_copy_format, CopyFormatParams};
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///

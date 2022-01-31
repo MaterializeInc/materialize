@@ -212,7 +212,7 @@ impl PostgresSourceReader {
             while let Some(Ok(b)) = reader.next().await {
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
-                let mut parser = pgwire::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+                let mut parser = pgcopy::message::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
                 while !parser.is_eof() && !parser.is_end_of_copy_marker() {
                     let mut mz_row = Row::default();
                     mz_row.push(relation_id);
