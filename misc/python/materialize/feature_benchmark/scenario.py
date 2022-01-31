@@ -20,7 +20,7 @@ class RootScenario:
     def __init__(self, scale: float) -> None:
         self._name = self.__class__.__name__
         self._scale = scale
-        self._n: int = int(10 ** scale)
+        self._n: int = int(10**scale)
 
     def shared(self) -> Optional[Union[Action, List[Action]]]:
         return None
