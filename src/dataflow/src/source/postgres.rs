@@ -233,7 +233,6 @@ impl PostgresSourceReader {
                         Ok(())
                     }));
 
-                    println!("Inserting {:?}", mz_row);
                     try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
                     try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
                 }
