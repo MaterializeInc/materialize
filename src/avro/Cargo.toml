@@ -24,7 +24,7 @@ itertools = "0.10.3"
 tracing = "0.1.29"
 rand = "0.8.4"
 regex = "1.5.4"
-serde = { version = "1.0.135", features = ["derive"] }
+serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 sha2 = "0.10.1"
 snap = { version = "1.0.5", optional = true }

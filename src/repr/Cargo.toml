@@ -35,7 +35,7 @@ persist-types = { path = "../persist-types" }
 prost = "0.9.0"
 regex = "1.5.4"
 ryu = "1.0.9"
-serde = { version = "1.0.135", features = ["derive"] }
+serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { version = "1.0.78", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.8.0", features = ["serde", "union"] }
