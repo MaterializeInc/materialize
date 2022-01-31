@@ -90,7 +90,7 @@ contains:unit '' not recognized
 
 
 > SELECT EXTRACT('second' FROM CAST('2011-11-11' AS DATE));
-0
+contains:unit '' not recognized
 
 > SELECT EXTRACT('second' FROM CAST('2011-11-11' AS TIMESTAMP));
 0
