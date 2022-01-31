@@ -23,7 +23,6 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         "who",
         nargs="*",
         help="Whose instances to show (defaults to yourself)",
-        default=[whoami()],
     )
     parser.add_argument("--all", help="Show all instances", action="store_true")
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
@@ -32,7 +31,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 def run(args: argparse.Namespace) -> None:
     filters: List[FilterTypeDef] = []
     if not args.all:
-        filters.append({"Name": "tag:LaunchedBy", "Values": args.who})
+        filters.append({"Name": "tag:LaunchedBy", "Values": args.who or [whoami()]})
     print_instances(
         list(boto3.resource("ec2").instances.filter(Filters=filters)),
         args.output_format,

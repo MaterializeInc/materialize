@@ -9,13 +9,14 @@
 
 import argparse
 
-from materialize.cli.scratch import create, destroy, mine, push, sftp, ssh
+from materialize.cli.scratch import create, destroy, login, mine, push, sftp, ssh
 
 
 def main() -> None:
     parser = argparse.ArgumentParser("scratch")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
     for name, configure, run in [
+        ("login", login.configure_parser, login.run),
         ("create", create.configure_parser, create.run),
         ("mine", mine.configure_parser, mine.run),
         ("ssh", ssh.configure_parser, ssh.run),
