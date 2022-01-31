@@ -603,11 +603,14 @@ impl ParsedDateTime {
     /// # Arguments
     ///
     /// * `value` is a PostgreSQL-compatible interval string, e.g `INTERVAL 'value'`.
+    /// * `leading_time_precision` optionally identifies the leading time component
+    ///   HOUR | MINUTE to disambiguate {}:{} formatted intervals
     /// * `ambiguous_resolver` identifies the DateTimeField of the final part
     ///   if it's ambiguous, e.g. in `INTERVAL '1' MONTH` '1' is ambiguous as its
     ///   DateTimeField, but MONTH resolves the ambiguity.
     pub fn build_parsed_datetime_interval(
         value: &str,
+        leading_time_precision: Option<DateTimeField>,
         ambiguous_resolver: DateTimeField,
     ) -> Result<ParsedDateTime, String> {
         use DateTimeField::*;
@@ -638,13 +641,13 @@ impl ParsedDateTime {
         let mut annotated_parts = Vec::new();
 
         while let Some(part) = value_parts.pop_front() {
-            let mut fmt = determine_format_w_datetimefield(part.clone())?;
+            let mut fmt = determine_format_w_datetimefield(part.clone(), leading_time_precision)?;
             // If you cannot determine the format of this part, try to infer its
             // format.
             if fmt.is_none() {
                 fmt = match value_parts.pop_front() {
                     Some(next_part) => {
-                        match determine_format_w_datetimefield(next_part.clone())? {
+                        match determine_format_w_datetimefield(next_part.clone(), None)? {
                             Some(TimePartFormat::SqlStandard(f)) => {
                                 match f {
                                     // Do not capture this token because expression
@@ -1001,7 +1004,7 @@ fn fill_pdt_time(
     mut pdt: &mut ParsedDateTime,
     mut actual: &mut VecDeque<TimeStrToken>,
 ) -> Result<(), String> {
-    match determine_format_w_datetimefield(actual.clone())? {
+    match determine_format_w_datetimefield(actual.clone(), None)? {
         Some(TimePartFormat::SqlStandard(leading_field)) => {
             let mut expected = expected_dur_like_tokens(leading_field)?;
 
@@ -1315,6 +1318,7 @@ struct AnnotatedIntervalPart {
 /// Note that `toks` should _not_ contain space
 fn determine_format_w_datetimefield(
     mut toks: VecDeque<TimeStrToken>,
+    leading_time_precision: Option<DateTimeField>,
 ) -> Result<Option<TimePartFormat>, String> {
     use DateTimeField::*;
     use TimePartFormat::*;
@@ -1350,11 +1354,17 @@ fn determine_format_w_datetimefield(
             if let Some(Num(_, _)) = toks.front() {
                 toks.pop_front();
             }
+
             match toks.pop_front() {
                 // Implies {H:M:?...}
-                Some(Colon) | Some(Delim) | None => Ok(Some(SqlStandard(Hour))),
+                Some(Colon) | Some(Delim) => Ok(Some(SqlStandard(Hour))),
                 // Implies {M:S.NS}
                 Some(Dot) => Ok(Some(SqlStandard(Minute))),
+                // Implies {a:b}. We default to {H:M}, and the leading
+                // precision can be specified explicitly
+                None => Ok(leading_time_precision
+                    .map(SqlStandard)
+                    .or(Some(SqlStandard(Hour)))),
                 _ => Err("Cannot determine format of all parts".into()),
             }
         }
@@ -2033,24 +2043,50 @@ mod test {
             let s = tokenize_time_str(test.0).unwrap();
 
             match (
-                determine_format_w_datetimefield(s).unwrap(),
+                determine_format_w_datetimefield(s, None).unwrap(),
                 test.1.as_ref(),
             ) {
                 (Some(a), Some(b)) => {
                     if a != *b {
                         panic!(
-                            "determine_format_w_datetimefield returned {:?}, expected {:?}",
+                            "determine_format_w_datetimefield_and_time returned {:?}, expected {:?}",
                             a, b,
                         )
                     }
                 }
                 (None, None) => {}
                 (x, y) => panic!(
-                    "determine_format_w_datetimefield returned {:?}, expected {:?}",
+                    "determine_format_w_datetimefield_and_time returned {:?}, expected {:?}",
                     x, y,
                 ),
             }
         }
+    }
+    #[test]
+    fn test_determine_format_w_datetimefield_and_leading_time() {
+        use DateTimeField::*;
+        use TimePartFormat::*;
+
+        assert_eq!(
+            determine_format_w_datetimefield(tokenize_time_str("4:5").unwrap(), None,).unwrap(),
+            Some(SqlStandard(Hour))
+        );
+        assert_eq!(
+            determine_format_w_datetimefield(
+                tokenize_time_str("4:5").unwrap(),
+                Some(DateTimeField::Minute),
+            )
+            .unwrap(),
+            Some(SqlStandard(Minute))
+        );
+        assert_eq!(
+            determine_format_w_datetimefield(
+                tokenize_time_str("4:5").unwrap(),
+                Some(DateTimeField::Hour),
+            )
+            .unwrap(),
+            Some(SqlStandard(Hour))
+        );
     }
     #[test]
     fn test_determine_format_w_datetimefield_error() {
@@ -2062,7 +2098,7 @@ mod test {
 
         for test in test_cases.iter() {
             let s = tokenize_time_str(test.0).unwrap();
-            match determine_format_w_datetimefield(s) {
+            match determine_format_w_datetimefield(s, None) {
                 Err(e) => assert_eq!(e.to_string(), test.1),
                 Ok(f) => panic!(
                     "Test passed when expected to fail: {}, generated {:?}",
@@ -3143,7 +3179,8 @@ mod test {
         ];
 
         for test in test_cases.iter() {
-            let actual = ParsedDateTime::build_parsed_datetime_interval(test.1, test.2).unwrap();
+            let actual =
+                ParsedDateTime::build_parsed_datetime_interval(test.1, None, test.2).unwrap();
             if actual != test.0 {
                 panic!(
                     "In test INTERVAL '{}' {}\n actual: {:?} \n expected: {:?}",
@@ -3286,7 +3323,7 @@ mod test {
             ),
         ];
         for test in test_cases.iter() {
-            match ParsedDateTime::build_parsed_datetime_interval(test.0, test.1) {
+            match ParsedDateTime::build_parsed_datetime_interval(test.0, None, test.1) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(pdt) => panic!(
                     "Test INTERVAL '{}' {} passed when expected to fail with {}, generated ParsedDateTime {:?}",

@@ -438,14 +438,19 @@ where
 ///   | <seconds value>
 /// ```
 pub fn parse_interval(s: &str) -> Result<Interval, ParseError> {
-    parse_interval_w_disambiguator(s, DateTimeField::Second)
+    parse_interval_w_disambiguator(s, None, DateTimeField::Second)
 }
 
-/// Parse an interval string, using a specific sql_parser::ast::DateTimeField
-/// to identify ambiguous elements. For more information about this operation,
-/// see the doucmentation on ParsedDateTime::build_parsed_datetime_interval.
-pub fn parse_interval_w_disambiguator(s: &str, d: DateTimeField) -> Result<Interval, ParseError> {
-    ParsedDateTime::build_parsed_datetime_interval(&s, d)
+/// Parse an interval string, using an optional leading precision for time (H:M:S)
+/// and a specific sql_parser::ast::DateTimeField to identify ambiguous elements.
+/// For more information about this operation, see the documentation on
+/// ParsedDateTime::build_parsed_datetime_interval.
+pub fn parse_interval_w_disambiguator(
+    s: &str,
+    leading_time_precision: Option<DateTimeField>,
+    d: DateTimeField,
+) -> Result<Interval, ParseError> {
+    ParsedDateTime::build_parsed_datetime_interval(&s, leading_time_precision, d)
         .and_then(|pdt| pdt.compute_interval())
         .map_err(|e| ParseError::invalid_input_syntax("interval", s).with_details(e))
 }
