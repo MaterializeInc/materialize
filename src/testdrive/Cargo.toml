@@ -8,20 +8,20 @@ rust-version = "1.58.0"
 
 [dependencies]
 anyhow = "1.0.53"
-async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
+async-compression = { version = "0.3.12", features = ["tokio", "gzip"] }
 async-trait = "0.1.52"
 aws-config = { version = "0.5.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.5.0", default-features = false }
 aws-sdk-s3 = { version = "0.5.0", default-features = false }
 aws-sdk-sqs = { version = "0.5.0", default-features = false }
-aws-smithy-http = "0.35.1"
+aws-smithy-http = "0.36.0"
 aws-types = { version = "0.5.0", features = ["hardcoded-credentials"] }
 atty = "0.2.0"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.0.12", features = ["derive"] }
+clap = { version = "3.0.13", features = ["derive"] }
 coord = { path = "../coord" }
 flate2 = "1.0.22"
 futures = "0.3.19"
@@ -56,7 +56,7 @@ sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
 termcolor = "1.1.2"
 tiberius = { version = "0.7.1", default-features = false }
-tokio = { version = "1.15.0", features = ["process"] }
+tokio = { version = "1.16.1", features = ["process"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.8"
 tokio-util = { version = "0.6.9", features = ['compat'] }
