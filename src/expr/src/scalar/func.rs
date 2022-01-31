@@ -2411,10 +2411,10 @@ impl BinaryFunc {
                 ))
             }
             BinaryFunc::ExtractInterval => {
-                eager!(|a, b: Datum<'a>| date_part_interval::<Numeric>(a, b))
+                eager!(date_part_interval::<Numeric>)
             }
             BinaryFunc::ExtractTime => {
-                eager!(|a, b: Datum<'a>| date_part_time::<Numeric>(a, b))
+                eager!(date_part_time::<Numeric>)
             }
             BinaryFunc::ExtractTimestamp => {
                 eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamp()))
@@ -2423,13 +2423,13 @@ impl BinaryFunc {
                 eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamptz()))
             }
             BinaryFunc::ExtractDate => {
-                eager!(|a, b: Datum<'a>| extract_date(a, b))
+                eager!(extract_date)
             }
             BinaryFunc::DatePartInterval => {
-                eager!(|a, b: Datum<'a>| date_part_interval::<f64>(a, b))
+                eager!(date_part_interval::<f64>)
             }
             BinaryFunc::DatePartTime => {
-                eager!(|a, b: Datum<'a>| date_part_time::<f64>(a, b))
+                eager!(date_part_time::<f64>)
             }
             BinaryFunc::DatePartTimestamp => {
                 eager!(|a, b: Datum| date_part_timestamp::<_, f64>(a, b.unwrap_timestamp()))
