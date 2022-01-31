@@ -165,6 +165,19 @@ pub fn enable_sigbus_sigsegv_backtraces() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+pub fn enable_sigusr2_coverage_dump() -> Result<(), anyhow::Error> {
+    let action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_sigusr2_signal),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+
+    unsafe { signal::sigaction(signal::SIGUSR2, &action) }
+        .context("failed to install SIGUSR2 handler")?;
+
+    Ok(())
+}
+
 extern "C" fn handle_sigbus_sigsegv(_: i32) {
     // SAFETY: this is is a signal handler function and technically must be
     // "async-signal safe" [0]. That typically means no memory allocation, which
@@ -210,7 +223,6 @@ pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
         signal::SIGALRM,
         signal::SIGTERM,
         signal::SIGUSR1,
-        signal::SIGUSR2,
     ] {
         unsafe { signal::sigaction(*signum, &action) }
             .with_context(|| format!("failed to install handler for {}", signum))?;
@@ -221,6 +233,10 @@ pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
 
 extern "C" {
     fn __llvm_profile_write_file() -> libc::c_int;
+}
+
+extern "C" fn handle_sigusr2_signal(_: i32) {
+    let _ = unsafe { __llvm_profile_write_file() };
 }
 
 extern "C" fn handle_termination_signal(signum: i32) {

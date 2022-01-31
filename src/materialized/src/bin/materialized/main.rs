@@ -387,6 +387,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         sys::enable_sigbus_sigsegv_backtraces()?;
     }
 
+    sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
     // Initialize fail crate for failpoint support
