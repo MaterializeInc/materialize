@@ -7,24 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
-use std::io;
+use std::convert::TryFrom;
 
-use bytes::BytesMut;
-use csv::{ByteRecord, ReaderBuilder};
 use itertools::Itertools;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
 use coord::{CoordError, StartupMessage};
-use pgcopy::copy::CopyErrorResponse;
+use pgcopy::CopyErrorNotSupportedResponse;
 use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use repr::{
-    ColumnName, Datum, NotNullViolation, RelationDesc, RelationType, Row, RowArena, ScalarType,
-};
-use sql::plan::{CopyFormat, CopyParams};
+use repr::{ColumnName, NotNullViolation, RelationDesc, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -409,9 +402,9 @@ impl ErrorResponse {
     }
 }
 
-impl From<CopyErrorResponse> for ErrorResponse {
-    fn from(error: CopyErrorResponse) -> Self {
-        ErrorResponse::error(error.code, error.message)
+impl From<CopyErrorNotSupportedResponse> for ErrorResponse {
+    fn from(error: CopyErrorNotSupportedResponse) -> Self {
+        ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, error.message)
     }
 }
 

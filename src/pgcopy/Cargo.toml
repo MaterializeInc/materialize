@@ -12,6 +12,5 @@ rust-version = "1.58.0"
 bytes = "1.1.0"
 csv = "1.1.6"
 pgrepr = { path = "../pgrepr" }
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 repr = { path = "../repr" }
 sql = { path = "../sql" }

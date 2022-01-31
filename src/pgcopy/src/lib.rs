@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! PostgreSQL
+//! Encoding and decoding for PostgreSQL COPY format
 
-pub mod copy;
+mod copy;
+
+pub use copy::{decode_copy_format, encode_copy_row_binary, encode_copy_row_text};
+pub use copy::{CopyErrorNotSupportedResponse, CopyFormatParams, CopyTextFormatParser};

@@ -1419,7 +1419,7 @@ dependencies = [
  "pdqselect",
  "persist",
  "persist-types",
- "pgwire",
+ "pgcopy",
  "postgres-protocol",
  "postgres-util",
  "prometheus",
@@ -3912,7 +3912,6 @@ dependencies = [
  "bytes",
  "csv",
  "pgrepr",
- "postgres",
  "repr",
  "sql",
 ]

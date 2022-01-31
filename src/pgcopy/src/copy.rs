@@ -7,32 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use bytes::bytes_mut::BytesMut;
-use csv::byte_record::ByteRecord;
-use csv::reader::ReaderBuilder;
-use postgres::error::sqlstate::SqlState;
-use repr::relation::{RelationDesc, RelationType};
-use repr::row::{Row, RowArena};
-use repr::scalar::{Datum, ScalarType};
-use sql::plan::{CopyFormat, CopyParams};
 use std::borrow::Cow;
 use std::io;
+
+use bytes::BytesMut;
+use csv::ByteRecord;
+use csv::ReaderBuilder;
+
+use repr::{Datum, RelationType, Row, RowArena};
+use sql::plan::{CopyFormat, CopyParams};
 
 // This is equivalent to a backslash followed by a dot, i.e "\."
 static END_OF_COPY_MARKER: [u8; 2] = [92, 46];
 
 #[derive(Debug)]
-pub struct CopyErrorResponse {
-    pub code: SqlState,
+pub struct CopyErrorNotSupportedResponse {
     pub message: String,
 }
 
-impl CopyErrorResponse {
-    fn new(code: SqlState, message: String) -> CopyErrorResponse {
-        CopyErrorResponse {
-            code,
-            message: message.into(),
-        }
+impl CopyErrorNotSupportedResponse {
+    fn new(message: String) -> CopyErrorNotSupportedResponse {
+        CopyErrorNotSupportedResponse { message }
     }
 }
 
@@ -349,7 +344,7 @@ pub enum CopyFormatParams<'a> {
 }
 
 impl<'a> TryFrom<CopyParams> for CopyFormatParams<'a> {
-    type Error = CopyErrorResponse;
+    type Error = CopyErrorNotSupportedResponse;
 
     fn try_from(params: CopyParams) -> Result<CopyFormatParams<'a>, Self::Error> {
         match params.format {
@@ -383,7 +378,7 @@ pub struct CopyTextFormatParams<'a> {
 }
 
 impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
-    type Error = CopyErrorResponse;
+    type Error = CopyErrorNotSupportedResponse;
 
     fn try_from(
         CopyParams {
@@ -398,12 +393,12 @@ impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
         fn only_available_with_csv<T>(
             option: Option<T>,
             param: &str,
-        ) -> Result<(), CopyErrorResponse> {
+        ) -> Result<(), CopyErrorNotSupportedResponse> {
             match option {
-                Some(..) => Err(CopyErrorResponse::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("COPY {} only available in CSV mode", param),
-                )),
+                Some(..) => Err(CopyErrorNotSupportedResponse::new(format!(
+                    "COPY {} only available in CSV mode",
+                    param
+                ))),
                 None => Ok(()),
             }
         }
@@ -419,8 +414,7 @@ impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
         let delimiter = match delimiter {
             Some(delimiter) => {
                 if delimiter.len() > 1 {
-                    return Err(CopyErrorResponse::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
+                    return Err(CopyErrorNotSupportedResponse::new(
                         "COPY delimiter must be a single one-byte character".to_string(),
                     ));
                 }
@@ -478,7 +472,7 @@ pub struct CopyCsvFormatParams<'a> {
 }
 
 impl<'a> TryFrom<CopyParams> for CopyCsvFormatParams<'a> {
-    type Error = CopyErrorResponse;
+    type Error = CopyErrorNotSupportedResponse;
 
     fn try_from(
         CopyParams {
@@ -496,14 +490,14 @@ impl<'a> TryFrom<CopyParams> for CopyCsvFormatParams<'a> {
             v: Option<String>,
             default: u8,
             param_name: &str,
-        ) -> Result<u8, CopyErrorResponse> {
+        ) -> Result<u8, CopyErrorNotSupportedResponse> {
             Ok(match v {
                 Some(v) if v.len() == 1 => v.as_bytes()[0],
                 Some(..) => {
-                    return Err(CopyErrorResponse::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        format!("COPY {} must be a single one-byte character", param_name),
-                    ))
+                    return Err(CopyErrorNotSupportedResponse::new(format!(
+                        "COPY {} must be a single one-byte character",
+                        param_name
+                    )))
                 }
                 None => default,
             })
@@ -519,8 +513,7 @@ impl<'a> TryFrom<CopyParams> for CopyCsvFormatParams<'a> {
         let header = header.unwrap_or(false);
 
         if delimiter == quote {
-            return Err(CopyErrorResponse::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
+            return Err(CopyErrorNotSupportedResponse::new(
                 "COPY delimiter and quote must be different".to_string(),
             ));
         }
@@ -611,7 +604,6 @@ pub fn decode_copy_format_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pgcopy::message::CopyTextFormatParser;
 
     #[test]
     fn test_copy_format_text_parser() {
