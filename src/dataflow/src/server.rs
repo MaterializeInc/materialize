@@ -481,8 +481,7 @@ where
             // Handle any received commands.
             let mut cmds = vec![];
             let mut empty = false;
-
-            while !empty && !shutdown {
+            while !empty {
                 match self.command_rx.try_recv() {
                     Ok(cmd) => cmds.push(cmd),
                     Err(TryRecvError::Empty) => empty = true,
@@ -704,7 +703,7 @@ where
             ComputeCommand::CreateInstance | ComputeCommand::DropInstance => {
                 // Can be ignored for the moment.
                 // Should eventually be filtered outside of this method,
-                // we are already deep in a specific instance.
+                // as we are already deep in a specific instance.
             }
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
