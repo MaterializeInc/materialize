@@ -53,9 +53,9 @@ pub const DEFAULT_INSTANCE_ID: usize = 0;
     doc = "The kind of compute command that was received"
 )]
 pub enum ComputeCommand {
-    /// Indicates the creation of an instance, and is the first command.
+    /// Indicates the creation of an instance, and is the first command for its compute instance.
     CreateInstance,
-    /// Indicates the termination of an instance, and is the last command.
+    /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
     /// Create a sequence of dataflows.
