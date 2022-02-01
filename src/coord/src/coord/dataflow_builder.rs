@@ -23,7 +23,7 @@ pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     pub indexes: &'a ArrangementFrontiers<Timestamp>,
     /// A handle to the storage abstraction, which describe sources from their identifier.
-    pub storage: &'a dataflow_types::client::FatClient<Box<dyn dataflow_types::client::Client>>,
+    pub storage: &'a dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
 }
 
 impl Coordinator {

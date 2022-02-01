@@ -278,7 +278,7 @@ pub struct Config<'a> {
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
-    dataflow_client: dataflow_types::client::FatClient<Box<dyn dataflow_types::client::Client>>,
+    dataflow_client: dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -4658,7 +4658,7 @@ pub async fn serve(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
-                dataflow_client: dataflow_types::client::FatClient::new(dataflow_client),
+                dataflow_client: dataflow_types::client::Controller::new(dataflow_client),
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 indexes: ArrangementFrontiers::default(),

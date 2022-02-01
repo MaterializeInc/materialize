@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Traits and types for fat clients of the dataflow subsystem.
+//! Traits and types for controller of the dataflow subsystem.
 
 // This appears to be defective at the moment, with false positiives
 // for each variant of the `Command` enum, each of which are documented.
@@ -28,8 +28,8 @@ use expr::{GlobalId, PartitionId, RowSetFinishing};
 use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
-pub mod fat_client;
-pub use fat_client::FatClient;
+pub mod controller;
+pub use controller::Controller;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]

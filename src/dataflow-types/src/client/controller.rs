@@ -17,7 +17,7 @@ use repr::Timestamp;
 use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
-pub struct FatClient<C> {
+pub struct Controller<C> {
     /// The underlying client,
     client: C,
     /// Sources that have been created.
@@ -31,7 +31,7 @@ pub struct FatClient<C> {
 }
 
 #[async_trait::async_trait]
-impl<C: Client> Client for FatClient<C> {
+impl<C: Client> Client for Controller<C> {
     async fn send(&mut self, cmd: Command) {
         self.send(cmd).await
     }
@@ -40,7 +40,7 @@ impl<C: Client> Client for FatClient<C> {
     }
 }
 
-impl<C: Client> FatClient<C> {
+impl<C: Client> Controller<C> {
     pub async fn send(&mut self, cmd: Command) {
         match &cmd {
             Command::Storage(StorageCommand::CreateSources(bindings)) => {
@@ -173,8 +173,8 @@ impl<C: Client> FatClient<C> {
     }
 }
 
-impl<C> FatClient<C> {
-    /// Create a new fat client from a client it should wrap.
+impl<C> Controller<C> {
+    /// Create a new controller from a client it should wrap.
     pub fn new(client: C) -> Self {
         Self {
             client,
