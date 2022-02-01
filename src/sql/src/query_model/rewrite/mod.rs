@@ -127,57 +127,33 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
         .into_iter()
         .partition(|r| matches!(r.strategy(), ApplyStrategy::AllBoxes(VisitOrder::Pre)));
 
-    for rule in &top_box {
-        rule.apply(model, model.top_box);
-    }
-
     let mut rewritten = true;
     while rewritten {
-        rewritten = false;
-
-        rewritten |= apply_dft_rules(&pre, &post, model);
+        let mut rewritten_in_top = false;
+        let mut rewritten_in_pre = false;
+        let mut rewritten_in_post = false;
 
         for rule in &top_box {
-            rewritten |= rule.apply(model, model.top_box);
+            rewritten_in_top |= rule.apply(model, model.top_box);
         }
+
+        let _ = model.try_visit_mut_pre_post(
+            &mut |model, box_id| -> Result<(), ()> {
+                for rule in pre.iter() {
+                    rewritten_in_pre |= rule.apply(model, *box_id);
+                }
+                Ok(())
+            },
+            &mut |model, box_id| -> Result<(), ()> {
+                for rule in post.iter() {
+                    rewritten_in_post |= rule.apply(model, *box_id);
+                }
+                Ok(())
+            },
+        );
+
+        rewritten = rewritten_in_top | rewritten_in_pre | rewritten_in_post;
     }
-}
-
-/// Traverse the model depth-first, applying rules to each box.
-///
-/// To avoid the possibility of stack overflow, the implementation does not use
-/// recursion. Instead, it keeps track of boxes we have entered using a `Vec`.
-/// It also keeps track of boxes we have exited so that if multiple boxes are
-/// parents of the same child box, the child will only be visited once.
-///
-/// Rules in `pre` are applied at enter-time, and rules in `post` are applied at
-/// exit-time.
-///
-/// Returns whether any box was rewritten.
-fn apply_dft_rules(
-    pre: &Vec<Box<dyn ApplyRule>>,
-    post: &Vec<Box<dyn ApplyRule>>,
-    model: &mut Model,
-) -> bool {
-    let mut rewritten_in_pre = false;
-    let mut rewritten_in_post = false;
-
-    let _ = model.try_visit_mut_pre_post(
-        &mut |m, box_id| -> Result<(), ()> {
-            for rule in pre {
-                rewritten_in_pre |= rule.apply(m, *box_id);
-            }
-            Ok(())
-        },
-        &mut |m, box_id| -> Result<(), ()> {
-            for rule in post {
-                rewritten_in_post |= rule.apply(m, *box_id);
-            }
-            Ok(())
-        },
-    );
-
-    rewritten_in_pre | rewritten_in_post
 }
 
 #[cfg(test)]
