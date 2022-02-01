@@ -747,6 +747,11 @@ impl Coordinator {
             });
         }
 
+        // Create the default cluster so that subsequent default cluster commands succeed.
+        self.dataflow_client
+            .create_instance(dataflow_types::client::DEFAULT_INSTANCE_ID)
+            .await;
+
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
         loop {
@@ -1610,7 +1615,10 @@ impl Coordinator {
             // See #10300 for context.
             self.persisted_table_allow_compaction(&index_since_updates);
             self.dataflow_client
-                .allow_index_compaction(index_since_updates)
+                .allow_index_compaction(
+                    dataflow_types::client::DEFAULT_INSTANCE_ID,
+                    index_since_updates,
+                )
                 .await;
         }
 
@@ -1743,7 +1751,9 @@ impl Coordinator {
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
             // Allow dataflow to cancel any pending peeks.
-            self.dataflow_client.cancel_peek(conn_id).await;
+            self.dataflow_client
+                .cancel_peek(dataflow_types::client::DEFAULT_INSTANCE_ID, conn_id)
+                .await;
         }
     }
 
@@ -4146,7 +4156,9 @@ impl Coordinator {
             for id in sinks_to_drop.iter() {
                 self.sink_writes.remove(id);
             }
-            self.dataflow_client.drop_sinks(sinks_to_drop).await;
+            self.dataflow_client
+                .drop_sinks(dataflow_types::client::DEFAULT_INSTANCE_ID, sinks_to_drop)
+                .await;
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop).await;
@@ -4234,7 +4246,9 @@ impl Coordinator {
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            self.dataflow_client.drop_sinks(dataflow_names).await;
+            self.dataflow_client
+                .drop_sinks(dataflow_types::client::DEFAULT_INSTANCE_ID, dataflow_names)
+                .await;
         }
     }
 
@@ -4246,7 +4260,9 @@ impl Coordinator {
             }
         }
         if !trace_keys.is_empty() {
-            self.dataflow_client.drop_indexes(trace_keys).await
+            self.dataflow_client
+                .drop_indexes(dataflow_types::client::DEFAULT_INSTANCE_ID, trace_keys)
+                .await
         }
     }
 
@@ -4360,7 +4376,9 @@ impl Coordinator {
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow)?);
         }
-        self.dataflow_client.create_dataflows(dataflow_plans).await;
+        self.dataflow_client
+            .create_dataflows(dataflow_types::client::DEFAULT_INSTANCE_ID, dataflow_plans)
+            .await;
         Ok(())
     }
 
@@ -4687,14 +4705,17 @@ pub async fn serve(
             };
             if let Some(config) = &logging {
                 handle.block_on(
-                    coord.dataflow_client.enable_logging(DataflowLoggingConfig {
-                        granularity_ns: config.granularity.as_nanos(),
-                        active_logs: BUILTINS
-                            .logs()
-                            .map(|src| (src.variant.clone(), src.index_id))
-                            .collect(),
-                        log_logging: config.log_logging,
-                    }),
+                    coord.dataflow_client.enable_logging(
+                        dataflow_types::client::DEFAULT_INSTANCE_ID,
+                        DataflowLoggingConfig {
+                            granularity_ns: config.granularity.as_nanos(),
+                            active_logs: BUILTINS
+                                .logs()
+                                .map(|src| (src.variant.clone(), src.index_id))
+                                .collect(),
+                            log_logging: config.log_logging,
+                        },
+                    ),
                 );
             }
             if let Some(persister) = persister {
@@ -5064,7 +5085,12 @@ pub mod fast_path_peek {
                 ),
                 Plan::PeekDataflow(dataflow, index_id) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    self.dataflow_client.create_dataflows(vec![dataflow]).await;
+                    self.dataflow_client
+                        .create_dataflows(
+                            dataflow_types::client::DEFAULT_INSTANCE_ID,
+                            vec![dataflow],
+                        )
+                        .await;
 
                     // Create an identity MFP operator.
                     let map_filter_project = expr::MapFilterProject::new(source_arity)
@@ -5102,6 +5128,7 @@ pub mod fast_path_peek {
             let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
             self.dataflow_client
                 .peek(
+                    dataflow_types::client::DEFAULT_INSTANCE_ID,
                     id,
                     key,
                     conn_id,

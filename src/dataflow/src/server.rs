@@ -461,6 +461,7 @@ where
 
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
+        let mut started = false;
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -481,11 +482,32 @@ where
             // Handle any received commands.
             let mut cmds = vec![];
             let mut empty = false;
-            while !empty {
+
+            while !empty && !shutdown {
                 match self.command_rx.try_recv() {
-                    Ok(cmd) => cmds.push(cmd),
+                    Ok(Command::Compute(ComputeCommand::CreateInstance, _)) => {
+                        if !started {
+                            started = true
+                        } else {
+                            panic!("Repeated CreateInstance command");
+                        }
+                    }
+                    Ok(Command::Compute(ComputeCommand::DropInstance, _)) => {
+                        if !started {
+                            panic!("First command was not CreateInstance");
+                        }
+                        // Cease consuming from `self.command_rx`.
+                        shutdown = true;
+                    }
+                    Ok(cmd) => {
+                        if !started {
+                            panic!("First command was not CreateInstance");
+                        }
+                        cmds.push(cmd)
+                    }
                     Err(TryRecvError::Empty) => empty = true,
                     Err(TryRecvError::Disconnected) => {
+                        // Unclean termination. Not obviously wrong at this point though.
                         empty = true;
                         shutdown = true;
                     }
@@ -693,13 +715,16 @@ where
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Compute(cmd) => self.handle_compute_command(cmd),
+            Command::Compute(cmd, _instance) => self.handle_compute_command(cmd),
             Command::Storage(cmd) => self.handle_storage_command(cmd),
         }
     }
 
     fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
+            ComputeCommand::CreateInstance | ComputeCommand::DropInstance => {
+                panic!("CreateInstance and DropInstance commands should be filtered, not handled.");
+            }
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
