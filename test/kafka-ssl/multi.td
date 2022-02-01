@@ -80,5 +80,30 @@ a
       password = "sekurity"
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_follow_kafka = true
+  )
+  ENVELOPE DEBEZIUM
+contains:sslv3 alert certificate unknown
+
+# Ensure that our test infra correctly sets up certs by failing when CSR is not
+# specifically configured, AND we are specifically setting certs
+! CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized-kafka.key',
+      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password = 'mzmzmz',
+      username = "materialize",
+      password = "sekurity"
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_key_location = '/share/secrets/materialized-kafka.key',
+      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
+      ssl_ca_location = '/share/secrets/ca.crt'
+  )
   ENVELOPE DEBEZIUM
 contains:sslv3 alert certificate unknown
