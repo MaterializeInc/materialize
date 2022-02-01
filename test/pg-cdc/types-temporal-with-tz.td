@@ -19,11 +19,6 @@ DROP PUBLICATION IF EXISTS mz_source;
 
 CREATE SCHEMA public;
 
-CREATE TABLE time_table (f1 TIME WITH TIME ZONE);
-INSERT INTO time_table VALUES ('11:11:11.123456-09');
-INSERT INTO time_table VALUES ('11:11:11.123456+09');
-ALTER TABLE time_table REPLICA IDENTITY FULL;
-
 CREATE TABLE timestamp_table (f1 TIMESTAMP WITH TIME ZONE);
 INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456-09');
 INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456+09');
@@ -42,7 +37,7 @@ true
 
 # Insert the same data post-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO time_table SELECT * FROM time_table;
+
 INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 
 > SELECT pg_typeof(f1) FROM timestamp_table LIMIT 1;
@@ -54,6 +49,19 @@ INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 "2011-11-11 20:11:11.123456 UTC"
 "2011-11-11 20:11:11.123456 UTC"
 
+# Now create a table with an unsupported type
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+
+CREATE TABLE time_table (f1 TIME WITH TIME ZONE);
+INSERT INTO time_table VALUES ('11:11:11.123456-09');
+INSERT INTO time_table VALUES ('11:11:11.123456+09');
+ALTER TABLE time_table REPLICA IDENTITY FULL;
+
+# Drop the source so we can recreate with the second table in the publication
+> DROP SOURCE mz_source CASCADE;
+
 # Mz does not support TIME WITH TIME ZOINE
-! CREATE VIEWS FROM SOURCE mz_source (time_table);
+! CREATE MATERIALIZED SOURCE mz_source
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  PUBLICATION 'mz_source';
 contains:unknown catalog item 'timetz'
