@@ -2343,7 +2343,7 @@ impl Coordinator {
                 for ((source_id, since_ts), description) in source_ids
                     .into_iter()
                     .zip_eq(since_timestamps)
-                    .zip(descriptions)
+                    .zip_eq(descriptions)
                 {
                     self.update_timestamper(source_id, true).await;
 
