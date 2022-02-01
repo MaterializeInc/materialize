@@ -111,6 +111,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--value-bytes", type=int, default=500, help="record payload size in bytes"
     )
     parser.add_argument(
+        "--upsert",
+        action="store_true",
+        help="whether to use envelope UPSERT (True) or NONE (False)",
+    )
+    parser.add_argument(
         "--timeout-secs", type=int, default=120, help="timeout to send records to Kafka"
     )
     parser.add_argument(
@@ -131,6 +136,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="number of dataflow workers to use in materialized",
     )
     args = parser.parse_args()
+
+    envelope = "NONE"
+    if args.upsert:
+        envelope = "UPSERT"
 
     options = []
     if args.enable_persistence:
@@ -173,6 +182,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.run(
             "testdrive-svc",
+            f"--var=envelope={envelope}",
             "setup.td",
         )
 
