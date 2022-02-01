@@ -77,7 +77,7 @@ impl<C: Client> Controller<C> {
             Command::Storage(StorageCommand::DropSources(identifiers)) => {
                 for id in identifiers.iter() {
                     if !self.source_descriptions.contains_key(id) {
-                        log::error!("Source id {} dropped without first being created", id);
+                        tracing::error!("Source id {} dropped without first being created", id);
                     } else {
                         self.source_descriptions.insert(*id, None);
                     }

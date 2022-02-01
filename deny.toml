@@ -72,6 +72,37 @@ wrappers = [
     "zip",
 ]
 
+[[bans.deny]]
+name = "log"
+wrappers = [
+    "wasm-bindgen-backend",
+    "want",
+    "tracing-log",
+    "tracing",
+    "tokio-util",
+    "tokio-postgres",
+    "reqwest",
+    # TODO(guswynn): switch to tracing in rdkafka
+    "rdkafka",
+    "pubnub-hyper",
+    "pubnub-core",
+    "prost-build",
+    "pprof",
+    "postgres",
+    "os_info",
+    "opentls",
+    "native-tls",
+    "mio",
+    "globset",
+    "fail",
+    "env_logger",
+
+
+    # TODO(guswynn): switch to `tracing:enabled!` when its released
+    "dataflow",
+    "coord",
+]
+
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
 # mature and more widely used.
 [[bans.deny]]

@@ -15,10 +15,10 @@ use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use log::{debug, error, info, warn};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
+use tracing::{debug, error, info, warn};
 
 use dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
