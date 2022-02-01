@@ -69,6 +69,7 @@ lazy_static! {
     static ref VER_0_9_1: Version = Version::new(0, 9, 1);
     static ref VER_0_9_2: Version = Version::new(0, 9, 2);
     static ref VER_0_9_13: Version = Version::new(0, 9, 13);
+    static ref VER_0_20_0: Version = Version::new(0, 20, 0);
 }
 
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
@@ -96,6 +97,9 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_9_13 {
             ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(stmt)?;
+        }
+        if catalog_version < *VER_0_20_0 {
+            ast_rewrite_ccsr_with_options_to_compiled_0_20_0(stmt)?;
         }
         Ok(())
     })?;
@@ -134,6 +138,56 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+// Adds `ssl_follow_kafka` to CSR connectors that defaulted to Kafka ssl values
+// from when that was the default
+fn ast_rewrite_ccsr_with_options_to_compiled_0_20_0(
+    stmt: &mut sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    fn is_option_to_skip(option_name: &str) -> bool {
+        [
+            "ssl_ca_location",
+            "ssl_key_location",
+            "ssl_certificate_location",
+        ]
+        .contains(&option_name)
+    }
+
+    struct OptionRemover;
+    impl<'ast> VisitMut<'ast, Raw> for OptionRemover {
+        fn visit_create_source_statement_mut(
+            &mut self,
+            node: &'ast mut CreateSourceStatement<Raw>,
+        ) {
+            let with_options = match &mut node.format {
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr { csr_connector })) => {
+                    Some(&mut csr_connector.with_options)
+                }
+                CreateSourceFormat::Bare(Format::Protobuf(ProtobufSchema::Csr {
+                    csr_connector,
+                })) => Some(&mut csr_connector.with_options),
+                _ => None,
+            };
+
+            if let Some(with_options) = with_options {
+                if !with_options
+                    .iter()
+                    .any(|opt| is_option_to_skip(opt.name().as_str()))
+                    && !with_options
+                        .iter()
+                        .any(|opt| opt.name().as_str() == "ssl_follow_kafka")
+                {
+                    with_options.push(SqlOption::Value {
+                        name: Ident::new("ssl_follow_kafka"),
+                        value: Value::Boolean(true),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(OptionRemover.visit_statement_mut(stmt))
+}
 
 /// Rewrites Protobuf sources to store the compiled bytes rather than the text
 /// of the schema.
