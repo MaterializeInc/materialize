@@ -649,6 +649,19 @@ its value may always be `NULL`. The precise nature of the incompleteness is
 intentionally undocumented. New tools developed against Materialize should use
 the documented [`mz_catalog`](#mz_catalog) API instead.
 
+## `information_schema`
+
+Materialize has compatibility shims for the following relations from
+[`information_schema`](https://www.postgresql.org/docs/current/infoschema-schema.html):
+
+  * [`columns`](https://www.postgresql.org/docs/current/infoschema-columns.html)
+
+These compatibility shims are largely incomplete. Most are lacking some columns
+that are present in PostgreSQL, or if they do include the column the result set
+its value may always be `NULL`. The precise nature of the incompleteness is
+intentionally undocumented. New tools developed against Materialize should use
+the documented [`mz_catalog`](#mz_catalog) API instead.
+
 If you are having trouble making a PostgreSQL tool work with Materialize, please
 [file a GitHub issue][gh-issue]. Many PostgreSQL tools can be made to work with
 Materialize with minor changes to the `pg_catalog` compatibility shim.
