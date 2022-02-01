@@ -176,7 +176,10 @@ fn test_pid_file() -> Result<(), Box<dyn Error>> {
     match util::start_server(config.clone()) {
         Ok(_) => panic!("unexpected success"),
         Err(e) => {
-            if !e.to_string().contains("process already running") {
+            if !e
+                .to_string()
+                .contains("running with the same data directory")
+            {
                 return Err(e.into());
             }
         }

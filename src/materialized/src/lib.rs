@@ -14,10 +14,12 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::env;
+use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use compile_time_run::run_command_str;
 use coord::PersistConfig;
 use futures::StreamExt;
@@ -30,6 +32,7 @@ use build_info::BuildInfo;
 use coord::LoggingConfig;
 use ore::metrics::MetricsRegistry;
 use ore::now::SYSTEM_TIME;
+use ore::option::OptionExt;
 use ore::task;
 use pid_file::PidFile;
 
@@ -216,7 +219,19 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
 
     // Attempt to acquire PID file lock.
-    let pid_file = PidFile::open(config.data_directory.join("materialized.pid"))?;
+    let pid_file =
+        PidFile::open(config.data_directory.join("materialized.pid")).map_err(|e| match e {
+            // Enhance error with some materialized-specific details.
+            pid_file::Error::AlreadyRunning { pid } => anyhow!(
+                "another materialized process (PID {}) is running with the same data directory\n\
+                data directory: {}\n",
+                pid.display_or("<unknown>"),
+                fs::canonicalize(&config.data_directory)
+                    .unwrap_or_else(|_| config.data_directory.clone())
+                    .display(),
+            ),
+            e => e.into(),
+        })?;
 
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
