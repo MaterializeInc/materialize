@@ -106,6 +106,7 @@ pub(crate) fn render<G: Scope>(
                 let mut dedup_state = HashMap::new();
                 let envelope = envelope.clone();
                 let mut data = vec![];
+
                 move |input, output| {
                     while let Some((cap, refmut_data)) = input.next() {
                         let mut session = output.session(&cap);
@@ -144,7 +145,7 @@ pub(crate) fn render<G: Scope>(
                                     match res {
                                         Ok(b) => b,
                                         Err(err) => {
-                                            session.give((Err(err), cap.time().clone(), 1));
+                                            session.give((Err(err.into()), cap.time().clone(), 1));
                                             continue;
                                         }
                                     }
@@ -379,7 +380,7 @@ impl DebeziumDeduplicationState {
     fn extract_binlog_position(
         &mut self,
         value: &Row,
-    ) -> Result<Option<RowCoordinates>, DataflowError> {
+    ) -> Result<Option<RowCoordinates>, DecodeError> {
         match value.iter().nth(self.projection.source_idx).unwrap() {
             Datum::List(source) => {
                 // While reading a snapshot the row coordinates are useless, so early return None
@@ -489,7 +490,7 @@ impl DebeziumDeduplicationState {
         connector_offset: Option<i64>,
         upstream_time_millis: Option<i64>,
         debug_name: &str,
-    ) -> Result<bool, DataflowError> {
+    ) -> Result<bool, DecodeError> {
         let binlog_position = self.extract_binlog_position(value)?;
 
         self.messages_processed += 1;
