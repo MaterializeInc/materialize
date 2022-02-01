@@ -83,13 +83,13 @@ impl<C: Client> Controller<C> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::EnableLogging(logging_config)) => {
+            Command::Compute(ComputeCommand::EnableLogging(logging_config), _instance) => {
                 for id in logging_config.log_identifiers() {
                     self.compute_since_uppers
                         .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
                 }
             }
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
+            Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
                 // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
                 // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
                 for dataflow in dataflows.iter() {
@@ -134,7 +134,7 @@ impl<C: Client> Controller<C> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::AllowIndexCompaction(frontiers)) => {
+            Command::Compute(ComputeCommand::AllowIndexCompaction(frontiers), _instance) => {
                 for (id, frontier) in frontiers.iter() {
                     self.compute_since_uppers.advance_since_for(*id, frontier);
                 }
