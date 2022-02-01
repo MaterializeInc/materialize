@@ -184,7 +184,7 @@ pub(crate) fn render<G: Scope>(
 /// one deduplicator per timely worker and use use timely key sharding
 /// normally. But it also means that no single deduplicator knows the
 /// highest-ever seen binlog offset.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct DebeziumDeduplicationState {
     /// Last recorded binlog position and connector offset
     ///
@@ -205,7 +205,7 @@ struct DebeziumDeduplicationState {
 /// During normal (non-snapshot) operation, we deduplicate based on binlog position: (pos, row), for MySQL.
 /// During the initial snapshot, (pos, row) values are all the same, but primary keys
 /// are unique and thus we can get deduplicate based on those.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct TrackFull {
     /// binlog position to (timestamp that this binlog entry was first seen)
     seen_positions: HashMap<RowCoordinates, i64>,
@@ -224,7 +224,7 @@ struct TrackFull {
 /// `upstream_time_millis` argument to [`DebeziumDeduplicationState::should_use_record`].
 ///
 /// We throw away all tracking data after we see the first record past `end`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct TrackRange {
     /// Start pre-filling the seen data before we start trusting it
     ///
