@@ -1,6 +1,10 @@
 # dbt-materialize Changelog
 
-## 1.0.0 - 2021-01-03
+## Unreleased
+
+* Respect type overrides in the views created by seeds.
+
+## 1.0.1 - 2021-01-03
 
 * Upgrade to `dbt-postgres` v1.0.1.
 
