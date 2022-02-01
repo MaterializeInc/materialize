@@ -10,3 +10,4 @@
 //! Derived attributes framework and definitions.
 
 pub mod core;
+pub mod non_null_requirements;
