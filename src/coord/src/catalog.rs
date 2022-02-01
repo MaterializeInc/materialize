@@ -2501,13 +2501,29 @@ impl Catalog {
         // Find all relations referenced by the expression. Find their parent schemas
         // and add all tables, views, and sources in those schemas to a set.
         let mut relations: HashSet<GlobalId> = HashSet::new();
+        let mut schemas = HashSet::new();
         let mut schema_ids = VecDeque::new();
         for id in ids {
             // Always add in the user-specified ids.
             relations.insert(*id);
             let entry = self.get_by_id(&id);
             let name = entry.name();
-            if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
+            schemas.insert((&name.database, &*name.schema));
+        }
+
+        // If any of the system schemas is specified, add the rest of the
+        // system schemas.
+        let system_schemas = &[
+            (&DatabaseSpecifier::Ambient, MZ_CATALOG_SCHEMA),
+            (&DatabaseSpecifier::Ambient, PG_CATALOG_SCHEMA),
+            (&DatabaseSpecifier::Ambient, INFORMATION_SCHEMA),
+        ];
+        if system_schemas.iter().any(|s| schemas.contains(s)) {
+            schemas.extend(system_schemas);
+        }
+
+        for (db, schema) in schemas {
+            if let Some(schema) = self.get_schema(db, schema, conn_id) {
                 schema_ids.extend(schema.items.values());
                 while let Some(id) = schema_ids.pop_front() {
                     let entry = self.get_by_id(id);
