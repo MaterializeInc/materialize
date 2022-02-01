@@ -53,10 +53,11 @@ schema-id is present at the beginning of each record.
 
 #### Confluent Schema Registry options
 
-Options for connecting to a Confluent Schema Registry. If these options are not provided, the SSL `WITH` options for the Kafka cluster (see above) are used.
+Options for connecting to a Confluent Schema Registry. Any missing options use the SSL `WITH` options for the Kafka cluster (see above) IF `ssl_follow_kafka` is `true`.
 
 Field | Value | Description
 ------|-------|------------
 `ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication. <em>New in v0.17.0.</em>
 `ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication. <em>New in v0.17.0.</em>
 `ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. <em>New in v0.17.0.</em>
+`ssl_follow_kafka` | `text` | Use the Kafka cluster SSL options for missing SSL options. <em>New in v0.20.0.</em>
