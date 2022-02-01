@@ -234,8 +234,7 @@ struct SinceUpperMap {
 
 impl SinceUpperMap {
     fn insert(&mut self, id: GlobalId, since_upper: (Antichain<Timestamp>, Antichain<Timestamp>)) {
-        let prior = self.since_uppers.insert(id, since_upper);
-        assert!(prior.is_none());
+        self.since_uppers.insert(id, since_upper);
     }
     fn get(&self, id: &GlobalId) -> Option<(AntichainRef<Timestamp>, AntichainRef<Timestamp>)> {
         self.since_uppers
