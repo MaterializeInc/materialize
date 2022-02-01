@@ -16,7 +16,7 @@ dag: true
 
 steps:
   - id: build-x86_64
-    label: ":docker: build x86_64"
+    label: Build x86_64
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build x86_64
     inputs:
       - "*"
@@ -25,7 +25,7 @@ steps:
       queue: builder
 
   - id: build-aarch64
-    label: ":docker: build aarch64"
+    label: Build aarch64
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build aarch64
     inputs:
       - "*"
@@ -34,14 +34,14 @@ steps:
       queue: builder-aarch64
 
   - id: lint-fast
-    label: ":bath: lint and rustfmt"
+    label: Lint and rustfmt
     command: bin/ci-builder run stable ci/test/lint-fast.sh
     inputs:
       - "*"
     timeout_in_minutes: 10
 
   - id: lint-slow
-    label: ":paperclip: clippy and doctests"
+    label: Clippy and doctests
     command: bin/ci-builder run stable ci/test/lint-slow.sh
     inputs:
       - Cargo.lock
@@ -52,7 +52,7 @@ steps:
       queue: builder
 
   - id: lint-macos
-    label: ":mac: clippy"
+    label: macOS Clippy
     command: bin/check
     env:
       CARGO_INCREMENTAL: "0"
@@ -66,19 +66,19 @@ steps:
       queue: mac
 
   - id: lint-docs
-    label: ":briefcase: lint docs"
+    label: Lint docs
     command: bin/ci-builder run stable ci/test/lint-docs.sh
     inputs: [doc/user]
     timeout_in_minutes: 30
 
   - id: preview-docs
-    label: preview docs
+    label: Preview docs
     command: bin/ci-builder run stable ci/test/preview-docs.sh
     inputs: [doc/user]
     timeout_in_minutes: 30
 
   - id: cargo-test
-    label: ":cargo: test"
+    label: Cargo test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -88,7 +88,7 @@ steps:
           run: app
 
   - id: miri-test
-    label: ":face_with_monocle: miri test"
+    label: Miri test
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     inputs: [src/repr]
     timeout_in_minutes: 30
@@ -96,7 +96,7 @@ steps:
       queue: builder
 
   - id: testdrive
-    label: ":racing_car: testdrive %n"
+    label: Testdrive %n
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
@@ -108,7 +108,7 @@ steps:
           args: [--aws-region=us-east-2]
 
   - id: cluster-smoke
-    label: "Cluster smoke test"
+    label: Cluster smoke test
     depends_on: build-x86_64
     inputs: [test/cluster]
     plugins:
@@ -116,7 +116,7 @@ steps:
           composition: cluster
 
   - id: kafka-ssl
-    label: ":lock: Kafka SSL smoke test"
+    label: Kafka SSL smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-ssl/smoketest.td]
@@ -125,7 +125,7 @@ steps:
           composition: kafka-ssl
 
   - id: kafka-krb5
-    label: ":hotdog: Kafka Kerberos smoke test"
+    label: Kafka Kerberos smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-krb5/smoketest.td]
@@ -135,7 +135,7 @@ steps:
           run: testdrive
 
   - id: kafka-sasl-plain
-    label: ":hotdog: Kafka SASL PLAIN smoke test"
+    label: Kafka SASL PLAIN smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-sasl-plain/smoketest.td]
@@ -145,7 +145,7 @@ steps:
           run: testdrive
 
   - id: sqllogictest-fast
-    label: ":bulb: Fast SQL logic tests"
+    label: Fast SQL logic tests
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/sqllogictest]
@@ -153,8 +153,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
 
-  - id: streaming-demo
-    label: ":credit_card: billing demo"
+  - id: billing-demo
+    label: Billing demo smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -163,7 +163,7 @@ steps:
           args: [--message-count=100, --partitions=10, --check-sink]
 
   - id: perf-kinesis
-    label: ":shower: kinesis streaming demo"
+    label: Kinesis performance smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -172,7 +172,7 @@ steps:
           composition: perf-kinesis
 
   - id: chbench-demo
-    label: "chbench sanity check"
+    label: chbench smoke test
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
@@ -181,7 +181,7 @@ steps:
     timeout_in_minutes: 30
 
   - id: catalog-compat
-    label: ":book: catalog compatibility check"
+    label: Catalog compatibility test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -190,7 +190,7 @@ steps:
           run: catalog-compat
 
   - id: restarts
-    label: ":arrows_clockwise: restarts"
+    label: Restart test
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -198,7 +198,7 @@ steps:
           composition: restart
 
   - id: upgrade
-    label: "Upgrade testing"
+    label: Upgrade tests
     depends_on: build-x86_64
     timeout_in_minutes: 60
     plugins:
@@ -207,7 +207,7 @@ steps:
           args: [--most-recent, "3"]
 
   - id: metabase-demo
-    label: "metabase-demo"
+    label: Metabase smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 10
     plugins:
@@ -216,7 +216,7 @@ steps:
           run: smoketest
 
   - id: dbt-materialize
-    label: "dbt-materialize"
+    label: dbt-materialize tests
     depends_on: build-x86_64
     timeout_in_minutes: 10
     plugins:
@@ -224,7 +224,7 @@ steps:
           composition: dbt-materialize
 
   - id: debezium-postgres
-    label: "Debezium test (Postgres)"
+    label: Debezium Postgres tests
     depends_on: build-x86_64
     inputs: [test/debezium]
     plugins:
@@ -233,7 +233,7 @@ steps:
           run: postgres
 
   - id: debezium-sql-server
-    label: "Debezium test (SQL Server)"
+    label: Debezium SQL Server tests
     depends_on: build-x86_64
     inputs: [test/debezium]
     plugins:
@@ -242,7 +242,7 @@ steps:
           run: sql-server
 
   - id: pg-cdc
-    label: "Postgres CDC test"
+    label: Postgres CDC tests
     depends_on: build-x86_64
     inputs: [test/pg-cdc]
     plugins:
@@ -250,7 +250,7 @@ steps:
           composition: pg-cdc
 
   - id: pg-cdc-resumption
-    label: "Postgres CDC test (Resumption logic)"
+    label: Postgres CDC resumption tests
     depends_on: build-x86_64
     inputs: [test/pg-cdc-resumption]
     plugins:
@@ -258,7 +258,7 @@ steps:
           composition: pg-cdc-resumption
 
   - id: s3-resumption
-    label: "S3 Retry/Resumption test"
+    label: S3 resumption tests
     depends_on: build-x86_64
     inputs: [test/s3-resumption]
     plugins:
@@ -266,14 +266,14 @@ steps:
           composition: s3-resumption
 
   - id: kafka-exactly-once
-    label: "Test for the Kafka exactly-once sink"
+    label: Kafka exactly-once tests
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
 
   - id: persistence
-    label: "Tests for persistence"
+    label: Persistence tests
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
@@ -290,7 +290,7 @@ steps:
           run: csharp
 
   - id: lang-js
-    label: ":javascript: tests"
+    label: ":js: tests"
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/js]
@@ -322,7 +322,7 @@ steps:
   - wait: ~
 
   - id: deploy
-    label: ":rocket: Deploy"
+    label: Deploy
     trigger: deploy
     async: true
     branches: "main v*.*"
