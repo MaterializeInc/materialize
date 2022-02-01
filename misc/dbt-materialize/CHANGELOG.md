@@ -1,6 +1,11 @@
 # dbt-materialize Changelog
 
-## 1.0.0 - 2021-01-03
+## Unreleased
+
+* Fix the implementation of the `list_relations_without_caching` macro.
+  Previously it always returned an empty list of relations.
+
+## 1.0.1 - 2021-01-03
 
 * Upgrade to `dbt-postgres` v1.0.1.
 
