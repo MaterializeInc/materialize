@@ -160,7 +160,7 @@ pub(crate) struct SourceData {
 }
 
 /// The output of the decoding operator
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct DecodeResult {
     /// The decoded key
     pub key: Option<Result<Row, DecodeError>>,
@@ -170,6 +170,8 @@ pub struct DecodeResult {
     pub position: Option<i64>,
     /// The time the record was created in the upstream systsem, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
+    /// The partition this record came from
+    pub partition: PartitionId,
     /// If this is a Kafka stream, the appropriate metadata
     // TODO(bwm): This should probably be statically different for different streams, or we should
     // propagate whether metadata is requested into the decoder

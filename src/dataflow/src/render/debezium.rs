@@ -67,7 +67,9 @@ pub(crate) fn render<G: Scope>(
                                             Some(Ok(row))
                                         }
                                         Datum::Null => None,
-                                        d => panic!("type error: expected record, found {:?}", d),
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
                                     },
                                     Some(Err(err)) => Some(Err(DataflowError::from(err))),
                                     None => continue,
@@ -93,7 +95,8 @@ pub(crate) fn render<G: Scope>(
         }
         _ => input
             .unary(Pipeline, "envelope-debezium", move |_, _| {
-                let mut state = DebeziumDeduplicationState::new(envelope.clone());
+                let mut dedup_state = HashMap::new();
+                let envelope = envelope.clone();
                 let mut data = vec![];
                 move |input, output| {
                     while let Some((cap, refmut_data)) = input.next() {
@@ -116,7 +119,12 @@ pub(crate) fn render<G: Scope>(
                                 None => continue,
                             };
 
-                            let should_use = match state {
+                            let partition_dedup = dedup_state
+                                .entry(result.partition.clone())
+                                .or_insert_with(|| {
+                                    DebeziumDeduplicationState::new(envelope.clone())
+                                });
+                            let should_use = match partition_dedup {
                                 Some(ref mut s) => {
                                     let res = s.should_use_record(
                                         key,

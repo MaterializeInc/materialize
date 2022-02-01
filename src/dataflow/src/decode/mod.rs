@@ -18,8 +18,7 @@ use expr::PartitionId;
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use repr::MessagePayload;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
@@ -27,7 +26,7 @@ use timely::scheduling::SyncActivator;
 use dataflow_types::{
     sources::{
         encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
-        IncludedColumnSource, SourceEnvelope,
+        DebeziumMode, IncludedColumnSource, SourceEnvelope,
     },
     DecodeError, LinearOperator,
 };
@@ -366,72 +365,69 @@ where
 
     let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
 
-    // The Debezium deduplication and upsert logic rely on elements for the same key going to the same worker.
-    // Other decoders don't care; so we distribute things round-robin (i.e., by "position"), and
-    // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
-    // TODO(petrosagg): this function should accept a pact from the caller
-    let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
-    let results = stream.unary_frontier(
-        Exchange::new(move |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>| {
-            if use_key_contract {
-                x.key.hashed()
-            } else if let Some(position) = x.position {
+    let dist: fn(&SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>) -> _ = match envelope {
+        SourceEnvelope::Debezium(dbz) => match dbz.mode {
+            DebeziumMode::Upsert => |x| x.key.hashed(),
+            _ => |x| x.partition.hashed(),
+        },
+        _ => |x| {
+            if let Some(position) = x.position {
                 position.hashed()
             } else {
                 x.value.hashed()
             }
-        }),
-        &op_name,
-        move |_, _| {
-            move |input, output| {
-                let mut n_errors = 0;
-                let mut n_successes = 0;
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for SourceOutput {
+        },
+    };
+    let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
+        move |input, output| {
+            let mut n_errors = 0;
+            let mut n_successes = 0;
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for SourceOutput {
+                    key,
+                    value,
+                    position,
+                    upstream_time_millis,
+                    partition,
+                } in data.iter()
+                {
+                    let key = key_decoder
+                        .as_mut()
+                        .and_then(|decoder| try_decode(decoder, key.as_ref()));
+
+                    let value = try_decode(&mut value_decoder, value.as_ref());
+
+                    if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                        n_errors += 1;
+                    } else if matches!(&value, Some(Ok(_))) {
+                        n_successes += 1;
+                    }
+
+                    session.give(DecodeResult {
                         key,
                         value,
-                        position,
-                        upstream_time_millis,
-                        partition,
-                    } in data.iter()
-                    {
-                        let key = key_decoder
-                            .as_mut()
-                            .and_then(|decoder| try_decode(decoder, key.as_ref()));
-
-                        let value = try_decode(&mut value_decoder, value.as_ref());
-
-                        if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                            n_errors += 1;
-                        } else if matches!(&value, Some(Ok(_))) {
-                            n_successes += 1;
-                        }
-
-                        session.give(DecodeResult {
-                            key,
-                            value,
-                            position: *position,
-                            upstream_time_millis: *upstream_time_millis,
-                            metadata: to_metadata_row(
-                                &metadata_items,
-                                partition.clone(),
-                                *position,
-                                *upstream_time_millis,
-                            ),
-                        });
-                    }
-                });
-                // Matching historical practice, we only log metrics on the value decoder.
-                if n_errors > 0 {
-                    value_decoder.log_errors(n_errors);
+                        position: *position,
+                        upstream_time_millis: *upstream_time_millis,
+                        partition: partition.clone(),
+                        metadata: to_metadata_row(
+                            &metadata_items,
+                            partition.clone(),
+                            *position,
+                            *upstream_time_millis,
+                        ),
+                    });
                 }
-                if n_successes > 0 {
-                    value_decoder.log_successes(n_successes);
-                }
+            });
+            // Matching historical practice, we only log metrics on the value decoder.
+            if n_errors > 0 {
+                value_decoder.log_errors(n_errors);
             }
-        },
-    );
+            if n_successes > 0 {
+                value_decoder.log_successes(n_successes);
+            }
+        }
+    });
     (results, None)
 }
 
@@ -525,6 +521,7 @@ where
                                         value: Some(value),
                                         position,
                                         upstream_time_millis: *upstream_time_millis,
+                                        partition: partition.clone(),
                                         metadata,
                                     });
                                 }
@@ -554,6 +551,7 @@ where
                             value: None,
                             position: None,
                             upstream_time_millis: *upstream_time_millis,
+                            partition: partition.clone(),
                             metadata,
                         });
                     } else {
@@ -599,6 +597,7 @@ where
                                     value: Some(value),
                                     position,
                                     upstream_time_millis: *upstream_time_millis,
+                                    partition: partition.clone(),
                                     metadata,
                                 });
                                 value_buf = vec![];
@@ -609,6 +608,7 @@ where
                                     value: Some(value),
                                     position,
                                     upstream_time_millis: *upstream_time_millis,
+                                    partition: partition.clone(),
                                     metadata,
                                 });
                             }
