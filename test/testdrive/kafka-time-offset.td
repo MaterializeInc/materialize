@@ -28,12 +28,6 @@ contains:topic missing_topic does not exist
   FORMAT TEXT
 contains:`start_offset` and `kafka_time_offset` cannot be set at the same time.
 
-! CREATE MATERIALIZED SOURCE byo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
-  WITH (kafka_time_offset=1, consistency_topic="t0")
-  FORMAT TEXT
-contains:`start_offset` is not yet implemented for non-realtime consistency sources.
-
 ! CREATE MATERIALIZED SOURCE not_a_number
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset="not_a_number")

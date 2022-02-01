@@ -38,10 +38,7 @@ use dataflow_types::client::{
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    sources::{
-        persistence::Consistency, persistence::TimestampSourceUpdate, ExternalSourceConnector,
-        SourceConnector,
-    },
+    sources::{persistence::TimestampSourceUpdate, ExternalSourceConnector, SourceConnector},
     DataflowError, PeekResponse,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
@@ -907,71 +904,25 @@ where
             } => {
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
-                    consistency,
                     ts_frequency,
                     ..
                 } = connector
                 {
-                    let byo_default = TimestampBindingRc::new(None, self.now.clone(), true);
                     let rt_default = TimestampBindingRc::new(
                         Some(ts_frequency.as_millis().try_into().unwrap()),
                         self.now.clone(),
-                        false,
                     );
-                    match (connector, consistency) {
-                        (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
-                            // TODO(aljoscha): Hey Ruchir 😃, should we always pull this to +Inf,
-                            // and never persist bindings for BYO sources, like this?
-                            byo_default.set_durability_frontier(Antichain::new().borrow());
-                            Some(byo_default)
-                        }
-                        (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
-                            Some(rt_default)
-                        }
-                        (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
-                            byo_default.add_partition(PartitionId::None, None);
-                            Some(byo_default)
-                        }
-                        (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
+                    match connector {
+                        ExternalSourceConnector::AvroOcf(_)
+                        | ExternalSourceConnector::File(_)
+                        | ExternalSourceConnector::Kinesis(_)
+                        | ExternalSourceConnector::S3(_) => {
                             rt_default.add_partition(PartitionId::None, None);
                             Some(rt_default)
                         }
-                        (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
-                            byo_default.add_partition(PartitionId::None, None);
-                            Some(byo_default)
-                        }
-                        (ExternalSourceConnector::File(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::None, None);
-                            Some(rt_default)
-                        }
-                        (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::None, None);
-                            Some(rt_default)
-                        }
-                        (ExternalSourceConnector::S3(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::None, None);
-                            Some(rt_default)
-                        }
-                        (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
-                            tracing::error!("BYO timestamping not supported for Kinesis sources");
-                            None
-                        }
-                        (ExternalSourceConnector::S3(_), Consistency::BringYourOwn(_)) => {
-                            tracing::error!("BYO timestamping not supported for S3 sources");
-                            None
-                        }
-                        (ExternalSourceConnector::Postgres(_), _) => {
-                            tracing::debug!(
-                                "Postgres sources do not communicate with the timestamper thread"
-                            );
-                            None
-                        }
-                        (ExternalSourceConnector::PubNub(_), _) => {
-                            tracing::debug!(
-                                "PubNub sources do not communicate with the timestamper thread"
-                            );
-                            None
-                        }
+                        ExternalSourceConnector::Kafka(_) => Some(rt_default),
+                        ExternalSourceConnector::Postgres(_)
+                        | ExternalSourceConnector::PubNub(_) => None,
                     }
                 } else {
                     tracing::debug!(
@@ -1022,20 +973,6 @@ where
             StorageCommand::AdvanceSourceTimestamp { id, update } => {
                 if let Some(history) = self.storage_state.ts_histories.get_mut(&id) {
                     match update {
-                        TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
-                            // TODO: change the interface between the dataflow server and the
-                            // timestamper. Specifically, we probably want to inform the timestamper
-                            // of the timestamps we already know about so that it doesn't send us
-                            // duplicate copies again.
-
-                            let mut upper = Antichain::new();
-                            history.read_upper(&mut upper);
-
-                            if upper.less_equal(&timestamp) {
-                                history.add_partition(pid.clone(), None);
-                                history.add_binding(pid, timestamp, offset + 1, false);
-                            }
-                        }
                         TimestampSourceUpdate::RealTime(new_partition) => {
                             history.add_partition(new_partition, None);
                         }

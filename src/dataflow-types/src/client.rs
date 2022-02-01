@@ -162,7 +162,7 @@ pub enum StorageCommand {
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
         id: GlobalId,
-        /// The associated update (RT or BYO)
+        /// The associated update
         update: crate::types::sources::persistence::TimestampSourceUpdate,
     },
     /// Enable compaction in sources.

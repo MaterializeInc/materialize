@@ -34,9 +34,7 @@ use timely::dataflow::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dataflow_types::{
-    sources::{
-        encoding::SourceDataEncoding, persistence::Consistency, ExternalSourceConnector, MzOffset,
-    },
+    sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset},
     SourceError,
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
@@ -110,8 +108,6 @@ pub struct SourceConfig<'a, G> {
     // Timestamping fields.
     /// Data-timestamping updates: information about (timestamp, source offset)
     pub timestamp_histories: Option<TimestampBindingRc>,
-    /// A source can use Real-Time consistency timestamping or BYO consistency information.
-    pub consistency: Consistency,
     /// Source Type
     /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
     /// downgraded)
@@ -567,7 +563,7 @@ impl ConsInfo {
 
 /// Contains all necessary information that relates to consistency and timestamping.
 /// This information is (and should remain) source independent. This covers consistency
-/// information for sources that follow RT consistency and BYO consistency.
+/// information for sources that follow RT consistency
 pub struct ConsistencyInfo {
     /// Last closed timestamp
     last_closed_ts: u64,
@@ -578,8 +574,6 @@ pub struct ConsistencyInfo {
     /// Note that we only keep track of partitions this worker is responsible for in this
     /// hashmap.
     partition_metadata: HashMap<PartitionId, ConsInfo>,
-    /// Source Type (Real-time or BYO)
-    source_type: Consistency,
     /// Per-source Prometheus metrics.
     source_metrics: SourceMetrics,
     /// source global id
@@ -596,7 +590,6 @@ impl ConsistencyInfo {
         source_id: SourceInstanceId,
         worker_id: usize,
         worker_count: usize,
-        consistency: Consistency,
         timestamp_frequency: Duration,
         logger: Option<Logger>,
         base_metrics: &SourceBaseMetrics,
@@ -606,7 +599,6 @@ impl ConsistencyInfo {
             // Safe conversion: statement.rs checks that value specified fits in u64
             downgrade_capability_frequency: timestamp_frequency.as_millis().try_into().unwrap(),
             partition_metadata: HashMap::new(),
-            source_type: consistency,
             source_metrics: SourceMetrics::new(
                 &base_metrics,
                 &metrics_name,
@@ -747,18 +739,16 @@ impl ConsistencyInfo {
     /// at the end of source operator execution to make sure all source
     /// instances assign the same timestamps.
     fn propose(&self, timestamp_bindings: &mut TimestampBindingRc) {
-        if self.source_type == Consistency::RealTime {
-            for (pid, cons_info) in self.partition_metadata.iter() {
-                if let Some((time, offset)) = cons_info.proposal() {
-                    timestamp_bindings.add_binding(
-                        pid.clone(),
-                        time,
-                        MzOffset {
-                            offset: offset.offset + 1,
-                        },
-                        true,
-                    );
-                }
+        for (pid, cons_info) in self.partition_metadata.iter() {
+            if let Some((time, offset)) = cons_info.proposal() {
+                timestamp_bindings.add_binding(
+                    pid.clone(),
+                    time,
+                    MzOffset {
+                        offset: offset.offset + 1,
+                    },
+                    true,
+                );
             }
         }
     }
@@ -1303,7 +1293,6 @@ where
         mut timestamp_histories,
         worker_id,
         worker_count,
-        consistency,
         timestamp_frequency,
         active,
         encoding,
@@ -1415,7 +1404,6 @@ where
             id,
             worker_id,
             worker_count,
-            consistency,
             timestamp_frequency,
             logger.clone(),
             &base_metrics,
@@ -1538,13 +1526,7 @@ where
                             (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
                         }
                         Ok(NextMessage::Finished) => {
-                            if let Consistency::RealTime = consistency_info.source_type {
-                                (SourceStatus::Done, MessageProcessing::Stopped)
-                            } else {
-                                // The coord drives Doneness decisions for BYO, so we must still return Alive
-                                // on EOF
-                                (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
-                            }
+                            (SourceStatus::Done, MessageProcessing::Stopped)
                         }
                         Err(e) => {
                             output.session(&cap).give(Err(e.to_string()));

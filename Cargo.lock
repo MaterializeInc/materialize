@@ -978,7 +978,6 @@ dependencies = [
  "kafka-util",
  "lazy_static",
  "log",
- "mz-avro",
  "mz-aws-util",
  "ore",
  "persist",
