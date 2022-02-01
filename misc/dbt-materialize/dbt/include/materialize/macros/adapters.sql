@@ -18,6 +18,7 @@
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
 {% macro materialize__create_view_as(relation, sql) -%}
+  {% set _ = run_query("commit") %}
   create view {{ relation }}
   as (
     {{ sql }}
@@ -25,6 +26,7 @@
 {%- endmacro %}
 
 {% macro materialize__create_materialized_view_as(relation, sql) -%}
+  {% set _ = run_query("commit") %}
   create materialized view {{ relation }}
   as (
     {{ sql }}
@@ -39,6 +41,7 @@
   {% if relation.database -%}
     {{ adapter.verify_database(relation.database) }}
   {%- endif -%}
+  {% set _ = run_query("commit") %}
   {%- call statement('create_schema', auto_begin=False) -%}
     create schema if not exists {{ relation.without_identifier().include(database=False) }}
   {%- endcall -%}
@@ -48,6 +51,7 @@
   {% if relation.database -%}
     {{ adapter.verify_database(relation.database) }}
   {%- endif -%}
+  {% set _ = run_query("commit") %}
   {%- call statement('drop_schema', auto_begin=False) -%}
     drop schema if exists {{ relation.without_identifier().include(database=False) }} cascade
   {%- endcall -%}
@@ -55,30 +59,35 @@
 
 {% macro materialize__rename_relation(from_relation, to_relation) -%}
   {% set target_name = adapter.quote_as_configured(to_relation.identifier, 'identifier') %}
+  {% set _ = run_query("commit") %}
   {% call statement('rename_relation', auto_begin=False) -%}
     alter view {{ from_relation }} rename to {{ target_name }}
   {%- endcall %}
 {% endmacro %}
 
 {% macro materialize__drop_source(source_name) -%}
+  {% set _ = run_query("commit") %}
   {% call statement('drop_source', auto_begin=False) -%}
     drop source if exists {{ source_name }} cascade
   {%- endcall %}
 {% endmacro %}
 
 {% macro materialize__drop_index(index_name) -%}
+  {% set _ = run_query("commit") %}
   {% call statement('drop_index', auto_begin=False) -%}
     drop index if exists {{ index_name }} cascade
   {%- endcall %}
 {% endmacro %}
 
 {% macro materialize__drop_sink(sink_name) -%}
+  {% set _ = run_query("commit") %}
   {% call statement('drop_sink', auto_begin=False) -%}
     drop sink if exists {{ sink_name }}
   {%- endcall %}
 {% endmacro %}
 
 {% macro materialize__drop_relation(relation) -%}
+  {% set _ = run_query("commit") %}
   {% call statement('drop_relation', auto_begin=False) -%}
     drop view if exists {{ relation }} cascade
   {%- endcall %}

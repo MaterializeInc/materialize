@@ -2,10 +2,16 @@
 
 ## Unreleased
 
+* Teach the DDL-related macros to commit any outstanding transactions before
+  executing their DDL statement ([materialize-dbt-utils#11]). This avoids errors
+  of the form "CREATE ... must be executed outside of a transaction block."
+
 * Respect type overrides in the views created by seeds.
 
 * Fix the implementation of the `list_relations_without_caching` macro.
   Previously it always returned an empty list of relations.
+
+[materialize-dbt-utils#11]: https://github.com/MaterializeInc/materialize-dbt-utils/issues/11
 
 ## 1.0.1 - 2021-01-03
 
