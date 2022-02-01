@@ -30,7 +30,7 @@ $ kafka-create-topic topic=load-test partitions=4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-load-test-${testdrive.seed}'
   FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
-  ENVELOPE UPSERT
+  ENVELOPE ${arg.envelope}
 
 # Render a dataflow that uses the source, but does a minimal amount of
 # work and keeps a minimal amount of data in memory.
