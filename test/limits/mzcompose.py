@@ -792,6 +792,10 @@ class Aggregates(Generator):
 
 
 class AggregateExpression(Generator):
+    # Stack exhaustion with COUNT=1000 due to unprotected path:
+    # https://github.com/MaterializeInc/materialize/issues/10348#issuecomment-1025946920
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
