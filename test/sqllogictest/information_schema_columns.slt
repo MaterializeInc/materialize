@@ -1,0 +1,20 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE VIEW v AS SELECT 1 AS num, 'a' AS char
+
+query TTTTTTTTT colnames,rowsort
+SELECT * FROM information_schema.columns WHERE table_name = 'v'
+----
+table_catalog  table_schema  table_name  column_name  ordinal_position  data_type  character_maximum_length  numeric_precision  numeric_scale
+materialize    public        v           num          1                 integer    NULL                      NULL               NULL
+materialize    public        v           char         2                 text       NULL                      NULL               NULL

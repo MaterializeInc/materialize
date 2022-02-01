@@ -1661,7 +1661,29 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
     needs_logs: false,
 };
 
-// Next id BuiltinView: 5039
+pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
+    name: "columns",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW columns AS
+SELECT
+    d.name as table_catalog,
+    s.name AS table_schema,
+    o.name AS table_name,
+    c.name AS column_name,
+    c.position AS ordinal_position,
+    c.type AS data_type,
+    NULL::pg_catalog.int4 AS character_maximum_length,
+    NULL::pg_catalog.int4 AS numeric_precision,
+    NULL::pg_catalog.int4 AS numeric_scale
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
+JOIN mz_catalog.mz_databases d on s.database_id = d.id",
+    id: GlobalId::System(5039),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5040
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -1806,6 +1828,7 @@ lazy_static! {
             Builtin::View(&PG_ACCESS_METHODS),
             Builtin::View(&PG_ROLES),
             Builtin::View(&PG_VIEWS),
+            Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
