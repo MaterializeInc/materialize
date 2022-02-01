@@ -23,7 +23,9 @@ SERVICES = [
     Kafka(name="kafka1", broker_id=1, offsets_topic_replication_factor=2),
     Kafka(name="kafka2", broker_id=2, offsets_topic_replication_factor=2),
     Kafka(name="kafka3", broker_id=3, offsets_topic_replication_factor=2),
-    SchemaRegistry(kafka_servers=["kafka1", "kafka2", "kafka3"]),
+    SchemaRegistry(
+        kafka_servers=[("kafka1", "9092"), ("kafka2", "9092"), ("kafka3", "9092")]
+    ),
     Materialized(),
     Testdrive(
         entrypoint=[

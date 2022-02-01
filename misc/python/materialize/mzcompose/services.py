@@ -9,7 +9,7 @@
 
 import os
 import random
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 from materialize.mzcompose import Service, ServiceConfig
 
@@ -260,7 +260,7 @@ class Kafka(Service):
     ) -> None:
         environment = [
             *environment,
-            f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:9092",
+            f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:{port}",
             f"KAFKA_BROKER_ID={broker_id}",
         ]
         config: ServiceConfig = {
@@ -334,7 +334,7 @@ class SchemaRegistry(Service):
         image: str = "confluentinc/cp-schema-registry",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 8081,
-        kafka_servers: List[str] = ["kafka"],
+        kafka_servers: List[Tuple[str, str]] = [("kafka", "9092")],
         bootstrap_server_type: str = "PLAINTEXT",
         environment: List[str] = [
             # NOTE(guswynn): under docker, kafka *can* be really slow, which means
@@ -346,19 +346,20 @@ class SchemaRegistry(Service):
         volumes: List[str] = [],
     ) -> None:
         bootstrap_servers = ",".join(
-            f"{bootstrap_server_type}://{kafka}:9092" for kafka in kafka_servers
+            f"{bootstrap_server_type}://{kafka}:{port}" for kafka, port in kafka_servers
         )
         environment = [
             *environment,
             f"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS={bootstrap_servers}",
         ]
+        kafka_hosts = [kafka for kafka, _ in kafka_servers]
         super().__init__(
             name=name,
             config={
                 "image": f"{image}:{tag}",
                 "ports": [port],
                 "environment": environment,
-                "depends_on": depends_on or [*kafka_servers, "zookeeper"],
+                "depends_on": depends_on or [*kafka_hosts, "zookeeper"],
                 "volumes": volumes,
             },
         )
@@ -500,6 +501,7 @@ class Testdrive(Service):
         name: str = "testdrive-svc",
         mzbuild: str = "testdrive",
         materialized_url: str = "postgres://materialize@materialized:6875",
+        kafka_url: str = "kafka:9092",
         no_reset: bool = False,
         default_timeout: str = "30s",
         seed: Optional[int] = None,
@@ -538,7 +540,7 @@ class Testdrive(Service):
         if entrypoint is None:
             entrypoint = [
                 "testdrive",
-                "--kafka-addr=kafka:9092",
+                f"--kafka-addr={kafka_url}",
                 "--schema-registry-url=http://schema-registry:8081",
                 f"--materialized-url={materialized_url}",
             ]
