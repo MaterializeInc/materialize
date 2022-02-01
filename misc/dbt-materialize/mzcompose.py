@@ -39,13 +39,17 @@ test_cases = [
     TestCase(
         name="no-tls-head",
         materialized_options=[],
-        dbt_env={},
+        dbt_env={
+            "DBT_HOST": "materialized",
+        },
     ),
     TestCase(
         name="no-tls-min-supported-version",
         materialized_options=[],
-        dbt_env={},
-        materialized_image="materialize/materialized:v0.12.0",
+        dbt_env={
+            "DBT_HOST": "materialized",
+        },
+        materialized_image="materialize/materialized:v0.20.0",
     ),
     TestCase(
         name="tls-head",
