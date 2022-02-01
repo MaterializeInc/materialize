@@ -11,8 +11,12 @@
 //!
 //! The public interface consists of the [`Model::optimize`] method.
 
-use crate::query_model::model::BoxId;
-use crate::query_model::Model;
+use std::collections::HashSet;
+
+use super::attribute::core::{
+    dependency_order, derive_dft_attributes, transitive_closure, Attribute,
+};
+use super::model::{BoxId, Model};
 
 impl Model {
     pub fn optimize(&mut self) {
@@ -30,6 +34,9 @@ pub(crate) trait Rule {
 
     /// The [`ApplyStrategy`] for the rule.
     fn strategy(&self) -> ApplyStrategy;
+
+    /// Derived attributes required by this [`Rule`].
+    fn required_attributes(&self) -> HashSet<Box<dyn Attribute>>;
 
     /// Determines how to rewrite the box.
     ///
@@ -53,6 +60,9 @@ pub(crate) trait ApplyRule {
     /// The [`ApplyStrategy`] for the rule.
     fn strategy(&self) -> ApplyStrategy;
 
+    /// Derived attributes required by this [`ApplyRule`].
+    fn required_attributes(&self) -> HashSet<Box<dyn Attribute>>;
+
     /// Attempts to apply the rewrite to a subgraph rooted at the given `box_id`.
     /// Returns whether the attempt was successful.
     fn apply(&self, model: &mut Model, box_id: BoxId) -> bool;
@@ -68,6 +78,11 @@ impl<U: Rule> ApplyRule for U {
     #[inline(always)]
     fn strategy(&self) -> ApplyStrategy {
         self.strategy()
+    }
+
+    #[inline(always)]
+    fn required_attributes(&self) -> HashSet<Box<dyn Attribute>> {
+        self.required_attributes()
     }
 
     /// Apply the [`Rule::rewrite`] and return `true` if [`Rule::check`] returns
@@ -120,6 +135,18 @@ pub fn rewrite_model(model: &mut Model) {
 
 /// Transform the model by applying a list of rewrite rules.
 fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
+    // collect a set of attributes required by the given rules
+    let mut attributes = rules
+        .iter()
+        .flat_map(|r| r.required_attributes())
+        .collect::<HashSet<_>>();
+    // add missing dependencies required to derive this set of attributes
+    transitive_closure(&mut attributes);
+    // order transitive closure topologically based on dependency order
+    let attributes = dependency_order(attributes);
+    // compute initial values of the required derived attributes
+    derive_dft_attributes(model, &attributes, model.top_box);
+
     let (top_box, other): (Vec<Box<dyn ApplyRule>>, Vec<Box<dyn ApplyRule>>) = rules
         .into_iter()
         .partition(|r| matches!(r.strategy(), ApplyStrategy::TopBox));
@@ -134,19 +161,28 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
         let mut rewritten_in_post = false;
 
         for rule in &top_box {
-            rewritten_in_top |= rule.apply(model, model.top_box);
+            if rule.apply(model, model.top_box) {
+                rewritten_in_top |= true;
+                derive_dft_attributes(model, &attributes, model.top_box);
+            }
         }
 
         let _ = model.try_visit_mut_pre_post(
             &mut |model, box_id| -> Result<(), ()> {
                 for rule in pre.iter() {
-                    rewritten_in_pre |= rule.apply(model, *box_id);
+                    if rule.apply(model, *box_id) {
+                        rewritten_in_pre |= true;
+                        derive_dft_attributes(model, &attributes, model.top_box);
+                    }
                 }
                 Ok(())
             },
             &mut |model, box_id| -> Result<(), ()> {
                 for rule in post.iter() {
-                    rewritten_in_post |= rule.apply(model, *box_id);
+                    if rule.apply(model, *box_id) {
+                        rewritten_in_post |= true;
+                        derive_dft_attributes(model, &attributes, *box_id);
+                    }
                 }
                 Ok(())
             },
@@ -287,6 +323,10 @@ mod tests {
 
         fn strategy(&self) -> ApplyStrategy {
             ApplyStrategy::AllBoxes(self.visit_order)
+        }
+
+        fn required_attributes(&self) -> HashSet<Box<dyn Attribute>> {
+            HashSet::new()
         }
 
         fn check(&self, model: &Model, box_id: BoxId) -> Option<Connect> {

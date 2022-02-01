@@ -17,6 +17,7 @@
 //!
 //! All other types are crate-private.
 
+use super::super::attribute::core::Attributes;
 use super::scalar::*;
 use itertools::Itertools;
 use ore::id_gen::Gen;
@@ -137,6 +138,9 @@ pub(crate) struct QueryBox {
     /// guaranteed by structure of the box or it must preserve duplicated
     /// rows from its input boxes. See [DistinctOperation].
     pub distinct: DistinctOperation,
+    /// Derived attributes
+    #[allow(dead_code)]
+    pub attributes: Attributes,
 }
 
 /// A column projected by a `QueryBox`.
@@ -325,6 +329,7 @@ impl Model {
             quantifiers: QuantifierSet::new(),
             ranging_quantifiers: QuantifierSet::new(),
             distinct: DistinctOperation::Preserve,
+            attributes: Attributes::new(),
         }));
         self.boxes.insert(id, b);
         id
