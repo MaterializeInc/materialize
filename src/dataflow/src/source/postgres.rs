@@ -209,12 +209,12 @@ impl PostgresSourceReader {
                 .await?;
 
             pin_mut!(reader);
+            let mut mz_row = Row::default();
             while let Some(Ok(b)) = reader.next().await {
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let mut parser = pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
                 while !parser.is_eof() && !parser.is_end_of_copy_marker() {
-                    let mut mz_row = Row::default();
                     mz_row.push(relation_id);
 
                     try_fatal!(mz_row.push_list_with(|rp| -> Result<(), io::Error> {
@@ -233,8 +233,9 @@ impl PostgresSourceReader {
                         Ok(())
                     }));
 
-                    try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+                    let row = mz_row.finish_and_reuse();
+                    try_recoverable!(snapshot_tx.insert(row.clone()).await);
+                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&row))).await);
                 }
             }
 
