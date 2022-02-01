@@ -135,13 +135,17 @@ pub(crate) fn render<G: Scope>(
                                 });
                             let should_use = match partition_dedup {
                                 Some(ref mut s) => {
-                                    let res = s.should_use_record(
+                                    let (res, state_mutations) = s.should_use_record(
                                         key,
                                         &value,
                                         result.position,
                                         result.upstream_time_millis,
                                         &debug_name,
                                     );
+
+                                    println!("Debezium state mutations: {:?}", state_mutations);
+                                    s.apply_mutations(state_mutations);
+
                                     match res {
                                         Ok(b) => b,
                                         Err(err) => {
@@ -199,6 +203,20 @@ struct DebeziumDeduplicationState {
     // avoid it completely.
     filenames_to_indices: HashMap<String, i64>,
     projection: DebeziumDedupProjection,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DebeziumStateMutation {
+    IncNumMesssagesProcessed,
+    SetLastPosition(RowCoordinates),
+    SetLastPositionAndOffset(RowCoordinates, Option<i64>),
+    SetMaxSeenTime(i64),
+    UpdateSeenPositions(RowCoordinates, i64),
+    SetStarted(bool),
+    SetPaddingStarted(bool),
+    AddSeenSnapshotKeys(Row),
+    AddFilenameToIndexMapping(String, i64),
+    ClearFull,
 }
 
 /// If we need to deal with debezium possibly going back after it hasn't seen things.
@@ -365,7 +383,7 @@ impl DebeziumDeduplicationState {
         })
     }
 
-    fn extract_total_order(&mut self, value: &Row) -> Option<i64> {
+    fn extract_total_order(&self, value: &Row) -> Option<i64> {
         match value.iter().nth(self.projection.transaction_idx).unwrap() {
             Datum::List(l) => match l.iter().nth(self.projection.total_order_idx).unwrap() {
                 Datum::Int64(n) => Some(n),
@@ -378,8 +396,9 @@ impl DebeziumDeduplicationState {
     }
 
     fn extract_binlog_position(
-        &mut self,
+        &self,
         value: &Row,
+        state_mutations: &mut Vec<DebeziumStateMutation>,
     ) -> Result<Option<RowCoordinates>, DecodeError> {
         match value.iter().nth(self.projection.source_idx).unwrap() {
             Datum::List(source) => {
@@ -402,8 +421,13 @@ impl DebeziumDeduplicationState {
                             Some(idx) => *idx,
                             None => {
                                 let next_idx = self.filenames_to_indices.len() as i64;
-                                self.filenames_to_indices
-                                    .insert(filename.to_owned(), next_idx);
+                                state_mutations.push(
+                                    DebeziumStateMutation::AddFilenameToIndexMapping(
+                                        filename.to_owned(),
+                                        next_idx,
+                                    ),
+                                );
+
                                 next_idx
                             }
                         };
@@ -484,25 +508,33 @@ impl DebeziumDeduplicationState {
     }
 
     fn should_use_record(
-        &mut self,
+        &self,
         key: Option<Row>,
         value: &Row,
         connector_offset: Option<i64>,
         upstream_time_millis: Option<i64>,
         debug_name: &str,
-    ) -> Result<bool, DecodeError> {
-        let binlog_position = self.extract_binlog_position(value)?;
+    ) -> (Result<bool, DecodeError>, Vec<DebeziumStateMutation>) {
+        let mut state_mutations = Vec::new();
 
-        self.messages_processed += 1;
+        let binlog_position = match self.extract_binlog_position(value, &mut state_mutations) {
+            Ok(binlog_position) => binlog_position,
+            Err(e) => {
+                return (Err(e), state_mutations);
+            }
+        };
+
+        state_mutations.push(DebeziumStateMutation::IncNumMesssagesProcessed);
 
         // If in the initial snapshot, binlog position is meaningless for detecting
         // duplicates, since it is always the same.
         let should_skip = match &binlog_position {
             None => None,
-            Some(position) => match &mut self.last_position_and_offset {
+            Some(position) => match &self.last_position_and_offset {
                 Some((old_position, old_offset)) => {
                     if position > old_position {
-                        *old_position = position.clone();
+                        state_mutations
+                            .push(DebeziumStateMutation::SetLastPosition(position.clone()));
                         None
                     } else {
                         Some(SkipInfo {
@@ -512,14 +544,17 @@ impl DebeziumDeduplicationState {
                     }
                 }
                 None => {
-                    self.last_position_and_offset = Some((position.clone(), connector_offset));
+                    state_mutations.push(DebeziumStateMutation::SetLastPositionAndOffset(
+                        position.clone(),
+                        connector_offset,
+                    ));
                     None
                 }
             },
         };
 
         let mut delete_full = false;
-        let should_use = match &mut self.full {
+        let should_use = match &self.full {
             // Always none if in snapshot, see comment above where `should_skip` is bound.
             None => should_skip.is_none(),
             Some(TrackFull {
@@ -530,7 +565,8 @@ impl DebeziumDeduplicationState {
                 started_padding,
                 started,
             }) => {
-                *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
+                let max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
+                state_mutations.push(DebeziumStateMutation::SetMaxSeenTime(max_seen_time));
                 if let Some(position) = binlog_position {
                     // first check if we are in a special case of range-bounded track full
                     if let Some(range) = range {
@@ -548,28 +584,35 @@ impl DebeziumDeduplicationState {
                                               debug_name, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
                                 }
-                                *started_padding = false;
-                                *started = false;
-                                return Ok(should_skip.is_none());
+                                state_mutations
+                                    .push(DebeziumStateMutation::SetPaddingStarted(false));
+                                state_mutations.push(DebeziumStateMutation::SetStarted(false));
+                                return (Ok(should_skip.is_none()), state_mutations);
                             }
                             if upstream_time_millis < range.start {
                                 // in the padding time range
-                                *started_padding = true;
+                                state_mutations
+                                    .push(DebeziumStateMutation::SetPaddingStarted(true));
                                 if *started {
                                     warn!("went back to before padding start, after entering full dedupe \
                                                source={} message_time={} messages_processed={}",
                                               debug_name, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
                                 }
-                                *started = false;
+                                state_mutations.push(DebeziumStateMutation::SetStarted(false));
 
                                 if seen_positions.get(&position).is_none() {
-                                    seen_positions.insert(position, upstream_time_millis);
+                                    state_mutations.push(
+                                        DebeziumStateMutation::UpdateSeenPositions(
+                                            position,
+                                            upstream_time_millis,
+                                        ),
+                                    );
                                 }
-                                return Ok(should_skip.is_none());
+                                return (Ok(should_skip.is_none()), state_mutations);
                             }
                             if upstream_time_millis <= range.end && !*started {
-                                *started = true;
+                                state_mutations.push(DebeziumStateMutation::SetStarted(true));
                                 info!(
                                     "starting full deduplication source={} buffer_size={} \
                                          messages_processed={} message_time={}",
@@ -585,14 +628,25 @@ impl DebeziumDeduplicationState {
                             }
                         } else {
                             warn!("message has no creation time file_position={:?}", position);
-                            seen_positions.insert(position.clone(), 0);
                         }
                     }
 
                     // Now we know that we are in either trackfull or a range-bounded trackfull
-                    let seen = seen_positions.entry(position.clone());
-                    let is_new = matches!(seen, std::collections::hash_map::Entry::Vacant(_));
-                    let original_time = seen.or_insert_with(|| upstream_time_millis.unwrap_or(0));
+                    let seen = seen_positions.get(&position);
+                    let (is_new, original_time) = match seen {
+                        Some(time) => (false, time),
+                        None => (true, upstream_time_millis.as_ref().unwrap_or(&0)),
+                    };
+
+                    if !state_mutations
+                        .iter()
+                        .any(|m| matches!(m, DebeziumStateMutation::UpdateSeenPositions(_, _)))
+                    {
+                        state_mutations.push(DebeziumStateMutation::UpdateSeenPositions(
+                            position.clone(),
+                            upstream_time_millis.unwrap_or(0),
+                        ));
+                    }
 
                     log_duplication_info(
                         position,
@@ -602,7 +656,7 @@ impl DebeziumDeduplicationState {
                         is_new,
                         &should_skip,
                         original_time,
-                        max_seen_time,
+                        &max_seen_time,
                     );
 
                     is_new
@@ -611,12 +665,13 @@ impl DebeziumDeduplicationState {
                         Some(key) => key,
                         // No key, so we can't do anything sensible for snapshots.
                         // Return "all OK" and hope their data isn't corrupted.
-                        None => return Ok(true),
+                        None => return (Ok(true), state_mutations),
                     };
 
-                    // TODO: avoid cloning via `get_or_insert` once rust-lang/rust#60896 is resolved
-                    let is_new = seen_snapshot_keys.insert(key.clone());
-                    if !is_new {
+                    let is_new = !seen_snapshot_keys.contains(&key);
+                    if is_new {
+                        state_mutations.push(DebeziumStateMutation::AddSeenSnapshotKeys(key));
+                    } else {
                         warn!(
                                 "Snapshot row with key={:?} source={} seen multiple times (most recent message_time={})",
                                 key, debug_name, fmt_timestamp(upstream_time_millis)
@@ -633,9 +688,75 @@ impl DebeziumDeduplicationState {
                 debug_name,
                 fmt_timestamp(upstream_time_millis)
             );
-            self.full = None;
+            state_mutations.push(DebeziumStateMutation::ClearFull);
         }
-        Ok(should_use)
+        (Ok(should_use), state_mutations)
+    }
+
+    fn apply_mutations(&mut self, mutations: Vec<DebeziumStateMutation>) {
+        for mutation in mutations {
+            self.apply_mutation(mutation);
+        }
+    }
+
+    fn apply_mutation(&mut self, mutation: DebeziumStateMutation) {
+        match mutation {
+            DebeziumStateMutation::IncNumMesssagesProcessed => {
+                self.messages_processed += 1;
+            }
+            DebeziumStateMutation::SetLastPosition(position) => {
+                match self.last_position_and_offset.as_mut() {
+                    Some((old_position, _old_offset)) => {
+                        *old_position = position;
+                    }
+                    None => panic!("no previous position and offset"),
+                }
+            }
+            DebeziumStateMutation::SetLastPositionAndOffset(position, offset) => {
+                self.last_position_and_offset = Some((position, offset));
+            }
+            DebeziumStateMutation::SetMaxSeenTime(time) => {
+                let track_full = match self.full {
+                    Some(ref mut state) => state,
+                    None => panic!("no full track state"),
+                };
+                track_full.max_seen_time = time;
+            }
+            DebeziumStateMutation::UpdateSeenPositions(position, ts) => {
+                let track_full = match self.full {
+                    Some(ref mut state) => state,
+                    None => panic!("no full track state"),
+                };
+                track_full.seen_positions.insert(position, ts);
+            }
+            DebeziumStateMutation::SetStarted(value) => {
+                let track_full = match self.full {
+                    Some(ref mut state) => state,
+                    None => panic!("no full track state"),
+                };
+                track_full.started = value;
+            }
+            DebeziumStateMutation::SetPaddingStarted(value) => {
+                let track_full = match self.full {
+                    Some(ref mut state) => state,
+                    None => panic!("no full track state"),
+                };
+                track_full.started_padding = value;
+            }
+            DebeziumStateMutation::AddSeenSnapshotKeys(row) => {
+                let track_full = match self.full {
+                    Some(ref mut state) => state,
+                    None => panic!("no full track state"),
+                };
+                track_full.seen_snapshot_keys.insert(row);
+            }
+            DebeziumStateMutation::AddFilenameToIndexMapping(filename, idx) => {
+                self.filenames_to_indices.insert(filename, idx);
+            }
+            DebeziumStateMutation::ClearFull => {
+                self.full = None;
+            }
+        }
     }
 }
 
