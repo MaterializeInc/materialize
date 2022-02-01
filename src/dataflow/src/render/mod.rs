@@ -514,8 +514,13 @@ where
                 input_key_val,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                let (oks, errs) = input.as_collection_core(mfp, input_key_val);
-                CollectionBundle::from_collections(oks, errs)
+                // If `mfp` is non-trivial, we should apply it and produce a collection.
+                if mfp.is_identity() {
+                    input
+                } else {
+                    let (oks, errs) = input.as_collection_core(mfp, input_key_val);
+                    CollectionBundle::from_collections(oks, errs)
+                }
             }
             Plan::FlatMap {
                 input,

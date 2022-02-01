@@ -841,12 +841,45 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 None
             };
 
-            plan = Plan::Mfp {
-                input: Box::new(plan),
-                mfp,
-                input_key_val,
-            };
-            keys = AvailableCollections::new_raw();
+            if mfp.is_identity() {
+                // We have discovered a key
+                // whose permutation causes the MFP to actually
+                // be the identity! We can keep it around,
+                // but without its permutation this time,
+                // and with a trivial thinning of the right length.
+                let (key, val) = input_key_val.unwrap();
+                let (_old_key, old_permutation, old_thinning) = keys
+                    .arranged
+                    .iter_mut()
+                    .find(|(key2, _, _)| key2 == &key)
+                    .unwrap();
+                *old_permutation = (0..mfp.input_arity).map(|i| (i, i)).collect();
+                let old_thinned_arity = old_thinning.len();
+                *old_thinning = (0..old_thinned_arity).collect();
+                // Get rid of all other forms, as this is now the only one known to be valid.
+                // TODO[btv] we can probably save the other arrangements too, if we adjust their permutations.
+                // This is not hard to do, but leaving it for a quick follow-up to avoid making the present diff too unwieldy.
+                keys.arranged.retain(|(key2, _, _)| key2 == &key);
+                keys.raw = false;
+
+                // Creating a Plan::Mfp node is now logically unnecessary, but we
+                // should do so anyway when `val` is populated, so that
+                // the `key_val` optimization gets applied.
+                if val.is_some() {
+                    plan = Plan::Mfp {
+                        input: Box::new(plan),
+                        mfp,
+                        input_key_val: Some((key, val)),
+                    }
+                }
+            } else {
+                plan = Plan::Mfp {
+                    input: Box::new(plan),
+                    mfp,
+                    input_key_val,
+                };
+                keys = AvailableCollections::new_raw();
+            }
         }
 
         Ok((plan, keys))
