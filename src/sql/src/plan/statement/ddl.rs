@@ -514,7 +514,6 @@ pub fn plan_create_source(
                 publication: publication.clone(),
                 slot_name: slot_name.clone(),
             });
-
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
             (connector, encoding)
         }

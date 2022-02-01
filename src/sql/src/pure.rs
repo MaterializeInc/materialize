@@ -204,7 +204,17 @@ pub fn purify(
                     let pub_tables = postgres_util::publication_info(&conn, &publication).await?;
                     let mut pg_tables: Vec<PgTable<Raw>> = Vec::new();
                     for tbl in pub_tables {
-                        pg_tables.push(PgTable::<Raw>::try_from(tbl)?);
+                        // Clone one field to enrich the error case
+                        let name = tbl.name.clone();
+                        pg_tables.push(match PgTable::<Raw>::try_from(tbl) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                return Err(anyhow!(format!(
+                                    "Error processing table {}: {}",
+                                    name, e
+                                )));
+                            }
+                        });
                     }
                     *tables = Some(pg_tables);
                 }

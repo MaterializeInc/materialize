@@ -1834,20 +1834,59 @@ impl<'a> Parser<'a> {
         let tokens = lexer::lex(&raw_def)?;
         let mut parser = Parser::new(&raw_def, tokens);
         loop {
-            let oid_str = format!("{}",parser.parse_number_value()?);
-            let oid_parse = u32::from_str(&oid_str);
-            let oid = match oid_parse {
-                Ok(i) => i,
-                Err(e) => return Err(ParserError::new(parser.peek_pos(),format!("{}", &e))),
+            let tbl_name = parser.parse_identifier()?.to_string();
+
+            let (col_def, _constaints) = match parser.parse_columns(Optional) {
+                Ok((col_def, _constraints)) => (col_def, _constraints),
+                Err(e) => {
+                    return Err(ParserError::new(
+                        parser.peek_pos(),
+                        format!(
+                            "Failed to parse columns for table {} due to: {}",
+                            tbl_name, e
+                        ),
+                    ))
+                }
             };
-            parser.expect_keyword(AS)?;
-            let tbl_name = UnresolvedObjectName::unqualified(parser.parse_identifier()?.as_str());
-            let (col_def, _constraints) = parser.parse_columns(Optional)?;
-            tables.push(PgTable{oid, name: tbl_name, columns: col_def});
+            parser.expect_keyword(WITH)?;
+            let opts: Vec<WithOption> = parser.parse_with_options(true)?;
+
+            let oid_val = opts.into_iter().find_map(|elem| {
+                if elem.key.to_string() == "oid" {
+                    match elem.value {
+                        Some(v) => Some(v),
+                        None => None,
+                    }
+                } else {
+                    None
+                }
+            });
+            let oid = match oid_val {
+                Some(val) => match u32::from_str(&val.to_string()) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        return Err(ParserError::new(
+                            parser.peek_pos(),
+                            format!("Error parsing OID for table {}: {}", tbl_name, &e),
+                        ));
+                    }
+                },
+                None => {
+                    return Err(ParserError::new(
+                        parser.peek_pos(),
+                        format!("Missing WITH option oid for table: {}", tbl_name),
+                    ));
+                }
+            };
+            tables.push(PgTable {
+                oid,
+                name: tbl_name,
+                columns: col_def,
+            });
             if parser.consume_token(&Token::Comma) {
-                continue
+                continue;
             } else {
-                break
+                break;
             }
         }
         Ok(tables)

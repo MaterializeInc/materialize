@@ -22,7 +22,7 @@ use tokio_postgres::{Client, Config};
 use ore::task;
 use repr::adt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
-use sql_parser::ast::{ColumnDef, Ident, PgTable, Raw, UnresolvedObjectName};
+use sql_parser::ast::{ColumnDef, Ident, PgTable, Raw};
 use sql_parser::impl_display;
 
 pub struct PgNumericMod {
@@ -170,7 +170,7 @@ impl TryFrom<TableInfo> for PgTable<Raw> {
     fn try_from(tbl: TableInfo) -> Result<Self, anyhow::Error> {
         let mut pg_table: PgTable<Raw> = PgTable {
             oid: tbl.rel_id,
-            name: UnresolvedObjectName::unqualified(&tbl.name),
+            name: tbl.name,
             columns: Vec::new(),
         };
         for pg_col in tbl.schema {
