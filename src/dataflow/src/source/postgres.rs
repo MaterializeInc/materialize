@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::error;
 use std::error::Error;
 use std::io;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -214,6 +215,8 @@ impl PostgresSourceReader {
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let mut parser = pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+
+                // Option 1: Perform parsing logic here
                 while !parser.is_eof() && !parser.is_end_of_copy_marker() {
                     mz_row.push(relation_id);
 
@@ -237,6 +240,39 @@ impl PostgresSourceReader {
                     try_recoverable!(snapshot_tx.insert(row.clone()).await);
                     try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&row))).await);
                 }
+
+                // Option 2: Use an Iterator to produce values and pack values
+                try_fatal!(mz_row.push_list_with(|rp| -> Result<(), io::Error> {
+                    for raw_value in parser.iter_raw(info.schema.len()) {
+                        match std::str::from_utf8(raw_value) {
+                            Ok(value) => rp.push(Datum::String(value)),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    }
+                }));
+                let row = mz_row.finish_and_reuse();
+                try_recoverable!(snapshot_tx.insert(row.clone()).await);
+                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&row))).await);
+
+                // Option 3: Pass a FnMut to the parser to receive values
+                try_fatal!(mz_row.push_list_with(|rp| -> Result<(), io::Error> {
+                    parser.consume_raw_values(
+                        info.schema.len(),
+                        |raw_value: &[u8]| -> Result<(), Box<dyn error::Error + Send + Sync>> {
+                            println!("Raw value: {}", raw_value.len());
+                            match std::str::from_utf8(raw_value) {
+                                Ok(value) => rp.push(Datum::String(value)),
+                                Err(err) => return Err(Box::new(err)),
+                            }
+                            Ok(())
+                        },
+                    )
+                }));
+
+                let row = mz_row.finish_and_reuse();
+                println!("Row: {:?}", row);
+                try_recoverable!(snapshot_tx.insert(row.clone()).await);
+                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&row))).await);
             }
 
             self.metrics.tables.inc();

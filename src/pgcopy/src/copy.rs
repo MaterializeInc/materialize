@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::io;
+use std::io::Error;
+use std::{error, io};
 
 use bytes::BytesMut;
 use csv::ByteRecord;
@@ -331,6 +332,69 @@ impl<'a> CopyTextFormatParser<'a> {
             Ok(Some(&self.buffer[..]))
         }
     }
+
+    pub fn consume_raw_values<F>(&mut self, num_columns: usize, mut f: F) -> Result<(), io::Error>
+    where
+        F: FnMut(&[u8]) -> Result<(), Box<dyn error::Error + Send + Sync>>,
+    {
+        while !self.is_eof() && !self.is_end_of_copy_marker() {
+            for col in 0..num_columns {
+                if col > 0 {
+                    self.expect_column_delimiter()?;
+                }
+                if let Some(raw_value) = self.consume_raw_value()? {
+                    if let Some(err) = f(raw_value).err() {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, err));
+                    }
+                } else {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown value"));
+                }
+            }
+            self.expect_end_of_line()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn iter_raw(&mut self, num_columns: i32) -> RawIterator<'a> {
+        RawIterator {
+            parser: self,
+            current_column: 0,
+            num_columns,
+        }
+    }
+}
+
+pub struct RawIterator<'a> {
+    parser: &'a mut CopyTextFormatParser<'a>,
+    current_column: i32,
+    num_columns: i32,
+}
+
+impl<'a> Iterator for RawIterator<'a> {
+    type Item = Result<&'a [u8], io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.parser.is_eof() || self.parser.is_end_of_line() {
+            return None;
+        }
+
+        if self.current_column == self.num_columns {
+            if let Some(err) = self.parser.expect_end_of_line().err() {
+                return Some(Err(err));
+            }
+            return None;
+        }
+
+        if self.current_column > 0 {
+            if let Some(err) = self.parser.expect_column_delimiter().err() {
+                return Some(Err(err));
+            }
+        }
+
+        self.current_column += 1;
+        self.parser.consume_raw_value().transpose()
+    }
 }
 
 /// `CopyFormatParams` expresses valid conversions from [`CopyParams`] to the
@@ -434,7 +498,7 @@ pub fn decode_copy_format_text(
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
 
-    let mut parser = CopyTextFormatParser::new(data, &delimiter, &null);
+    let mut parser = CopyTextFormatParser::new(&data, &delimiter, &null);
     while !parser.is_eof() && !parser.is_end_of_copy_marker() {
         let mut row = Vec::new();
         let buf = RowArena::new();
@@ -608,7 +672,7 @@ mod tests {
     #[test]
     fn test_copy_format_text_parser() {
         let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
-        let mut parser = CopyTextFormatParser::new(text, "\t", "\\N");
+        let mut parser = CopyTextFormatParser::new(&text, "\t", "\\N");
         assert!(parser.is_column_delimiter());
         parser
             .expect_column_delimiter()
@@ -662,7 +726,7 @@ mod tests {
             vec![Some("30"), None],
             vec![Some("40"), None],
         ];
-        let mut parser = CopyTextFormatParser::new(text, "\t", "");
+        let mut parser = CopyTextFormatParser::new(&text, "\t", "");
         for line in expect {
             for (i, value) in line.iter().enumerate() {
                 if i > 0 {
@@ -752,7 +816,7 @@ mod tests {
         ];
 
         for test in tests {
-            let mut parser = CopyTextFormatParser::new(test.input.as_bytes(), "\t", "\\N");
+            let mut parser = CopyTextFormatParser::new(&test.input.as_bytes(), "\t", "\\N");
             assert_eq!(
                 parser
                     .consume_raw_value()
