@@ -15,6 +15,7 @@ aws-smithy-http = "0.36.0"
 bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.2"
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
@@ -27,6 +28,7 @@ kafka-util = { path = "../kafka-util" }
 http = "0.2.6"
 http-serde = "1.0.3"
 tracing = "0.1.29"
+log = "0.4.13"
 num_enum = "0.5.6"
 mz-aws-util = { path = "../aws-util" }
 ore = { path = "../ore" }

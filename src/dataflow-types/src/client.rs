@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Traits and types for fat clients of the dataflow subsystem.
+//! Traits and types for controller of the dataflow subsystem.
 
 // This appears to be defective at the moment, with false positiives
 // for each variant of the `Command` enum, each of which are documented.
@@ -27,6 +27,9 @@ use crate::{
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
+
+pub mod controller;
+pub use controller::Controller;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -131,7 +134,14 @@ impl ComputeCommandKind {
 )]
 pub enum StorageCommand {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<(GlobalId, crate::types::sources::SourceDesc)>),
+    ///
+    /// For each identifier, there is a source description and a valid `since` frontier.
+    CreateSources(
+        Vec<(
+            GlobalId,
+            (crate::types::sources::SourceDesc, Antichain<Timestamp>),
+        )>,
+    ),
 
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
@@ -387,7 +397,7 @@ pub trait ComputeClient: Client {
 pub trait StorageClient: Client {
     async fn create_sources(
         &mut self,
-        source_descriptions: Vec<(GlobalId, crate::sources::SourceDesc)>,
+        source_descriptions: Vec<(GlobalId, (crate::sources::SourceDesc, Antichain<Timestamp>))>,
     ) {
         self.send(Command::Storage(StorageCommand::CreateSources(
             source_descriptions,
@@ -519,10 +529,10 @@ pub trait Client: Send {
 #[async_trait::async_trait]
 impl Client for Box<dyn Client> {
     async fn send(&mut self, cmd: Command) {
-        self.send(cmd).await
+        (**self).send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
-        self.recv().await
+        (**self).recv().await
     }
 }
 

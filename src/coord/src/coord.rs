@@ -259,11 +259,8 @@ pub struct LoggingConfig {
 }
 
 /// Configures a coordinator.
-pub struct Config<'a, C>
-where
-    C: dataflow_types::client::Client,
-{
-    pub dataflow_client: C,
+pub struct Config<'a> {
+    pub dataflow_client: Box<dyn dataflow_types::client::Client>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
     pub timestamp_frequency: Duration,
@@ -279,12 +276,9 @@ where
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<C>
-where
-    C: dataflow_types::client::Client,
-{
+pub struct Coordinator {
     /// A client to a running dataflow cluster.
-    dataflow_client: C,
+    dataflow_client: dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -410,10 +404,7 @@ macro_rules! guard_write_critical_section {
     };
 }
 
-impl<C> Coordinator<C>
-where
-    C: ComputeClient + StorageClient + 'static,
-{
+impl Coordinator {
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
@@ -572,7 +563,10 @@ where
                         .source_description_for(entry.id())
                         .unwrap();
                     self.dataflow_client
-                        .create_sources(vec![(entry.id(), source_description)])
+                        .create_sources(vec![(
+                            entry.id(),
+                            (source_description, Antichain::from_elem(since_ts)),
+                        )])
                         .await;
                 }
                 CatalogItem::Table(table) => {
@@ -600,7 +594,10 @@ where
                         .source_description_for(entry.id())
                         .unwrap();
                     self.dataflow_client
-                        .create_sources(vec![(entry.id(), source_description)])
+                        .create_sources(vec![(
+                            entry.id(),
+                            (source_description, Antichain::from_elem(since_ts)),
+                        )])
                         .await;
                 }
                 CatalogItem::Index(_) => {
@@ -2241,6 +2238,15 @@ where
             .await;
         match df {
             Ok(df) => {
+                // Determine the initial validity for the table.
+                let since_ts = {
+                    match &table.persist {
+                        Some(persist) => Some(persist.since_ts),
+                        _ => None,
+                    }
+                };
+                let since_ts = since_ts.unwrap_or(0);
+
                 // Announce the creation of the table source.
                 let source_description = self
                     .catalog
@@ -2248,18 +2254,13 @@ where
                     .source_description_for(table_id)
                     .unwrap();
                 self.dataflow_client
-                    .create_sources(vec![(table_id, source_description)])
+                    .create_sources(vec![(
+                        table_id,
+                        (source_description, Antichain::from_elem(since_ts)),
+                    )])
                     .await;
                 // Install the dataflow if so required.
                 if let Some(df) = df {
-                    let since_ts = {
-                        match &table.persist {
-                            Some(persist) => Some(persist.since_ts),
-                            _ => None,
-                        }
-                    };
-
-                    let since_ts = since_ts.unwrap_or(0);
                     let frontiers = self.new_source_frontiers(
                         table_id,
                         [since_ts],
@@ -2313,13 +2314,6 @@ where
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
                 let catalog_state = self.catalog.state();
-                let source_descriptions = source_ids
-                    .iter()
-                    .map(|id| (*id, catalog_state.source_description_for(*id).unwrap()))
-                    .collect::<Vec<_>>();
-                self.dataflow_client
-                    .create_sources(source_descriptions)
-                    .await;
 
                 // Ask persistence if it has a since timestamps for any
                 // of the new sources.
@@ -2339,8 +2333,18 @@ where
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
+                let descriptions = source_ids
+                    .iter()
+                    .map(|id| catalog_state.source_description_for(*id).unwrap())
+                    .collect::<Vec<_>>();
+
                 // Continue to do those things.
-                for (source_id, since_ts) in source_ids.into_iter().zip_eq(since_timestamps) {
+                let mut source_descriptions = Vec::with_capacity(source_ids.len());
+                for ((source_id, since_ts), description) in source_ids
+                    .into_iter()
+                    .zip_eq(since_timestamps)
+                    .zip_eq(descriptions)
+                {
                     self.update_timestamper(source_id, true).await;
 
                     let frontiers = self.new_source_frontiers(
@@ -2349,8 +2353,13 @@ where
                         self.logical_compaction_window_ms,
                     );
                     self.sources.insert(source_id, frontiers);
+                    source_descriptions
+                        .push((source_id, (description, Antichain::from_elem(since_ts))));
                 }
 
+                self.dataflow_client
+                    .create_sources(source_descriptions)
+                    .await;
                 self.ship_dataflows(dfs).await?;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
@@ -4104,9 +4113,14 @@ where
         }
 
         let indexes = &self.indexes;
+        let storage = &self.dataflow_client;
 
         let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
-            let builder = DataflowBuilder { catalog, indexes };
+            let builder = DataflowBuilder {
+                catalog,
+                indexes,
+                storage,
+            };
             f(builder)
         })?;
         self.send_builtin_table_updates(builtin_table_updates).await;
@@ -4578,7 +4592,7 @@ where
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve<C>(
+pub async fn serve(
     Config {
         dataflow_client,
         logging,
@@ -4592,11 +4606,8 @@ pub async fn serve<C>(
         metrics_registry,
         persist,
         now,
-    }: Config<'_, C>,
-) -> Result<(Handle, Client), CoordError>
-where
-    C: dataflow_types::client::ComputeClient + dataflow_types::client::StorageClient + 'static,
-{
+    }: Config<'_>,
+) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
@@ -4647,7 +4658,7 @@ where
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
-                dataflow_client,
+                dataflow_client: dataflow_types::client::Controller::new(dataflow_client),
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 indexes: ArrangementFrontiers::default(),
@@ -4899,7 +4910,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use dataflow_types::client::{ComputeClient, StorageClient};
+    use dataflow_types::client::ComputeClient;
 
     use crate::CoordError;
     use expr::{EvalError, GlobalId, Id};
@@ -4986,10 +4997,7 @@ pub mod fast_path_peek {
         return Ok(Plan::PeekDataflow(dataflow_plan, index_id));
     }
 
-    impl<C> crate::coord::Coordinator<C>
-    where
-        C: ComputeClient + StorageClient + 'static,
-    {
+    impl crate::coord::Coordinator {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
             &mut self,

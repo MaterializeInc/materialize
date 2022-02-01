@@ -22,17 +22,17 @@ use ore::stack::maybe_grow;
 pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     pub indexes: &'a ArrangementFrontiers<Timestamp>,
+    /// A handle to the storage abstraction, which describe sources from their identifier.
+    pub storage: &'a dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
 }
 
-impl<C> Coordinator<C>
-where
-    C: dataflow_types::client::Client,
-{
+impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder<'a>(&'a mut self) -> DataflowBuilder {
         DataflowBuilder {
             catalog: self.catalog.state(),
             indexes: &self.indexes,
+            storage: &self.dataflow_client,
         }
     }
 

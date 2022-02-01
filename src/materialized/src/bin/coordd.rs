@@ -83,7 +83,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let mut metrics_registry = MetricsRegistry::new();
     let (coord_handle, coord_client) = coord::serve(coord::Config {
-        dataflow_client,
+        dataflow_client: Box::new(dataflow_client),
         logging: None,
         data_directory: &args.data_directory,
         timestamp_frequency: Duration::from_secs(1),
