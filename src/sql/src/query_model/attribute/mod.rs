@@ -7,15 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod attribute;
-mod dot;
-mod hir;
-mod mir;
-mod model;
-mod rewrite;
-#[cfg(test)]
-mod test;
-mod validator;
+//! Derived attributes framework and definitions.
 
-pub use model::{BoxId, DistinctOperation, Model, QuantifierId};
-pub use validator::{ValidationError, ValidationResult};
+pub mod core;
