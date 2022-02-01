@@ -183,7 +183,7 @@ def trim_pipeline(pipeline: Any) -> None:
 def have_paths_changed(globs: Iterable[str]) -> bool:
     """Reports whether the specified globs have diverged from origin/main."""
     diff = subprocess.run(
-        ["git", "diff", "--no-patch", "--quiet", "--", "origin/main...", *globs]
+        ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
     )
     if diff.returncode == 0:
         return False
