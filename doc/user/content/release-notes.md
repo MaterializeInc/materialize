@@ -126,6 +126,8 @@ changes that have not yet been documented.
 
 - Add the `array_cat` function.
 
+- Add the [`pg_catalog.pg_views`](/sql/system-catalog#pg-catalog) PostgreSQL compatibility view.
+
 {{< comment >}}
 Only add new release notes above this line.
 
