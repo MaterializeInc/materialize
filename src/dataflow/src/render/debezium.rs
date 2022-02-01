@@ -219,6 +219,19 @@ enum DebeziumStateMutation {
     ClearFull,
 }
 
+/// A differential update to a [`DebeziumDeduplicationState`]. A collection of these can be used to
+/// restore a state to as it was at a given previous time.
+type DebeziumStateUpdate = (
+    u64,
+    Option<(RowCoordinates, Option<i64>)>,
+    i64,
+    Option<(RowCoordinates, i64)>,
+    bool,
+    bool,
+    Option<Row>,
+    Option<(String, i64)>,
+);
+
 /// If we need to deal with debezium possibly going back after it hasn't seen things.
 /// During normal (non-snapshot) operation, we deduplicate based on binlog position: (pos, row), for MySQL.
 /// During the initial snapshot, (pos, row) values are all the same, but primary keys
@@ -693,33 +706,127 @@ impl DebeziumDeduplicationState {
         (Ok(should_use), state_mutations)
     }
 
-    fn apply_mutations(&mut self, mutations: Vec<DebeziumStateMutation>) {
+    fn apply_mutations(
+        &mut self,
+        mutations: Vec<DebeziumStateMutation>,
+    ) -> Vec<(DebeziumStateUpdate, Diff)> {
+        let mut updates = Vec::new();
+
         for mutation in mutations {
-            self.apply_mutation(mutation);
+            self.apply_mutation(mutation, &mut updates);
         }
+
+        updates
     }
 
-    fn apply_mutation(&mut self, mutation: DebeziumStateMutation) {
+    /// Applies the given [`DebeziumStateMutation`] to `self` and returns a `Vec` of
+    /// [`DebeziumStateUpdate`] that can be used to record this update in a differential fashion.
+    fn apply_mutation(
+        &mut self,
+        mutation: DebeziumStateMutation,
+        updates: &mut Vec<(DebeziumStateUpdate, Diff)>,
+    ) {
         match mutation {
             DebeziumStateMutation::IncNumMesssagesProcessed => {
                 self.messages_processed += 1;
+                updates.push(((1, None, 0, None, false, false, None, None), 1));
             }
             DebeziumStateMutation::SetLastPosition(position) => {
+                updates.push((
+                    (
+                        0,
+                        self.last_position_and_offset.clone(),
+                        0,
+                        None,
+                        false,
+                        false,
+                        None,
+                        None,
+                    ),
+                    -1,
+                ));
+
                 match self.last_position_and_offset.as_mut() {
                     Some((old_position, _old_offset)) => {
                         *old_position = position;
                     }
                     None => panic!("no previous position and offset"),
                 }
+
+                updates.push((
+                    (
+                        0,
+                        self.last_position_and_offset.clone(),
+                        0,
+                        None,
+                        false,
+                        false,
+                        None,
+                        None,
+                    ),
+                    1,
+                ));
             }
             DebeziumStateMutation::SetLastPositionAndOffset(position, offset) => {
+                // Only retract if something was there.
+                if self.last_position_and_offset.is_some() {
+                    updates.push((
+                        (
+                            0,
+                            self.last_position_and_offset.clone(),
+                            0,
+                            None,
+                            false,
+                            false,
+                            None,
+                            None,
+                        ),
+                        -1,
+                    ));
+                }
+
                 self.last_position_and_offset = Some((position, offset));
+
+                updates.push((
+                    (
+                        0,
+                        self.last_position_and_offset.clone(),
+                        0,
+                        None,
+                        false,
+                        false,
+                        None,
+                        None,
+                    ),
+                    1,
+                ));
             }
             DebeziumStateMutation::SetMaxSeenTime(time) => {
                 let track_full = match self.full {
                     Some(ref mut state) => state,
                     None => panic!("no full track state"),
                 };
+
+                // Only emit updates/retractions for times that are not the default.
+                if track_full.max_seen_time != 0 {
+                    updates.push((
+                        (
+                            0,
+                            None,
+                            track_full.max_seen_time,
+                            None,
+                            false,
+                            false,
+                            None,
+                            None,
+                        ),
+                        -1,
+                    ));
+                }
+                if time != 0 {
+                    updates.push(((0, None, time, None, false, false, None, None), 1));
+                }
+
                 track_full.max_seen_time = time;
             }
             DebeziumStateMutation::UpdateSeenPositions(position, ts) => {
@@ -727,13 +834,45 @@ impl DebeziumDeduplicationState {
                     Some(ref mut state) => state,
                     None => panic!("no full track state"),
                 };
-                track_full.seen_positions.insert(position, ts);
+
+                let previous = track_full.seen_positions.insert(position.clone(), ts);
+                if let Some(ts) = previous {
+                    updates.push((
+                        (
+                            0,
+                            None,
+                            0,
+                            Some((position.clone(), ts)),
+                            false,
+                            false,
+                            None,
+                            None,
+                        ),
+                        -1,
+                    ));
+                }
+                updates.push((
+                    (0, None, 0, Some((position, ts)), false, false, None, None),
+                    1,
+                ));
             }
             DebeziumStateMutation::SetStarted(value) => {
                 let track_full = match self.full {
                     Some(ref mut state) => state,
                     None => panic!("no full track state"),
                 };
+
+                if !false && track_full.started {
+                    // Retract a previously emitted `true` update. Which makes us go back to the
+                    // base state, which is `false`. No need to emit a "positive" update for that.
+                    updates.push(((0, None, 0, None, true, false, None, None), -1));
+                }
+                if value && !track_full.started {
+                    // Emit an update when we go from `false` to `true`. But not otherwise, because
+                    // `false` is the base state.
+                    updates.push(((0, None, 0, None, true, false, None, None), 1));
+                }
+
                 track_full.started = value;
             }
             DebeziumStateMutation::SetPaddingStarted(value) => {
@@ -741,6 +880,18 @@ impl DebeziumDeduplicationState {
                     Some(ref mut state) => state,
                     None => panic!("no full track state"),
                 };
+
+                if !value && track_full.started_padding {
+                    // Retract a previously emitted `true` update. Which makes us go back to the
+                    // base state, which is `false`. No need to emit a "positive" update for that.
+                    updates.push(((0, None, 0, None, false, true, None, None), -1));
+                }
+                if value && !track_full.started_padding {
+                    // Emit an update when we go from `false` to `true`. But not otherwise, because
+                    // `false` is the base state.
+                    updates.push(((0, None, 0, None, false, true, None, None), 1));
+                }
+
                 track_full.started_padding = value;
             }
             DebeziumStateMutation::AddSeenSnapshotKeys(row) => {
@@ -748,13 +899,60 @@ impl DebeziumDeduplicationState {
                     Some(ref mut state) => state,
                     None => panic!("no full track state"),
                 };
-                track_full.seen_snapshot_keys.insert(row);
+
+                let new = track_full.seen_snapshot_keys.insert(row.clone());
+                if new {
+                    updates.push(((0, None, 0, None, false, false, Some(row), None), 1));
+                }
             }
             DebeziumStateMutation::AddFilenameToIndexMapping(filename, idx) => {
-                self.filenames_to_indices.insert(filename, idx);
+                if let Some(old_idx) = self.filenames_to_indices.insert(filename.clone(), idx) {
+                    panic!(
+                        "there is already a mapping for {}: {}, trying to insert {}",
+                        filename, old_idx, idx
+                    );
+                }
+                updates.push((
+                    (0, None, 0, None, false, false, None, Some((filename, idx))),
+                    1,
+                ));
             }
             DebeziumStateMutation::ClearFull => {
-                self.full = None;
+                let track_full = match self.full.take() {
+                    Some(state) => state,
+                    None => panic!("no full track state"),
+                };
+
+                for update in track_full.seen_positions {
+                    updates.push(((0, None, 0, Some(update), false, false, None, None), -1));
+                }
+
+                for key in track_full.seen_snapshot_keys {
+                    updates.push(((0, None, 0, None, false, false, Some(key), None), -1));
+                }
+
+                // For these three, only retract if the current state is different from the default
+                if track_full.max_seen_time != 0 {
+                    updates.push((
+                        (
+                            0,
+                            None,
+                            track_full.max_seen_time,
+                            None,
+                            false,
+                            false,
+                            None,
+                            None,
+                        ),
+                        -1,
+                    ));
+                }
+                if track_full.started {
+                    updates.push(((0, None, 0, None, true, false, None, None), -1));
+                }
+                if track_full.started_padding {
+                    updates.push(((0, None, 0, None, false, true, None, None), -1));
+                }
             }
         }
     }
