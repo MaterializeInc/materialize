@@ -1079,7 +1079,7 @@ where
     // our internal state after the send loop
     let mut progress_update = None;
 
-    let shutdown_flush = AtomicBool::new(false);
+    let shutdown_flush = Cell::new(false);
 
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
@@ -1094,10 +1094,10 @@ where
                 debug!("shutting down sink: {}", &s.name);
 
                 // Approximately one last attempt to push anything pending to kafka before closing.
-                if !shutdown_flush.load(Ordering::Relaxed) {
+                if !shutdown_flush.get() {
                     debug!("flushing kafka producer for sink: {}", &s.name);
                     let _ = s.producer.flush().await;
-                    shutdown_flush.store(true, Ordering::Relaxed);
+                    shutdown_flush.set(true);
                 }
 
                 // Indicate that the sink is closed to everyone else who
