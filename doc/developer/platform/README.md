@@ -20,6 +20,6 @@ the case yet.
 
 Initial design work has begun in the documents below.
 
-* [Database Architecture](db-architecture.md)
-* [Cloud Architecture](db-architecture.md) (TODO)
+* [Database Architecture](architecture-db.md)
+* [Cloud Architecture](architecture-cloud.md) (TODO)
 * [User Experience](ux.md)
