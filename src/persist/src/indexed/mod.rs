@@ -1000,6 +1000,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             // arbitrarily long for maintenance responses and most likely institute
             // a timeout.
             if self.in_flight_trace_compactions.contains_key(&id) {
+                self.metrics.trace_compaction_skipped_count.inc();
                 continue;
             }
             if let Some(req) = arrangement.trace_next_compact_req()? {
