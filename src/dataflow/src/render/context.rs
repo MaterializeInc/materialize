@@ -538,7 +538,7 @@ where
                 .arranged
                 .iter()
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
-        if form_raw_collection {
+        if form_raw_collection && self.collection.is_none() {
             self.collection =
                 Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None))));
         }
