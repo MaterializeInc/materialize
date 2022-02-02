@@ -36,8 +36,8 @@ INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:
 ALTER TABLE types_table REPLICA IDENTITY FULL;
 
 CREATE TABLE large_text (f1 TEXT, f2 TEXT);
-INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), REPEAT('y', 9 * 1024 * 1024));
-INSERT INTO large_text VALUES (REPEAT('a', 10 * 1024 * 1024), REPEAT('b', 11 * 1024 * 1024));
+INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), REPEAT('y', 1 * 1024 * 1024));
+INSERT INTO large_text VALUES (REPEAT('a', 3 * 1024 * 1024),  REPEAT('b', 2 * 1024 * 1024));
 ALTER TABLE large_text REPLICA IDENTITY FULL;
 
 CREATE TABLE trailing_space_pk (f1 TEXT PRIMARY KEY);
@@ -185,8 +185,8 @@ contains:publication "no_such_publication" does not exist
 "numeric"
 
 > SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
-16777216 9437184
-10485760 11534336
+16777216 1048576
+3145728  2097152
 
 > SELECT LENGTH(f1), f1 FROM trailing_space_pk;
 "6" "abc   "
@@ -299,8 +299,8 @@ INSERT INTO "таблица" SELECT * FROM "таблица";
 "foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
 
 > SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
-16777216 9437184
-10485760 11534336
+16777216 1048576
+3145728  2097152
 16777216 3
 
 > SELECT LENGTH(f1), f1 FROM trailing_space_pk;
