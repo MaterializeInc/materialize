@@ -36,19 +36,12 @@ SERVICES = [
 # Test the kafka sink resumption logic
 #
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument(
-        "--seed",
-        help="an alternate seed to use to avoid clashing with existing topics",
-        type=int,
-        default=int(random.getrandbits(16)),
-    )
-    args = parser.parse_args()
-
     c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy"]
     )
     c.wait_for_materialized()
 
+    seed = random.getrandbits(16)
     for i, failure_mode in enumerate(
         [
             "toxiproxy-close-connection.td",
@@ -59,8 +52,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "testdrive-svc",
             "--no-reset",
             "--max-errors=1",
-            f"--seed={args.seed}{i}",
-            f"--temp-dir=/share/tmp/kafka-resumption-{args.seed}-{i}",
+            f"--seed={seed}{i}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}{i}",
             "setup.td",
             failure_mode,
             "during.td",
