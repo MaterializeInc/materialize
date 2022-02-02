@@ -103,19 +103,3 @@ SELECT atttypid, attname FROM pg_attribute WHERE attrelid = (SELECT oid FROM mz_
 2951  c__uuid
 3802  c_jsonb
 3807  c__jsonb
-
-query IT
-SELECT oid, rolname FROM pg_roles ORDER BY oid
-----
-20007  materialize
-20008  mz_system
-
-query TIIO colnames
-SELECT proname, pronamespace, oid, proargdefaults
-FROM pg_catalog.pg_proc
-WHERE proname='substring'
-ORDER BY oid
-----
-proname    pronamespace  oid  proargdefaults
-substring  20003         936  NULL
-substring  20003         937  NULL
