@@ -4132,7 +4132,6 @@ impl Coordinator {
         if !sources_to_drop.is_empty() {
             for &id in &sources_to_drop {
                 self.update_timestamper(id, false).await;
-                self.catalog.delete_timestamp_bindings(id)?;
                 self.sources.remove(&id);
             }
             self.dataflow_client.drop_sources(sources_to_drop).await;
