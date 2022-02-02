@@ -17,7 +17,7 @@ use repr::adt::numeric::{self, Numeric};
 use repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
-use crate::EvalError;
+use crate::{scalar::DomainLimit, EvalError};
 
 sqlfunc!(
     #[sqlname = "-"]
@@ -190,8 +190,34 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    fn acos(a: f64) -> Result<f64, EvalError> {
+        if a < -1.0 || 1.0 < a {
+            return Err(EvalError::OutOfDomain(
+                DomainLimit::Inclusive(-1),
+                DomainLimit::Inclusive(1),
+                "acos".to_owned(),
+            ));
+        }
+        Ok(a.acos())
+    }
+);
+
+sqlfunc!(
     fn cosh(a: f64) -> f64 {
         a.cosh()
+    }
+);
+
+sqlfunc!(
+    fn acosh(a: f64) -> Result<f64, EvalError> {
+        if a < 1.0 {
+            return Err(EvalError::OutOfDomain(
+                DomainLimit::Inclusive(1),
+                DomainLimit::None,
+                "acosh".to_owned(),
+            ));
+        }
+        Ok(a.acosh())
     }
 );
 
@@ -205,8 +231,27 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    fn asin(a: f64) -> Result<f64, EvalError> {
+        if a < -1.0 || 1.0 < a {
+            return Err(EvalError::OutOfDomain(
+                DomainLimit::Inclusive(-1),
+                DomainLimit::Inclusive(1),
+                "asin".to_owned(),
+            ));
+        }
+        Ok(a.asin())
+    }
+);
+
+sqlfunc!(
     fn sinh(a: f64) -> f64 {
         a.sinh()
+    }
+);
+
+sqlfunc!(
+    fn asinh(a: f64) -> f64 {
+        a.asinh()
     }
 );
 
@@ -220,8 +265,27 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    fn atan(a: f64) -> f64 {
+        a.atan()
+    }
+);
+
+sqlfunc!(
     fn tanh(a: f64) -> f64 {
         a.tanh()
+    }
+);
+
+sqlfunc!(
+    fn atanh(a: f64) -> Result<f64, EvalError> {
+        if a < -1.0 || 1.0 < a {
+            return Err(EvalError::OutOfDomain(
+                DomainLimit::Inclusive(-1),
+                DomainLimit::Inclusive(1),
+                "atanh".to_owned(),
+            ));
+        }
+        Ok(a.atanh())
     }
 );
 

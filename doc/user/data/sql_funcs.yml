@@ -192,8 +192,14 @@
   - signature: 'cos(x: double precision) -> double precision'
     description: The cosine of `x`, with `x` in radians.
 
+  - signature: 'acos(x: double precision) -> double precision'
+    description: The inverse cosine of `x`, result in radians.
+
   - signature: 'cosh(x: double precision) -> double precision'
     description: The hyperbolic cosine of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'acosh(x: double precision) -> double precision'
+    description: The inverse hyperbolic cosine of `x`.
 
   - signature: 'cot(x: double precision) -> double precision'
     description: The cotangent of `x`, with `x` in radians.
@@ -201,14 +207,26 @@
   - signature: 'sin(x: double precision) -> double precision'
     description: The sine of `x`, with `x` in radians.
 
+  - signature: 'asin(x: double precision) -> double precision'
+    description: The inverse sine of `x`, result in radians.
+
   - signature: 'sinh(x: double precision) -> double precision'
     description: The hyperbolic sine of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'asinh(x: double precision) -> double precision'
+    description: The inverse hyperbolic sine of `x`.
 
   - signature: 'tan(x: double precision) -> double precision'
     description: The tangent of `x`, with `x` in radians.
 
+  - signature: 'asin(x: double precision) -> double precision'
+    description: The inverse tangent of `x`, result in radians.
+
   - signature: 'tanh(x: double precision) -> double precision'
     description: The hyperbolic tangent of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'atanh(x: double precision) -> double precision'
+    description: The inverse hyperbolic tangent of `x`.
 
 - type: String
   functions:

@@ -3285,11 +3285,17 @@ pub enum UnaryFunc {
     Upper,
     Lower,
     Cos(Cos),
+    Acos(Acos),
     Cosh(Cosh),
+    Acosh(Acosh),
     Sin(Sin),
+    Asin(Asin),
     Sinh(Sinh),
+    Asinh(Asinh),
     Tan(Tan),
+    Atan(Atan),
     Tanh(Tanh),
+    Atanh(Atanh),
     Cot(Cot),
     Log10(Log10),
     Log10Numeric(Log10Numeric),
@@ -3426,11 +3432,17 @@ derive_unary!(
     CastCharToString,
     CastUuidToString,
     Cos,
+    Acos,
     Cosh,
+    Acosh,
     Sin,
+    Asin,
     Sinh,
+    Asinh,
     Tan,
+    Atan,
     Tanh,
+    Atanh,
     Cot,
     Log10,
     Ln,
@@ -3508,6 +3520,12 @@ impl UnaryFunc {
             | Sinh(_)
             | Tan(_)
             | Tanh(_)
+            | Acos(_)
+            | Acosh(_)
+            | Asin(_)
+            | Asinh(_)
+            | Atan(_)
+            | Atanh(_)
             | Cot(_)
             | Log10(_)
             | Ln(_)
@@ -3710,6 +3728,12 @@ impl UnaryFunc {
             | Sinh(_)
             | Tan(_)
             | Tanh(_)
+            | Acos(_)
+            | Acosh(_)
+            | Asin(_)
+            | Asinh(_)
+            | Atan(_)
+            | Atanh(_)
             | Cot(_)
             | Log10(_)
             | Ln(_)
@@ -3945,6 +3969,12 @@ impl UnaryFunc {
             | Sinh(_)
             | Tan(_)
             | Tanh(_)
+            | Acos(_)
+            | Acosh(_)
+            | Asin(_)
+            | Asinh(_)
+            | Atan(_)
+            | Atanh(_)
             | Cot(_)
             | Log10(_)
             | Ln(_)
@@ -4132,6 +4162,12 @@ impl UnaryFunc {
             | Sinh(_)
             | Tan(_)
             | Tanh(_)
+            | Acos(_)
+            | Acosh(_)
+            | Asin(_)
+            | Asinh(_)
+            | Atan(_)
+            | Atanh(_)
             | Cot(_)
             | Log10(_)
             | Ln(_)
@@ -4196,6 +4232,12 @@ impl UnaryFunc {
             | Sinh(_)
             | Tan(_)
             | Tanh(_)
+            | Acos(_)
+            | Acosh(_)
+            | Asin(_)
+            | Asinh(_)
+            | Atan(_)
+            | Atanh(_)
             | Cot(_)
             | Log10(_)
             | Ln(_)
