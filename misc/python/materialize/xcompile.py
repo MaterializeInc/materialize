@@ -85,6 +85,7 @@ def cargo(
     rustflags += ["-Clink-arg=-Wl,--compress-debug-sections=zlib"]
 
     if sys.platform == "darwin":
+        _bootstrap_darwin(arch)
         sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
         rustflags += [f"-L{sysroot}/lib"]
         extra_env = {
@@ -136,6 +137,8 @@ def tool(arch: Arch, name: str, channel: Optional[str] = None) -> List[str]:
     Returns:
         A list of arguments specifying the beginning of the command to invoke.
     """
+    if sys.platform == "darwin":
+        _bootstrap_darwin(arch)
     return [
         *_enter_builder(arch, channel),
         f"{target(arch)}-{name}",
@@ -146,18 +149,16 @@ def _enter_builder(arch: Arch, channel: Optional[str] = None) -> List[str]:
     assert (
         arch == Arch.host()
     ), f"target architecture {arch} does not match host architecture {Arch.host()}"
-    if "MZ_DEV_CI_BUILDER" in os.environ:
-        return []
-    elif sys.platform == "darwin":
-        # Building in Docker for Mac is painfully slow, so we install a
-        # cross-compiling toolchain on the host and use that instead.
-        _bootstrap_darwin(arch)
+    if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:
         return ["bin/ci-builder", "run", channel if channel else "stable"]
 
 
 def _bootstrap_darwin(arch: Arch) -> None:
+    # Building in Docker for Mac is painfully slow, so we install a
+    # cross-compiling toolchain on the host and use that instead.
+
     BOOTSTRAP_VERSION = "4"
     BOOTSTRAP_FILE = ROOT / "target" / target(arch) / ".xcompile-bootstrap"
     try:
@@ -167,10 +168,6 @@ def _bootstrap_darwin(arch: Arch) -> None:
     if contents == BOOTSTRAP_VERSION:
         return
 
-    # TODO(benesch): no need to clean up these old taps once sufficient time has
-    # passed (say, March 2022).
-    for old_tap in ["SergioBenitez/osxct", "messense/macos-cross-toolchains"]:
-        spawn.runv(["brew", "uninstall", "-f", f"{old_tap}/{target(arch)}"])
     spawn.runv(["brew", "install", f"materializeinc/crosstools/{target(arch)}"])
     spawn.runv(["cargo", "clean", "--target", target(arch)], cwd=ROOT)
     spawn.runv(["rustup", "target", "add", target(arch)])
