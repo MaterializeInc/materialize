@@ -107,23 +107,17 @@ $ kafka-create-topic topic=nums
 
 # ==> Test consolidation.
 
-# Ingest several updates that consolidate. Some of these updates are in one
-# transaction, and some of them are in their own transactions.
+# Ingest several updates that consolidate
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
-{"array":[{"data":{"num":1},"time":1,"diff":1}]}
-{"array":[{"data":{"num":1},"time":1,"diff":-1}]}
-{"array":[{"data":{"num":2},"time":1,"diff":1}]}
-{"array":[{"data":{"num":2},"time":1,"diff":-1}]}
 {"array":[{"data":{"num":3},"time":1,"diff":1}]}
 {"array":[{"data":{"num":3},"time":2,"diff":-1}]}
 {"array":[{"data":{"num":4},"time":2,"diff":1}]}
 {"array":[{"data":{"num":4},"time":3,"diff":-1}]}
 {"array":[{"data":{"num":5},"time":3,"diff":1}]}
-{"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":5},{"time":2,"count":2}, {"time": 3, "count": 2}]}}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":1},{"time":2,"count":2}, {"time": 3, "count": 2}]}}
 
-# Test that by default updates that occurred at the same time are consolidated,
-# but updates that occurred at distinct times are not.
+# Test that by updates that occurred at at distinct times are not consolidated
 
 # we know that transactions (timestamps) are emitted in order, but the order
 # of emitted records with the same timestamp is not deterministic. We therefore
