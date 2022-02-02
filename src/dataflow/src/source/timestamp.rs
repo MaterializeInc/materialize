@@ -283,8 +283,6 @@ pub struct TimestampBindingBox {
     durability_frontier: Antichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: Option<TimestampProposer>,
-    /// Whether or not these timestamp bindings need to be persisted.
-    requires_persistence: bool,
 }
 
 impl TimestampBindingBox {
@@ -295,7 +293,6 @@ impl TimestampBindingBox {
             compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i, now)),
-            requires_persistence: false,
         }
     }
 
@@ -588,16 +585,6 @@ impl TimestampBindingRc {
     /// Returns the current durability frontier
     pub fn durability_frontier(&self) -> Antichain<Timestamp> {
         self.wrapper.borrow().durability_frontier.clone()
-    }
-
-    /// Whether or not these timestamp bindings must be persisted.
-    pub fn requires_persistence(&self) -> bool {
-        self.wrapper.borrow().requires_persistence
-    }
-
-    /// Enables persistence for these bindings.
-    pub fn enable_persistence(&self) {
-        self.wrapper.borrow_mut().requires_persistence = true;
     }
 }
 

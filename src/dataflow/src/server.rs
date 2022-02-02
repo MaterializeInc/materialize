@@ -636,10 +636,6 @@ where
         // If that frontier is different than the durability frontier we've previously reported then we also need to
         // get the new bindings we've produced and send them to the coordinator.
         for (id, history) in self.storage_state.ts_histories.iter() {
-            if !history.requires_persistence() {
-                continue;
-            }
-
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
             let prev_frontier = self

@@ -720,7 +720,11 @@ impl ConsistencyInfo {
                 None => Some(closed_ts),
             };
         }
-        let min = min.unwrap_or(0);
+        // Never go beyond the durability frontier
+        let min = match timestamp_bindings.durability_frontier().elements().get(0) {
+            Some(ts) => std::cmp::min(min.unwrap_or(0), ts.saturating_sub(1)),
+            None => min.unwrap_or(0),
+        };
 
         // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
         if min > self.last_closed_ts {

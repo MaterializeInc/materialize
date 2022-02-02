@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use interchange::json::JsonEncoder;
@@ -61,7 +60,6 @@ use timely_util::operators_async_ext::OperatorBuilderExt;
 
 use super::{KafkaBaseMetrics, SinkBaseMetrics};
 use crate::render::sinks::SinkRender;
-use crate::source::timestamp::TimestampBindingRc;
 use prometheus::core::{AtomicI64, AtomicU64};
 
 impl<G> SinkRender<G> for KafkaSinkConnector
@@ -113,24 +111,6 @@ where
             sinked_collection
         };
 
-        // Extract handles to the relevant source timestamp histories the sink
-        // needs to hear from before it can write data out to Kafka.
-        let mut source_ts_histories = Vec::new();
-
-        for id in &self.transitive_source_dependencies {
-            if let Some(history) = storage_state.ts_histories.get(id) {
-                // As soon as we have one sink that depends on a given source,
-                // that source needs to persist timestamp bindings.
-                history.enable_persistence();
-
-                let mut history_bindings = history.clone();
-                // We don't want these to block compaction
-                // ever.
-                history_bindings.set_compaction_frontier(Antichain::new().borrow());
-                source_ts_histories.push(history_bindings);
-            }
-        }
-
         // TODO: this is a brittle way to indicate the worker that will write to the sink
         // because it relies on us continuing to hash on the sink_id, with the same hash
         // function, and for the Exchange pact to continue to distribute by modulo number
@@ -158,7 +138,6 @@ where
                 .map(|(desc, _indices)| desc),
             self.value_desc.clone(),
             sink.as_of.clone(),
-            source_ts_histories,
             Rc::clone(&shared_frontier),
             &metrics.kafka,
         );
@@ -990,7 +969,6 @@ fn kafka<G>(
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
     as_of: SinkAsOf,
-    source_timestamp_histories: Vec<TimestampBindingRc>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
 ) -> Box<dyn Any>
@@ -1045,7 +1023,6 @@ where
         connector,
         as_of,
         shared_gate_ts,
-        source_timestamp_histories,
         write_frontier,
         metrics,
     )
@@ -1069,7 +1046,6 @@ pub fn produce_to_kafka<G>(
     connector: KafkaSinkConnector,
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
-    source_timestamp_histories: Vec<TimestampBindingRc>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
 ) -> Box<dyn Any>
@@ -1120,13 +1096,6 @@ where
             }
             // Panic if there's not exactly once element in the frontier like we expect.
             let frontier = frontiers.clone().into_element();
-
-            // Figure out the durablity frontier for all sources we depend on
-            let durability_frontier = source_timestamp_histories
-                .iter()
-                .fold(Antichain::new(), |accum, history| {
-                    accum.meet(&history.durability_frontier())
-                });
 
             // Can't use `?` when the return type is a `bool` so use a custom try operator
             macro_rules! bail_err {
@@ -1208,7 +1177,7 @@ where
             let mut closed_ts: Vec<u64> = s
                 .pending_rows
                 .iter()
-                .filter(|(ts, _)| !frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts))
+                .filter(|(ts, _)| !frontier.less_equal(*ts))
                 .map(|(&ts, _)| ts)
                 .collect();
             closed_ts.sort_unstable();
