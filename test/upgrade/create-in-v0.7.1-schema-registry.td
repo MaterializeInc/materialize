@@ -7,13 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set schema
-"int"
+$ set schema={
+    "type": "record",
+    "name": "foo",
+    "fields": [
+      {"name": "a", "type": "int"}
+    ]
+  }
 
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} publish=true
-1
+{"a": 1}
 
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
