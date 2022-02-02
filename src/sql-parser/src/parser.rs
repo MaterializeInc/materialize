@@ -1831,6 +1831,9 @@ impl<'a> Parser<'a> {
     fn parse_source_tables(&mut self) -> Result<Vec<PgTable<Raw>>, ParserError> {
         let mut tables: Vec<PgTable<Raw>> = Vec::new();
         let raw_def = self.parse_literal_string()?;
+        if raw_def.is_empty() {
+            return Ok(tables);
+        }
         let tokens = lexer::lex(&raw_def)?;
         let mut parser = Parser::new(&raw_def, tokens);
         loop {
