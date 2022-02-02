@@ -687,7 +687,7 @@ pub struct PgTable<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for PgTable<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(self.name.as_str());
+        f.write_node(&display::escape_single_quote_string(self.name.as_str()));
         if !self.columns.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.columns));
