@@ -30,6 +30,15 @@ use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
 use crate::storage::{Atomicity, Blob, BlobRead};
 
+/// User hints for [BlobCache] operations.
+#[derive(Debug)]
+pub enum CacheHint {
+    /// Attempt to add the result of the given operation to the in-memory cache.
+    MaybeAdd,
+    /// Never add the result of the given operation to the in-memory cache.
+    NeverAdd,
+}
+
 /// A disk-backed cache for objects in [Blob] storage.
 ///
 /// The data for the objects in the cache is stored on disk, mmap'd, and a
@@ -104,7 +113,11 @@ impl<B: BlobRead> BlobCache<B> {
     }
 
     /// Synchronously fetches the batch for the given key.
-    fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
+    fn fetch_unsealed_batch_sync(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> Result<Arc<BlobUnsealedBatch>, Error> {
         let async_guard = self.async_runtime.enter();
 
         let bytes = block_on(self.blob.lock()?.get(key))?
@@ -121,8 +134,10 @@ impl<B: BlobRead> BlobCache<B> {
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
         let ret = Arc::new(batch);
-        self.cache
-            .maybe_add_unsealed(key.to_owned(), bytes_len, Arc::clone(&ret))?;
+        if let CacheHint::MaybeAdd = hint {
+            self.cache
+                .maybe_add_unsealed(key.to_owned(), bytes_len, Arc::clone(&ret))?;
+        }
 
         drop(async_guard);
         Ok(ret)
@@ -130,7 +145,11 @@ impl<B: BlobRead> BlobCache<B> {
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_unsealed_batch_async(&self, key: &str) -> PFuture<Arc<BlobUnsealedBatch>> {
+    pub fn get_unsealed_batch_async(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> PFuture<Arc<BlobUnsealedBatch>> {
         let (tx, rx) = PFuture::new();
         match self.cache.get_unsealed(key) {
             Err(err) => {
@@ -158,7 +177,7 @@ impl<B: BlobRead> BlobCache<B> {
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
             let async_guard = cache.async_runtime.enter();
-            let res = cache.fetch_unsealed_batch_sync(&key);
+            let res = cache.fetch_unsealed_batch_sync(&key, hint);
             tx.fill(res);
             drop(async_guard);
         });
@@ -166,7 +185,11 @@ impl<B: BlobRead> BlobCache<B> {
     }
 
     /// Synchronously fetches the batch for the given key.
-    fn fetch_trace_batch_sync(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
+    fn fetch_trace_batch_sync(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> Result<Arc<BlobTraceBatch>, Error> {
         let async_guard = self.async_runtime.enter();
 
         let bytes = block_on(self.blob.lock()?.get(key))?
@@ -182,8 +205,10 @@ impl<B: BlobRead> BlobCache<B> {
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
         let ret = Arc::new(batch);
-        self.cache
-            .maybe_add_trace(key.to_owned(), bytes_len, Arc::clone(&ret))?;
+        if let CacheHint::MaybeAdd = hint {
+            self.cache
+                .maybe_add_trace(key.to_owned(), bytes_len, Arc::clone(&ret))?;
+        }
 
         drop(async_guard);
         Ok(ret)
@@ -191,7 +216,11 @@ impl<B: BlobRead> BlobCache<B> {
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_trace_batch_async(&self, key: &str) -> PFuture<Arc<BlobTraceBatch>> {
+    pub fn get_trace_batch_async(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> PFuture<Arc<BlobTraceBatch>> {
         let (tx, rx) = PFuture::new();
         match self.cache.get_trace(key) {
             Err(err) => {
@@ -219,7 +248,7 @@ impl<B: BlobRead> BlobCache<B> {
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
             let async_guard = cache.async_runtime.enter();
-            let res = cache.fetch_trace_batch_sync(&key);
+            let res = cache.fetch_trace_batch_sync(&key, hint);
             tx.fill(res);
             drop(async_guard);
         });
