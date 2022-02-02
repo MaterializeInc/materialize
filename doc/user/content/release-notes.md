@@ -107,35 +107,39 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
-- **Breaking change.** Drop support for the `consistency_topic` option when
-  creating a `DEBEZIUM` source. This was an undocumented option that is no
-  longer relevant.
-
-- **Breaking change.** Fix parsing of certain `INTERVAL head_time_unit TO tail_time_unit`
-  expressions involving two-component time expressions {{% gh 7918 %}}.
-
-  Previous versions of Materialize would assume the head time unit
-  to always be hours. The new behavior matches PostgreSQL.
-
-- Fix planning of repeat constant expressions in a `GROUP BY` clause
-  {{% gh 8302 %}}.
-
-- Add the [`date_bin_hopping`](/sql/functions/date-bin-hopping) function, which
-  is an [experimental mode] function that provides a primitive to express what
-  other systems refer to as "hopping windows."
-
-- **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
-  of `CREATE SOURCE` and `CREATE SINK` now reject unknown parameters.
-  (Example: [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)).
-
-- Add the `array_cat` function.
-
 {{< comment >}}
 Only add new release notes above this line.
 
 The presence of this comment ensures that PRs that are alive across a release
 boundary don't silently merge their release notes into the wrong place.
 {{</ comment >}}
+
+{{% version-header v0.19.0 %}}
+
+- **Breaking change.** Reject unknown `WITH` options in the [`CONFLUENT SCHEMA
+  REGISTRY` clause](/sql/create-source/avro-kafka#confluent-schema-registry-options)
+  when creating a Kafka source or sink {{% gh 10129 %}}.
+
+  Previously, unknown options were silently ignored. The new behavior matches
+  with how other clauses handle unknown `WITH` options.
+
+- **Breaking change.** Fix interpretation of certain [`interval`] values
+  involving time expressions with two components (e.g., `12:34`) {{% gh 7918
+  %}}.
+
+  Previous versions of Materialize would assume the interval's head time unit
+  to always be hours. The new behavior matches PostgreSQL.
+
+- **Breaking change.** Drop support for the `consistency_topic` option when
+  creating a source with `ENVELOPE DEBEZIUM`. This was an undocumented option
+  that is no longer relevant.
+
+- Fix planning of repeat constant expressions in a `GROUP BY` clause
+  {{% gh 8302 %}}.
+
+- Support calling multiple distinct [table functions](/sql/functions/#table-func)
+  in the `SELECT` list, as long as those table functions are not nested inside
+  other table functions {{% gh 9988 %}}.
 
 {{% version-header v0.18.0 %}}
 

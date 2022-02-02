@@ -6,7 +6,7 @@ menu:
     parent: 'sql-functions'
 ---
 
-{{< experimental v0.18.0 >}}
+{{< experimental v0.19.0 >}}
 The `date_bin_hopping` function
 {{< /experimental >}}
 
