@@ -59,6 +59,14 @@ pub(crate) fn render<G: Scope>(
                                     }
                                     None => continue,
                                 };
+
+                                // Ignore out of order updates that have been already overwritten
+                                if let Some((_, position)) = current_values.get(&key) {
+                                    if result.position < *position {
+                                        continue;
+                                    }
+                                }
+
                                 let value = match result.value {
                                     Some(Ok(row)) => match row.iter().nth(after_idx).unwrap() {
                                         Datum::List(after) => {
@@ -78,13 +86,13 @@ pub(crate) fn render<G: Scope>(
                                 let retraction = match value {
                                     Some(value) => {
                                         session.give((value.clone(), cap.time().clone(), 1));
-                                        current_values.insert(key, value)
+                                        current_values.insert(key, (value, result.position))
                                     }
                                     None => current_values.remove(&key),
                                 };
 
-                                if let Some(res) = retraction {
-                                    session.give((res, cap.time().clone(), -1));
+                                if let Some((value, _)) = retraction {
+                                    session.give((value, cap.time().clone(), -1));
                                 }
                             }
                         }
