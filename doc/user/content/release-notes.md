@@ -141,13 +141,6 @@ boundary don't silently merge their release notes into the wrong place.
   in the `SELECT` list, as long as those table functions are not nested inside
   other table functions {{% gh 9988 %}}.
 
-- Add the [`date_bin_hopping`](/sql/functions/date-bin-hopping) function, which
-  is an [experimental mode] function that provides a primitive to express what
-  other systems refer to as "hopping windows."
-
-- Add experimental support for the [`array_cat`](/sql/functions/#array-func)
-  function.
-
 {{% version-header v0.18.0 %}}
 
 - **Breaking change.** Further improve consistency with PostgreSQL's column name
