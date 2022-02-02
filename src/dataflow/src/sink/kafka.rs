@@ -208,15 +208,11 @@ impl SinkMetrics {
 
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
-    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl SinkProducerContext {
-    pub fn new(metrics: Arc<SinkMetrics>, shutdown_flag: Arc<AtomicBool>) -> Self {
-        SinkProducerContext {
-            metrics,
-            shutdown_flag,
-        }
+    pub fn new(metrics: Arc<SinkMetrics>) -> Self {
+        SinkProducerContext { metrics }
     }
 }
 
@@ -243,7 +239,6 @@ impl ProducerContext for SinkProducerContext {
                     msg.topic(),
                     e
                 );
-                self.shutdown_flag.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -432,7 +427,6 @@ impl KafkaSinkState {
                 config
                     .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
                         Arc::clone(&metrics),
-                        Arc::clone(&shutdown_flag),
                     ))
                     .expect("creating kafka producer for Kafka sink failed"),
             ),
@@ -553,11 +547,10 @@ impl KafkaSinkState {
         let shutdown = Cell::new(false);
         let self_producer = self.producer.clone();
         let mut last_error = KafkaError::Canceled;
+        // Only actually used for retriable errors.
         let tries = Retry::default()
-            .clamp_backoff(Duration::from_secs(60 * 10))
-            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
-            // addressing error strategy holistically.
             .max_tries(usize::MAX)
+            .clamp_backoff(Duration::from_secs(60 * 10))
             .into_retry_stream();
         tokio::pin!(tries);
         while tries.next().await.is_some() {
@@ -569,11 +562,10 @@ impl KafkaSinkState {
                     if e.txn_requires_abort() {
                         info!("Error requiring abort in kafka sink: {:?}", e);
                         let self_self_producer = self_producer.clone();
+                        // Only actually used for retriable errors.
                         let should_shutdown = Retry::default()
-                            .clamp_backoff(Duration::from_secs(60 * 10))
-                            // Yes this might be bad but we had an infinite loop before so it's no
-                            // worse.  Fix when addressing error strategy holistically.
                             .max_tries(usize::MAX)
+                            .clamp_backoff(Duration::from_secs(60 * 10))
                             .retry_async(|_| async {
                                 match self_self_producer.abort_transaction().await {
                                     Ok(_) => Ok(false),
@@ -610,26 +602,16 @@ impl KafkaSinkState {
         Err(last_error)
     }
 
-    async fn begin_transaction(&self) -> KafkaResult<()> {
-        self.producer.begin_transaction().await
-    }
-
-    async fn commit_transaction(&self) -> KafkaResult<()> {
-        self.producer.commit_transaction().await
-    }
-
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>) -> KafkaResult<()>
     where
         K: ToBytes + ?Sized,
         P: ToBytes + ?Sized,
     {
         let mut last_error = KafkaError::Canceled;
-        // Because of the lifetime bound on `record`, we can't just use `Retry::retry` so use the stream
+        // Only actually used for retriable errors.
         let tries = Retry::default()
-            .clamp_backoff(Duration::from_secs(60 * 10))
-            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
-            // addressing error strategy holistically.
             .max_tries(usize::MAX)
+            .clamp_backoff(Duration::from_secs(60 * 10))
             .into_retry_stream();
         tokio::pin!(tries);
         while tries.next().await.is_some() {
@@ -666,12 +648,11 @@ impl KafkaSinkState {
 
     async fn flush(&self) -> KafkaResult<()> {
         let self_producer = self.producer.clone();
+        // Only actually used for retriable errors.
         Retry::default()
+            .max_tries(usize::MAX)
             // Because we only expect to receive timeout errors, we should clamp fairly low.
             .clamp_backoff(Duration::from_secs(60))
-            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
-            // addressing error strategy holistically.
-            .max_tries(usize::MAX)
             .retry_async(|_| self_producer.flush())
             .await
     }
@@ -833,11 +814,10 @@ impl KafkaSinkState {
             ..
         })) = self.sink_state
         {
+            // Only actually used for retriable errors.
             return Retry::default()
-                .clamp_backoff(Duration::from_secs(60 * 10))
-                // Yes this is bad but we had an infinite loop before so it's no worse. Fix when
-                // addressing error strategy holistically.
                 .max_tries(usize::MAX)
+                .clamp_backoff(Duration::from_secs(60 * 10))
                 .retry_async(|_| async {
                     let topic = topic.clone();
                     let consistency_client_config = consistency_client_config.clone();
@@ -939,7 +919,7 @@ impl KafkaSinkState {
                 // record the write frontier in the consistency topic.
                 if let Some(consistency_state) = self.sink_state.unwrap_running() {
                     if self.transactional {
-                        self.begin_transaction().await?
+                        self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
                     self.send_consistency_record(
@@ -952,7 +932,7 @@ impl KafkaSinkState {
                     .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
-                        self.commit_transaction().await?
+                        self.retry_on_txn_error(|p| p.commit_transaction()).await?;
                     }
                     progress_emitted = true;
                 }
@@ -1099,6 +1079,8 @@ where
     // our internal state after the send loop
     let mut progress_update = None;
 
+    let shutdown_flush = Cell::new(false);
+
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
     let is_active_worker = (hashed_id as usize) % scope.peers() == scope.index();
@@ -1110,8 +1092,13 @@ where
         async_op!(|_initial_capabilities, frontiers| {
             if s.shutdown_flag.load(Ordering::SeqCst) {
                 debug!("shutting down sink: {}", &s.name);
-                // One last attempt to push anything pending to kafka before closing.
-                let _ = s.producer.flush().await;
+
+                // Approximately one last attempt to push anything pending to kafka before closing.
+                if !shutdown_flush.get() {
+                    debug!("flushing kafka producer for sink: {}", &s.name);
+                    let _ = s.producer.flush().await;
+                    shutdown_flush.set(true);
+                }
 
                 // Indicate that the sink is closed to everyone else who
                 // might be tracking its write frontier.
