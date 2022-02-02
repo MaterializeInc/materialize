@@ -350,17 +350,20 @@ pub struct RawIterator<'a> {
 
 impl<'a> RawIterator<'a> {
     pub fn next(&mut self) -> Option<Result<&[u8], io::Error>> {
+        if self.current_column == self.num_columns {
+            if let Some(err) = self.parser.expect_end_of_line().err() {
+                return Some(Err(err));
+            }
+        }
+
         if self.parser.is_eof() || self.parser.is_end_of_line() {
             return None;
         }
 
-        if self.current_column == self.num_columns {
-            self.parser.expect_end_of_line().err()?;
-            return None;
-        }
-
         if self.current_column > 0 {
-            self.parser.expect_column_delimiter().err()?;
+            if let Some(err) = self.parser.expect_column_delimiter().err() {
+                return Some(Err(err));
+            }
         }
 
         self.current_column += 1;
