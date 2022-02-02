@@ -1475,7 +1475,6 @@ dependencies = [
  "http-serde",
  "interchange",
  "kafka-util",
- "log",
  "mz-aws-util",
  "num_enum",
  "ore",

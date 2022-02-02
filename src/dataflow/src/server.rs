@@ -923,7 +923,7 @@ where
                             self.timely_worker.peers(),
                             &pid,
                         ) {
-                            log::trace!(
+                            tracing::trace!(
                                 "Adding partition/binding on worker {}: ({}, {}, {})",
                                 self.timely_worker.index(),
                                 pid,
@@ -933,7 +933,7 @@ where
                             data.add_partition(pid.clone(), None);
                             data.add_binding(pid, timestamp, offset, false);
                         } else {
-                            log::trace!(
+                            tracing::trace!(
                                 "NOT adding partition/binding on worker {}: ({}, {}, {})",
                                 self.timely_worker.index(),
                                 pid,
