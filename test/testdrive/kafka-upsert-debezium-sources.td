@@ -167,18 +167,6 @@ id creature
 -----------
 3  triceratops
 
-# Test that `WITH (kafka_time_offset=<whatever>)` works
-> CREATE MATERIALIZED SOURCE upsert_time_skip
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
-  WITH (kafka_time_offset = 6)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM UPSERT
-
-> SELECT * FROM upsert_time_skip
-id creature
------------
-4  chicken
-
 # Test that it doesn't work with full deduplication
 ! CREATE MATERIALIZED SOURCE upsert_full_dedupe
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'

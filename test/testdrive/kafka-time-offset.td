@@ -334,3 +334,85 @@ pie       4
 
 > SELECT SUM((statistics->'topics'->'testdrive-t4-${testdrive.seed}'->'partitions'->'0'->'msgs')::int) from mz_kafka_source_statistics;
 2
+
+#
+# UPSERT + AVRO
+#
+
+$ set keyschema={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+        {"name": "id", "type": "long"}
+    ]
+  }
+
+$ set schema={
+    "type" : "record",
+    "name" : "envelope",
+    "fields" : [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {
+                  "name": "id",
+                  "type": "long"
+              },
+              {
+                "name": "creature",
+                "type": "string"
+              }]
+           },
+           "null"
+         ]
+      },
+      {
+        "name": "after",
+        "type": ["row", "null"]
+      }
+    ]
+  }
+
+$ kafka-create-topic topic=dbzupsert
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
+{"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
+{"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}}
+{"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=2
+{"id": 1} {"before": {"row": {"id": 1, "creature": "lizard"}}, "after": {"row": {"id": 1, "creature": "dino"}}}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=3
+{"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "archeopteryx"}}}
+{"id": 2} {"before": {"row": {"id": 2, "creature": "archeopteryx"}}, "after": {"row": {"id": 2, "creature": "velociraptor"}}}
+
+# test duplicates
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=4
+{"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}}
+{"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}}
+
+# test removal and reinsertion
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=5
+{"id": 4} {"before": null, "after": {"row": {"id": 4, "creature": "moros"}}}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=6
+{"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=7
+{"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
+
+> CREATE MATERIALIZED SOURCE upsert_time_skip
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  WITH (kafka_time_offset = 6)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * FROM upsert_time_skip
+id creature
+-----------
+4  chicken
