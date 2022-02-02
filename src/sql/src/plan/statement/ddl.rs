@@ -795,7 +795,6 @@ pub fn plan_create_source(
     let materialized = *materialized;
     let name = scx.allocate_name(normalize::unresolved_object_name(name.clone())?);
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
-
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
     let timeline = if let Some(timeline) = with_options.remove("timeline") {
         match timeline {

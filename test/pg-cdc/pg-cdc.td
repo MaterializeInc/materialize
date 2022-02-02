@@ -76,7 +76,7 @@ CREATE TABLE conflict_schema.conflict_table (f1 TEXT);
 ALTER TABLE conflict_schema.conflict_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_schema.conflict_table VALUES ('234');
 
-CREATE TABLE "space table" ("space column" INTEGER);
+CREATE TABLE "single space" ("double  space" INTEGER);
 
 #
 # Error checking
@@ -153,7 +153,7 @@ contains:publication "no_such_publication" does not exist
 
 > CREATE VIEWS FROM SOURCE "mz_source" (conflict_schema.conflict_table AS public.conflict_table);
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("space table");
+> CREATE VIEWS FROM SOURCE "mz_source" ("single space");
 
 #
 # Perform sanity checks of the initial snapshot
