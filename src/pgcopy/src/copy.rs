@@ -333,30 +333,7 @@ impl<'a> CopyTextFormatParser<'a> {
         }
     }
 
-    pub fn consume_raw_values<F>(&mut self, num_columns: usize, mut f: F) -> Result<(), io::Error>
-    where
-        F: FnMut(&[u8]) -> Result<(), Box<dyn error::Error + Send + Sync>>,
-    {
-        while !self.is_eof() && !self.is_end_of_copy_marker() {
-            for col in 0..num_columns {
-                if col > 0 {
-                    self.expect_column_delimiter()?;
-                }
-                if let Some(raw_value) = self.consume_raw_value()? {
-                    if let Some(err) = f(raw_value).err() {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, err));
-                    }
-                } else {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown value"));
-                }
-            }
-            self.expect_end_of_line()?;
-        }
-
-        Ok(())
-    }
-
-    pub fn iter_raw(&mut self, num_columns: i32) -> RawIterator<'a> {
+    pub fn iter_raw(self, num_columns: i32) -> RawIterator<'a> {
         RawIterator {
             parser: self,
             current_column: 0,
@@ -366,30 +343,24 @@ impl<'a> CopyTextFormatParser<'a> {
 }
 
 pub struct RawIterator<'a> {
-    parser: &'a mut CopyTextFormatParser<'a>,
+    parser: CopyTextFormatParser<'a>,
     current_column: i32,
     num_columns: i32,
 }
 
-impl<'a> Iterator for RawIterator<'a> {
-    type Item = Result<&'a [u8], io::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl<'a> RawIterator<'a> {
+    pub fn next(&mut self) -> Option<Result<&[u8], io::Error>> {
         if self.parser.is_eof() || self.parser.is_end_of_line() {
             return None;
         }
 
         if self.current_column == self.num_columns {
-            if let Some(err) = self.parser.expect_end_of_line().err() {
-                return Some(Err(err));
-            }
+            self.parser.expect_end_of_line().err()?;
             return None;
         }
 
         if self.current_column > 0 {
-            if let Some(err) = self.parser.expect_column_delimiter().err() {
-                return Some(Err(err));
-            }
+            self.parser.expect_column_delimiter().err()?;
         }
 
         self.current_column += 1;
