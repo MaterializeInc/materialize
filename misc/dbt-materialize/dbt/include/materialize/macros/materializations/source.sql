@@ -27,7 +27,7 @@
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
 
-  {% call statement('main', auto_begin=False) -%}
+  {% call statement('main') -%}
     {{ materialize__create_arbitrary_object(sql) }}
   {%- endcall %}
 
