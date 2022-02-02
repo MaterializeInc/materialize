@@ -396,6 +396,91 @@ impl DebeziumDeduplicationState {
         })
     }
 
+    #[allow(dead_code)]
+    fn from_updates(
+        envelope: DebeziumEnvelope,
+        updates: Vec<(DebeziumStateUpdate, Diff)>,
+    ) -> Option<Self> {
+        let state = Self::new(envelope);
+
+        let mut state = match state {
+            Some(state) => state,
+            None => return None,
+        };
+
+        let mut updates = updates
+            .into_iter()
+            .map(|(update, diff)| (update, 1, diff))
+            .collect();
+
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        let mut messages_processed = 0;
+        let mut max_seen_time = 0;
+        let mut last_position_and_offset = None;
+        let mut started = false;
+        let mut started_padding = false;
+        let mut seen_positions = HashMap::new();
+        let mut seen_snapshot_keys = HashSet::new();
+        let mut filename_to_idx = HashMap::new();
+
+        for (
+            (
+                new_messages_processed,
+                new_last_position_and_offset,
+                new_max_seen_time,
+                seen_position,
+                new_started,
+                new_started_padding,
+                seen_snapshot_key,
+                filename_to_idx_mapping,
+            ),
+            _ts,
+            diff,
+        ) in updates.iter()
+        {
+            messages_processed += *new_messages_processed * *diff as u64;
+            max_seen_time = std::cmp::max(max_seen_time, *new_max_seen_time);
+            if let Some((position, offset)) = new_last_position_and_offset {
+                assert!(last_position_and_offset.is_none());
+                last_position_and_offset = Some((position.clone(), *offset));
+            }
+
+            started = started || *new_started;
+            started_padding = started_padding || *new_started_padding;
+
+            if let Some((position, offset)) = seen_position.as_ref() {
+                seen_positions.insert(position.clone(), *offset);
+            }
+
+            if let Some(key) = seen_snapshot_key.as_ref() {
+                seen_snapshot_keys.insert(key.clone());
+            }
+
+            if let Some((filename, idx)) = filename_to_idx_mapping.as_ref() {
+                filename_to_idx.insert(filename.clone(), *idx);
+            }
+        }
+
+        state.messages_processed = messages_processed;
+        state.last_position_and_offset = last_position_and_offset;
+
+        state.filenames_to_indices = filename_to_idx;
+
+        match state.full.as_mut() {
+            Some(track_full) => {
+                track_full.max_seen_time = max_seen_time;
+                track_full.started = started;
+                track_full.started_padding = started_padding;
+                track_full.seen_positions = seen_positions;
+                track_full.seen_snapshot_keys = seen_snapshot_keys;
+            }
+            None => (),
+        }
+
+        Some(state)
+    }
+
     fn extract_total_order(&self, value: &Row) -> Option<i64> {
         match value.iter().nth(self.projection.transaction_idx).unwrap() {
             Datum::List(l) => match l.iter().nth(self.projection.total_order_idx).unwrap() {
@@ -1037,4 +1122,140 @@ fn fmt_timestamp(ts: impl Into<Option<i64>>) -> DelayedFormat<StrftimeItems<'sta
         .map(|ts| (ts / 1000, (ts % 1000) * 1_000_000))
         .unwrap_or((0, 0));
     NaiveDateTime::from_timestamp(seconds, nanos as u32).format("%Y-%m-%dT%H:%S:%S%.f")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn postgres_insert_row(
+        value: &str,
+        source_info: Option<(i64, bool)>,
+        transaction_info: Option<i64>,
+    ) -> Row {
+        let mut row = Row::default();
+
+        // Push the "before" field.
+        row.push(Datum::Null);
+
+        // And now the "after"
+        row.push_list(&[Datum::String(value)]);
+
+        match source_info {
+            Some((lsn, snapshot)) => {
+                let snapshot = match snapshot {
+                    true => Datum::True,
+                    false => Datum::False,
+                };
+                row.push_list(&[Datum::Int64(lsn), snapshot]);
+            }
+            None => {
+                row.push(Datum::Null);
+            }
+        }
+
+        match transaction_info {
+            Some(total_order) => {
+                row.push_list(&[Datum::Int64(total_order)]);
+            }
+            None => {
+                row.push(Datum::Null);
+            }
+        }
+
+        row
+    }
+
+    fn postgres_debezium_full_envelope() -> DebeziumEnvelope {
+        let projection = DebeziumDedupProjection {
+            source_idx: 2,
+            source_projection: DebeziumSourceProjection::Postgres {
+                lsn: 0,
+                sequence: None,
+            },
+            snapshot_idx: 1,
+            transaction_idx: 0,
+            total_order_idx: 0,
+        };
+        let mode = DebeziumMode::Full(projection);
+        let envelope = DebeziumEnvelope {
+            before_idx: 0,
+            after_idx: 1,
+            mode,
+        };
+
+        envelope
+    }
+
+    #[test]
+    fn usage_example_with_binlog_no_key() {
+        let debug_name = "test";
+
+        let envelope = postgres_debezium_full_envelope();
+
+        let state = DebeziumDeduplicationState::new(envelope.clone());
+        let mut state_updates = Vec::new();
+        let mut state = state.unwrap();
+
+        let row = postgres_insert_row("ciao", Some((0, false)), None);
+        let (should_use, mutations) = state.should_use_record(None, &row, None, None, debug_name);
+        assert_eq!(should_use.unwrap(), true);
+        state_updates.extend(state.apply_mutations(mutations));
+
+        let row = postgres_insert_row("ciao", Some((0, false)), None);
+        let (should_use, mutations) = state.should_use_record(None, &row, None, None, debug_name);
+        assert_eq!(should_use.unwrap(), false);
+        state_updates.extend(state.apply_mutations(mutations));
+
+        let row = postgres_insert_row("hello", Some((1, false)), None);
+        let (should_use, mutations) = state.should_use_record(None, &row, None, None, debug_name);
+        assert_eq!(should_use.unwrap(), true);
+        state_updates.extend(state.apply_mutations(mutations));
+
+        let reconstructed_state = DebeziumDeduplicationState::from_updates(envelope, state_updates);
+        let reconstructed_state = reconstructed_state.unwrap();
+
+        assert_eq!(state, reconstructed_state);
+        assert_eq!(reconstructed_state.messages_processed, 3);
+    }
+
+    #[test]
+    fn usage_example_no_binlog_with_key() {
+        let debug_name = "test";
+
+        let envelope = postgres_debezium_full_envelope();
+
+        let state = DebeziumDeduplicationState::new(envelope.clone());
+        let mut state_updates = Vec::new();
+        let mut state = state.unwrap();
+
+        let key = Row::pack(&[Datum::String("hello")]);
+        let row = postgres_insert_row("ciao", None, None);
+        let (should_use, mutations) =
+            state.should_use_record(Some(key), &row, None, None, debug_name);
+        assert_eq!(should_use.unwrap(), true);
+        state_updates.extend(state.apply_mutations(mutations));
+
+        let key = Row::pack(&[Datum::String("hello")]);
+        let row = postgres_insert_row("ciao", None, None);
+        let (should_use, mutations) =
+            state.should_use_record(Some(key), &row, None, None, debug_name);
+        assert_eq!(should_use.unwrap(), false);
+        state_updates.extend(state.apply_mutations(mutations));
+
+        let other_key = Row::pack(&[Datum::String("other key")]);
+        let row = postgres_insert_row("ciao", None, None);
+        let (should_use, mutations) =
+            state.should_use_record(Some(other_key), &row, None, None, debug_name);
+        assert_eq!(should_use.unwrap(), true);
+        state_updates.extend(state.apply_mutations(mutations));
+
+        let reconstructed_state = DebeziumDeduplicationState::from_updates(envelope, state_updates);
+        let mut reconstructed_state = reconstructed_state.unwrap();
+
+        assert_eq!(state, reconstructed_state);
+        assert_eq!(reconstructed_state.messages_processed, 3);
+        let track_full = reconstructed_state.full.as_mut().unwrap();
+        assert_eq!(track_full.seen_snapshot_keys.len(), 2);
+    }
 }
