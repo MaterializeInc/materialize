@@ -59,7 +59,7 @@ mz-dataflow = { path = "../dataflow" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-dataflowd = { path = "../dataflowd" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
+mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgwire = { path = "../pgwire" }
 mz-pid-file = { path = "../pid-file" }
@@ -89,6 +89,17 @@ tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
 tracing = "0.1.31"
 tracing-subscriber = "0.3.9"
+
+# Deps for a correct opentelemetry setup!
+opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.10"}
+tracing-opentelemetry = "0.17"
+tonic = { version = "0.6.2", features = ["transport"] }
+tokio-native-tls = { version = "0.3.0" }
+native-tls = { version = "0.2.8", features = ["alpn"] }
+hyper-proxy = { version = "0.9.1" }
+hyper-tls = { version = "0.5.0" }
+
 url = "2.2.2"
 uuid = "0.8.2"
 
