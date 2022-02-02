@@ -26,6 +26,9 @@ skip = [
 
     # Waiting for csv, http, and aws_smithy_types to upgrade to v1.0.
     { name = "itoa", version = "0.4.1" },
+
+    # Waiting for tokio to upgrade to mio 0.8
+    { name = "mio", version = "0.7.11" },
 ]
 
 # Use `prost` or `protobuf-native` instead.
@@ -58,6 +61,8 @@ wrappers = [
     "aws-smithy-xml",
     "aws-sig-auth",
     "flatbuffers",
+    "mysql_async",
+    "mysql_common",
     "pprof",
     "proc-macro-crate",
     "prometheus",
@@ -111,6 +116,9 @@ allow-git = [
     # Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into
     # a release.
     "https://github.com/lu-zero/autotools-rs.git",
+
+    # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55
+    "https://github.com/blackbeam/rust_mysql_common.git",
 
     # See the patch in Cargo.toml.
     "https://github.com/MaterializeInc/headers.git",
