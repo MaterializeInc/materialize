@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::io::Error;
-use std::{error, io};
+use std::io;
 
 use bytes::BytesMut;
 use csv::ByteRecord;

@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::error;
 use std::error::Error;
-use std::io;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
