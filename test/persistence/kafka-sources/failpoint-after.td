@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Reading all that data after starting up can take longer than the default timeout.
+$ set-sql-timeout duration=60s
+
 > SELECT COUNT(*) FROM failpoint;
 1000000
 
