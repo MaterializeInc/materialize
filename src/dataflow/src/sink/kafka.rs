@@ -84,6 +84,7 @@ where
 
     fn render_continuous_sink(
         &self,
+        dataflow_as_of: Antichain<Timestamp>,
         _compute_state: &mut crate::render::ComputeState,
         storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
@@ -157,6 +158,7 @@ where
                 .clone()
                 .map(|(desc, _indices)| desc),
             self.value_desc.clone(),
+            dataflow_as_of,
             sink.as_of.clone(),
             source_ts_histories,
             Rc::clone(&shared_frontier),
@@ -989,6 +991,7 @@ fn kafka<G>(
     connector: KafkaSinkConnector,
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
+    dataflow_as_of: Antichain<Timestamp>,
     as_of: SinkAsOf,
     source_timestamp_histories: Vec<TimestampBindingRc>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -1043,6 +1046,7 @@ where
         id,
         name,
         connector,
+        dataflow_as_of,
         as_of,
         shared_gate_ts,
         source_timestamp_histories,
@@ -1067,6 +1071,7 @@ pub fn produce_to_kafka<G>(
     id: GlobalId,
     name: String,
     connector: KafkaSinkConnector,
+    dataflow_as_of: Antichain<Timestamp>,
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     source_timestamp_histories: Vec<TimestampBindingRc>,
@@ -1156,6 +1161,13 @@ where
                         }
                     };
                     shared_gate_ts.set(latest_ts);
+
+                    // Check that the dataflow `as_of` does not present us with
+                    // times that have been advanced beyond what we may feel we
+                    // need to record in the output.
+                    if let Some(latest_ts) = latest_ts {
+                        assert!(dataflow_as_of.less_equal(&latest_ts));
+                    }
 
                     let consistency_state = init
                         .clone()

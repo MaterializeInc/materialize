@@ -34,6 +34,7 @@ where
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &mut self,
+        dataflow_as_of: timely::progress::Antichain<Timestamp>,
         compute_state: &mut crate::render::ComputeState,
         storage_state: &mut crate::render::StorageState,
         tokens: &mut RelevantTokens,
@@ -68,6 +69,7 @@ where
         // if we figure out a protocol for that.
 
         let sink_token = sink_render.render_continuous_sink(
+            dataflow_as_of,
             compute_state,
             storage_state,
             sink,
@@ -214,6 +216,7 @@ where
 
     fn render_continuous_sink(
         &self,
+        dataflow_as_of: timely::progress::Antichain<Timestamp>,
         compute_state: &mut crate::render::ComputeState,
         storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,

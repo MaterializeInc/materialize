@@ -45,6 +45,7 @@ where
 
     fn render_continuous_sink(
         &self,
+        _dataflow_as_of: timely::progress::Antichain<Timestamp>,
         _compute_state: &mut crate::render::ComputeState,
         _storage_state: &mut crate::render::StorageState,
         _sink: &SinkDesc,

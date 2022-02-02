@@ -301,6 +301,7 @@ pub fn build_dataflow<A: Allocate>(
             // Export declared sinks.
             for (sink_id, imports, sink) in sinks {
                 context.export_sink(
+                    dataflow.as_of.clone().unwrap(),
                     compute_state,
                     storage_state,
                     &mut tokens,
