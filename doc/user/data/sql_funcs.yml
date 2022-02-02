@@ -421,9 +421,13 @@
     description: Largest `time_component` <= `val`
     url: date-trunc
 
-  - signature: EXTRACT(extract_expr) -> float
+  - signature: EXTRACT(extract_expr) -> numeric
     description: Specified time component from value
     url: extract
+
+  - signature: 'date_part(time_component: str, val: timestamp) -> float'
+    description: Specified time component from value
+    url: date-part
 
   - signature: mz_logical_timestamp() -> numeric
     description: 'The logical time at which a query executes. Used for temporal filters and internal debugging.'

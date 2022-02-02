@@ -372,6 +372,66 @@ impl MirScalarExpr {
                                     ),
                                 };
                             }
+                        } else if *func == BinaryFunc::ExtractInterval && expr1.is_literal() {
+                            let units = expr1.as_literal_str().unwrap();
+                            *e = match units.parse::<DateTimeUnits>() {
+                                Ok(units) => MirScalarExpr::CallUnary {
+                                    func: UnaryFunc::ExtractInterval(units),
+                                    expr: Box::new(expr2.take()),
+                                },
+                                Err(_) => MirScalarExpr::literal(
+                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    e.typ(&relation_type).scalar_type,
+                                ),
+                            }
+                        } else if *func == BinaryFunc::ExtractTime && expr1.is_literal() {
+                            let units = expr1.as_literal_str().unwrap();
+                            *e = match units.parse::<DateTimeUnits>() {
+                                Ok(units) => MirScalarExpr::CallUnary {
+                                    func: UnaryFunc::ExtractTime(units),
+                                    expr: Box::new(expr2.take()),
+                                },
+                                Err(_) => MirScalarExpr::literal(
+                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    e.typ(&relation_type).scalar_type,
+                                ),
+                            }
+                        } else if *func == BinaryFunc::ExtractTimestamp && expr1.is_literal() {
+                            let units = expr1.as_literal_str().unwrap();
+                            *e = match units.parse::<DateTimeUnits>() {
+                                Ok(units) => MirScalarExpr::CallUnary {
+                                    func: UnaryFunc::ExtractTimestamp(units),
+                                    expr: Box::new(expr2.take()),
+                                },
+                                Err(_) => MirScalarExpr::literal(
+                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    e.typ(&relation_type).scalar_type,
+                                ),
+                            }
+                        } else if *func == BinaryFunc::ExtractTimestampTz && expr1.is_literal() {
+                            let units = expr1.as_literal_str().unwrap();
+                            *e = match units.parse::<DateTimeUnits>() {
+                                Ok(units) => MirScalarExpr::CallUnary {
+                                    func: UnaryFunc::ExtractTimestampTz(units),
+                                    expr: Box::new(expr2.take()),
+                                },
+                                Err(_) => MirScalarExpr::literal(
+                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    e.typ(&relation_type).scalar_type,
+                                ),
+                            }
+                        } else if *func == BinaryFunc::ExtractDate && expr1.is_literal() {
+                            let units = expr1.as_literal_str().unwrap();
+                            *e = match units.parse::<DateTimeUnits>() {
+                                Ok(units) => MirScalarExpr::CallUnary {
+                                    func: UnaryFunc::ExtractDate(units),
+                                    expr: Box::new(expr2.take()),
+                                },
+                                Err(_) => MirScalarExpr::literal(
+                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    e.typ(&relation_type).scalar_type,
+                                ),
+                            }
                         } else if *func == BinaryFunc::DatePartInterval && expr1.is_literal() {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {

@@ -616,3 +616,36 @@ pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<u8>, anyhow::Error> {
         _ => unreachable!(),
     })
 }
+
+/// A type that can represent Real Numbers. Useful for interoperability between Numeric and
+/// floating point.
+pub trait DecimalLike:
+    From<u8>
+    + From<u16>
+    + From<u32>
+    + From<i8>
+    + From<i16>
+    + From<i32>
+    + From<f32>
+    + From<f64>
+    + std::ops::Add<Output = Self>
+    + std::ops::Sub<Output = Self>
+    + std::ops::Mul<Output = Self>
+    + std::ops::Div<Output = Self>
+{
+    /// Used to do value-to-value conversions while consuming the input value. Depending on the
+    /// implementation it may be potentially lossy.
+    fn lossy_from(i: i64) -> Self;
+}
+
+impl DecimalLike for f64 {
+    fn lossy_from(i: i64) -> Self {
+        i as f64
+    }
+}
+
+impl DecimalLike for Numeric {
+    fn lossy_from(i: i64) -> Self {
+        Numeric::from(i)
+    }
+}

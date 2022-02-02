@@ -346,6 +346,8 @@ func_date_trunc ::=
   'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'
 func_extract ::=
   'EXTRACT' '(' ( 'EPOCH' | 'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'QUARTER' | 'MONTH' | 'WEEK' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MICROSECOND' | 'MILLISECOND' | 'DOW' | 'ISODOW' | 'DOY' ) 'FROM' val ')'
+func_date_part ::=
+  'date_part' '(' "'" ( 'epoch' | 'millennium' | 'century' | 'decade' | 'year' | 'quarter' | 'month' | 'week' | 'dat' | 'hour' | 'minute' | 'second' | 'microsecond' | 'millisecond' | 'dow' | 'isodow' | 'doy' ) "'" ',' val ')'
 func_length ::=
   'length' '(' str (',' encoding_name)? ')'
 func_substring ::=

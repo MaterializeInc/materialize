@@ -157,7 +157,7 @@ SELECT extract(minute FROM TIMESTAMP '2010-01-10 12:13:14.1')
 query R
 SELECT extract(second FROM TIMESTAMP '2010-01-10 12:13:14.1')
 ----
-14.100
+14.1
 
 skipif postgresql # millisecond is not supported
 query R
@@ -197,7 +197,7 @@ SELECT extract(minute FROM INTERVAL '23:10' MINUTE TO SECOND)
 query R
 SELECT extract(second FROM INTERVAL '10:20.30' MINUTE TO SECOND)
 ----
-20.300
+20.3
 
 skipif postgresql # millisecond is not supported
 query R
@@ -208,4 +208,4 @@ SELECT extract(millisecond FROM INTERVAL '20.3040' SECOND)
 query R
 SELECT extract(epoch FROM INTERVAL '10:20.30' MINUTE TO SECOND)
 ----
-620.300
+620.3

@@ -1755,6 +1755,13 @@ lazy_static! {
                 params!(Interval, Timestamp, Timestamp) => VariadicFunc::DateBinTimestamp, 6177;
                 params!(Interval, TimestampTz, TimestampTz) => VariadicFunc::DateBinTimestampTz, 6178;
             },
+            "extract" => Scalar {
+                params!(String, Interval) => BinaryFunc::ExtractInterval, 6204;
+                params!(String, Time) => BinaryFunc::ExtractTime, 6200;
+                params!(String, Timestamp) => BinaryFunc::ExtractTimestamp, 6202;
+                params!(String, TimestampTz) => BinaryFunc::ExtractTimestampTz, 6203;
+                params!(String, Date) => BinaryFunc::ExtractDate, 6199;
+            },
             "date_part" => Scalar {
                 params!(String, Interval) => BinaryFunc::DatePartInterval, 1172;
                 params!(String, Time) => BinaryFunc::DatePartTime, 1385;
