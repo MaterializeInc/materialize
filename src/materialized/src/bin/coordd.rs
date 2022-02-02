@@ -7,15 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::StreamExt;
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
 
+use futures::StreamExt;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 use materialized::http;
 use materialized::mux::Mux;
@@ -81,19 +82,35 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let dataflow_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
 
+    let experimental_mode = false;
     let mut metrics_registry = MetricsRegistry::new();
+    let coord_storage = coord::catalog::storage::Connection::open(
+        &args.data_directory.join("catalog"),
+        Some(experimental_mode),
+    )?;
+    let persister = coord::PersistConfig::disabled()
+        .init(
+            // TODO(benesch): if we were enabling persistence, we'd want to use
+            // a stable reentrance ID here. Using a random UUID essentially
+            // amounts to "no reentrance allowed", which provides maximum
+            // safety.
+            Uuid::new_v4(),
+            materialized::BUILD_INFO,
+            &metrics_registry,
+        )
+        .await?;
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client: Box::new(dataflow_client),
         logging: None,
-        data_directory: &args.data_directory,
+        storage: coord_storage,
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: Some(Duration::from_millis(1)),
-        experimental_mode: false,
+        experimental_mode,
         disable_user_indexes: false,
         safe_mode: false,
         build_info: &materialized::BUILD_INFO,
         metrics_registry: metrics_registry.clone(),
-        persist: coord::PersistConfig::disabled(),
+        persister,
         now: SYSTEM_TIME.clone(),
     })
     .await?;

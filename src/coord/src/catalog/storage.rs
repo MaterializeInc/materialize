@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::path::Path;
+
 use itertools::Itertools;
-use ore::soft_assert_eq;
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
@@ -17,12 +18,12 @@ use serde::{Deserialize, Serialize};
 use dataflow_types::sources::MzOffset;
 use expr::{GlobalId, PartitionId};
 use ore::cast::CastFrom;
+use ore::soft_assert_eq;
 use repr::Timestamp;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName};
 use uuid::Uuid;
 
-use crate::catalog::config::Config;
 use crate::catalog::error::{Error, ErrorKind};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
@@ -151,11 +152,13 @@ const MIGRATIONS: &[&str] = &[
 #[derive(Debug)]
 pub struct Connection {
     inner: rusqlite::Connection,
+    experimental_mode: bool,
+    cluster_id: Uuid,
 }
 
 impl Connection {
-    pub fn open(config: &Config) -> Result<(Connection, bool, Uuid), Error> {
-        let mut sqlite = rusqlite::Connection::open(&config.path)?;
+    pub fn open(path: &Path, experimental_mode: Option<bool>) -> Result<Connection, Error> {
+        let mut sqlite = rusqlite::Connection::open(path)?;
 
         // Validate application ID.
         let tx = sqlite.transaction()?;
@@ -188,11 +191,11 @@ impl Connection {
             tx.commit()?;
         }
 
-        let experimental_mode =
-            Self::set_or_get_experimental_mode(&mut sqlite, config.experimental_mode)?;
-        let cluster_id = Self::set_or_get_cluster_id(&mut sqlite)?;
-
-        Ok((Connection { inner: sqlite }, experimental_mode, cluster_id))
+        Ok(Connection {
+            experimental_mode: Self::set_or_get_experimental_mode(&mut sqlite, experimental_mode)?,
+            cluster_id: Self::set_or_get_cluster_id(&mut sqlite)?,
+            inner: sqlite,
+        })
     }
 
     /// Sets catalog's `experimental_mode` setting on initialization or gets
@@ -375,6 +378,14 @@ impl Connection {
         Ok(Transaction {
             inner: self.inner.transaction()?,
         })
+    }
+
+    pub fn cluster_id(&self) -> Uuid {
+        self.cluster_id
+    }
+
+    pub fn experimental_mode(&self) -> bool {
+        self.experimental_mode
     }
 }
 

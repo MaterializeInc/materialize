@@ -57,7 +57,7 @@ async fn datadriven() {
                             defaults: vec![Expr::null(); 0],
                             conn_id: None,
                             depends_on: vec![],
-                            persist: None,
+                            persist_name: None,
                         }),
                     );
                     id += 1;

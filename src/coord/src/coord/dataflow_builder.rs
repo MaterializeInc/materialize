@@ -22,6 +22,7 @@ use ore::stack::maybe_grow;
 pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     pub indexes: &'a ArrangementFrontiers<Timestamp>,
+    pub persister: &'a PersisterWithConfig,
     /// A handle to the storage abstraction, which describe sources from their identifier.
     pub storage: &'a dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
 }
@@ -32,6 +33,7 @@ impl Coordinator {
         DataflowBuilder {
             catalog: self.catalog.state(),
             indexes: &self.indexes,
+            persister: &self.persister,
             storage: &self.dataflow_client,
         }
     }
@@ -125,8 +127,7 @@ impl<'a> DataflowBuilder<'a> {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
 
                         let persist_desc = self
-                            .catalog
-                            .persist()
+                            .persister
                             .load_source_persist_desc(&source)
                             .map_err(CoordError::Persistence)?;
 
