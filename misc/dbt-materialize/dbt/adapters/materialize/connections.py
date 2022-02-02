@@ -16,7 +16,12 @@
 
 from dataclasses import dataclass
 
+import dbt.exceptions
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
+from dbt.semver import versions_compatible
+
+# If you bump this version, bump it in README.md too.
+SUPPORTED_MATERIALIZE_VERSIONS = ">=0.12.0"
 
 
 @dataclass
@@ -32,9 +37,20 @@ class MaterializeConnectionManager(PostgresConnectionManager):
     @classmethod
     def open(cls, connection):
         connection = super().open(connection)
+
         # Prevents psycopg connection from automatically opening transactions.
         # More info: https://www.psycopg.org/docs/usage.html#transactions-control
         connection.handle.autocommit = True
+
+        cursor = connection.handle.cursor()
+        cursor.execute("SELECT mz_version()")
+        mz_version = cursor.fetchone()[0].split()[0].strip("v")
+        if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
+            raise dbt.exceptions.RuntimeException(
+                f"Detected unsupported Materialize version {mz_version}\n"
+                f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
+            )
+
         return connection
 
     # Disable transactions. Materialize transactions do not support arbitrary

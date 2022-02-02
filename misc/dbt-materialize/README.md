@@ -11,6 +11,11 @@ run:
 pip install dbt-materialize
 ```
 
+## Requirements
+
+<!-- If you update this, bump the constraint in connections.py too. -->
+dbt-materialize requires Materialize v0.12.0+.
+
 ## Configuring your profile
 
 [Materialize] is based on the PostgreSQL database protocol, so use the
