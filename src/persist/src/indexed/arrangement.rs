@@ -22,11 +22,13 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::Error;
-use crate::indexed::background::{CompactTraceReq, CompactTraceRes};
+use crate::indexed::background::{
+    CompactTraceReq, CompactTraceRes, DrainUnsealedReq, DrainUnsealedRes,
+};
 use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{
-    ArrangementMeta, BlobTraceBatch, TraceBatchMeta, UnsealedBatchMeta,
+    ArrangementMeta, BlobTraceBatch, TraceBatchMeta, UnsealedBatchMeta, UnsealedSnapshotMeta,
 };
 use crate::indexed::{BlobUnsealedBatch, Id, Snapshot};
 use crate::pfuture::PFuture;
@@ -198,7 +200,9 @@ impl Arrangement {
     ) -> Result<ArrangementSnapshot, Error> {
         let seal_frontier = self.get_seal();
         let trace = self.trace_snapshot(blob);
-        let unsealed = self.unsealed_snapshot(trace.ts_upper.clone(), Antichain::new(), blob)?;
+        let unsealed = self
+            .unsealed_snapshot(trace.ts_upper.clone(), Antichain::new())?
+            .fetch(blob);
         Ok(ArrangementSnapshot(unsealed, trace, seqno, seal_frontier))
     }
 
@@ -313,12 +317,11 @@ impl Arrangement {
 
     /// Returns a consistent read of the updates contained in this unsealed
     /// matching the given filters (in practice, everything not in Trace).
-    pub fn unsealed_snapshot<L: BlobRead>(
+    pub fn unsealed_snapshot(
         &self,
         ts_lower: Antichain<u64>,
         ts_upper: Antichain<u64>,
-        blob: &BlobCache<L>,
-    ) -> Result<UnsealedSnapshot, Error> {
+    ) -> Result<UnsealedSnapshotMeta, Error> {
         if PartialOrder::less_than(&ts_upper, &ts_lower) {
             return Err(Error::from(format!(
                 "invalid snapshot request: ts_upper {:?} is less than ts_lower {:?}",
@@ -334,11 +337,11 @@ impl Arrangement {
             // - ts_lower <= hi
             // - ts_upper > lo
             if ts_lower.less_equal(&meta.ts_upper) && !ts_upper.less_equal(&meta.ts_lower) {
-                batches.push(blob.get_unsealed_batch_async(&meta.key, CacheHint::MaybeAdd));
+                batches.push(meta.clone());
             }
         }
 
-        Ok(UnsealedSnapshot {
+        Ok(UnsealedSnapshotMeta {
             ts_lower,
             ts_upper,
             batches,
@@ -349,12 +352,23 @@ impl Arrangement {
     /// seal frontier into the trace and does any necessary resulting eviction
     /// work to remove unnecessary batches.
     pub fn unsealed_drain<L: Blob>(&mut self, blob: &mut BlobCache<L>) -> Result<(), Error> {
+        let req = match self.unsealed_next_drain_req()? {
+            Some(req) => req,
+            None => return Ok(()),
+        };
+        let res = Self::drain_unsealed_blocking(blob, req)?;
+        self.unsealed_handle_drain_response(res);
+        Ok(())
+    }
+
+    /// Get the next available drain work from the unsealed, if some exists.
+    pub fn unsealed_next_drain_req(&self) -> Result<Option<DrainUnsealedReq>, Error> {
         // If the trace's physical frontier matches the arrangement's logical
         // seal frontier, then nothing to do.
         let seal = self.get_seal();
         let trace_upper = self.trace_ts_upper();
         if seal == trace_upper {
-            return Ok(());
+            return Ok(None);
         }
 
         let desc = Description::new(
@@ -368,7 +382,17 @@ impl Arrangement {
 
         // Move a batch of data from unsealed into trace by reading a
         // snapshot from unsealed...
-        let snap = self.unsealed_snapshot(desc.lower().clone(), desc.upper().clone(), blob)?;
+        let snap = self.unsealed_snapshot(desc.lower().clone(), desc.upper().clone())?;
+        Ok(Some(DrainUnsealedReq { desc, snap }))
+    }
+
+    /// Copies unsealed data matching the specified description into a new trace
+    /// batch.
+    pub fn drain_unsealed_blocking<B: Blob>(
+        blob: &BlobCache<B>,
+        req: DrainUnsealedReq,
+    ) -> Result<DrainUnsealedRes, Error> {
+        let snap = req.snap.clone().fetch(&blob);
         let mut updates = snap
             .into_iter()
             .collect::<Result<Vec<_>, Error>>()
@@ -379,16 +403,54 @@ impl Arrangement {
         // everything works perfectly well when the trace upper hasn't yet
         // caught up to sealed.
         if updates.is_empty() {
-            return Ok(());
+            return Ok(DrainUnsealedRes { req, drained: None });
         }
 
         // Trace batches are required to be sorted and consolidated by ((k, v), t)
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
-        // ...and atomically swapping that snapshot's data into trace.
         let updates = updates.iter().collect::<ColumnarRecordsVec>().into_inner();
-        let batch = BlobTraceBatch { desc, updates };
-        self.trace_append(batch, blob)
+        let batch = BlobTraceBatch {
+            desc: req.desc.clone(),
+            updates,
+        };
+
+        let desc = batch.desc.clone();
+        let key = Self::new_blob_key();
+        let (format, size_bytes) = blob.set_trace_batch(key.clone(), batch)?;
+        // Batches are inserted into the trace with compaction level set to 0.
+        let drained = TraceBatchMeta {
+            key,
+            format,
+            desc,
+            level: 0,
+            size_bytes,
+        };
+
+        Ok(DrainUnsealedRes {
+            req,
+            drained: Some(drained),
+        })
+    }
+
+    /// Handle an externally completed trace compaction request.
+    ///
+    /// TODO: Call unsealed_evict at the end of this and return a list of
+    /// unsealed batches that can now be physically deleted after the drain step
+    /// is committed to durable storage
+    pub fn unsealed_handle_drain_response(&mut self, res: DrainUnsealedRes) {
+        let batch = match res.drained {
+            Some(batch) => batch,
+            None => return,
+        };
+
+        if &self.trace_ts_upper() != batch.desc.lower() {
+            // This trace batch doesn't line up with the ones we have. Nothing
+            // to do here.
+            return;
+        }
+
+        self.trace_batches.push(batch);
     }
 
     /// Remove all batches containing only data strictly before the trace's
@@ -539,35 +601,6 @@ impl Arrangement {
         self.since = since;
     }
 
-    /// Writes the given batch to [Blob] storage and logically adds the contained
-    /// updates to this trace.
-    pub fn trace_append<B: Blob>(
-        &mut self,
-        batch: BlobTraceBatch,
-        blob: &mut BlobCache<B>,
-    ) -> Result<(), Error> {
-        if &self.trace_ts_upper() != batch.desc.lower() {
-            return Err(Error::from(format!(
-                "batch lower doesn't match trace upper {:?}: {:?}",
-                self.trace_ts_upper(),
-                batch.desc
-            )));
-        }
-        let desc = batch.desc.clone();
-        let key = Self::new_blob_key();
-        let (format, size_bytes) = blob.set_trace_batch(key.clone(), batch)?;
-        // As mentioned above, batches are inserted into the trace with compaction
-        // level set to 0.
-        self.trace_batches.push(TraceBatchMeta {
-            key,
-            format,
-            desc,
-            level: 0,
-            size_bytes,
-        });
-        Ok(())
-    }
-
     /// Returns a consistent read of all the updates contained in this trace.
     pub fn trace_snapshot<B: BlobRead>(&self, blob: &BlobCache<B>) -> TraceSnapshot {
         let ts_upper = self.trace_ts_upper();
@@ -656,7 +689,7 @@ pub struct UnsealedSnapshot {
     pub ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     pub ts_upper: Antichain<u64>,
-    batches: Vec<PFuture<Arc<BlobUnsealedBatch>>>,
+    pub(crate) batches: Vec<PFuture<Arc<BlobUnsealedBatch>>>,
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
@@ -1014,7 +1047,9 @@ mod tests {
         hi: Option<u64>,
     ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
         let hi = hi.map_or_else(Antichain::new, Antichain::from_elem);
-        let snapshot = arrangement.unsealed_snapshot(Antichain::from_elem(lo), hi, &blob)?;
+        let snapshot = arrangement
+            .unsealed_snapshot(Antichain::from_elem(lo), hi)?
+            .fetch(&blob);
         let updates = snapshot.read_to_end()?;
         Ok(updates)
     }
@@ -1396,29 +1431,38 @@ mod tests {
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
         t.update_seal(10);
 
-        let batch = BlobTraceBatch {
-            desc: desc_from(0, 1, 0),
+        let batch = BlobUnsealedBatch {
+            desc: SeqNo(0)..SeqNo(1),
             updates: columnar_records(vec![
                 (("k".into(), "v".into()), 0, 1),
                 (("k2".into(), "v2".into()), 0, 1),
             ]),
         };
+        assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
+        t.update_seal(1);
+        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(t.trace_batches.len(), 1);
 
-        assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
-        let batch = BlobTraceBatch {
-            desc: desc_from(1, 3, 0),
+        let batch = BlobUnsealedBatch {
+            desc: SeqNo(1)..SeqNo(2),
             updates: columnar_records(vec![
                 (("k".into(), "v".into()), 2, 1),
                 (("k3".into(), "v3".into()), 2, 1),
             ]),
         };
-        assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
+        assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
+        t.update_seal(3);
+        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(t.trace_batches.len(), 2);
 
-        let batch = BlobTraceBatch {
-            desc: desc_from(3, 9, 0),
+        let batch = BlobUnsealedBatch {
+            desc: SeqNo(2)..SeqNo(3),
             updates: columnar_records(vec![(("k".into(), "v".into()), 5, 1)]),
         };
-        assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
+        assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
+        t.update_seal(9);
+        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(t.trace_batches.len(), 3);
 
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
         t.allow_compaction(Antichain::from_elem(3));
@@ -1477,11 +1521,14 @@ mod tests {
 
         t.update_seal(11);
 
-        let batch = BlobTraceBatch {
-            desc: desc_from(9, 10, 0),
+        let batch = BlobUnsealedBatch {
+            desc: SeqNo(3)..SeqNo(4),
             updates: columnar_records(vec![(("k".into(), "v".into()), 9, 1)]),
         };
-        assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
+        assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
+        t.update_seal(10);
+        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
         let (written_bytes, deleted_batches) = trace_step(&mut t, &maintainer)?;
@@ -1551,27 +1598,26 @@ mod tests {
         let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
 
-        t.update_seal(10);
-
         // Add updates to both the trace and the unsealeds.
-        let batch = BlobTraceBatch {
-            desc: desc_from(0, 2, 0),
+        let batch = BlobUnsealedBatch {
+            desc: SeqNo(0)..SeqNo(1),
             updates: columnar_records(vec![
                 (("k1".into(), "v1".into()), 0, 1),
                 (("k2".into(), "v2".into()), 1, 1),
             ]),
         };
-        t.trace_append(batch, &mut blob)?;
+        assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
+        t.update_seal(10);
+        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
 
         let unsealed_updates = vec![
             (("k3".into(), "v3".into()), 10, 1),
             (("k4".into(), "v4".into()), 11, 1),
         ];
         let batch = BlobUnsealedBatch {
-            desc: SeqNo(0)..SeqNo(1),
+            desc: SeqNo(1)..SeqNo(2),
             updates: columnar_records(unsealed_updates),
         };
-
         t.unsealed_append(batch, &mut blob)?;
 
         // Allow compaction beyond the seal frontier of [10].
