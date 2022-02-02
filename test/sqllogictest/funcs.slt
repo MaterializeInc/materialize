@@ -767,6 +767,36 @@ SELECT tanh(NULL)
 NULL
 
 query R
+SELECT asin(NULL)
+----
+NULL
+
+query R
+SELECT asinh(NULL)
+----
+NULL
+
+query R
+SELECT acos(NULL)
+----
+NULL
+
+query R
+SELECT acosh(NULL)
+----
+NULL
+
+query R
+SELECT atan(NULL)
+----
+NULL
+
+query R
+SELECT atanh(NULL)
+----
+NULL
+
+query R
 SELECT cot(NULL)
 ----
 NULL
@@ -802,6 +832,36 @@ SELECT tanh('NaN'::double)
 NaN
 
 query R
+SELECT asin('NaN'::double)
+----
+NaN
+
+query R
+SELECT asinh('NaN'::double)
+----
+NaN
+
+query R
+SELECT acos('NaN'::double)
+----
+NaN
+
+query R
+SELECT acosh('NaN'::double)
+----
+NaN
+
+query R
+SELECT atan('NaN'::double)
+----
+NaN
+
+query R
+SELECT atanh('NaN'::double)
+----
+NaN
+
+query R
 SELECT cot('NaN'::double)
 ----
 NaN
@@ -833,6 +893,34 @@ SELECT tan(0::double)
 
 query R
 SELECT tanh(0::double)
+----
+0.000
+
+query R
+SELECT asin(0::double)
+----
+0.000
+
+query R
+SELECT asinh(0::double)
+----
+0.000
+
+query R
+SELECT acos(0::double)
+----
+1.571
+
+query error function acosh is defined for numbers greater than or equal to 1
+SELECT acosh(0::double)
+
+query R
+SELECT atan(0::double)
+----
+0.000
+
+query R
+SELECT atanh(0::double)
 ----
 0.000
 
@@ -877,6 +965,36 @@ SELECT tanh(1::double)
 0.762
 
 query R
+SELECT asin(1::double)
+----
+1.571
+
+query R
+SELECT asinh(1::double)
+----
+0.881
+
+query R
+SELECT acos(1::double)
+----
+0.000
+
+query R
+SELECT acosh(1::double)
+----
+0.000
+
+query R
+SELECT atan(1::double)
+----
+0.785
+
+query R
+SELECT atanh(1::double)
+----
+inf
+
+query R
 SELECT cot(1.01::double)
 ----
 0.628
@@ -884,16 +1002,32 @@ SELECT cot(1.01::double)
 query error function sin is only defined for finite arguments
 SELECT sin('inf'::double)
 
+query error function asin is defined for numbers between -1 and 1 inclusive
+SELECT asin('inf'::double)
+
 query R
 SELECT sinh('inf'::double)
+----
+inf
+
+query R
+SELECT asinh('inf'::double)
 ----
 inf
 
 query error function cos is only defined for finite arguments
 SELECT cos('inf'::double)
 
+query error function acos is defined for numbers between -1 and 1 inclusive
+SELECT acos('inf'::double)
+
 query R
 SELECT cosh('inf'::double)
+----
+inf
+
+query R
+SELECT acosh('inf'::double)
 ----
 inf
 
@@ -901,9 +1035,17 @@ query error function tan is only defined for finite arguments
 SELECT tan('inf'::double)
 
 query R
+SELECT atan('inf'::double)
+----
+1.571
+
+query R
 SELECT tanh('inf'::double)
 ----
 1.000
+
+query error function atanh is defined for numbers between -1 and 1 inclusive
+SELECT atanh('inf'::double)
 
 query error function cot is only defined for finite arguments
 SELECT cot('inf'::double)
@@ -911,26 +1053,48 @@ SELECT cot('inf'::double)
 query error function sin is only defined for finite arguments
 SELECT sin('-inf'::double)
 
+query error function asin is defined for numbers between -1 and 1 inclusive
+SELECT asin('-inf'::double)
+
 query R
 SELECT sinh('-inf'::double)
+----
+-inf
+
+query R
+SELECT asinh('-inf'::double)
 ----
 -inf
 
 query error function cos is only defined for finite arguments
 SELECT cos('-inf'::double)
 
+query error function acos is defined for numbers between -1 and 1 inclusive
+SELECT acos('-inf'::double)
+
 query R
 SELECT cosh('-inf'::double)
 ----
 inf
 
+query error function acosh is defined for numbers greater than or equal to 1
+SELECT acosh('-inf'::double)
+
 query error function tan is only defined for finite arguments
 SELECT tan('-inf'::double)
+
+query R
+SELECT atan('-inf'::double)
+----
+-1.571
 
 query R
 SELECT tanh('-inf'::double)
 ----
 -1.000
+
+query error atanh is defined for numbers between -1 and 1 inclusive
+SELECT atanh('-inf'::double)
 
 # Use the more reasonable number representation, as the standard mode
 # causes all sorts of weird representation issues with exp and log:

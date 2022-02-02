@@ -111,6 +111,9 @@ changes that have not yet been documented.
   Previous versions of materialize would experience data loss unless
   `deduplication=full` was used.
 
+- Support the inverse [trigonometric functions](/sql/functions/#trigonometric-func)
+  `asin`, `asinh`, `acos`, `acosh`, `atan`, `atanh`.
+
 {{< comment >}}
 Only add new release notes above this line.
 

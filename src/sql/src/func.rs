@@ -1693,8 +1693,14 @@ lazy_static! {
             "cos" => Scalar {
                 params!(Float64) => UnaryFunc::Cos(func::Cos), 1605;
             },
+            "acos" => Scalar {
+                params!(Float64) => UnaryFunc::Acos(func::Acos), 1601;
+            },
             "cosh" => Scalar {
                 params!(Float64) => UnaryFunc::Cosh(func::Cosh), 2463;
+            },
+            "acosh" => Scalar {
+                params!(Float64) => UnaryFunc::Acosh(func::Acosh), 2466;
             },
             "cot" => Scalar {
                 params!(Float64) => UnaryFunc::Cot(func::Cot), 1607;
@@ -2001,8 +2007,14 @@ lazy_static! {
             "sin" => Scalar {
                 params!(Float64) => UnaryFunc::Sin(func::Sin), 1604;
             },
+            "asin" => Scalar {
+                params!(Float64) => UnaryFunc::Asin(func::Asin), 1600;
+            },
             "sinh" => Scalar {
                 params!(Float64) => UnaryFunc::Sinh(func::Sinh), 2462;
+            },
+            "asinh" => Scalar {
+                params!(Float64) => UnaryFunc::Asinh(func::Asinh), 2465;
             },
             "split_part" => Scalar {
                 params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
@@ -2043,8 +2055,14 @@ lazy_static! {
             "tan" => Scalar {
                 params!(Float64) => UnaryFunc::Tan(func::Tan), 1606;
             },
+            "atan" => Scalar {
+                params!(Float64) => UnaryFunc::Atan(func::Atan), 1602;
+            },
             "tanh" => Scalar {
                 params!(Float64) => UnaryFunc::Tanh(func::Tanh), 2464;
+            },
+            "atanh" => Scalar {
+                params!(Float64) => UnaryFunc::Atanh(func::Atanh), 2467;
             },
             "timezone" => Scalar {
                 params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;

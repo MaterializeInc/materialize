@@ -1140,6 +1140,13 @@ impl CheckedRecursion for MirScalarExprVisitor {
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub enum DomainLimit {
+    None,
+    Inclusive(i64),
+    Exclusive(i64),
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum EvalError {
     DateBinOutOfRange(String),
     DivisionByZero,
@@ -1192,6 +1199,7 @@ pub enum EvalError {
     InfinityOutOfDomain(String),
     NegativeOutOfDomain(String),
     ZeroOutOfDomain(String),
+    OutOfDomain(DomainLimit, DomainLimit, String),
     ComplexOutOfRange(String),
     MultipleRowsFromSubquery,
     Undefined(String),
@@ -1284,6 +1292,25 @@ impl fmt::Display for EvalError {
             }
             EvalError::ZeroOutOfDomain(s) => {
                 write!(f, "function {} is not defined for zero", s)
+            }
+            EvalError::OutOfDomain(lower, upper, s) => {
+                use DomainLimit::*;
+                write!(f, "function {s} is defined for numbers ")?;
+                match (lower, upper) {
+                    (Inclusive(n), None) => write!(f, "greater than or equal to {n}"),
+                    (Exclusive(n), None) => write!(f, "greater than {n}"),
+                    (None, Inclusive(n)) => write!(f, "less than or equal to {n}"),
+                    (None, Exclusive(n)) => write!(f, "less than {n}"),
+                    (Inclusive(lo), Inclusive(hi)) => write!(f, "between {lo} and {hi} inclusive"),
+                    (Exclusive(lo), Exclusive(hi)) => write!(f, "between {lo} and {hi} exclusive"),
+                    (Inclusive(lo), Exclusive(hi)) => {
+                        write!(f, "between {lo} inclusive and {hi} exclusive")
+                    }
+                    (Exclusive(lo), Inclusive(hi)) => {
+                        write!(f, "between {lo} exclusive and {hi} inclusive")
+                    }
+                    (None, None) => panic!("invalid domain error"),
+                }
             }
             EvalError::ComplexOutOfRange(s) => {
                 write!(f, "function {} cannot return complex numbers", s)
