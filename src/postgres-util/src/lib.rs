@@ -170,7 +170,7 @@ impl TryFrom<TableInfo> for PgTable<Raw> {
     fn try_from(tbl: TableInfo) -> Result<Self, anyhow::Error> {
         let mut pg_table: PgTable<Raw> = PgTable {
             oid: tbl.rel_id,
-            name: format!("{}.{}",tbl.namespace,tbl.name),
+            name: format!("{}.{}", tbl.namespace, tbl.name),
             columns: Vec::new(),
         };
         for pg_col in tbl.schema {
