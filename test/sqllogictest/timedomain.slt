@@ -17,16 +17,19 @@ simple
 BEGIN;
 SELECT row(1, 2);
 SELECT 1 FROM mz_types LIMIT 1;
+SELECT 3 FROM pg_type LIMIT 1; -- mz_catalog and pg_catalog should be treated as the same schema
 ----
 COMPLETE 0
 (1,2)
 COMPLETE 1
 1
 COMPLETE 1
+3
+COMPLETE 1
 
 # But we can only change timedomains once.
 query error Transactions can only reference objects in the same timedomain.
-SELECT 3 FROM pg_type LIMIT 1;
+SELECT * FROM t
 
 # Referring to the timestamp prevents including sources later.
 simple
@@ -59,7 +62,7 @@ COMPLETE 1
 COMPLETE 1
 
 query error Transactions can only reference objects in the same timedomain.
-SELECT 3 FROM pg_type LIMIT 1;
+SELECT * FROM t;
 
 statement ok
 ROLLBACK
