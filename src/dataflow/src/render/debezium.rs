@@ -59,6 +59,14 @@ pub(crate) fn render<G: Scope>(
                                     }
                                     None => continue,
                                 };
+
+                                // Ignore out of order updates that have been already overwritten
+                                if let Some((_, position)) = current_values.get(&key) {
+                                    if result.position < *position {
+                                        continue;
+                                    }
+                                }
+
                                 let value = match result.value {
                                     Some(Ok(row)) => match row.iter().nth(after_idx).unwrap() {
                                         Datum::List(after) => {
@@ -67,7 +75,9 @@ pub(crate) fn render<G: Scope>(
                                             Some(Ok(row))
                                         }
                                         Datum::Null => None,
-                                        d => panic!("type error: expected record, found {:?}", d),
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
                                     },
                                     Some(Err(err)) => Some(Err(DataflowError::from(err))),
                                     None => continue,
@@ -76,13 +86,13 @@ pub(crate) fn render<G: Scope>(
                                 let retraction = match value {
                                     Some(value) => {
                                         session.give((value.clone(), cap.time().clone(), 1));
-                                        current_values.insert(key, value)
+                                        current_values.insert(key, (value, result.position))
                                     }
                                     None => current_values.remove(&key),
                                 };
 
-                                if let Some(res) = retraction {
-                                    session.give((res, cap.time().clone(), -1));
+                                if let Some((value, _)) = retraction {
+                                    session.give((value, cap.time().clone(), -1));
                                 }
                             }
                         }
@@ -93,7 +103,8 @@ pub(crate) fn render<G: Scope>(
         }
         _ => input
             .unary(Pipeline, "envelope-debezium", move |_, _| {
-                let mut state = DebeziumDeduplicationState::new(envelope.clone());
+                let mut dedup_state = HashMap::new();
+                let envelope = envelope.clone();
                 let mut data = vec![];
                 move |input, output| {
                     while let Some((cap, refmut_data)) = input.next() {
@@ -116,7 +127,12 @@ pub(crate) fn render<G: Scope>(
                                 None => continue,
                             };
 
-                            let should_use = match state {
+                            let partition_dedup = dedup_state
+                                .entry(result.partition.clone())
+                                .or_insert_with(|| {
+                                    DebeziumDeduplicationState::new(envelope.clone())
+                                });
+                            let should_use = match partition_dedup {
                                 Some(ref mut s) => {
                                     let res = s.should_use_record(
                                         key,

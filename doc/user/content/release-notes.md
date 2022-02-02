@@ -107,6 +107,10 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Correctly deduplicate debezium topics that have more than one partition.
+  Previous versions of materialize would experience data loss unless
+  `deduplication=full` was used.
+
 {{< comment >}}
 Only add new release notes above this line.
 

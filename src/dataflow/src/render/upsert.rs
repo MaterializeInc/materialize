@@ -326,6 +326,7 @@ where
                         value: new_value,
                         position: new_position,
                         upstream_time_millis: _,
+                        partition: _,
                         metadata,
                     } in vector.drain(..)
                     {
