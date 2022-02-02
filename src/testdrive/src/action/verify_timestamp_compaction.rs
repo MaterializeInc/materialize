@@ -56,7 +56,7 @@ impl Action for VerifyTimestampCompactionAction {
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));
             Retry::default()
                 .initial_backoff(Duration::from_secs(1))
-                .max_duration(Duration::from_secs(10))
+                .max_duration(Duration::from_secs(30))
                 .retry_async(|retry_state| {
                     let initial_highest = Arc::clone(&initial_highest_base);
                     async move {
