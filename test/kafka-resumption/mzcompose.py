@@ -40,7 +40,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--seed",
         help="an alternate seed to use to avoid clashing with existing topics",
         type=int,
-        default=random.getrandbits(32),
+        default=int(random.getrandbits(16)),
     )
     args = parser.parse_args()
 
