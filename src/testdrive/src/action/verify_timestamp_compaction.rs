@@ -76,13 +76,13 @@ impl Action for VerifyTimestampCompactionAction {
                         // timestamp binding.
                         let progress = if retry_state.i == 0 {
                             initial_highest.store(
-                                bindings.iter().map(|(_, ts, _)| ts).fold(u64::MIN, |a, &b| a.max(b)),
+                                bindings.iter().map(|(_, ts, _)| *ts).max().unwrap_or(u64::MIN),
                                 Ordering::SeqCst,
                             );
                             false
                         } else {
                             self.permit_progress &&
-                                (bindings.iter().map(|(_, ts, _)| ts).fold(u64::MAX, |a, &b| a.min(b))
+                                (bindings.iter().map(|(_, ts, _)| *ts).min().unwrap_or(u64::MAX)
                                     >= initial_highest.load(Ordering::SeqCst))
                         };
 
