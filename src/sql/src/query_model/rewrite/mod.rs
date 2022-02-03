@@ -11,8 +11,12 @@
 //!
 //! The public interface consists of the [`Model::optimize`] method.
 
-use crate::query_model::model::BoxId;
-use crate::query_model::Model;
+use std::collections::HashSet;
+
+use super::attribute::core::{
+    dependency_order, derive_dft_attributes, transitive_closure, Attribute,
+};
+use super::model::{BoxId, Model};
 
 impl Model {
     pub fn optimize(&mut self) {
@@ -30,6 +34,9 @@ pub(crate) trait Rule {
 
     /// The [`ApplyStrategy`] for the rule.
     fn strategy(&self) -> ApplyStrategy;
+
+    /// Derived attributes required by this [`Rule`].
+    fn required_attributes(&self) -> HashSet<Box<dyn Attribute>>;
 
     /// Determines how to rewrite the box.
     ///
@@ -53,6 +60,9 @@ pub(crate) trait ApplyRule {
     /// The [`ApplyStrategy`] for the rule.
     fn strategy(&self) -> ApplyStrategy;
 
+    /// Derived attributes required by this [`ApplyRule`].
+    fn required_attributes(&self) -> HashSet<Box<dyn Attribute>>;
+
     /// Attempts to apply the rewrite to a subgraph rooted at the given `box_id`.
     /// Returns whether the attempt was successful.
     fn apply(&self, model: &mut Model, box_id: BoxId) -> bool;
@@ -68,6 +78,11 @@ impl<U: Rule> ApplyRule for U {
     #[inline(always)]
     fn strategy(&self) -> ApplyStrategy {
         self.strategy()
+    }
+
+    #[inline(always)]
+    fn required_attributes(&self) -> HashSet<Box<dyn Attribute>> {
+        self.required_attributes()
     }
 
     /// Apply the [`Rule::rewrite`] and return `true` if [`Rule::check`] returns
@@ -120,6 +135,18 @@ pub fn rewrite_model(model: &mut Model) {
 
 /// Transform the model by applying a list of rewrite rules.
 fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
+    // collect a set of attributes required by the given rules
+    let mut attributes = rules
+        .iter()
+        .flat_map(|r| r.required_attributes())
+        .collect::<HashSet<_>>();
+    // add missing dependencies required to derive this set of attributes
+    transitive_closure(&mut attributes);
+    // order transitive closure topologically based on dependency order
+    let attributes = dependency_order(attributes);
+    // compute initial values of the required derived attributes
+    derive_dft_attributes(model, &attributes, model.top_box);
+
     let (top_box, other): (Vec<Box<dyn ApplyRule>>, Vec<Box<dyn ApplyRule>>) = rules
         .into_iter()
         .partition(|r| matches!(r.strategy(), ApplyStrategy::TopBox));
@@ -127,57 +154,42 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
         .into_iter()
         .partition(|r| matches!(r.strategy(), ApplyStrategy::AllBoxes(VisitOrder::Pre)));
 
-    for rule in &top_box {
-        rule.apply(model, model.top_box);
-    }
-
     let mut rewritten = true;
     while rewritten {
-        rewritten = false;
-
-        rewritten |= apply_dft_rules(&pre, &post, model);
+        let mut rewritten_in_top = false;
+        let mut rewritten_in_pre = false;
+        let mut rewritten_in_post = false;
 
         for rule in &top_box {
-            rewritten |= rule.apply(model, model.top_box);
+            if rule.apply(model, model.top_box) {
+                rewritten_in_top |= true;
+                derive_dft_attributes(model, &attributes, model.top_box);
+            }
         }
+
+        let _ = model.try_visit_mut_pre_post(
+            &mut |model, box_id| -> Result<(), ()> {
+                for rule in pre.iter() {
+                    if rule.apply(model, *box_id) {
+                        rewritten_in_pre |= true;
+                        derive_dft_attributes(model, &attributes, model.top_box);
+                    }
+                }
+                Ok(())
+            },
+            &mut |model, box_id| -> Result<(), ()> {
+                for rule in post.iter() {
+                    if rule.apply(model, *box_id) {
+                        rewritten_in_post |= true;
+                        derive_dft_attributes(model, &attributes, *box_id);
+                    }
+                }
+                Ok(())
+            },
+        );
+
+        rewritten = rewritten_in_top | rewritten_in_pre | rewritten_in_post;
     }
-}
-
-/// Traverse the model depth-first, applying rules to each box.
-///
-/// To avoid the possibility of stack overflow, the implementation does not use
-/// recursion. Instead, it keeps track of boxes we have entered using a `Vec`.
-/// It also keeps track of boxes we have exited so that if multiple boxes are
-/// parents of the same child box, the child will only be visited once.
-///
-/// Rules in `pre` are applied at enter-time, and rules in `post` are applied at
-/// exit-time.
-///
-/// Returns whether any box was rewritten.
-fn apply_dft_rules(
-    pre: &Vec<Box<dyn ApplyRule>>,
-    post: &Vec<Box<dyn ApplyRule>>,
-    model: &mut Model,
-) -> bool {
-    let mut rewritten_in_pre = false;
-    let mut rewritten_in_post = false;
-
-    let _ = model.try_visit_mut_pre_post(
-        &mut |m, box_id| -> Result<(), ()> {
-            for rule in pre {
-                rewritten_in_pre |= rule.apply(m, *box_id);
-            }
-            Ok(())
-        },
-        &mut |m, box_id| -> Result<(), ()> {
-            for rule in post {
-                rewritten_in_post |= rule.apply(m, *box_id);
-            }
-            Ok(())
-        },
-    );
-
-    rewritten_in_pre | rewritten_in_post
 }
 
 #[cfg(test)]
@@ -253,6 +265,7 @@ mod tests {
     fn get_user_id(id: u64) -> Get {
         Get {
             id: expr::GlobalId::User(id),
+            unique_keys: vec![],
         }
     }
 
@@ -310,6 +323,10 @@ mod tests {
 
         fn strategy(&self) -> ApplyStrategy {
             ApplyStrategy::AllBoxes(self.visit_order)
+        }
+
+        fn required_attributes(&self) -> HashSet<Box<dyn Attribute>> {
+            HashSet::new()
         }
 
         fn check(&self, model: &Model, box_id: BoxId) -> Option<Connect> {

@@ -64,15 +64,17 @@ impl FromHir {
     /// Generates a sub-graph representing the given expression.
     fn generate_internal(&mut self, expr: HirRelationExpr) -> BoxId {
         match expr {
-            HirRelationExpr::Get { id, mut typ } => {
+            HirRelationExpr::Get { id, typ } => {
                 if let Some(box_id) = self.gets_seen.get(&id) {
                     return *box_id;
                 }
                 if let expr::Id::Global(id) = id {
-                    let result = self.model.make_box(BoxType::Get(Get { id }));
+                    let result = self.model.make_box(BoxType::Get(Get {
+                        id,
+                        unique_keys: typ.keys,
+                    }));
                     let mut b = self.model.get_mut_box(result);
                     self.gets_seen.insert(expr::Id::Global(id), result);
-                    b.unique_keys.append(&mut typ.keys);
                     b.columns
                         .extend(typ.column_types.into_iter().enumerate().map(
                             |(position, column_type)| Column {

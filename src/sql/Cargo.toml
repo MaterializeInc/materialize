@@ -43,6 +43,7 @@ sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
 tokio = { version = "1.16.1", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
+typemap_rev = { version= "0.1.5"}
 uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
