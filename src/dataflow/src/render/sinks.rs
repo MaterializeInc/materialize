@@ -158,7 +158,6 @@ where
     //   It then renders those as Avro.
     // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
-    // * "Tail" writes some metadata.
     let collection = match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
             let combined = combine_at_timestamp(keyed.arrange_by_key().stream);

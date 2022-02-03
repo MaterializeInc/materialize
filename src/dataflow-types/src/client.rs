@@ -646,10 +646,14 @@ impl Client for LocalClient {
 /// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
 pub mod partitioned {
 
+    use std::collections::hash_map::Entry;
     use std::collections::HashMap;
 
     use mz_expr::GlobalId;
-    use mz_repr::Timestamp;
+    use mz_repr::{Diff, Row, Timestamp};
+    use timely::progress::Antichain;
+
+    use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
     use super::{Command, PeekResponse, Response};
@@ -687,6 +691,9 @@ pub mod partitioned {
 
         async fn recv(&mut self) -> Option<Response> {
             use futures::StreamExt;
+            if let Some(stashed) = self.state.stashed_response.take() {
+                return Some(stashed);
+            }
             self.cursor = (self.cursor + 1) % self.shards.len();
             let mut stream = super::SelectStream::new(&mut self.shards[..], self.cursor);
             while let Some((index, response)) = stream.next().await {
@@ -702,6 +709,138 @@ pub mod partitioned {
 
     use timely::progress::frontier::MutableAntichain;
 
+    /// Represents a frontier of zero or one timestamps.
+    /// Essentially the same as `Option<T>`,
+    /// but with the ordering of the variants intentionally
+    /// inverted.
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+    enum OneDimensionalFrontier<T: Ord> {
+        /// Corresponds to an antichain with one element
+        Finite(T),
+        /// Corresponds to an antichain with zero elements
+        Infinite,
+    }
+
+    impl<T: Ord + Clone> TryFrom<&Antichain<T>> for OneDimensionalFrontier<T> {
+        type Error = ();
+
+        fn try_from(value: &Antichain<T>) -> Result<Self, Self::Error> {
+            match value.elements() {
+                [] => Ok(Self::Infinite),
+                [t] => Ok(Self::Finite(t.clone())),
+                _ => Err(()),
+            }
+        }
+    }
+
+    impl<T: Ord> From<OneDimensionalFrontier<T>> for Antichain<T> {
+        fn from(value: OneDimensionalFrontier<T>) -> Self {
+            match value {
+                OneDimensionalFrontier::Finite(t) => Self::from_elem(t),
+                OneDimensionalFrontier::Infinite => Self::new(),
+            }
+        }
+    }
+
+    /// Buffer for partial results for a `TAIL`.
+    /// This exists so we can consolidate rows and
+    /// sort them by timestamp before passing them to the consumer
+    /// (currently, coord.rs).
+    struct PendingTail {
+        /// frontiers[i] is `Some(t)` if we may still receieve updates from shard `i`
+        /// for times >= `t`; None otherwise.
+        ///
+        /// We use a `OneDimensionalFrontier` here, instead of an `Antichain`, because
+        /// we guarantee that tail results are delivered in timestamp order,
+        /// which is meaningless for non-totally-ordered timestamps.
+        frontiers: HashMap<usize, OneDimensionalFrontier<Timestamp>>,
+        /// The results (possibly unsorted) which have not yet been delivered.
+        buffer: Vec<(Row, Timestamp, Diff)>,
+        /// The number of unique shard IDs expected.
+        parts: usize,
+        /// The last progress message that has been reported to the consumer.
+        reported_frontier: OneDimensionalFrontier<Timestamp>,
+    }
+
+    impl PendingTail {
+        // See [`differential_dataflow::consolidation::consolidate_updates_slice`].
+        // This function works similarly, except that we sort by timestamp first, then data.
+        //
+        // I implemented it without `unsafe`; we can revisit that if proves to be
+        // a hot path.
+        /// Return all the updates with time less than `upper` (or all times if that is `None`),
+        /// in sorted and consolidated representation.
+        pub fn consolidate_up_to(
+            &mut self,
+            upper: OneDimensionalFrontier<Timestamp>,
+        ) -> Vec<(Row, Timestamp, Diff)> {
+            self.buffer
+                .sort_unstable_by(|(d1, t1, _r1), (d2, t2, _r2)| (t1, d1).cmp(&(t2, d2)));
+            let mut offset = 0;
+            let mut index = 1;
+            while index < self.buffer.len()
+                && OneDimensionalFrontier::Finite(self.buffer[index].1) < upper
+            {
+                if self.buffer[index].0 == self.buffer[offset].0
+                    && self.buffer[index].1 == self.buffer[offset].1
+                {
+                    self.buffer[offset].2 += self.buffer[index].2;
+                } else {
+                    if self.buffer[offset].2 != 0 {
+                        offset += 1;
+                    }
+                    let next = std::mem::take(&mut self.buffer[index]);
+                    self.buffer[offset] = next;
+                }
+                index += 1;
+            }
+            if offset < self.buffer.len() && self.buffer[offset].2 != 0 {
+                offset += 1;
+            }
+            self.buffer.drain(0..offset).collect()
+        }
+
+        pub fn push_data<I: IntoIterator<Item = (Row, Timestamp, Diff)>>(&mut self, data: I) {
+            self.buffer.extend(data);
+        }
+
+        pub fn record_progress(
+            &mut self,
+            shard_id: usize,
+            progress: &Antichain<Timestamp>,
+        ) -> Option<OneDimensionalFrontier<Timestamp>> {
+            // In the future, we can probably replace all this logic with the use of a `MutableAntichain`.
+            // We would need to have the tail workers report both their old frontier and their new frontier, rather
+            // than just the latter. But this will all be subsumed anyway by the proposed refactor to make TAILs
+            // behave like PEEKs.
+            let progress: OneDimensionalFrontier<Timestamp> = progress
+                .try_into()
+                .expect("TAIL does not support multi-dimensional timestamps.");
+            match self.frontiers.entry(shard_id) {
+                Entry::Occupied(mut oe) => {
+                    assert!(&progress > oe.get(), "Timestamps should advance");
+                    oe.insert(progress);
+                }
+                Entry::Vacant(ve) => {
+                    ve.insert(progress);
+                }
+            }
+            assert!(self.frontiers.len() <= self.parts);
+            if self.frontiers.len() == self.parts {
+                let min_frontier = *self.frontiers.values().min().unwrap();
+                assert!(min_frontier >= self.reported_frontier);
+                if min_frontier > self.reported_frontier {
+                    self.reported_frontier = min_frontier;
+                    Some(min_frontier)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+    }
+
     /// Maintained state for sharded dataflow clients.
     ///
     /// This helper type unifies the responses of multiple partitioned
@@ -713,6 +852,14 @@ pub mod partitioned {
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
+        /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
+        /// back until their timestamps are complete.
+        ///
+        /// `None` is a sentinel value indicating that the tail has been dropped and no
+        /// further messages should be forwarded.
+        pending_tails: HashMap<GlobalId, Option<PendingTail>>,
+        /// The next response to return immediately, if any
+        stashed_response: Option<Response>,
     }
 
     impl PartitionedClientState {
@@ -722,6 +869,8 @@ pub mod partitioned {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
+                pending_tails: Default::default(),
+                stashed_response: None,
             }
         }
 
@@ -830,6 +979,58 @@ pub mod partitioned {
                     } else {
                         None
                     }
+                }
+                Response::Compute(ComputeResponse::TailResponse(id, response)) => {
+                    let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
+                        Some(PendingTail {
+                            frontiers: HashMap::new(),
+                            buffer: Vec::new(),
+                            parts: self.parts,
+                            reported_frontier: OneDimensionalFrontier::Finite(0),
+                        })
+                    });
+
+                    let entry = match maybe_entry {
+                        None => {
+                            // This tail has been dropped;
+                            // we should pernanently block
+                            // any messages from it
+                            return None;
+                        }
+                        Some(entry) => entry,
+                    };
+
+                    let tail_response = match response {
+                        TailResponse::Progress(frontier) => {
+                            if let Some(new_frontier) = entry.record_progress(shard_id, &frontier) {
+                                let data = entry.consolidate_up_to(new_frontier);
+                                let progress_response = TailResponse::Progress(new_frontier.into());
+                                if data.is_empty() {
+                                    Some(progress_response)
+                                } else {
+                                    // Return the data first, then the progress message.
+                                    assert!(self.stashed_response.is_none());
+                                    self.stashed_response = Some(Response::Compute(
+                                        ComputeResponse::TailResponse(id, progress_response),
+                                    ));
+                                    Some(TailResponse::Rows(data))
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        TailResponse::Rows(rows) => {
+                            entry.push_data(rows);
+                            None
+                        }
+                        TailResponse::Dropped => {
+                            *maybe_entry = None;
+                            Some(TailResponse::Dropped)
+                        }
+                    };
+                    tail_response.map(|response| {
+                        Response::Compute(ComputeResponse::TailResponse(id, response))
+                    })
                 }
                 message => {
                     // TimestampBindings and TailResponses are mirrored out,

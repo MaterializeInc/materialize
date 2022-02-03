@@ -60,15 +60,10 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let scope = sinked_collection.scope();
-        use differential_dataflow::Hashable;
-        // `active_worker` indicates the index of the worker that receives all data.
-        let active_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
         // An encapsulation of the Tail response protocol.
         // Used to send rows and progress messages,
         // and alert if the dataflow was dropped before completing.
-        // Set to `None` for instances that should not produce output.
-        let tail_protocol_handle = Rc::new(RefCell::new(if active_worker {
+        let tail_protocol_handle = Rc::new(RefCell::new(if true {
             Some(TailProtocol {
                 sink_id,
                 tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
@@ -83,7 +78,6 @@ where
             sink_id,
             sink.as_of.clone(),
             tail_protocol_handle,
-            active_worker,
         );
 
         // Inform the coordinator that we have been dropped,
@@ -102,67 +96,41 @@ fn tail<G>(
     sink_id: GlobalId,
     as_of: SinkAsOf,
     tail_protocol_handle: Rc<RefCell<Option<TailProtocol>>>,
-    active_worker: bool,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    // make sure all data is routed to one worker by keying on the sink id
-    let batches = sinked_collection
-        .map(move |(k, v)| {
-            assert!(k.is_none(), "tail does not support keys");
-            let v = v.expect("tail must have values");
-            (sink_id, v)
-        })
-        .arrange_by_key()
-        .stream;
+    // // make sure all data is routed to one worker by keying on the sink id
+    // let batches = sinked_collection
+    //     .map(move |(k, v)| {
+    //         assert!(k.is_none(), "tail does not support keys");
+    //         let v = v.expect("tail must have values");
+    //         (sink_id, v)
+    //     })
+    //     .arrange_by_key()
+    //     .stream;
 
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
 
-    batches.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
-        input.for_each(|_, batches| {
+    sinked_collection.inner.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
+        input.for_each(|_, rows| {
             let mut results = vec![];
-            for batch in batches.iter() {
-                let mut cursor = batch.cursor();
-                while cursor.key_valid(&batch) {
-                    while cursor.val_valid(&batch) {
-                        let row = cursor.val(&batch);
-                        cursor.map_times(&batch, |time, diff| {
-                            let diff = *diff;
-                            let should_emit = if as_of.strict {
-                                as_of.frontier.less_than(time)
-                            } else {
-                                as_of.frontier.less_equal(time)
-                            };
-                            if should_emit {
-                                results.push((row.clone(), *time, diff));
-                            }
-                        });
-                        cursor.step_val(&batch);
-                    }
-                    cursor.step_key(&batch);
+            for ((k, v), time, diff) in rows.iter() {
+                assert!(k.is_none(), "tail does not support keys");
+                let row = v.as_ref().expect("tail must have values");
+                let should_emit = if as_of.strict {
+                    as_of.frontier.less_than(time)
+                } else {
+                    as_of.frontier.less_equal(time)
+                };
+                if should_emit {
+                    results.push((row.clone(), *time, *diff));
                 }
             }
 
-            if active_worker {
-                // Emit data if configured, otherwise it is an error to have data to send.
-                if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
-                    tail_protocol.send_rows(results);
-                }
-            } else {
-                assert!(
-                    results.is_empty(),
-                    "Observed data at inactive TAIL instance"
-                );
-            }
-
-            if let Some(batch) = batches.last() {
-                let progress = update_progress(&mut input_frontier, batch.desc.upper().borrow());
-                if let (Some(tail_protocol), Some(progress)) =
-                    (tail_protocol_handle.borrow_mut().deref_mut(), progress)
-                {
-                    tail_protocol.send_progress(progress);
-                }
+            // Emit data if configured, otherwise it is an error to have data to send.
+            if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
+                tail_protocol.send_rows(results);
             }
         });
 
