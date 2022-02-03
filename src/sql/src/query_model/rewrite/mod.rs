@@ -196,11 +196,12 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
 mod tests {
     use super::*;
     use crate::query_model::model::*;
+    use crate::query_model::test::util::*;
 
     #[test]
     fn it_applies_a_simple_rule() {
         let mut model = test_model();
-        let src_id = model.make_box(get_user_id(5).into());
+        let src_id = model.make_box(qgm::get(5).into());
 
         let rules: Vec<Box<dyn ApplyRule>> = vec![
             // create E(src_id, curr_id) quantifiers in pre-visit
@@ -260,13 +261,6 @@ mod tests {
         model.top_box = b4;
 
         model
-    }
-
-    fn get_user_id(id: u64) -> Get {
-        Get {
-            id: expr::GlobalId::User(id),
-            unique_keys: vec![],
-        }
     }
 
     /// A test [`Rule`] that creates quantifiers between `src_id`
