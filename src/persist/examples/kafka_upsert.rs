@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use ore::metrics::MetricsRegistry;
 use ore::now::{NowFn, SYSTEM_TIME};
-use persist::client::{RuntimeClient, StreamReadHandle};
+use persist::client::{MultiWriteHandle, RuntimeClient, StreamReadHandle};
 use persist::error::Error as PersistError;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::Snapshot;
@@ -34,7 +34,7 @@ use persist_types::Codec;
 
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Inspect, Map, ToStream};
+use timely::dataflow::operators::{Concat, Inspect, Map, Probe, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
@@ -154,11 +154,15 @@ where
         PersistentUpsertConfig::new(start_ts, out_read, out_write.clone()),
     );
 
-    let upsert_oks = upsert_oks.conditional_seal(
+    let mut seal_handle = MultiWriteHandle::new(&out_write);
+    seal_handle
+        .add_stream(&ts_write)
+        .expect("known from same runtime");
+
+    let upsert_oks = upsert_oks.seal(
         "timestamp_bindings|upsert_state",
-        &bindings_persist_oks,
-        out_write,
-        ts_write,
+        vec![bindings_persist_oks.probe()],
+        seal_handle,
     );
 
     // Wait for persistent collections to be sealed before forwarding results.  We could do this
