@@ -74,6 +74,7 @@ impl Action for VerifyTimestampCompactionAction {
 
                         // We consider progress to be eventually compacting at least up to the original highest
                         // timestamp binding.
+                        let lo_binding= bindings.iter().map(|(_, ts, _)| *ts).min();
                         let progress = if retry_state.i == 0 {
                             initial_highest.store(
                                 bindings.iter().map(|(_, ts, _)| *ts).max().unwrap_or(u64::MIN),
@@ -82,16 +83,16 @@ impl Action for VerifyTimestampCompactionAction {
                             false
                         } else {
                             self.permit_progress &&
-                                (bindings.iter().map(|(_, ts, _)| *ts).min().unwrap_or(u64::MAX)
-                                    >= initial_highest.load(Ordering::SeqCst))
+                                (lo_binding.unwrap_or(u64::MAX) >= initial_highest.load(Ordering::SeqCst))
                         };
 
                         println!(
-                            "Verifying timestamp binding compaction for {:?}.  Found {:?} vs expected {:?}.  Progress: {:?}",
+                            "Verifying timestamp binding compaction for {:?}.  Found {:?} vs expected {:?}.  Progress: {:?} vs {:?}",
                             self.source,
                             bindings.len(),
                             self.max_size,
-                            progress,
+                            lo_binding,
+                            initial_highest.load(Ordering::SeqCst),
                         );
 
                         if bindings.len() <= self.max_size || progress {
