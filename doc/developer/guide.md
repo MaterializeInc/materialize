@@ -66,7 +66,7 @@ By default, we recomend that developers without a strong preference of editor us
 Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
 setup for developing Materialize, and the one for which you are the most likely
 to be able to get help if something goes wrong. It's important to note that you
-**should not** install Microsoft's official Rust plugin, as it is known to
+**should not** install the "Rust" plugin, as it is known to
 conflict with Rust-Analyzer; the latter has far more advanced code navigation
 features and is the de-facto standard for developing Rust.
 
