@@ -352,7 +352,13 @@ impl<'a> Parser<'a> {
             Token::Keyword(LIST) => self.parse_list(),
             Token::Keyword(CASE) => self.parse_case_expr(),
             Token::Keyword(CAST) => self.parse_cast_expr(),
-            Token::Keyword(COALESCE) => self.parse_coalesce_expr(),
+            Token::Keyword(COALESCE) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Coalesce)
+            }
+            Token::Keyword(GREATEST) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Greatest)
+            }
+            Token::Keyword(LEAST) => self.parse_homogenizing_function(HomogenizingFunction::Least),
             Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
@@ -700,11 +706,14 @@ impl<'a> Parser<'a> {
         Ok(exists_node)
     }
 
-    fn parse_coalesce_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+    fn parse_homogenizing_function(
+        &mut self,
+        function: HomogenizingFunction,
+    ) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let exprs = self.parse_comma_separated(Parser::parse_expr)?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Coalesce { exprs })
+        Ok(Expr::HomogenizingFunction { function, exprs })
     }
 
     fn parse_nullif_expr(&mut self) -> Result<Expr<Raw>, ParserError> {

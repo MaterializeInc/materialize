@@ -39,10 +39,10 @@ use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
-    Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
-    Query, Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, SubscriptPosition,
-    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
-    Value, Values,
+    HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
+    Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement,
+    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins,
+    UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -2558,7 +2558,10 @@ fn invent_column_name(
                     Some((name.item.into(), NameQuality::High))
                 }
             }
-            Expr::Coalesce { .. } => Some(("coalesce".into(), NameQuality::High)),
+            Expr::HomogenizingFunction { function, .. } => Some((
+                function.to_string().to_lowercase().into(),
+                NameQuality::High,
+            )),
             Expr::NullIf { .. } => Some(("nullif".into(), NameQuality::High)),
             Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
@@ -2995,7 +2998,9 @@ fn plan_expr_inner<'a>(
             results,
             else_result,
         } => Ok(plan_case(ecx, operand, conditions, results, else_result)?.into()),
-        Expr::Coalesce { exprs } => plan_coalesce(ecx, exprs),
+        Expr::HomogenizingFunction { function, exprs } => {
+            plan_homogenizing_function(ecx, function, exprs)
+        }
         Expr::NullIf { l_expr, r_expr } => Ok(plan_case(
             ecx,
             &None,
@@ -3119,11 +3124,24 @@ fn plan_or(
     .into())
 }
 
-fn plan_coalesce(ecx: &ExprContext, exprs: &[Expr<Aug>]) -> Result<CoercibleScalarExpr, PlanError> {
+fn plan_homogenizing_function(
+    ecx: &ExprContext,
+    function: &HomogenizingFunction,
+    exprs: &[Expr<Aug>],
+) -> Result<CoercibleScalarExpr, PlanError> {
     assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
     let expr = HirScalarExpr::CallVariadic {
-        func: VariadicFunc::Coalesce,
-        exprs: coerce_homogeneous_exprs("coalesce", ecx, plan_exprs(ecx, exprs)?, None)?,
+        func: match function {
+            HomogenizingFunction::Coalesce => VariadicFunc::Coalesce,
+            HomogenizingFunction::Greatest => VariadicFunc::Greatest,
+            HomogenizingFunction::Least => VariadicFunc::Least,
+        },
+        exprs: coerce_homogeneous_exprs(
+            &function.to_string().to_lowercase(),
+            ecx,
+            plan_exprs(ecx, exprs)?,
+            None,
+        )?,
     };
     Ok(expr.into())
 }
@@ -4321,7 +4339,10 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
     fn visit_expr_mut(&mut self, expr: &mut Expr<Aug>) {
         let (disallowed_context, func) = match expr {
             Expr::Case { .. } => (Some("CASE"), None),
-            Expr::Coalesce { .. } => (Some("COALESCE"), None),
+            Expr::HomogenizingFunction {
+                function: HomogenizingFunction::Coalesce,
+                ..
+            } => (Some("COALESCE"), None),
             Expr::Function(func) if self.in_select_item => {
                 // If we're in a SELECT list, replace table functions with a uuid identifier
                 // and save the table func so it can be planned elsewhere.

@@ -19,6 +19,7 @@ use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
 };
+use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
@@ -4530,6 +4531,30 @@ fn coalesce<'a>(
     Ok(Datum::Null)
 }
 
+fn greatest<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [MirScalarExpr],
+) -> Result<Datum<'a>, EvalError> {
+    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
+    Ok(datums
+        .filter(|d| Ok(!d.is_null()))
+        .max()?
+        .unwrap_or(Datum::Null))
+}
+
+fn least<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [MirScalarExpr],
+) -> Result<Datum<'a>, EvalError> {
+    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
+    Ok(datums
+        .filter(|d| Ok(!d.is_null()))
+        .min()?
+        .unwrap_or(Datum::Null))
+}
+
 fn error_if_null<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -5650,6 +5675,8 @@ fn mz_render_typemod<'a>(
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum VariadicFunc {
     Coalesce,
+    Greatest,
+    Least,
     Concat,
     MakeTimestamp,
     PadLeading,
@@ -5702,6 +5729,8 @@ impl VariadicFunc {
 
         match self {
             VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
+            VariadicFunc::Greatest => greatest(datums, temp_storage, exprs),
+            VariadicFunc::Least => least(datums, temp_storage, exprs),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
             VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
@@ -5741,13 +5770,13 @@ impl VariadicFunc {
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
         match self {
-            Coalesce => {
+            Coalesce | Greatest | Least => {
                 assert!(input_types.len() > 0);
                 debug_assert!(
                     input_types
                         .windows(2)
                         .all(|w| w[0].scalar_type.base_eq(&w[1].scalar_type)),
-                    "coalesce inputs did not have uniform type: {:?}",
+                    "coalesce/greatest/least inputs did not have uniform type: {:?}",
                     input_types
                 );
                 input_types.into_first().nullable(true)
@@ -5822,6 +5851,8 @@ impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
+            VariadicFunc::Greatest => f.write_str("greatest"),
+            VariadicFunc::Least => f.write_str("least"),
             VariadicFunc::Concat => f.write_str("concat"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::PadLeading => f.write_str("lpad"),

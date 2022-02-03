@@ -381,7 +381,7 @@ Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args
 parse-scalar
 COALESCE(foo, bar)
 ----
-Coalesce { exprs: [Identifier([Ident("foo")]), Identifier([Ident("bar")])] }
+HomogenizingFunction { function: Coalesce, exprs: [Identifier([Ident("foo")]), Identifier([Ident("bar")])] }
 
 parse-scalar
 COALESCE()
