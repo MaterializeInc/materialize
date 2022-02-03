@@ -374,6 +374,64 @@ SELECT coalesce(1, 1 / 0, a) FROM v
 ----
 1
 
+# Test greatest.
+query I
+SELECT greatest(1)
+----
+1
+
+query I
+SELECT greatest(1, 2)
+----
+2
+
+query I
+SELECT greatest(3, 1)
+----
+3
+
+query I
+SELECT greatest(NULL)
+----
+NULL
+
+query I
+SELECT greatest(1, NULL, -1)
+----
+1
+
+query error greatest cannot be cast to uniform type: text vs integer
+SELECT greatest(1::int, 2::text)
+
+# Test least.
+query I
+SELECT least(1)
+----
+1
+
+query I
+SELECT least(1, 2)
+----
+1
+
+query I
+SELECT least(3, 1)
+----
+1
+
+query I
+SELECT least(NULL)
+----
+NULL
+
+query I
+SELECT least(1, NULL, -1)
+----
+-1
+
+query error least cannot be cast to uniform type: text vs integer
+SELECT least(1::int, 2::text)
+
 # Tests issue #2355, that type information for Maps are correctly constructed
 # before being passed to expressions for optimization.
 statement ok

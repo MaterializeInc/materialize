@@ -107,6 +107,9 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Add the [`greatest`](/sql/functions/#generic) and [`least`](/sql/functions/#generic)
+  functions.
+
 - Correctly deduplicate debezium topics that have more than one partition.
   Previous versions of materialize would experience data loss unless
   `deduplication=full` was used.

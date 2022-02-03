@@ -8,6 +8,12 @@
   - signature: 'coalesce(x: T...) -> T?'
     description: First non-_NULL_ arg, or _NULL_ if all are _NULL_
 
+  - signature: 'greatest(x: T...) -> T?'
+    description: The maximum argument, or _NULL_ if all are _NULL_
+
+  - signature: 'least(x: T...) -> T?'
+    description: The minimum argument, or _NULL_ if all are _NULL_
+
   - signature: 'nullif(x: T, y: T) -> T?'
     description: _NULL_ if `x == y`, else `x`
 

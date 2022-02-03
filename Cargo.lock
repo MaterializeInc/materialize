@@ -1846,6 +1846,7 @@ dependencies = [
  "encoding",
  "enum-iterator",
  "expr_test_util",
+ "fallible-iterator",
  "hex",
  "hmac",
  "itertools",

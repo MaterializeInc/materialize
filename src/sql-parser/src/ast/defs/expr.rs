@@ -104,11 +104,13 @@ pub enum Expr<T: AstInfo> {
         expr: Box<Expr<T>>,
         collation: UnresolvedObjectName,
     },
-    /// COALESCE(<expr>, ...)
+    /// COALESCE(<expr>, ...) or GREATEST(<expr>, ...) or LEAST(<expr>, ...)
     ///
-    /// While COALESCE has the same syntax as a function call, its semantics are
-    /// extremely unusual, and are better captured with a dedicated AST node.
-    Coalesce {
+    /// While COALESCE/GREATEST/LEAST have the same syntax as a function call,
+    /// their semantics are extremely unusual, and are better captured with a
+    /// dedicated AST node.
+    HomogenizingFunction {
+        function: HomogenizingFunction,
         exprs: Vec<Expr<T>>,
     },
     /// NULLIF(expr, expr)
@@ -306,7 +308,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                         | Expr::Function { .. }
                         | Expr::Identifier { .. }
                         | Expr::Collate { .. }
-                        | Expr::Coalesce { .. }
+                        | Expr::HomogenizingFunction { .. }
                         | Expr::NullIf { .. }
                 );
                 if needs_wrap {
@@ -324,8 +326,9 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(" COLLATE ");
                 f.write_node(&collation);
             }
-            Expr::Coalesce { exprs } => {
-                f.write_str("COALESCE(");
+            Expr::HomogenizingFunction { function, exprs } => {
+                f.write_node(function);
+                f.write_str("(");
                 f.write_node(&display::comma_separated(&exprs));
                 f.write_str(")");
             }
@@ -599,6 +602,24 @@ impl Op {
         Op::Bare(name.into())
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HomogenizingFunction {
+    Coalesce,
+    Greatest,
+    Least,
+}
+
+impl AstDisplay for HomogenizingFunction {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            HomogenizingFunction::Coalesce => f.write_str("COALESCE"),
+            HomogenizingFunction::Greatest => f.write_str("GREATEST"),
+            HomogenizingFunction::Least => f.write_str("LEAST"),
+        }
+    }
+}
+impl_display!(HomogenizingFunction);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SubscriptPosition<T: AstInfo> {
