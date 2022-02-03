@@ -830,6 +830,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 })
                 .max_by_key(|(key, _, _, _)| key.len());
 
+            // Input key selection strategy:
+            // (1) If we can read a key at a particular value, do so
+            // (2) Otherwise, if there is a key that causes the MFP to be the identity, and
+            // therefore allows us to avoid discarding the arrangement, use that.
+            // (3) Otherwise, if there is _some_ key, use that,
+            // (4) Otherwise just read the raw collection.
             let input_key_val = if let Some((key, permutation, thinning, val)) = key_val {
                 mfp.permute(permutation.clone(), thinning.len() + key.len());
 
