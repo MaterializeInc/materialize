@@ -1837,7 +1837,7 @@ impl<'a> Parser<'a> {
         let tokens = lexer::lex(&raw_def)?;
         let mut parser = Parser::new(&raw_def, tokens);
         loop {
-            let tbl_name = parser.parse_object_name()?.to_string();
+            let tbl_name = parser.parse_object_name()?;
 
             let (col_def, _constaints) = match parser.parse_columns(Optional) {
                 Ok((col_def, _constraints)) => (col_def, _constraints),

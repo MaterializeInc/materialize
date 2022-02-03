@@ -680,14 +680,14 @@ pub struct PgTable<T: AstInfo> {
     /// The OID of the table in the upstream source
     pub oid: u32,
     /// The name of the table to sync
-    pub name: String,
+    pub name: UnresolvedObjectName,
     /// The expected column schema of the synced table
     pub columns: Vec<ColumnDef<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for PgTable<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(format!("\"{}\"", self.name));
+        f.write_node(&self.name);
         if !self.columns.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.columns));
