@@ -24,3 +24,15 @@ build apply=CanonicalizeMfp
 | Get x (u0)
 | Filter false
 | Project (#1)
+
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (filter (get x) [(call_binary gt #0 123)])
+        [(call_binary lt #0 321)])
+    [#0])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 < 321), (#0 > 123)
+| Project (#0)
