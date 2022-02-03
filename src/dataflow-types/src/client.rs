@@ -702,7 +702,21 @@ pub mod partitioned {
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
-        /// Source timestamping progress utterances.
+        /// Sources that have presented timestamping responses.
+        ///
+        /// This set is currently needed to map the multi-worker progress utterances
+        /// of the timestamping responses into single-worker utterances. When a source
+        /// is first observed in these responses, we increment the `Timestamp::minimum`
+        /// count by `self.parts - 1`, which prepares the recipients for the eventual
+        /// number of `self.parts` retractions of that time.
+        ///
+        /// TODO(mcsherry): This can be improved with help from the source of these
+        /// messages communicating this change when it starts the process, so that
+        /// this type does not need to retain the state indefinitely. We could also
+        /// count down from `self.parts` and clean up at zero, but it seemed hard to
+        /// correctly sniff "first message" without introducing additional composability
+        /// bugs. Check with me when we end up in a state that this grows too large
+        /// to manage and we'll figure it out.
         source_timestamping: std::collections::HashSet<GlobalId>,
     }
 
