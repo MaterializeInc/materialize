@@ -683,6 +683,8 @@ pub mod partitioned {
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
+        /// Source timestamping progress utterances.
+        source_timestamping: std::collections::HashSet<GlobalId>,
     }
 
     impl PartitionedClientState {
@@ -692,6 +694,7 @@ pub mod partitioned {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
+                source_timestamping: Default::default(),
             }
         }
 
@@ -750,6 +753,18 @@ pub mod partitioned {
                     } else {
                         None
                     }
+                }
+                // Avoid multiple retractions of minimum time, to present as updates from one worker.
+                Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
+                    for (id, changes) in feedback.changes.iter_mut() {
+                        if self.source_timestamping.insert(*id) {
+                            use timely::progress::Timestamp;
+                            changes.update(Timestamp::minimum(), (self.parts as i64) - 1);
+                        }
+                    }
+                    Some(Response::Storage(StorageResponse::TimestampBindings(
+                        feedback,
+                    )))
                 }
                 Response::Compute(ComputeResponse::PeekResponse(connection, response)) => {
                     // Incorporate new peek responses; awaiting all responses.

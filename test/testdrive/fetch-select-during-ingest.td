@@ -50,13 +50,18 @@ $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestam
 
 > COMMIT;
 
+# Ensure the 234 row is available in a SELECT by waiting for it.
+> SELECT * FROM fetch_during_ingest ORDER BY 1
+123
+234
+
 #
 # The '234' row can now be fetched
 #
 
 > BEGIN
 
-> DECLARE c CURSOR FOR SELECT * FROM fetch_during_ingest;
+> DECLARE c CURSOR FOR SELECT * FROM fetch_during_ingest ORDER BY 1;
 
 > FETCH 2 c WITH (timeout='60s');
 123

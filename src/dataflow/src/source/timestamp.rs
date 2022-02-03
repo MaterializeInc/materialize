@@ -243,6 +243,10 @@ impl PartitionTimestamps {
 ///
 /// This type is almost never meant to be used directly, and you probably want to
 /// use `TimestampBindingRc` instead.
+///
+/// The type maintains a durability frontier and a compaction frontier, with the
+/// invariant that the compaction frontier is never strictly greater than the
+/// durability frontier.
 #[derive(Debug)]
 pub struct TimestampBindingBox {
     /// List of partitions that we learned about from the coordinator. This is used by source
@@ -267,8 +271,6 @@ pub struct TimestampBindingBox {
     durability_frontier: Antichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: TimestampProposer,
-    /// Whether or not these timestamp bindings need to be persisted.
-    requires_persistence: bool,
 }
 
 impl TimestampBindingBox {
@@ -279,7 +281,6 @@ impl TimestampBindingBox {
             compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: TimestampProposer::new(timestamp_update_interval, now),
-            requires_persistence: false,
         }
     }
 
@@ -288,14 +289,32 @@ impl TimestampBindingBox {
         remove: AntichainRef<Timestamp>,
         add: AntichainRef<Timestamp>,
     ) {
-        self.compaction_frontier
-            .update_iter(remove.iter().map(|t| (*t, -1)));
-        self.compaction_frontier
-            .update_iter(add.iter().map(|t| (*t, 1)));
+        // Capture the changes so we can observe if the frontier advanced.
+        let changed = !self
+            .compaction_frontier
+            .update_iter(
+                add.iter()
+                    .map(|t| (*t, 1))
+                    .chain(remove.iter().map(|t| (*t, -1))),
+            )
+            .next()
+            .is_none();
+        // Compact only in the case the frontier advances.
+        if changed {
+            self.compact();
+        }
     }
 
     fn set_durability_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
-        <_ as PartialOrder>::less_equal(&self.durability_frontier.borrow(), &new_frontier);
+        assert!(
+            <_ as PartialOrder>::less_equal(&self.durability_frontier.borrow(), &new_frontier),
+            "Durability frontier regression: {:?} to {:?}",
+            self.durability_frontier.borrow(),
+            new_frontier
+        );
+        // Release a hold on the compaction frontier.
+        let prior = self.durability_frontier.clone();
+        self.adjust_compaction_frontier(prior.borrow(), new_frontier);
         self.durability_frontier = new_frontier.to_owned();
     }
 
@@ -358,7 +377,11 @@ impl TimestampBindingBox {
                 ts = std::cmp::min(ts, partition_ts);
             }
         }
-        cap.downgrade(&ts);
+
+        // Never go beyond the durability frontier
+        if let Some(durability_ts) = self.durability_frontier.elements().get(0) {
+            cap.downgrade(&std::cmp::min(ts, *durability_ts));
+        };
     }
 
     fn get_or_propose_binding(&mut self, partition: &PartitionId, offset: MzOffset) -> Timestamp {
@@ -433,10 +456,15 @@ impl TimestampBindingRc {
             timestamp_update_interval,
             now,
         )));
-
+        // Increase the count associated with the compaction frontier, as there
+        // is a new reference to it.
+        let compaction_frontier = wrapper.borrow().compaction_frontier.frontier().to_owned();
+        wrapper
+            .borrow_mut()
+            .adjust_compaction_frontier(Antichain::new().borrow(), compaction_frontier.borrow());
         let ret = Self {
             wrapper: Rc::clone(&wrapper),
-            compaction_frontier: wrapper.borrow().compaction_frontier.frontier().to_owned(),
+            compaction_frontier,
         };
 
         ret
@@ -454,13 +482,15 @@ impl TimestampBindingRc {
                 || <_ as PartialOrder>::less_equal(
                     &self.compaction_frontier.borrow(),
                     &new_frontier
-                )
+                ),
+            "Compaction frontier transition unacceptable: {:?} to {:?}",
+            self.compaction_frontier.borrow(),
+            new_frontier,
         );
         self.wrapper
             .borrow_mut()
             .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier);
         self.compaction_frontier = new_frontier.to_owned();
-        self.wrapper.borrow_mut().compact();
     }
 
     /// Sets the durability frontier, aka, the frontier before which all updates can be
@@ -556,16 +586,6 @@ impl TimestampBindingRc {
     /// Returns the current durability frontier
     pub fn durability_frontier(&self) -> Antichain<Timestamp> {
         self.wrapper.borrow().durability_frontier.clone()
-    }
-
-    /// Whether or not these timestamp bindings must be persisted.
-    pub fn requires_persistence(&self) -> bool {
-        self.wrapper.borrow().requires_persistence
-    }
-
-    /// Enables persistence for these bindings.
-    pub fn enable_persistence(&self) {
-        self.wrapper.borrow_mut().requires_persistence = true;
     }
 }
 
@@ -1008,6 +1028,8 @@ mod tests {
 
         let compaction_frontier = Antichain::from_elem(44);
         timestamp_histories.set_compaction_frontier(compaction_frontier.borrow());
+        timestamp_histories.set_durability_frontier(compaction_frontier.borrow());
+        timestamp_histories.wrapper.borrow_mut().compact();
         let mut actual_updates = timestamp_binding_updater
             .update(&timestamp_histories)
             .collect::<Vec<_>>();
