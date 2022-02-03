@@ -117,6 +117,6 @@
           - --other-tag
           - latest
           - --this-options
-          - "--persistent-user-tables --persistent-kafka-upsert-source"
+          - "--persistent-user-tables --persistent-kafka-sources"
           - --other-options
-          - "--persistent-user-tables --persistent-kafka-upsert-source"
+          - "--persistent-user-tables --persistent-kafka-sources"
