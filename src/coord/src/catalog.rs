@@ -1737,17 +1737,6 @@ impl Catalog {
         Ok(ret)
     }
 
-    /// Delete all timestamp bindings for a source
-    pub fn delete_timestamp_bindings(&mut self, source_id: GlobalId) -> Result<(), Error> {
-        let mut storage = self.storage();
-        let tx = storage.transaction()?;
-
-        tx.delete_timestamp_bindings(source_id)?;
-        tx.commit()?;
-
-        Ok(())
-    }
-
     /// Compact timestamp bindings for a source
     ///
     /// In practice this ends up being "remove all bindings less than a given timestamp"
@@ -1982,15 +1971,21 @@ impl Catalog {
                     let entry = self.get_by_id(&id);
                     // Prevent dropping a table's default index unless the table
                     // is being dropped too.
-                    if let CatalogItem::Index(Index { on, .. }) = entry.item() {
-                        if self.get_by_id(on).is_table()
-                            && self.default_index_for(*on) == Some(id)
-                            && !drop_ids.contains(on)
-                        {
-                            return Err(CoordError::Catalog(Error::new(
-                                ErrorKind::MandatoryTableIndex(entry.name().to_string()),
-                            )));
+                    match entry.item() {
+                        CatalogItem::Index(Index { on, .. }) => {
+                            if self.get_by_id(on).is_table()
+                                && self.default_index_for(*on) == Some(id)
+                                && !drop_ids.contains(on)
+                            {
+                                return Err(CoordError::Catalog(Error::new(
+                                    ErrorKind::MandatoryTableIndex(entry.name().to_string()),
+                                )));
+                            }
                         }
+                        CatalogItem::Source(_) => {
+                            tx.delete_timestamp_bindings(id)?;
+                        }
+                        _ => {}
                     }
                     if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
