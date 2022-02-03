@@ -731,9 +731,6 @@ impl ConsistencyInfo {
             self.source_metrics.capability.set(min);
             cap.downgrade(&(&min + 1));
             self.last_closed_ts = min;
-
-            let new_compaction_frontier = Antichain::from_elem(min + 1);
-            timestamp_bindings.set_compaction_frontier(new_compaction_frontier.borrow());
         }
     }
 

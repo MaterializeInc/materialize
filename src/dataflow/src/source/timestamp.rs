@@ -491,7 +491,10 @@ impl TimestampBindingRc {
                 || <_ as PartialOrder>::less_equal(
                     &self.compaction_frontier.borrow(),
                     &new_frontier
-                )
+                ),
+            "Compaction frontier transition unacceptable: {:?} to {:?}",
+            self.compaction_frontier.borrow(),
+            new_frontier,
         );
         self.wrapper
             .borrow_mut()
