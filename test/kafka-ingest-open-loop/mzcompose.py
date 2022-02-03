@@ -145,7 +145,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.enable_persistence:
         options = [
             "--persistent-user-tables",
-            "--persistent-kafka-upsert-source",
+            "--persistent-kafka-sources",
             "--disable-persistent-system-tables-test",
         ]
 
