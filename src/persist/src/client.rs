@@ -573,6 +573,27 @@ impl MultiWriteHandle {
         rx
     }
 
+    /// Closes all contained streams at the given timestamp, migrating data strictly less than it
+    /// into the trace.
+    pub fn seal_all(&self, upper: u64) -> PFuture<SeqNo> {
+        let (tx, rx) = PFuture::new();
+
+        let client = match self.client.as_ref() {
+            Ok(client) => client,
+            Err(e) => {
+                tx.fill(Err(e.clone()));
+                return rx;
+            }
+        };
+
+        let ids = self.stream_ids.iter().map(|id| *id).collect::<Vec<_>>();
+
+        client
+            .sender
+            .send_runtime_cmd(RuntimeCmd::IndexedCmd(Cmd::Seal(ids, upper, tx)));
+        rx
+    }
+
     /// Unblocks compaction for updates for the given streams at the paired
     /// `since` timestamp.
     ///

@@ -740,6 +740,32 @@ mod tests {
     }
 
     #[test]
+    fn multi_write_handle_seal_all() -> Result<(), Error> {
+        let mut registry = MemMultiRegistry::new();
+        let client = registry.open("1", "multi")?;
+
+        let (write1, _) = client.create_or_load::<String, ()>("1");
+        let (write2, _) = client.create_or_load::<String, ()>("2");
+
+        let mut multi = MultiWriteHandle::new(&write1);
+        multi.add_stream(&write2)?;
+
+        let _ = multi.seal_all(42).recv()?;
+
+        assert_eq!(
+            client.get_description("1")?.upper(),
+            &Antichain::from_elem(42)
+        );
+
+        assert_eq!(
+            client.get_description("2")?.upper(),
+            &Antichain::from_elem(42)
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn codec_mismatch() -> Result<(), Error> {
         let client = MemRegistry::new().runtime_no_reentrance()?;
 
