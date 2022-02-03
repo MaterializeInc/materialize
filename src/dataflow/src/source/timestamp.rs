@@ -311,7 +311,12 @@ impl TimestampBindingBox {
     }
 
     fn set_durability_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
-        <_ as PartialOrder>::less_equal(&self.durability_frontier.borrow(), &new_frontier);
+        assert!(
+            <_ as PartialOrder>::less_equal(&self.durability_frontier.borrow(), &new_frontier),
+            "Durability frontier regression: {:?} to {:?}",
+            self.durability_frontier.borrow(),
+            new_frontier
+        );
         self.durability_frontier = new_frontier.to_owned();
     }
 
