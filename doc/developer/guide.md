@@ -92,7 +92,10 @@ on Slack.
 Besides Rust-Analyzer, the only other known tool with good code navigation features
 is CLion along with its Rust plugin. This is a good choice for developers who prefer
 the JetBrains ecosystem, but we no longer recommend it by default, since
-Rust-Analyzer has long since caught up to it in maturity.
+Rust-Analyzer has long since caught up to it in maturity. If you are a
+Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
+JetBrains license. If you're not yet sure you want to use CLion, you can
+use the 30-day free trial.
 
 ### Debugging
 
