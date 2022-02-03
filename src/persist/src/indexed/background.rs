@@ -205,6 +205,25 @@ impl<B: Blob> Maintainer<B> {
             .inc_by(start.elapsed().as_secs_f64());
         Ok(CompactTraceRes { req, merged })
     }
+
+    /// Asynchronously runs the requested drain on the work pool provided
+    /// at construction time.
+    pub fn drain_unsealed(&self, req: DrainUnsealedReq) -> PFuture<DrainUnsealedRes> {
+        let (tx, rx) = PFuture::new();
+        let blob = Arc::clone(&self.blob);
+        // Ignore the spawn_blocking response since we communicate
+        // success/failure through the returned future.
+        //
+        // TODO: Push the spawn_blocking down into the cpu-intensive bits and
+        // use spawn here once the storage traits are made async.
+        //
+        // TODO(guswynn): consider adding more info to the task name here
+        let _ = self.async_runtime.spawn_blocking_named(
+            || "persist_drain_unsealed",
+            move || tx.fill(Arrangement::drain_unsealed_blocking(&blob, req)),
+        );
+        rx
+    }
 }
 
 #[cfg(test)]

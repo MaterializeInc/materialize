@@ -84,8 +84,12 @@ pub struct Metrics {
     pub(crate) compaction_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) compaction_seconds: ThirdPartyMetric<Counter>,
     pub(crate) compaction_write_bytes: ThirdPartyMetric<UIntCounter>,
-    pub(crate) trace_compaction_error_response_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) unsealed_drain_skipped_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) unsealed_drain_error_response_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) unsealed_drain_unexpected_response_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) trace_compaction_skipped_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) trace_compaction_error_response_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) trace_compaction_unexpected_response_count: ThirdPartyMetric<UIntCounter>,
 
     // TODO: Tag cmd_process_count with cmd type and remove this?
     pub(crate) cmd_write_count: ThirdPartyMetric<UIntCounter>,
@@ -170,13 +174,29 @@ impl Metrics {
                 name: "mz_persist_compaction_bytes",
                 help: "bytes written compacting unsealed and trace",
             )),
-            trace_compaction_error_response_count: registry.register_third_party_visible(metric!(
-                name: "mz_persist_trace_compaction_error_response_count",
-                help: "count of trace compaction requests where an error was returned",
+            unsealed_drain_skipped_count: registry.register_third_party_visible(metric!(
+                name: "mz_persist_unsealed_drain_skipped_count",
+                help: "count of times unsealed drain request generation was skipped",
+            )),
+            unsealed_drain_error_response_count: registry.register_third_party_visible(metric!(
+                name: "mz_persist_unsealed_drain_error_response_count",
+                help: "count of unsealed drain requests where an error was returned",
+            )),
+            unsealed_drain_unexpected_response_count: registry.register_third_party_visible(metric!(
+                name: "mz_persist_unsealed_drain_unexpected_response_count",
+                help: "count of unsealed drain requests where an unexpected response was returned",
             )),
             trace_compaction_skipped_count: registry.register_third_party_visible(metric!(
                 name: "mz_persist_trace_compaction_skipped_count",
                 help: "count of times trace compaction request generation was skipped",
+            )),
+            trace_compaction_error_response_count: registry.register_third_party_visible(metric!(
+                name: "mz_persist_trace_compaction_error_response_count",
+                help: "count of trace compaction requests where an error was returned",
+            )),
+            trace_compaction_unexpected_response_count: registry.register_third_party_visible(metric!(
+                name: "mz_persist_trace_compaction_unexpected_response_count",
+                help: "count of trace compaction requests where an unexpected response was returned",
             )),
             cmd_write_count: registry.register_third_party_visible(metric!(
                 name: "mz_persist_cmd_write_count",

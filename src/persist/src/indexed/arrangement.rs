@@ -348,19 +348,6 @@ impl Arrangement {
         })
     }
 
-    /// Atomically moves all writes in unsealed not in advance of the trace's
-    /// seal frontier into the trace and does any necessary resulting eviction
-    /// work to remove unnecessary batches.
-    pub fn unsealed_drain<L: Blob>(&mut self, blob: &mut BlobCache<L>) -> Result<(), Error> {
-        let req = match self.unsealed_next_drain_req()? {
-            Some(req) => req,
-            None => return Ok(()),
-        };
-        let res = Self::drain_unsealed_blocking(blob, req)?;
-        self.unsealed_handle_drain_response(res);
-        Ok(())
-    }
-
     /// Get the next available drain work from the unsealed, if some exists.
     pub fn unsealed_next_drain_req(&self) -> Result<Option<DrainUnsealedReq>, Error> {
         // If the trace's physical frontier matches the arrangement's logical
@@ -953,6 +940,22 @@ mod tests {
 
     use super::*;
 
+    /// Atomically moves all writes in unsealed not in advance of the trace's
+    /// seal frontier into the trace and does any necessary resulting eviction
+    /// work to remove unnecessary batches.
+    fn unsealed_drain<L: Blob>(
+        arrangement: &mut Arrangement,
+        blob: &mut BlobCache<L>,
+    ) -> Result<(), Error> {
+        let req = match arrangement.unsealed_next_drain_req()? {
+            Some(req) => req,
+            None => return Ok(()),
+        };
+        let res = Arrangement::drain_unsealed_blocking(blob, req)?;
+        arrangement.unsealed_handle_drain_response(res);
+        Ok(())
+    }
+
     /// Take one step towards compacting the trace.
     ///
     /// Returns a list of trace batches that can now be physically deleted after
@@ -1181,7 +1184,7 @@ mod tests {
         // Check that evict correctly returns the list of batches that can be
         // physically deleted.
         f.update_seal(1);
-        f.unsealed_drain(&mut blob)?;
+        unsealed_drain(&mut f, &mut blob)?;
         assert_eq!(
             f.unsealed_evict()
                 .into_iter()
@@ -1206,7 +1209,7 @@ mod tests {
 
         // Check that evict correctly handles removing all data in the unsealed.
         f.update_seal(2);
-        f.unsealed_drain(&mut blob)?;
+        unsealed_drain(&mut f, &mut blob)?;
         assert_eq!(
             f.unsealed_evict()
                 .into_iter()
@@ -1309,7 +1312,7 @@ mod tests {
         assert_eq!(snapshot_updates, updates);
 
         // Physically drain the sealed data from unsealed into trace.
-        f.unsealed_drain(&mut blob)?;
+        unsealed_drain(&mut f, &mut blob)?;
         // Take a step to trim the batch
         assert!(f.unsealed_step(&mut blob)?);
 
@@ -1419,7 +1422,7 @@ mod tests {
         };
         assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
         t.update_seal(1);
-        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(unsealed_drain(&mut t, &mut blob), Ok(()));
         assert_eq!(t.trace_batches.len(), 1);
 
         let batch = BlobUnsealedBatch {
@@ -1431,7 +1434,7 @@ mod tests {
         };
         assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
         t.update_seal(3);
-        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(unsealed_drain(&mut t, &mut blob), Ok(()));
         assert_eq!(t.trace_batches.len(), 2);
 
         let batch = BlobUnsealedBatch {
@@ -1440,7 +1443,7 @@ mod tests {
         };
         assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
         t.update_seal(9);
-        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(unsealed_drain(&mut t, &mut blob), Ok(()));
         assert_eq!(t.trace_batches.len(), 3);
 
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
@@ -1506,7 +1509,7 @@ mod tests {
         };
         assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
         t.update_seal(10);
-        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(unsealed_drain(&mut t, &mut blob), Ok(()));
 
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
@@ -1586,7 +1589,7 @@ mod tests {
         };
         assert_eq!(t.unsealed_append(batch, &mut blob), Ok(()));
         t.update_seal(10);
-        assert_eq!(t.unsealed_drain(&mut blob), Ok(()));
+        assert_eq!(unsealed_drain(&mut t, &mut blob), Ok(()));
 
         let unsealed_updates = vec![
             (("k3".into(), "v3".into()), 10, 1),

@@ -32,7 +32,9 @@ use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::error::Error;
 use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
-use crate::indexed::background::{CompactTraceReq, CompactTraceRes, Maintainer};
+use crate::indexed::background::{
+    CompactTraceReq, CompactTraceRes, DrainUnsealedReq, DrainUnsealedRes, Maintainer,
+};
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
@@ -161,6 +163,8 @@ impl Cmd {
 pub enum MaintenanceReq {
     /// A request to compact a trace by merging together some immutable batches.
     CompactTrace((Id, CompactTraceReq)),
+    /// A request to copy unsealed data into a new trace batch.
+    DrainUnsealed((Id, DrainUnsealedReq)),
 }
 
 /// A future for some work that can be completed outside of the main [Indexed]
@@ -169,6 +173,8 @@ pub enum MaintenanceReq {
 pub enum MaintenanceFuture {
     /// A future to perform some trace compaction.
     CompactTrace((Id, PFuture<CompactTraceRes>)),
+    /// A future to perform some unsealed draining.
+    DrainUnsealed((Id, PFuture<DrainUnsealedRes>)),
 }
 
 /// A response for some work that was completed outside of the main [Indexed] loop.
@@ -177,6 +183,8 @@ pub enum MaintenanceRes {
     /// The results of performing some trace compaction by merging together some
     /// immutable trace batches.
     CompactTrace((Id, Result<CompactTraceRes, Error>)),
+    /// The results of copy unsealed data into a new trace batch.
+    DrainUnsealed((Id, Result<DrainUnsealedRes, Error>)),
 }
 
 impl MaintenanceReq {
@@ -191,6 +199,10 @@ impl MaintenanceReq {
                 let fut = maintainer.compact_trace(req);
                 MaintenanceFuture::CompactTrace((id, fut))
             }
+            MaintenanceReq::DrainUnsealed((id, req)) => {
+                let fut = maintainer.drain_unsealed(req);
+                MaintenanceFuture::DrainUnsealed((id, fut))
+            }
         }
     }
 }
@@ -202,6 +214,9 @@ impl MaintenanceFuture {
         match self {
             MaintenanceFuture::CompactTrace((id, fut)) => {
                 MaintenanceRes::CompactTrace((id, fut.await))
+            }
+            MaintenanceFuture::DrainUnsealed((id, fut)) => {
+                MaintenanceRes::DrainUnsealed((id, fut.await))
             }
         }
     }
@@ -312,6 +327,7 @@ pub struct Indexed<L: Log, B: BlobRead> {
     listeners: HashMap<Id, Vec<crossbeam_channel::Sender<ListenEvent>>>,
     metrics: Arc<Metrics>,
     state: AppliedState,
+    in_flight_unsealed_drains: HashMap<Id, DrainUnsealedReq>,
     in_flight_trace_compactions: HashMap<Id, CompactTraceReq>,
     pending: Option<Pending>,
 }
@@ -361,6 +377,7 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
             listeners: HashMap::new(),
             metrics,
             state,
+            in_flight_unsealed_drains: HashMap::new(),
             in_flight_trace_compactions: HashMap::new(),
             pending: None,
         };
@@ -989,6 +1006,90 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(())
     }
 
+    fn drain_unsealed_maintenance_reqs(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
+        let mut reqs = vec![];
+        for (id, arrangement) in self.state.arrangements.iter() {
+            // Skip over the arrangement if it already has a drain request in flight.
+            //
+            // TODO: note that this works because right now the connection between Indexed
+            // and Maintainer is infallible, and the two cannot fail independently of each
+            // other. If that changes, we will have to revisit the policy around waiting
+            // arbitrarily long for maintenance responses and most likely institute
+            // a timeout.
+            if self.in_flight_unsealed_drains.contains_key(&id) {
+                self.metrics.unsealed_drain_skipped_count.inc();
+                continue;
+            }
+            if let Some(req) = arrangement.unsealed_next_drain_req()? {
+                reqs.push(MaintenanceReq::DrainUnsealed((*id, req.clone())));
+                self.in_flight_unsealed_drains.insert(*id, req);
+            }
+        }
+        Ok(reqs)
+    }
+
+    /// Handle the results of a prior request to drain an unsealed.
+    fn handle_drain_unsealed_res(&mut self, id: Id, res: Result<DrainUnsealedRes, Error>) {
+        // Check that the request belongs to a stream with currently in-flight
+        // drain requests, and matches the request currently in flight for that
+        // stream. We expect this condition to always be true while the
+        // connection between Indexed and Maintainer is infallible.
+        //
+        // TODO: can we get rid of this check and simply attempt to handle the
+        // response we've received?
+        let response_expected = {
+            match (self.in_flight_unsealed_drains.get(&id), &res) {
+                (Some(req), Ok(res)) => req == &res.req,
+                (Some(_), Err(_)) => {
+                    // TODO: if the error response also contained the original
+                    // request, we could make sure to only handle error responses
+                    // that match the currently in-flight request.
+                    true
+                }
+                (None, _) => false,
+            }
+        };
+
+        debug_assert!(
+            response_expected,
+            "unexpected drain response for stream: {:?}",
+            id
+        );
+        if !response_expected {
+            self.metrics.unsealed_drain_unexpected_response_count.inc();
+            return;
+        }
+
+        self.in_flight_unsealed_drains.remove(&id);
+
+        // Ignore the response if it corresponds to an error encountered while
+        // trying to compact the stream. The next call to
+        // drain_unsealed_maintenance_reqs will retry the compaction request.
+        let response = match res {
+            Ok(res) => res,
+            Err(_) => {
+                self.metrics.unsealed_drain_error_response_count.inc();
+                return;
+            }
+        };
+
+        if let Some(drained) = &response.drained {
+            self.metrics
+                .compaction_write_bytes
+                .inc_by(drained.size_bytes);
+        }
+
+        self.apply_batched_cmd(|state, _pending| {
+            // Ignore the response if it belongs to a stream that has since been
+            // deleted.
+            let arrangement = match state.arrangements.get_mut(&id) {
+                Some(arrangement) => arrangement,
+                None => return,
+            };
+            arrangement.unsealed_handle_drain_response(response);
+        });
+    }
+
     fn compact_trace_maintenance_reqs(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         let mut reqs = vec![];
         for (id, arrangement) in self.state.arrangements.iter() {
@@ -1039,6 +1140,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             id
         );
         if !response_expected {
+            self.metrics
+                .trace_compaction_unexpected_response_count
+                .inc();
             return;
         }
 
@@ -1076,14 +1180,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn handle_maintenance_res(&mut self, res: MaintenanceRes) {
         match res {
             MaintenanceRes::CompactTrace((id, res)) => self.handle_compact_trace_res(id, res),
+            MaintenanceRes::DrainUnsealed((id, res)) => self.handle_drain_unsealed_res(id, res),
         };
     }
 
     fn step(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         self.drain_pending()?;
-        self.apply_unbatched_cmd(|state, blob| state.drain_unsealed(blob))?;
+        let mut maintenance_reqs = self.drain_unsealed_maintenance_reqs()?;
         self.compact_unsealed()?;
-        self.compact_trace_maintenance_reqs()
+        maintenance_reqs.extend(self.compact_trace_maintenance_reqs()?);
+        Ok(maintenance_reqs)
     }
 
     /// Drains writes from the log into the unsealed and does any necessary
@@ -1256,16 +1362,6 @@ impl AppliedState {
         };
         self.append_unsealed(id, batch, blob)?;
 
-        Ok(())
-    }
-
-    /// Atomically moves all writes in unsealed not in advance of the trace's
-    /// seal frontier into the trace and does any necessary resulting eviction
-    /// work to remove unnecessary batches.
-    fn drain_unsealed<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<(), Error> {
-        for arrangement in self.arrangements.values_mut() {
-            arrangement.unsealed_drain(blob)?;
-        }
         Ok(())
     }
 
@@ -1482,6 +1578,18 @@ mod tests {
         rx.recv()
     }
 
+    fn step_and_maintenance<L: Log, B: Blob>(
+        i: &mut Indexed<L, B>,
+        m: &Maintainer<B>,
+    ) -> Result<(), Error> {
+        let reqs = i.step()?;
+        for req in reqs {
+            let res = futures_executor::block_on(req.run_async(m).recv());
+            i.handle_maintenance_res(res);
+        }
+        Ok(())
+    }
+
     fn write_req_payload(
         id: Id,
         updates: &[((Vec<u8>, Vec<u8>), u64, isize)],
@@ -1531,6 +1639,11 @@ mod tests {
         ];
 
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
+        let m = Maintainer::new(
+            i.blob.clone(),
+            Arc::new(AsyncRuntime::new()?),
+            Arc::clone(&i.metrics),
+        );
         let id = block_on(|res| i.register("0", "()", "()", res))?;
 
         // Empty things are empty.
@@ -1578,7 +1691,7 @@ mod tests {
         // part of the index. Since we haven't sealed all the data, some of it
         // is still in the unsealed.
         block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 2, handle)))?;
-        i.step()?;
+        step_and_maintenance(&mut i, &m)?;
         assert_eq!(
             block_on(|res| i.apply(Cmd::Read(CmdRead::Snapshot(id, res))))?.read_to_end()?,
             updates
@@ -1592,7 +1705,7 @@ mod tests {
 
         // All the data has been sealed, so it's now all in the trace.
         block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 3, handle)))?;
-        i.step()?;
+        step_and_maintenance(&mut i, &m)?;
         assert_eq!(
             block_on(|res| i.apply(Cmd::Read(CmdRead::Snapshot(id, res))))?.read_to_end()?,
             updates
@@ -1807,7 +1920,11 @@ mod tests {
         let unreliable = UnreliableHandle::default();
         let (mut i, maintainer, id) = trace_compaction_setup(unreliable)?;
 
-        let reqs = i.step()?;
+        let reqs = i
+            .step()?
+            .into_iter()
+            .filter(|x| matches!(x, MaintenanceReq::CompactTrace(_)))
+            .collect::<Vec<_>>();
         assert_eq!(reqs.len(), 1);
         let request = reqs[0].clone();
 
@@ -1907,6 +2024,11 @@ mod tests {
         ];
 
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
+        let m = Maintainer::new(
+            i.blob.clone(),
+            Arc::new(AsyncRuntime::new()?),
+            Arc::clone(&i.metrics),
+        );
         let id = block_on(|res| i.register("0", "", "", res))?;
 
         // Write the data and move it into the unsealed part of the index, which
@@ -1921,7 +2043,7 @@ mod tests {
         // given the data is not ordered by key, so again this should fire a
         // validations error if the sort code doesn't work.
         block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 3, handle)))?;
-        i.step()?;
+        step_and_maintenance(&mut i, &m)?;
 
         // Sanity check that all the data made it into trace as expected.
         let ArrangementSnapshot(unsealed, trace, _, _) =
@@ -1939,6 +2061,11 @@ mod tests {
         ];
 
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
+        let m = Maintainer::new(
+            i.blob.clone(),
+            Arc::new(AsyncRuntime::new()?),
+            Arc::clone(&i.metrics),
+        );
         let id = block_on(|res| i.register("0", "", "", res))?;
 
         // Write the data and move it into the unsealed part of the index.
@@ -1970,7 +2097,7 @@ mod tests {
         // updates at identical ((k, v), t). Since the writes are unconsolidated
         // this test will fail if trace batch consolidation does not work.
         block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 2, handle)))?;
-        i.step()?;
+        step_and_maintenance(&mut i, &m)?;
 
         // Sanity check that all the data made it into trace as expected.
         let ArrangementSnapshot(unsealed, trace, _, _) =
