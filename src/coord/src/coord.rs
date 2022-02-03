@@ -531,7 +531,7 @@ impl Coordinator {
                         .persister
                         .load_source_persist_desc(&source)
                         .map_err(CoordError::Persistence)?
-                        .map(|p| p.primary_stream.since_ts)
+                        .map(|p| p.since_ts)
                         .unwrap_or(0);
 
                     let frontiers = self.new_source_frontiers(
@@ -2283,7 +2283,7 @@ impl Coordinator {
                             .persister
                             .load_source_persist_desc(&source)
                             .map_err(CoordError::Persistence)?
-                            .map(|p| p.primary_stream.since_ts)
+                            .map(|p| p.since_ts)
                             .unwrap_or(0);
                         Ok::<_, CoordError>(since_ts)
                     })
