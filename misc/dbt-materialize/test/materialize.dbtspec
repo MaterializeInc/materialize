@@ -16,7 +16,7 @@
 
 target:
   type: materialize
-  host: "{{ env_var('DBT_HOST') }}"
+  host: materialized
   user: materialize
   pass: password
   database: materialize

@@ -15,11 +15,7 @@
 # limitations under the License.
 
 from dbt.adapters.materialize import MaterializeConnectionManager
-from dbt.adapters.materialize.relation import (
-    MaterializeRelation,
-    MaterializeRelationType,
-)
-from dbt.adapters.postgres import PostgresAdapter, PostgresColumn
+from dbt.adapters.postgres import PostgresAdapter, PostgresColumn, PostgresRelation
 
 MATERIALIZE_GET_COLUMNS_MACRO_NAME = "materialize_get_columns"
 MATERIALIZE_CONVERT_COLUMNS_MACRO_NAME = "sql_convert_columns_in_relation"
@@ -31,7 +27,7 @@ MATERIALIZE_SHOW_VIEW_MACRO_NAME = "materialize_show_view"
 class MaterializeAdapter(PostgresAdapter):
     ConnectionManager = MaterializeConnectionManager
     Column = PostgresColumn
-    Relation = MaterializeRelation
+    Relation = PostgresRelation
 
     @classmethod
     def date_function(cls):
