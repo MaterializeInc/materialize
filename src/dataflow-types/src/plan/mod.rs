@@ -834,6 +834,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 mfp.permute(permutation.clone(), thinning.len() + key.len());
 
                 Some((key, Some(val)))
+            } else if let Some((key, permutation, thinning)) =
+                keys.arranged.iter().find(|(key, permutation, thinning)| {
+                    let mut mfp = mfp.clone();
+                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.is_identity()
+                })
+            {
+                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                Some((key.clone(), None))
             } else if let Some((key, permutation, thinning)) = keys.arbitrary_arrangement() {
                 mfp.permute(permutation.clone(), thinning.len() + key.len());
                 Some((key.clone(), None))
