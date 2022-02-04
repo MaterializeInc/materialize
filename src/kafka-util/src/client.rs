@@ -90,3 +90,10 @@ pub fn get_partitions<C: ClientContext>(
 
     Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
 }
+
+/// Creates a new `rdkafka` `ClientConfig`, configured correctly for
+/// materialized and related services.
+#[allow(clippy::disallowed_methods)]
+pub fn create_new_client_config() -> rdkafka::config::ClientConfig {
+    rdkafka::config::ClientConfig::new()
+}

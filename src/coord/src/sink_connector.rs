@@ -11,14 +11,13 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::config::ClientConfig;
 
 use mz_dataflow_types::sinks::{
     KafkaSinkConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
     KafkaSinkConsistencyConnector, PersistSinkConnector, PersistSinkConnectorBuilder,
     PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
 
@@ -219,7 +218,7 @@ async fn build_kafka(
     let topic = maybe_append_nonce(&builder.topic_prefix);
 
     // Create Kafka topic
-    let mut config = ClientConfig::new();
+    let mut config = create_new_client_config();
     config.set("bootstrap.servers", &builder.broker_addrs.to_string());
     for (k, v) in builder.config_options.iter() {
         // Explicitly reject the statistics interval option here because its not

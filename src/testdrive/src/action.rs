@@ -26,7 +26,7 @@ use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
@@ -733,7 +733,7 @@ pub async fn create_state(
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::producer::FutureProducer;
 
-        let mut kafka_config = ClientConfig::new();
+        let mut kafka_config = create_new_client_config();
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
         kafka_config.set("group.id", "materialize-testdrive");
         kafka_config.set("auto.offset.reset", "earliest");

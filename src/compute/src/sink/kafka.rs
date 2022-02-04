@@ -51,7 +51,7 @@ use mz_interchange::avro::{
     self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
 };
 use mz_interchange::encode::Encode;
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -487,7 +487,7 @@ impl KafkaSinkState {
     }
 
     fn create_producer_config(connector: &KafkaSinkConnector) -> ClientConfig {
-        let mut config = ClientConfig::new();
+        let mut config = create_new_client_config();
         config.set("bootstrap.servers", &connector.addrs.to_string());
 
         // Ensure that messages are sinked in order and without duplicates. Note that
@@ -536,7 +536,7 @@ impl KafkaSinkState {
     }
 
     fn create_consistency_client_config(connector: &KafkaSinkConnector) -> ClientConfig {
-        let mut config = ClientConfig::new();
+        let mut config = create_new_client_config();
         config.set("bootstrap.servers", &connector.addrs.to_string());
         for (k, v) in connector.config_options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't

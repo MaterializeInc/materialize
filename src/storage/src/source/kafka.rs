@@ -28,7 +28,7 @@ use mz_dataflow_types::sources::{
     KafkaSourceConnector, MzOffset,
 };
 use mz_expr::PartitionId;
-use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
+use mz_kafka_util::{client::create_new_client_config, client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
@@ -508,7 +508,7 @@ fn create_kafka_config(
     cluster_id: Uuid,
     config_options: &BTreeMap<String, String>,
 ) -> ClientConfig {
-    let mut kafka_config = ClientConfig::new();
+    let mut kafka_config = create_new_client_config();
 
     // Broker configuration.
     kafka_config.set("bootstrap.servers", &addrs.to_string());
@@ -708,8 +708,10 @@ mod tests {
     use std::time::Duration;
 
     use rdkafka::consumer::{BaseConsumer, Consumer};
-    use rdkafka::{ClientConfig, Message, Offset, TopicPartitionList};
+    use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
+
+    use super::create_new_client_config;
 
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
     // lead to a race condition where sometimes we receive messages from polling the main consumer
@@ -728,7 +730,7 @@ mod tests {
         let topic_name = "queue-test";
         let pid = 0;
 
-        let mut kafka_config = ClientConfig::new();
+        let mut kafka_config = create_new_client_config();
         kafka_config.set("bootstrap.servers", "localhost:9092".to_string());
         kafka_config.set("enable.auto.commit", "false");
         kafka_config.set("group.id", Uuid::new_v4().to_string());
