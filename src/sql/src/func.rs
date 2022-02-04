@@ -1871,6 +1871,18 @@ lazy_static! {
             "make_timestamp" => Scalar {
                 params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp, 3461;
             },
+            "md5" => Scalar {
+                params!(String) => Operation::unary(move |_ecx, input| {
+                    let algorithm = HirScalarExpr::literal(Datum::String("md5"), ScalarType::String);
+                    let encoding = HirScalarExpr::literal(Datum::String("hex"), ScalarType::String);
+                    Ok(input.call_binary(algorithm, BinaryFunc::DigestString).call_binary(encoding, BinaryFunc::Encode))
+                }) => String, 2311;
+                params!(Bytes) => Operation::unary(move |_ecx, input| {
+                    let algorithm = HirScalarExpr::literal(Datum::String("md5"), ScalarType::String);
+                    let encoding = HirScalarExpr::literal(Datum::String("hex"), ScalarType::String);
+                    Ok(input.call_binary(algorithm, BinaryFunc::DigestBytes).call_binary(encoding, BinaryFunc::Encode))
+                }) => String, 2321;
+            },
             "mod" => Scalar {
                 params!(Numeric, Numeric) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Numeric, 1728;
                 params!(Int16, Int16) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int16, 940;
@@ -2016,6 +2028,18 @@ lazy_static! {
             "rtrim" => Scalar {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
                 params!(String, String) => BinaryFunc::TrimTrailing, 876;
+            },
+            "sha224" => Scalar {
+                params!(Bytes) => digest("sha224") => Bytes, 3419;
+            },
+            "sha256" => Scalar {
+                params!(Bytes) => digest("sha256") => Bytes, 3420;
+            },
+            "sha384" => Scalar {
+                params!(Bytes) => digest("sha384") => Bytes, 3421;
+            },
+            "sha512" => Scalar {
+                params!(Bytes) => digest("sha512") => Bytes, 3422;
             },
             "sin" => Scalar {
                 params!(Float64) => UnaryFunc::Sin(func::Sin), 1604;
@@ -2701,6 +2725,13 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr
         )),
         QueryLifetime::Static => sql_bail!("{} cannot be used in static queries; see: https://materialize.com/docs/sql/functions/now_and_mz_logical_timestamp/", name),
     }
+}
+
+fn digest(algorithm: &'static str) -> Operation<HirScalarExpr> {
+    Operation::unary(move |_ecx, input| {
+        let algorithm = HirScalarExpr::literal(Datum::String(algorithm), ScalarType::String);
+        Ok(input.call_binary(algorithm, BinaryFunc::DigestBytes))
+    })
 }
 
 fn mz_cluster_id(ecx: &ExprContext) -> Result<HirScalarExpr, PlanError> {

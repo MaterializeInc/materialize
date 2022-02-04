@@ -586,6 +586,22 @@
       description: >-
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
         `type` algorithm. The supported hash algorithms are the same as for `digest`.
+    - signature: 'md5(data: bytea) -> text'
+      description: >-
+        Computes the MD5 hash of the given bytea `data`.
+        For PostgreSQL compatibility, returns a hex-encoded value of type `text` rather than `bytea`.
+    - signature: 'sha224(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-224 hash of the given bytea `data`.
+    - signature: 'sha256(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-256 hash of the given bytea `data`.
+    - signature: 'sha384(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-384 hash of the given bytea `data`.
+    - signature: 'sha512(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-512 hash of the given bytea `data`.
 
 - type: Window
   description: Window functions compute values across sets of rows related to the current query.
