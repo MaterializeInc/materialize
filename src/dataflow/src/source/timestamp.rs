@@ -1049,6 +1049,7 @@ mod tests {
         let compaction_frontier = Antichain::from_elem(44);
         timestamp_histories.set_compaction_frontier(compaction_frontier.borrow());
         timestamp_histories.set_durability_frontier(compaction_frontier.borrow());
+        timestamp_histories.wrapper.borrow_mut().compact();
         let mut actual_updates = timestamp_binding_updater
             .update(&timestamp_histories)
             .collect::<Vec<_>>();
