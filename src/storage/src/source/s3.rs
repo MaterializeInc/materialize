@@ -47,10 +47,10 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
-use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsConfig, AwsExternalId, Compression, ExternalSourceConnector,
-    MzOffset, S3KeySource,
-};
+use mz_dataflow_types::aws::{AwsConfig, AwsExternalId};
+use mz_dataflow_types::sources::encoding::SourceDataEncoding;
+use mz_dataflow_types::sources::{Compression, ExternalSourceConnector, MzOffset, S3KeySource};
+use mz_dataflow_types::ConnectorContext;
 use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
@@ -126,12 +126,12 @@ async fn download_objects_task(
     tx: Sender<S3Result<InternalMessage>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_config: AwsConfig,
-    aws_external_id: AwsExternalId,
+    aws_external_id: Option<AwsExternalId>,
     activator: SyncActivator,
     compression: Compression,
     metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id).await;
+    let config = aws_config.load(aws_external_id.as_ref()).await;
     let client = aws_sdk_s3::Client::new(&config);
 
     struct BucketInfo {
@@ -239,11 +239,11 @@ async fn scan_bucket_task(
     source_id: String,
     glob: Option<GlobMatcher>,
     aws_config: AwsConfig,
-    aws_external_id: AwsExternalId,
+    aws_external_id: Option<AwsExternalId>,
     tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id).await;
+    let config = aws_config.load(aws_external_id.as_ref()).await;
     let client = aws_sdk_s3::Client::new(&config);
 
     let glob = glob.as_ref();
@@ -352,7 +352,7 @@ async fn read_sqs_task(
     glob: Option<GlobMatcher>,
     queue: String,
     aws_config: AwsConfig,
-    aws_external_id: AwsExternalId,
+    aws_external_id: Option<AwsExternalId>,
     tx: Sender<S3Result<KeyInfo>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
@@ -362,7 +362,7 @@ async fn read_sqs_task(
         source_id, queue,
     );
 
-    let config = aws_config.load(aws_external_id).await;
+    let config = aws_config.load(aws_external_id.as_ref()).await;
     let client = aws_sdk_sqs::Client::new(&config);
 
     let glob = glob.as_ref();
@@ -778,10 +778,10 @@ impl SourceReader for S3SourceReader {
         _worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        metrics: SourceBaseMetrics,
+        metrics: crate::source::metrics::SourceBaseMetrics,
+        connector_context: ConnectorContext,
     ) -> Result<Self, anyhow::Error> {
         let s3_conn = match connector {
             ExternalSourceConnector::S3(s3_conn) => s3_conn,
@@ -805,7 +805,7 @@ impl SourceReader for S3SourceReader {
                     dataflow_tx,
                     shutdown_rx.clone(),
                     s3_conn.aws.clone(),
-                    aws_external_id.clone(),
+                    connector_context.aws_external_id.clone(),
                     consumer_activator,
                     s3_conn.compression,
                     metrics.clone(),
@@ -827,7 +827,7 @@ impl SourceReader for S3SourceReader {
                                 source_id.to_string(),
                                 glob.clone(),
                                 s3_conn.aws.clone(),
-                                aws_external_id.clone(),
+                                connector_context.aws_external_id.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
                             ),
@@ -845,7 +845,7 @@ impl SourceReader for S3SourceReader {
                                 glob.clone(),
                                 queue,
                                 s3_conn.aws.clone(),
-                                aws_external_id.clone(),
+                                connector_context.aws_external_id.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
                                 metrics.clone(),

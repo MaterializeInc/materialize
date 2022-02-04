@@ -19,7 +19,7 @@ use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{Event, Subscriber};
+use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::format::{format, Format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
@@ -145,6 +145,21 @@ pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
     .await?;
 
     Ok(())
+}
+
+/// Returns the level of a specific target from a [`Targets`].
+pub fn target_level(targets: &Targets, target: &str) -> Level {
+    if targets.would_enable(target, &Level::TRACE) {
+        Level::TRACE
+    } else if targets.would_enable(target, &Level::DEBUG) {
+        Level::DEBUG
+    } else if targets.would_enable(target, &Level::INFO) {
+        Level::INFO
+    } else if targets.would_enable(target, &Level::WARN) {
+        Level::WARN
+    } else {
+        Level::ERROR
+    }
 }
 
 /// A wrapper around a `tracing_subscriber` `Format` that

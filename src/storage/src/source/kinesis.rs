@@ -21,16 +21,15 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KinesisSourceConnector,
-    MzOffset,
-};
-use mz_dataflow_types::SourceErrorDetails;
+use mz_dataflow_types::aws::AwsExternalId;
+use mz_dataflow_types::sources::encoding::SourceDataEncoding;
+use mz_dataflow_types::sources::{ExternalSourceConnector, KinesisSourceConnector, MzOffset};
+use mz_dataflow_types::{ConnectorContext, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 
-use crate::source::metrics::{KinesisMetrics, SourceBaseMetrics};
+use crate::source::metrics::KinesisMetrics;
 use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
 /// To read all data from a Kinesis stream, we need to continually update
@@ -128,17 +127,21 @@ impl SourceReader for KinesisSourceReader {
         _worker_count: usize,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        base_metrics: SourceBaseMetrics,
+        metrics: crate::source::metrics::SourceBaseMetrics,
+        connector_context: ConnectorContext,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kinesis(kc) => kc,
             _ => unreachable!(),
         };
 
-        let state = block_on(create_state(&base_metrics.kinesis, kc, aws_external_id));
+        let state = block_on(create_state(
+            &metrics.kinesis,
+            kc,
+            connector_context.aws_external_id.as_ref(),
+        ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
                 kinesis_client,
@@ -148,7 +151,7 @@ impl SourceReader for KinesisSourceReader {
                 shard_set,
                 stream_name,
                 processed_message_count: 0,
-                base_metrics: base_metrics.kinesis,
+                base_metrics: metrics.kinesis,
             }),
             Err(e) => Err(anyhow!("{}", e)),
         }
@@ -263,7 +266,7 @@ impl SourceReader for KinesisSourceReader {
 async fn create_state(
     base_metrics: &KinesisMetrics,
     c: KinesisSourceConnector,
-    aws_external_id: AwsExternalId,
+    aws_external_id: Option<&AwsExternalId>,
 ) -> Result<
     (
         KinesisClient,

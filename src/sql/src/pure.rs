@@ -27,8 +27,9 @@ use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
+use mz_dataflow_types::aws::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
-use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
+use mz_dataflow_types::ConnectorContext;
 
 use mz_repr::strconv;
 
@@ -52,8 +53,8 @@ use crate::normalize;
 /// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
     now: u64,
-    aws_external_id: AwsExternalId,
     mut stmt: CreateSourceStatement<Raw>,
+    connector_context: ConnectorContext,
 ) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
     let CreateSourceStatement {
         connector,
@@ -102,9 +103,14 @@ pub async fn purify_create_source(
                 // Verify that the provided security options are valid and then test them.
                 kafka_util::extract_config(&mut with_options_map)?
             };
-            let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
-                .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+            let consumer = kafka_util::create_consumer(
+                &broker,
+                &topic,
+                &config_options,
+                connector_context.librdkafka_log_level,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
 
             // Translate `kafka_time_offset` to `start_offset`.
             match kafka_util::lookup_start_offsets(
@@ -137,7 +143,8 @@ pub async fn purify_create_source(
         }
         CreateSourceConnector::S3 { .. } => {
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
-            validate_aws_credentials(&aws_config, aws_external_id).await?;
+            validate_aws_credentials(&aws_config, connector_context.aws_external_id.as_ref())
+                .await?;
         }
         CreateSourceConnector::Kinesis { arn } => {
             let region = arn
@@ -147,7 +154,8 @@ pub async fn purify_create_source(
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
             let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
-            validate_aws_credentials(&aws_config, aws_external_id).await?;
+            validate_aws_credentials(&aws_config, connector_context.aws_external_id.as_ref())
+                .await?;
         }
         CreateSourceConnector::Postgres {
             conn,
@@ -504,7 +512,7 @@ async fn compile_proto(
 /// whether the specified AWS configuration is valid.
 async fn validate_aws_credentials(
     config: &AwsConfig,
-    external_id: AwsExternalId,
+    external_id: Option<&AwsExternalId>,
 ) -> Result<(), anyhow::Error> {
     let config = config.load(external_id).await;
     let sts_client = aws_sdk_sts::Client::new(&config);

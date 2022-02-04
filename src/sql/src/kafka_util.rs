@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -204,8 +204,9 @@ pub async fn create_consumer(
     broker: &str,
     topic: &str,
     options: &BTreeMap<String, String>,
+    librdkafka_log_level: tracing::Level,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
-    let mut config = rdkafka::ClientConfig::new();
+    let mut config = create_new_client_config(librdkafka_log_level);
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
         config.set(k, v);

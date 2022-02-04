@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::env;
 use std::fmt;
 use std::path::PathBuf;
 use std::process;
@@ -25,7 +26,7 @@ use tracing_subscriber::filter::Targets;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
@@ -178,10 +179,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
-        aws_external_id: args
-            .aws_external_id
-            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
-            .unwrap_or(AwsExternalId::NotProvided),
+        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
     };
 
     let serve_config = ServeConfig {

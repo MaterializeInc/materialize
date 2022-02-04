@@ -25,8 +25,8 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{RenderSourcesCommand, StorageCommand, StorageResponse};
-use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
@@ -75,12 +75,12 @@ pub struct StorageState {
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
     pub source_metrics: SourceBaseMetrics,
-    /// An external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id: AwsExternalId,
     /// Index of the associated timely dataflow worker.
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
     pub timely_worker_peers: usize,
+    /// Configuration for source and sink connectors.
+    pub connector_context: ConnectorContext,
 }
 
 /// State about a single table.

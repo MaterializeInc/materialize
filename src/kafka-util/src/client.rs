@@ -14,10 +14,11 @@ use std::time::Duration;
 use anyhow::bail;
 use mz_ore::collections::CollectionExt;
 use rdkafka::client::Client;
+use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::ConsumerContext;
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
 use rdkafka::ClientContext;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Level};
 
 /// A `ClientContext` implementation that uses `tracing` instead of `log` macros.
 ///
@@ -89,4 +90,57 @@ pub fn get_partitions<C: ClientContext>(
     }
 
     Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
+}
+
+/// A simpler version of [`create_new_client_config`] that defaults
+/// the `log_level` to `INFO` and should only be used in tests.
+pub fn create_new_client_config_simple() -> ClientConfig {
+    create_new_client_config(tracing::Level::INFO)
+}
+
+/// Build a new [`rdkafka`] [`ClientConfig`] with its `log_level` set correctly
+/// based on the passed through [`tracing::Level`]. This level should be
+/// determined for `target: "librdkafka"`.
+pub fn create_new_client_config(tracing_level: Level) -> ClientConfig {
+    #[allow(clippy::disallowed_methods)]
+    let mut config = ClientConfig::new();
+
+    let level = if tracing_level >= Level::DEBUG {
+        RDKafkaLogLevel::Debug
+    } else if tracing_level >= Level::INFO {
+        RDKafkaLogLevel::Info
+    } else if tracing_level >= Level::WARN {
+        RDKafkaLogLevel::Warning
+    } else {
+        RDKafkaLogLevel::Error
+    };
+    // WARNING WARNING WARNING
+    //
+    // For whatever reason, if you change this `target` to something else, this
+    // log line might break. I (guswynn) did some extensive investigation with
+    // the tracing folks, and we learned that this edge case only happens with
+    // 1. a different target
+    // 2. only this file (so far as I can tell)
+    // 3. only in certain subscriber combinations
+    // 4. only if the `tracing-log` feature is on.
+    //
+    // Our conclusion was that one of our dependencies is doing something
+    // problematic with `log`.
+    //
+    // For now, this works, and prints a nice log line exactly when we want it.
+    //
+    // TODO(guswynn): when we can remove `tracing-log`, remove this warning
+    tracing::debug!(target: "librdkafka", level = ?level, "Determined log level for librdkafka");
+    config.set_log_level(level);
+
+    // Patch the librdkafka debug log system into the Rust `log` ecosystem. This
+    // is a very simple integration at the moment; enabling `debug`-level logs
+    // for the `librdkafka` target enables the full firehouse of librdkafka
+    // debug logs. We may want to investigate finer-grained control.
+    if tracing_level >= Level::DEBUG {
+        tracing::debug!(target: "librdkafka", "Enabling debug logs for rdkafka");
+        config.set("debug", "all");
+    }
+
+    config
 }

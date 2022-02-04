@@ -271,7 +271,6 @@ where
                 base_metrics: &storage_state.source_metrics,
                 storage_metadata,
                 as_of: as_of_frontier.clone(),
-                aws_external_id: storage_state.aws_external_id.clone(),
             };
 
             // Pubnub and Postgres are `SimpleSource`s, so they produce _raw_ sources
@@ -307,7 +306,7 @@ where
                         let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader>(
                             base_source_config,
                             &connector,
-                            storage_state.aws_external_id.clone(),
+                            storage_state.connector_context.clone(),
                         );
                         ((SourceType::Delimited(ok), err), cap)
                     }
@@ -318,7 +317,7 @@ where
                         >(
                             base_source_config,
                             &connector,
-                            storage_state.aws_external_id.clone(),
+                            storage_state.connector_context.clone(),
                         );
                         ((SourceType::Delimited(ok), err), cap)
                     }
@@ -326,7 +325,7 @@ where
                         let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader>(
                             base_source_config,
                             &connector,
-                            storage_state.aws_external_id.clone(),
+                            storage_state.connector_context.clone(),
                         );
                         ((SourceType::ByteStream(ok), err), cap)
                     }
@@ -335,7 +334,7 @@ where
                         let ((ok, err), cap) = source::create_raw_source::<_, PubNubSourceReader>(
                             base_source_config,
                             &connector,
-                            storage_state.aws_external_id.clone(),
+                            storage_state.connector_context.clone(),
                         );
                         ((SourceType::Row(ok), err), cap)
                     }

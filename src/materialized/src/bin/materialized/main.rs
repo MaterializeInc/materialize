@@ -49,7 +49,7 @@ use uuid::Uuid;
 use materialized::{
     OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
@@ -472,7 +472,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
     runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
-        log_filter: args.log_filter,
+        log_filter: args.log_filter.clone(),
         opentelemetry_endpoint: args.opentelemetry_endpoint,
         opentelemetry_headers: args
             .opentelemetry_header
@@ -752,14 +752,11 @@ max log level: {max_log_level}",
         orchestrator,
         secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
-        aws_external_id: args
-            .aws_external_id
-            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
-            .unwrap_or(AwsExternalId::NotProvided),
         metrics_registry,
         now: SYSTEM_TIME.clone(),
         replica_sizes,
         availability_zones: args.availability_zone,
+        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
     }))?;
 
     eprintln!(

@@ -28,7 +28,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_coord::catalog::{Catalog, ConnCatalog};
 use mz_coord::session::Session;
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::now::NOW_ZERO;
 use rand::Rng;
 use rdkafka::ClientConfig;
@@ -795,7 +795,7 @@ pub async fn create_state(
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::producer::FutureProducer;
 
-        let mut kafka_config = ClientConfig::new();
+        let mut kafka_config = create_new_client_config_simple();
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
         kafka_config.set("group.id", "materialize-testdrive");
         kafka_config.set("auto.offset.reset", "earliest");

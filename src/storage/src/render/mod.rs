@@ -138,7 +138,6 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
-
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
