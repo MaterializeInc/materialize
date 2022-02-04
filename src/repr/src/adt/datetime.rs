@@ -126,6 +126,7 @@ pub enum DateTimeField {
     Hour,
     Minute,
     Second,
+    Milliseconds,
 }
 
 impl fmt::Display for DateTimeField {
@@ -137,6 +138,7 @@ impl fmt::Display for DateTimeField {
             DateTimeField::Hour => "HOUR",
             DateTimeField::Minute => "MINUTE",
             DateTimeField::Second => "SECOND",
+            DateTimeField::Milliseconds => "MILLISECONDS",
         })
     }
 }
@@ -161,6 +163,7 @@ impl FromStr for DateTimeField {
             "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
             "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
             "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
+            "MILLISECOND" | "MILLISECONDS" | "MS" => Ok(Self::Milliseconds),
             _ => Err(format!("invalid DateTimeField: {}", s)),
         }
     }
@@ -188,7 +191,7 @@ impl DateTimeField {
     ///
     /// # Panics
     ///
-    /// Panics if called on a non-duration field.
+    /// Panics if called on a non-duration field or a field smaller than a second.
     pub fn seconds_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
@@ -196,7 +199,22 @@ impl DateTimeField {
             Hour => 60 * 60,
             Minute => 60,
             Second => 1,
-            _other => unreachable!("Do not call with a non-duration field"),
+            _other => unreachable!(
+                "Do not call with a non-duration field or a field smaller than a second"
+            ),
+        }
+    }
+
+    /// Returns the number of 'fields' in a single second.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-duration field or a field smaller than a second.
+    pub fn seconds_divider(self) -> i64 {
+        use DateTimeField::*;
+        match self {
+            Milliseconds => 1_000,
+            _other => unreachable!("Do not call with a field larger than or equal to a second"),
         }
     }
 
@@ -204,9 +222,13 @@ impl DateTimeField {
     ///
     /// # Panics
     ///
-    /// Panics if called on a non-duration field.
+    /// Panics if called on a non-duration field or a field smaller than a nanosecond.
     pub fn nanos_multiplier(self) -> i64 {
-        self.seconds_multiplier() * 1_000_000_000
+        use DateTimeField::*;
+        match self {
+            Milliseconds => 1_000_000,
+            _ => self.seconds_multiplier() * 1_000_000_000,
+        }
     }
 }
 
@@ -219,6 +241,7 @@ impl DateTimeField {
 /// let mut itr = Hour.into_iter();
 /// assert_eq!(itr.next(), Some(Minute));
 /// assert_eq!(itr.next(), Some(Second));
+/// assert_eq!(itr.next(), Some(Milliseconds));
 /// assert_eq!(itr.next(), None);
 /// ```
 #[derive(Debug)]
@@ -235,7 +258,8 @@ impl Iterator for DateTimeFieldIterator {
             Some(Day) => Some(Hour),
             Some(Hour) => Some(Minute),
             Some(Minute) => Some(Second),
-            Some(Second) => None,
+            Some(Second) => Some(Milliseconds),
+            Some(Milliseconds) => None,
             None => None,
         };
         self.0.clone()
@@ -252,6 +276,7 @@ impl DoubleEndedIterator for DateTimeFieldIterator {
             Some(Hour) => Some(Day),
             Some(Minute) => Some(Hour),
             Some(Second) => Some(Minute),
+            Some(Milliseconds) => Some(Second),
             None => None,
         };
         self.0.clone()
@@ -282,16 +307,6 @@ impl DateTimeFieldValue {
     /// Construct `DateTimeFieldValue { unit, fraction }`.
     pub fn new(unit: i64, fraction: i64) -> Self {
         DateTimeFieldValue { unit, fraction }
-    }
-
-    /// Divides `unit` and `fraction` by `x`, carrying the `unit` remainder into `fraction`.
-    /// # Panics
-    /// - If `x == 0`.
-    fn div(&mut self, x: i64) {
-        let mut n: i128 = i128::from(self.unit) * 1_000_000_000 + i128::from(self.fraction);
-        n /= i128::from(x);
-        self.fraction = (n % 1_000_000_000) as i64;
-        self.unit = (n / 1_000_000_000) as i64;
     }
 }
 
@@ -380,6 +395,7 @@ pub struct ParsedDateTime {
     pub minute: Option<DateTimeFieldValue>,
     // second.fraction is equivalent to nanoseconds.
     pub second: Option<DateTimeFieldValue>,
+    pub millisecond: Option<DateTimeFieldValue>,
     pub timezone_offset_second: Option<Timezone>,
 }
 
@@ -392,6 +408,7 @@ impl Default for ParsedDateTime {
             hour: None,
             minute: None,
             second: None,
+            millisecond: None,
             timezone_offset_second: None,
         }
     }
@@ -411,7 +428,7 @@ impl ParsedDateTime {
         // Add all DateTimeFields, from Year to Seconds.
         self.add_field(Year, &mut months, &mut seconds, &mut nanos)?;
 
-        for field in Year.into_iter().take_while(|f| *f <= Second) {
+        for field in Year.into_iter().take_while(|f| *f <= Milliseconds) {
             self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
         }
 
@@ -444,6 +461,9 @@ impl ParsedDateTime {
         nanos: &mut i64,
     ) -> Result<(), String> {
         use DateTimeField::*;
+
+        if let Milliseconds = d {}
+
         match d {
             Year => {
                 let (y, y_f) = match self.units_of(Year) {
@@ -505,8 +525,8 @@ impl ParsedDateTime {
                 *nanos += m_f_ns % 1_000_000_000;
                 Ok(())
             }
-            dhms => {
-                let (t, t_f) = match self.units_of(dhms) {
+            Day | Hour | Minute | Second => {
+                let (t, t_f) = match self.units_of(d) {
                     Some(t) => (t.unit, t.fraction),
                     None => return Ok(()),
                 };
@@ -523,8 +543,8 @@ impl ParsedDateTime {
                     })?;
 
                 let t_f_ns = t_f
-                    .checked_mul(dhms.seconds_multiplier())
-                    .ok_or_else(|| format!("Intermediate overflow in {} fraction", dhms))?;
+                    .checked_mul(d.seconds_multiplier())
+                    .ok_or_else(|| format!("Intermediate overflow in {} fraction", d))?;
 
                 // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000
                 *seconds = seconds.checked_add(t_f_ns / 1_000_000_000).ok_or_else(|| {
@@ -536,6 +556,49 @@ impl ParsedDateTime {
                 })?;
 
                 *nanos += t_f_ns % 1_000_000_000;
+                Ok(())
+            }
+            Milliseconds => {
+                let (t, t_f) = match self.units_of(d) {
+                    Some(t) => (t.unit, t.fraction),
+                    None => return Ok(()),
+                };
+
+                *seconds = t
+                    .checked_div(d.seconds_divider())
+                    .and_then(|t_s| seconds.checked_add(t_s))
+                    .ok_or_else(|| {
+                        format!(
+                            "Overflows maximum seconds; \
+                             cannot exceed {} seconds",
+                            std::i64::MAX
+                        )
+                    })?;
+
+                *nanos = t
+                    .checked_rem(d.seconds_divider())
+                    .and_then(|t_s| t_s.checked_mul(d.nanos_multiplier()))
+                    .and_then(|t_s| nanos.checked_add(t_s))
+                    .ok_or_else(|| {
+                        format!(
+                            "Overflows maximum nanoseconds; \
+                             cannot exceed {} nanoseconds",
+                            std::i64::MAX
+                        )
+                    })?;
+
+                *nanos = t_f
+                    .checked_div(d.seconds_divider())
+                    .and_then(|t_s| t_s.checked_rem(1_000_000_000))
+                    .and_then(|t_s| nanos.checked_add(t_s))
+                    .ok_or_else(|| {
+                        format!(
+                            "Overflows maximum nanoseconds; \
+                             cannot exceed {} nanoseconds",
+                            std::i64::MAX
+                        )
+                    })?;
+
                 Ok(())
             }
         }
@@ -797,11 +860,19 @@ impl ParsedDateTime {
                 Second if self.second.is_none() => {
                     self.second = u;
                 }
+                Milliseconds if self.millisecond.is_none() && !self.seconds_has_fraction() => {
+                    self.millisecond = u;
+                }
                 _ => return Err(format!("{} field set twice", f)),
             }
         }
         Ok(())
     }
+
+    fn seconds_has_fraction(&self) -> bool {
+        return self.second.is_some() && self.second.as_ref().unwrap().fraction > 0;
+    }
+
     pub fn check_datelike_bounds(&mut self) -> Result<(), String> {
         if let Some(year) = self.year {
             // 1BC is not represented as year 0 at the parser level, only internally
@@ -863,23 +934,36 @@ impl ParsedDateTime {
                     };
                 }
             }
-            Hour | Minute | Second => {
+            Hour | Minute | Second | Milliseconds => {
                 if let Some(minute) = self.minute {
                     if minute.unit < -59 || minute.unit > 59 {
                         return Err(format!("MINUTE must be [-59, 59], got {}", minute.unit));
                     };
                 }
+
+                let mut seconds = 0;
+                let mut nanoseconds = 0;
+
                 if let Some(second) = self.second {
-                    if second.unit < -60 || second.unit > 60 {
-                        return Err(format!("SECOND must be [-60, 60], got {}", second.unit));
-                    };
-                    if second.fraction < -1_000_000_000 || second.fraction > 1_000_000_000 {
-                        return Err(format!(
-                            "NANOSECOND must be [-1_000_000_000, 1_000_000_000], got {}",
-                            second.fraction
-                        ));
-                    };
+                    seconds += second.unit;
+                    nanoseconds += second.fraction;
                 }
+
+                if let Some(millisecond) = self.millisecond {
+                    seconds += millisecond.unit / 1_000;
+                    nanoseconds += (millisecond.unit % 1_000) * 1_000_000;
+                    nanoseconds += (millisecond.fraction / 1_000) % 1_000_000_000;
+                }
+
+                if seconds < -60 || seconds > 60 {
+                    return Err(format!("SECOND must be [-60, 60], got {}", seconds));
+                };
+                if nanoseconds < -1_000_000_000 || nanoseconds > 1_000_000_000 {
+                    return Err(format!(
+                        "NANOSECOND must be [-1_000_000_000, 1_000_000_000], got {}",
+                        nanoseconds
+                    ));
+                };
             }
             Day => {}
         }
@@ -903,6 +987,7 @@ impl ParsedDateTime {
             DateTimeField::Hour => self.hour,
             DateTimeField::Minute => self.minute,
             DateTimeField::Second => self.second,
+            DateTimeField::Milliseconds => self.millisecond,
         }
     }
 }
@@ -1048,6 +1133,12 @@ fn fill_pdt_interval_sql(
                 return Err("HOUR, MINUTE, SECOND field set twice".into());
             }
         }
+        Milliseconds => {
+            return Err(format!(
+                "Cannot specify {} field for SQL standard-style interval parts",
+                leading_field
+            ))
+        }
     }
 
     let mut expected = expected_sql_standard_interval_tokens(leading_field);
@@ -1083,6 +1174,12 @@ fn fill_pdt_interval_sql(
             if pdt.second.is_none() {
                 pdt.second = Some(DateTimeFieldValue::default());
             }
+        }
+        Milliseconds => {
+            return Err(format!(
+                "Cannot specify {} field for SQL standard-style interval parts",
+                leading_field
+            ))
         }
     }
 
@@ -1187,13 +1284,10 @@ fn fill_pdt_from_tokens(
             // If we got a DateTimeUnits, attempt to convert it to a TimeUnit.
             (DateTimeUnit(u), TimeUnit(_)) => {
                 let f = match u {
-                    DateTimeUnits::Milliseconds => {
-                        unit_buf.as_mut().map(|b| b.div(1_000));
-                        DateTimeField::Second
-                    }
                     DateTimeUnits::Hour => DateTimeField::Hour,
                     DateTimeUnits::Minute => DateTimeField::Minute,
                     DateTimeUnits::Second => DateTimeField::Second,
+                    DateTimeUnits::Milliseconds => DateTimeField::Milliseconds,
                     _ => return Err(format!("unsupported unit {}", u)),
                 };
                 if unit_buf.is_some() && f != current_field {
@@ -1373,6 +1467,7 @@ fn determine_format_w_datetimefield(
         Some(DateTimeUnit(DateTimeUnits::Hour)) => Ok(Some(PostgreSql(Hour))),
         Some(DateTimeUnit(DateTimeUnits::Minute)) => Ok(Some(PostgreSql(Minute))),
         Some(DateTimeUnit(DateTimeUnits::Second)) => Ok(Some(PostgreSql(Second))),
+        Some(DateTimeUnit(DateTimeUnits::Milliseconds)) => Ok(Some(PostgreSql(Milliseconds))),
         Some(DateTimeUnit(_)) => Ok(None),
         _ => Err("Cannot determine format of all parts".into()),
     }
@@ -1433,8 +1528,8 @@ fn expected_sql_standard_interval_tokens(from: DateTimeField) -> VecDeque<TimeSt
         Year => (0, 4),
         Month => (2, 4),
         Day => (4, 6),
-        hms => {
-            return expected_dur_like_tokens(hms)
+        _ => {
+            return expected_dur_like_tokens(from)
                 .expect("input to expected_dur_like_tokens shown to be valid");
         }
     };
@@ -1912,58 +2007,8 @@ mod test {
         use DateTimeField::*;
         assert_eq!(
             Year.into_iter().take(10).collect::<Vec<_>>(),
-            vec![Month, Day, Hour, Minute, Second]
+            vec![Month, Day, Hour, Minute, Second, Milliseconds]
         )
-    }
-
-    #[test]
-    fn test_datetimefieldvalue_div() {
-        let test_cases = vec![
-            (
-                DateTimeFieldValue::new(0, 0),
-                1,
-                DateTimeFieldValue::new(0, 0),
-            ),
-            (
-                DateTimeFieldValue::new(0, 1),
-                1,
-                DateTimeFieldValue::new(0, 1),
-            ),
-            (
-                DateTimeFieldValue::new(1, 0),
-                1,
-                DateTimeFieldValue::new(1, 0),
-            ),
-            (
-                DateTimeFieldValue::new(1, 0),
-                2,
-                DateTimeFieldValue::new(0, 500_000_000),
-            ),
-            (
-                DateTimeFieldValue::new(2, 2),
-                2,
-                DateTimeFieldValue::new(1, 1),
-            ),
-            (
-                DateTimeFieldValue::new(3, 0),
-                2,
-                DateTimeFieldValue::new(1, 500_000_000),
-            ),
-            (
-                DateTimeFieldValue::new(123, 456_789_321),
-                1_000,
-                DateTimeFieldValue::new(0, 123_456_789),
-            ),
-            (
-                DateTimeFieldValue::new(1_234, 567_890_321),
-                1_000,
-                DateTimeFieldValue::new(1, 234_567_890),
-            ),
-        ];
-        for mut test in test_cases.into_iter() {
-            test.0.div(test.1);
-            assert_eq!(test.0, test.2);
-        }
     }
 
     #[test]
@@ -2305,12 +2350,12 @@ mod test {
         }
     }
     #[test]
-    #[should_panic(expected = "Cannot get smaller DateTimeField than SECOND")]
+    #[should_panic(expected = "Cannot get smaller DateTimeField than MILLISECONDS")]
     fn test_fill_pdt_from_tokens_panic() {
         use DateTimeField::*;
         let test_cases = [
             // Mismatched syntax
-            ("1 2", "0 0", Second, 1),
+            ("1 2", "0 0", Milliseconds, 1),
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
@@ -3145,7 +3190,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeFieldValue::new(0, 1_200_000)),
+                    millisecond: Some(DateTimeFieldValue::new(1, 200_000_000)),
                     ..Default::default()
                 },
                 "1.2ms",
@@ -3153,7 +3198,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeFieldValue::new(0, 1_000_000)),
+                    millisecond: Some(DateTimeFieldValue::new(1, 0)),
                     ..Default::default()
                 },
                 "1ms",
@@ -3161,7 +3206,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeFieldValue::new(2, 100_000_000)),
+                    millisecond: Some(DateTimeFieldValue::new(2100, 0)),
                     ..Default::default()
                 },
                 "2100ms",
@@ -3170,7 +3215,7 @@ mod test {
             (
                 ParsedDateTime {
                     hour: Some(DateTimeFieldValue::new(1, 0)),
-                    second: Some(DateTimeFieldValue::new(0, 2_000_000)),
+                    millisecond: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "1h 2ms",
@@ -3290,25 +3335,6 @@ mod test {
                 "-9223372036854775808 seconds",
                 Day,
                 "Unable to parse value as a number at index 20: number too large to fit in target type",
-            ),
-            (
-                "2s 1ms",
-                Second,
-                "SECOND field set twice",
-            ),
-
-            // Milliseconds aren't well supported. Improve these.
-            (
-                "1 ms",
-                Second,
-                "Cannot determine format of all parts. Add explicit time components, e.g. \
-                INTERVAL '1 day' or INTERVAL '1' DAY",
-            ),
-            (
-                "1.2 ms",
-                Second,
-                "Cannot determine format of all parts. Add explicit time components, e.g. \
-                INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
             (
                 "1.0us",
