@@ -135,6 +135,8 @@ pub struct PersistConfig {
     /// version of the creating process).
     pub lock_info: String,
     pub min_step_interval: Duration,
+    /// Maximum size of the in-memory blob storage cache, in bytes.
+    pub cache_size_limit: Option<usize>,
 }
 
 impl PersistConfig {
@@ -147,6 +149,7 @@ impl PersistConfig {
             kafka_sources_enabled: false,
             lock_info: Default::default(),
             min_step_interval: Duration::default(),
+            cache_size_limit: None,
         }
     }
 
@@ -171,7 +174,7 @@ impl PersistConfig {
                     let mut blob = FileBlob::open_exclusive((&s.blob_path).into(), lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
-                        RuntimeConfig::with_min_step_interval(self.min_step_interval),
+                        RuntimeConfig::new(self.min_step_interval, self.cache_size_limit),
                         log,
                         blob,
                         build,
@@ -186,7 +189,7 @@ impl PersistConfig {
                     let mut blob = S3Blob::open_exclusive(config, lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
-                        RuntimeConfig::with_min_step_interval(self.min_step_interval),
+                        RuntimeConfig::new(self.min_step_interval, self.cache_size_limit),
                         log,
                         blob,
                         build,

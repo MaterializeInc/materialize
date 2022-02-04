@@ -92,6 +92,7 @@ where
         Arc::clone(&metrics),
         Arc::clone(&async_runtime),
         blob,
+        config.cache_size_limit,
     );
     let maintainer = Maintainer::new(
         blob.clone(),
@@ -181,7 +182,7 @@ where
     };
 
     // Start up the runtime.
-    let blob = BlobCache::new(build, Arc::clone(&metrics), async_runtime, blob);
+    let blob = BlobCache::new(build, Arc::clone(&metrics), async_runtime, blob, None);
     let indexed = Indexed::new(ErrorLog, blob, Arc::clone(&metrics))?;
     let mut runtime = RuntimeReadImpl::new(indexed, rx, Arc::clone(&metrics));
     let id = RuntimeId::new();
@@ -292,12 +293,15 @@ struct RuntimeImpl<L: Log, B: Blob> {
 pub struct RuntimeConfig {
     /// Minimum step interval to use
     min_step_interval: Duration,
+    /// Maximum in-memory cache size, in bytes
+    cache_size_limit: Option<usize>,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             min_step_interval: Self::DEFAULT_MIN_STEP_INTERVAL,
+            cache_size_limit: None,
         }
     }
 }
@@ -310,12 +314,16 @@ impl RuntimeConfig {
     pub(crate) fn for_tests() -> Self {
         RuntimeConfig {
             min_step_interval: Duration::from_millis(1),
+            cache_size_limit: None,
         }
     }
 
-    /// A configuration with a configurable min_step_interval
-    pub fn with_min_step_interval(min_step_interval: Duration) -> Self {
-        RuntimeConfig { min_step_interval }
+    /// A new runtime configuration.
+    pub fn new(min_step_interval: Duration, cache_size_limit: Option<usize>) -> Self {
+        RuntimeConfig {
+            min_step_interval,
+            cache_size_limit,
+        }
     }
 }
 

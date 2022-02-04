@@ -155,6 +155,11 @@ struct Args {
     #[structopt(long, hide = true)]
     persistent_kafka_sources: bool,
 
+    /// Maximum allowed size of the in-memory persist storage cache, in bytes. Has
+    /// to be used with --experimental.
+    #[structopt(long, hide = true)]
+    persist_cache_size_limit: Option<usize>,
+
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
     #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
@@ -717,6 +722,14 @@ dataflow workers: {workers}",
             false
         };
 
+        let cache_size_limit = {
+            if args.persist_cache_size_limit.is_some() && !args.experimental {
+                bail!("cannot specify --persist-cache-size-limit without --experimental");
+            }
+
+            args.persist_cache_size_limit
+        };
+
         let lock_info = format!(
             "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
             mz_version = materialized::BUILD_INFO.human_version(),
@@ -740,6 +753,7 @@ dataflow workers: {workers}",
             kafka_sources_enabled: persistent_kafka_sources_enabled,
             lock_info,
             min_step_interval,
+            cache_size_limit,
         }
     };
 

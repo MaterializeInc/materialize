@@ -439,6 +439,7 @@ impl MemRegistry {
             Arc::clone(&metrics),
             async_runtime,
             self.blob_no_reentrance()?,
+            None,
         );
         Indexed::new(log, blob, metrics)
     }
@@ -460,6 +461,7 @@ impl MemRegistry {
             Arc::clone(&metrics),
             async_runtime,
             blob,
+            None,
         );
         Indexed::new(log, blob, metrics)
     }
