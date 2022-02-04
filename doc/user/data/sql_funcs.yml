@@ -234,6 +234,12 @@
   - signature: 'atanh(x: double precision) -> double precision'
     description: The inverse hyperbolic tangent of `x`.
 
+  - signature: 'radians(x: double precision) -> double precision'
+    description: Converts degrees to radians.
+
+  - signature: 'degrees(x: double precision) -> double precision'
+    description: Converts radians to degrees.
+
 - type: String
   functions:
   - signature: 'ascii(s: str) -> int'

@@ -3397,6 +3397,8 @@ pub enum UnaryFunc {
     Tanh(Tanh),
     Atanh(Atanh),
     Cot(Cot),
+    Degrees(Degrees),
+    Radians(Radians),
     Log10(Log10),
     Log10Numeric(Log10Numeric),
     Ln(Ln),
@@ -3547,6 +3549,8 @@ derive_unary!(
     Log10,
     Ln,
     Exp,
+    Degrees,
+    Radians,
     SqrtFloat64,
     CbrtFloat64,
     CastTimestampToString,
@@ -3630,6 +3634,8 @@ impl UnaryFunc {
             | Log10(_)
             | Ln(_)
             | Exp(_)
+            | Radians(_)
+            | Degrees(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastInt16ToNumeric(_)
@@ -3851,6 +3857,8 @@ impl UnaryFunc {
             | Log10(_)
             | Ln(_)
             | Exp(_)
+            | Radians(_)
+            | Degrees(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastInt16ToNumeric(_)
@@ -4098,6 +4106,8 @@ impl UnaryFunc {
             | Log10(_)
             | Ln(_)
             | Exp(_)
+            | Radians(_)
+            | Degrees(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastInt16ToNumeric(_)
@@ -4366,6 +4376,8 @@ impl UnaryFunc {
             | Log10(_)
             | Ln(_)
             | Exp(_)
+            | Radians(_)
+            | Degrees(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastInt16ToNumeric(_)
