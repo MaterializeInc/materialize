@@ -306,9 +306,15 @@ impl TimestampBindingBox {
         add: AntichainRef<Timestamp>,
     ) {
         // Capture the changes so we can observe if the frontier advanced.
-        let changed =
-        !self.compaction_frontier
-            .update_iter(add.iter().map(|t| (*t, 1)).chain(remove.iter().map(|t| (*t, -1)))).next().is_none();
+        let changed = !self
+            .compaction_frontier
+            .update_iter(
+                add.iter()
+                    .map(|t| (*t, 1))
+                    .chain(remove.iter().map(|t| (*t, -1))),
+            )
+            .next()
+            .is_none();
         // Compact only in the case the frontier advances.
         if changed {
             self.compact();
