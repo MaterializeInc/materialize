@@ -305,12 +305,14 @@ impl TimestampBindingBox {
         remove: AntichainRef<Timestamp>,
         add: AntichainRef<Timestamp>,
     ) {
-        self.compaction_frontier
-            .update_iter(add.iter().map(|t| (*t, 1)));
-        self.compaction_frontier
-            .update_iter(remove.iter().map(|t| (*t, -1)));
-
-        assert!(!self.compaction_frontier.frontier().is_empty());
+        // Capture the changes so we can observe if the frontier advanced.
+        let changed =
+        !self.compaction_frontier
+            .update_iter(add.iter().map(|t| (*t, 1)).chain(remove.iter().map(|t| (*t, -1)))).next().is_none();
+        // Compact only in the case the frontier advances.
+        if changed {
+            self.compact();
+        }
     }
 
     fn set_durability_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
@@ -321,10 +323,8 @@ impl TimestampBindingBox {
             new_frontier
         );
         // Release a hold on the compaction frontier.
-        self.compaction_frontier
-            .update_iter(new_frontier.iter().map(|t| (*t, 1)));
-        self.compaction_frontier
-            .update_iter(self.durability_frontier.iter().map(|t| (*t, -1)));
+        let prior = self.durability_frontier.clone();
+        self.adjust_compaction_frontier(prior.borrow(), new_frontier);
         self.durability_frontier = new_frontier.to_owned();
     }
 
@@ -516,7 +516,6 @@ impl TimestampBindingRc {
             .borrow_mut()
             .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier);
         self.compaction_frontier = new_frontier.to_owned();
-        self.wrapper.borrow_mut().compact();
     }
 
     /// Sets the durability frontier, aka, the frontier before which all updates can be
