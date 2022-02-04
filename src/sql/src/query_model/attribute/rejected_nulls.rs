@@ -278,3 +278,263 @@ fn case_and(expr: &BoxScalarExpr) -> Option<(&BoxScalarExpr, &BoxScalarExpr)> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query_model::model::*;
+    use crate::query_model::test::util::*;
+
+    #[test]
+    fn test_select_1() {
+        let mut model = Model::new();
+        let g_id = add_get(&mut model);
+        let b_id = add_select(&mut model, g_id, |input| {
+            vec![
+                // P0: (#0 - #1) + (#2 - #3)
+                exp::add(
+                    exp::sub(exp::cref(input, 0), exp::cref(input, 1)), // {#0, #1}
+                    exp::sub(exp::cref(input, 2), exp::cref(input, 3)), // {#2, #3}
+                ), // {#0, #1, #2, #3}
+            ]
+        });
+
+        assert_derived_attribute(&mut model, b_id, |r#box| {
+            HashSet::from([
+                cref(input(&r#box, 0), 0),
+                cref(input(&r#box, 0), 1),
+                cref(input(&r#box, 0), 2),
+                cref(input(&r#box, 0), 3),
+            ]) // {#0, #1, #2, #3}
+        });
+    }
+
+    #[test]
+    fn test_select_2() {
+        let mut model = Model::new();
+        let g_id = add_get(&mut model);
+        let b_id = add_select(&mut model, g_id, |input| {
+            vec![
+                // P0: (#0 > #1) || (#2 < #3)
+                exp::and(
+                    exp::gt(exp::cref(input, 0), exp::cref(input, 1)), // {#0, #1}
+                    exp::lt(exp::cref(input, 2), exp::cref(input, 3)), // {#2, #3}
+                ), // {#0, #1, #2, #3}
+            ]
+        });
+
+        assert_derived_attribute(&mut model, b_id, |r#box| {
+            HashSet::from([
+                cref(input(&r#box, 0), 0),
+                cref(input(&r#box, 0), 1),
+                cref(input(&r#box, 0), 2),
+                cref(input(&r#box, 0), 3),
+            ]) // {#0, #1, #2, #3}
+        });
+    }
+
+    #[test]
+    fn test_select_3() {
+        let mut model = Model::new();
+        let g_id = add_get(&mut model);
+        let b_id = add_select(&mut model, g_id, |input| {
+            vec![
+                // P0: OR(NOT(OR(#0 < #1, #1 < #2)), AND(!isnull(#1), AND(#0 = #2, #2 = #3))
+                exp::or(
+                    exp::not(exp::or(
+                        exp::lt(exp::cref(input, 0), exp::cref(input, 1)), // { #0, #1 }
+                        exp::lt(exp::cref(input, 1), exp::cref(input, 2)), // { #1, #2 }
+                    )), // { #0, #1, #2 }
+                    exp::and(
+                        exp::not(exp::isnull(exp::cref(input, 1))), // { #1 }
+                        exp::and(
+                            exp::eq(exp::cref(input, 0), exp::cref(input, 2)), // { #0, #2 }
+                            exp::eq(exp::cref(input, 2), exp::cref(input, 3)), // { #2, #3 }
+                        ), // { #0, #2, #3 }
+                    ), // { #0, #1, #2, #3 }
+                ), // { #0, #1, #2 }
+                // P1: !isnull(#3)
+                exp::not(exp::isnull(exp::cref(input, 3))), // { #3 }
+            ]
+        });
+
+        assert_derived_attribute(&mut model, b_id, |r#box| {
+            HashSet::from([
+                cref(input(&r#box, 0), 0),
+                cref(input(&r#box, 0), 1),
+                cref(input(&r#box, 0), 2),
+                cref(input(&r#box, 0), 3),
+            ]) // {#0, #1, #2, #3}
+        });
+    }
+
+    #[test]
+    fn test_select_4() {
+        let mut model = Model::new();
+        let g_id = add_get(&mut model);
+        let b_id = add_select(&mut model, g_id, |input| {
+            vec![
+                // P0: AND(NOT(AND(#0 < #1, #1 < #2)), OR(!isnull(#2), OR(#0 = #2, #2 = #3))
+                exp::and(
+                    exp::not(exp::and(
+                        exp::lt(exp::cref(input, 0), exp::cref(input, 1)), // { #0, #1 }
+                        exp::lt(exp::cref(input, 1), exp::cref(input, 2)), // { #1, #2 }
+                    )), // { #1 }
+                    exp::or(
+                        exp::not(exp::isnull(exp::cref(input, 2))), // { #2 }
+                        exp::or(
+                            exp::eq(exp::cref(input, 0), exp::cref(input, 2)), // { #0, #2 }
+                            exp::eq(exp::cref(input, 2), exp::cref(input, 3)), // { #2, #3 }
+                        ), // { #2 }
+                    ), // { #2 }
+                ), // { #1, #2 }
+                // P1: !isnull(#3)
+                exp::not(exp::isnull(exp::cref(input, 3))), // { #3 }
+            ]
+        });
+
+        assert_derived_attribute(&mut model, b_id, |r#box| {
+            HashSet::from([
+                cref(input(&r#box, 0), 1),
+                cref(input(&r#box, 0), 2),
+                cref(input(&r#box, 0), 3),
+            ]) // {#0, #2, #3}
+        });
+    }
+
+    #[test]
+    fn test_left_outer_join_1() {
+        let mut model = Model::new();
+        let g_id = add_get(&mut model);
+        let b_id = add_left_outer_join(&mut model, g_id, g_id, |lhs, rhs| {
+            vec![
+                // P0: (lhs.#0 > rhs.#0)
+                exp::gt(exp::cref(lhs, 0), exp::cref(rhs, 0)),
+                // P1: (lhs.#1 < rhs.#1)
+                exp::lt(exp::cref(lhs, 1), exp::cref(rhs, 1)),
+                // P2: (lhs.#2 == rhs.#2)
+                exp::eq(exp::cref(lhs, 2), exp::cref(rhs, 2)),
+            ]
+        });
+
+        assert_derived_attribute(&mut model, b_id, |r#box| {
+            HashSet::from([
+                cref(input(r#box, 1), 0),
+                cref(input(r#box, 1), 1),
+                cref(input(r#box, 1), 2),
+            ]) // {rhs.#0, rhs.#1, rhs.#2}
+        });
+    }
+
+    #[test]
+    fn test_full_outer_join_1() {
+        let mut model = Model::new();
+        let g_id = add_get(&mut model);
+        let b_id = add_full_outer_join(&mut model, g_id, g_id, |lhs, rhs| {
+            vec![
+                // P0: (lhs.#0 >= rhs.#0)
+                exp::gte(exp::cref(lhs, 0), exp::cref(rhs, 0)),
+                // P1: (lhs.#1 <= rhs.#1)
+                exp::lte(exp::cref(lhs, 1), exp::cref(rhs, 1)),
+                // P2: (lhs.#2 != rhs.#2)
+                exp::not_eq(exp::cref(lhs, 2), exp::cref(rhs, 2)),
+            ]
+        });
+
+        assert_derived_attribute(&mut model, b_id, |_| {
+            HashSet::from([]) // {}
+        });
+    }
+
+    /// Adds a get box to the given model with a schema consisting of
+    /// for 32-bit nullable integers.
+    fn add_get(model: &mut Model) -> BoxId {
+        let get_id = model.make_box(qgm::get(0).into());
+
+        let mut b = model.get_mut_box(get_id);
+        b.add_column(exp::base(0, typ::int32(true)));
+        b.add_column(exp::base(1, typ::int32(true)));
+        b.add_column(exp::base(2, typ::int32(true)));
+        b.add_column(exp::base(3, typ::int32(true)));
+
+        get_id
+    }
+
+    /// Adds a select join to the model and attaches the given `predicates`.
+    /// The select box has a single input connected to the `src_id` box.
+    fn add_select<F>(model: &mut Model, src_id: BoxId, predicates: F) -> BoxId
+    where
+        F: FnOnce(QuantifierId) -> Vec<BoxScalarExpr>,
+    {
+        let tgt_id = model.make_box(Select::default().into());
+        let inp_id = model.make_quantifier(QuantifierType::Foreach, src_id, tgt_id);
+
+        if let BoxType::Select(ref mut b) = model.get_mut_box(tgt_id).box_type {
+            b.predicates.extend_from_slice(&predicates(inp_id));
+        }
+
+        tgt_id
+    }
+
+    /// Adds a full outer join to the model and attaches the given `predicates`.
+    /// Both inputs are connected to the `lhs_id` and `rhs_id` boxes.
+    fn add_full_outer_join<F>(
+        model: &mut Model,
+        lhs_id: BoxId,
+        rhs_id: BoxId,
+        predicates: F,
+    ) -> BoxId
+    where
+        F: FnOnce(QuantifierId, QuantifierId) -> Vec<BoxScalarExpr>,
+    {
+        let tgt_id = model.make_box(OuterJoin::default().into());
+        let lhs_id = model.make_quantifier(QuantifierType::PreservedForeach, lhs_id, tgt_id);
+        let rhs_id = model.make_quantifier(QuantifierType::PreservedForeach, rhs_id, tgt_id);
+
+        if let BoxType::OuterJoin(ref mut b) = model.get_mut_box(tgt_id).box_type {
+            b.predicates.extend_from_slice(&predicates(lhs_id, rhs_id));
+        }
+
+        tgt_id
+    }
+
+    /// Adds a left outer join to the model and attaches the given `predicates`.
+    /// Both inputs are connected to the `lhs_id` and `rhs_id` boxes.
+    fn add_left_outer_join<F>(
+        model: &mut Model,
+        lhs_id: BoxId,
+        rhs_id: BoxId,
+        predicates: F,
+    ) -> BoxId
+    where
+        F: FnOnce(QuantifierId, QuantifierId) -> Vec<BoxScalarExpr>,
+    {
+        let tgt_id = model.make_box(OuterJoin::default().into());
+        let lhs_id = model.make_quantifier(QuantifierType::PreservedForeach, lhs_id, tgt_id);
+        let rhs_id = model.make_quantifier(QuantifierType::Foreach, rhs_id, tgt_id);
+
+        if let BoxType::OuterJoin(ref mut b) = model.get_mut_box(tgt_id).box_type {
+            b.predicates.extend_from_slice(&predicates(lhs_id, rhs_id));
+        }
+
+        tgt_id
+    }
+
+    /// Derives the `RejectedNulls` for the given `b_id` and asserts its value.
+    fn assert_derived_attribute<F>(model: &mut Model, b_id: BoxId, exp_value: F)
+    where
+        F: FnOnce(&QueryBox) -> HashSet<ColumnReference>,
+    {
+        RejectedNulls.derive(model, b_id);
+
+        let r#box = model.get_box(b_id);
+        let act_value = r#box.attributes.get::<RejectedNulls>();
+        let exp_value = &exp_value(&r#box);
+
+        assert_eq!(act_value, exp_value);
+    }
+
+    fn input(b: &QueryBox, i: usize) -> QuantifierId {
+        b.quantifiers.iter().nth(i).unwrap().clone()
+    }
+}
