@@ -21,7 +21,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{LocalClient, LocalStorageClient, StorageCommand, StorageResponse};
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
@@ -44,8 +44,8 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// An external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id: AwsExternalId,
+    /// Configuration for source and sink connectors.
+    pub connector_context: ConnectorContext,
 }
 
 /// A handle to a running dataflow server.
@@ -104,7 +104,6 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
-    let aws_external_id = config.aws_external_id.clone();
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
@@ -137,9 +136,9 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 last_bindings_feedback: Instant::now(),
                 now: now.clone(),
                 source_metrics,
-                aws_external_id: aws_external_id.clone(),
                 timely_worker_index,
                 timely_worker_peers,
+                connector_context: config.connector_context.clone(),
             },
             storage_boundary,
             storage_response_tx,

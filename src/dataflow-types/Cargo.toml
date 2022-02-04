@@ -28,7 +28,7 @@ mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
@@ -47,6 +47,7 @@ tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-stream = " 0.1.8"
 tokio-util = { version = "0.7.2", features = ["codec"] }
 tracing = "0.1.34"
+tracing-subscriber = "0.3.11"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "1.0.0", features = ["serde", "v4"] }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}

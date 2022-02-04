@@ -3286,6 +3286,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util 0.7.2",
  "tracing",
+ "tracing-subscriber",
  "url",
  "uuid 1.0.0",
 ]
@@ -3978,6 +3979,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tower-http",
+ "tracing",
  "uuid 1.0.0",
  "walkdir",
 ]

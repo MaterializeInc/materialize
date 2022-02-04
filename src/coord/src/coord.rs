@@ -99,10 +99,10 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
+    ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
 use mz_dataflow_types::{
-    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
+    BuildDesc, ConnectorContext, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
@@ -233,12 +233,12 @@ pub struct Config<S> {
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
     pub build_info: &'static BuildInfo,
-    pub aws_external_id: AwsExternalId,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
+    pub connector_context: ConnectorContext,
 }
 
 struct PendingPeek {
@@ -363,6 +363,9 @@ pub struct Coordinator<S> {
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
     availability_zones: Vec<String>,
+
+    /// Extra context to pass through to connector creation.
+    connector_context: ConnectorContext,
 }
 
 /// Metadata about an active connection.
@@ -627,9 +630,13 @@ impl<S: Append + 'static> Coordinator<S> {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = sink_connector::build(builder.clone(), entry.id())
-                        .await
-                        .with_context(|| format!("recreating sink {}", entry.name()))?;
+                    let connector = sink_connector::build(
+                        builder.clone(),
+                        entry.id(),
+                        self.connector_context.clone(),
+                    )
+                    .await
+                    .with_context(|| format!("recreating sink {}", entry.name()))?;
                     self.handle_sink_connector_ready(
                         entry.id(),
                         entry.oid(),
@@ -1410,8 +1417,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     match mz_sql::connectors::populate_connectors(stmt, &catalog, &mut vec![]) {
                         Ok(stmt) => mz_sql::pure::purify_create_source(
                             self.now(),
-                            self.catalog.config().aws_external_id.clone(),
                             stmt,
+                            self.connector_context.clone(),
                         ),
                         Err(e) => return tx.send(Err(e.into()), session),
                     };
@@ -2355,6 +2362,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let connector_context = self.connector_context.clone();
         task::spawn(
             || format!("sink_connector_ready:{}", sink.from),
             async move {
@@ -2364,7 +2372,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
-                        result: sink_connector::build(connector_builder, id).await,
+                        result: sink_connector::build(connector_builder, id, connector_context)
+                            .await,
                         compute_instance,
                     }))
                     .expect("sending to internal_cmd_tx cannot fail");
@@ -4711,12 +4720,12 @@ pub async fn serve<S: Append + 'static>(
         logical_compaction_window,
         experimental_mode,
         build_info,
-        aws_external_id,
         metrics_registry,
         now,
         secrets_controller,
         replica_sizes,
         availability_zones,
+        connector_context,
     }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4726,7 +4735,6 @@ pub async fn serve<S: Append + 'static>(
         storage,
         experimental_mode: Some(experimental_mode),
         build_info,
-        aws_external_id,
         timestamp_frequency,
         now: now.clone(),
         skip_migrations: false,
@@ -4766,6 +4774,7 @@ pub async fn serve<S: Append + 'static>(
                 secrets_controller,
                 replica_sizes,
                 availability_zones,
+                connector_context,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

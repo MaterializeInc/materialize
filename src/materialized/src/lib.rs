@@ -28,7 +28,7 @@ use futures::StreamExt;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
 use mz_dataflow_types::client::RemoteClient;
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
@@ -98,6 +98,12 @@ pub struct Config {
     /// stash instead of sqlite from the `data_directory`.
     pub catalog_postgres_stash: Option<String>,
 
+    // === Connector options. ===
+    /// Configuration for source and sink connectors created by the storage
+    /// layer. This can include configuration for external
+    /// sources.
+    pub connector_context: ConnectorContext,
+
     // === Platform options. ===
     /// Configuration of service orchestration.
     pub orchestrator: OrchestratorConfig,
@@ -105,12 +111,6 @@ pub struct Config {
     // === Secrets Storage options. ===
     /// Optional configuration for a secrets controller.
     pub secrets_controller: Option<SecretsControllerConfig>,
-
-    // === AWS options. ===
-    /// An [external ID] to be supplied to all AWS AssumeRole operations.
-    ///
-    /// [external id]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
-    pub aws_external_id: AwsExternalId,
 
     // === Mode switches. ===
     /// Whether to permit usage of experimental features.
@@ -396,12 +396,12 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
         build_info: &BUILD_INFO,
-        aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller,
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
+        connector_context: config.connector_context,
     })
     .await?;
 

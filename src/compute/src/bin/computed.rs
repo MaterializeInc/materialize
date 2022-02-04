@@ -17,7 +17,6 @@ use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use http::HeaderMap;
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::sources::AwsExternalId;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
@@ -27,6 +26,7 @@ use tracing_subscriber::filter::Targets;
 
 use mz_dataflow_types::client::{ComputeClient, GenericClient};
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
+use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -254,10 +254,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
-        aws_external_id: args
-            .aws_external_id
-            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
-            .unwrap_or(AwsExternalId::NotProvided),
+        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
     };
 
     let serve_config = ServeConfig {

@@ -55,8 +55,8 @@ use tracing::error;
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{AwsExternalId, ExternalSourceConnector, MzOffset};
-use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
+use mz_dataflow_types::sources::{ExternalSourceConnector, MzOffset};
+use mz_dataflow_types::{ConnectorContext, DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -118,8 +118,6 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
     pub base_metrics: &'a SourceBaseMetrics,
-    /// An external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id: AwsExternalId,
     /// Storage Metadata
     pub storage_metadata: CollectionMetadata,
     /// As Of
@@ -168,10 +166,10 @@ where
         worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        aws_external_id: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
+        connector_context: ConnectorContext,
     ) -> Result<Self, anyhow::Error> {
         S::new(
             source_name,
@@ -180,10 +178,10 @@ where
             worker_count,
             consumer_activator,
             connector,
-            aws_external_id,
             restored_offsets,
             encoding,
             metrics,
+            connector_context,
         )
         .map(Self)
     }
@@ -388,10 +386,10 @@ pub trait SourceReader {
         worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        aws_external_id: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
+        connector_context: ConnectorContext,
     ) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
@@ -910,7 +908,7 @@ where
 pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_connector: &ExternalSourceConnector,
-    aws_external_id: AwsExternalId,
+    connector_context: ConnectorContext,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
@@ -971,10 +969,10 @@ where
                 worker_count,
                 sync_activator,
                 source_connector.clone(),
-                aws_external_id.clone(),
                 start_offsets,
                 encoding,
                 base_metrics,
+                connector_context.clone(),
             );
             let source_stream = match source_reader {
                 Ok(s) => s.into_stream(timestamp_frequency).fuse(),

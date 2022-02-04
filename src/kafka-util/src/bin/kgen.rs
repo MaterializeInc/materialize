@@ -26,7 +26,6 @@ use rdkafka::error::KafkaError;
 use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::util::Timeout;
-use rdkafka::ClientConfig;
 use serde_json::Map;
 use url::Url;
 
@@ -695,7 +694,7 @@ async fn main() -> anyhow::Result<()> {
             let mut key_gen = key_gen.clone();
             let mut value_gen = value_gen.clone();
             let producer: ThreadedProducer<mz_kafka_util::client::MzClientContext> =
-                ClientConfig::new()
+                mz_kafka_util::client::create_new_client_config_simple()
                     .set("bootstrap.servers", args.bootstrap_server.to_string())
                     .create_with_context(mz_kafka_util::client::MzClientContext)
                     .unwrap();
