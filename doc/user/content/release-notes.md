@@ -131,6 +131,9 @@ changes that have not yet been documented.
 
   This new behavior matches PostgreSQL v14.
 
+- Follow PostgreSQL's type conversion rules for the relations involved in a
+  `UNION`, `EXCEPT`, or `INTERSECT` operation {{% gh 3331 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 

@@ -324,7 +324,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map coalesce(chartostr(strtochar("a")), varchartostr(strtovarchar("a")), "a")
+| Map coalesce(strtovarchar(strtochar("a")), strtovarchar("a"), strtovarchar("a"))
 
 EOF
 

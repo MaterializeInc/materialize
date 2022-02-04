@@ -27,14 +27,15 @@
 "a "
 "a  "
 
-! SELECT 'a '::varchar(5) UNION DISTINCT SELECT 'a '::char(5);
-contains:UNION types character varying and character cannot be matched
+> SELECT 'a '::varchar(5) UNION DISTINCT SELECT 'a '::char(5);
+a
+"a "
 
-! SELECT 'a '::varchar(5) UNION DISTINCT SELECT 'a '::text;
-contains:UNION types character varying and text cannot be matched
+> SELECT 'a '::varchar(5) UNION DISTINCT SELECT 'a '::text;
+"a "
 
-! SELECT 'a '::char(5) UNION DISTINCT SELECT 'a '::text;
-contains:UNION types character and text cannot be matched
+> SELECT 'a '::char(5) UNION DISTINCT SELECT 'a '::text;
+"a    "
 
 > CREATE TABLE char_table (f1 CHAR(20));
 
