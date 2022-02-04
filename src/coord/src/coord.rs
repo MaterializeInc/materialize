@@ -243,6 +243,14 @@ pub struct Config<S> {
     pub secrets_controller: Box<dyn SecretsController>,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
+    pub librdkafka_debug: tracing::Level,
+}
+
+/// Extra context to pass through to connector creation
+/// Should be kept cheaply-cloneable
+#[derive(Clone)]
+pub struct CoordContext {
+    pub librdkafka_debug: tracing::Level,
 }
 
 struct PendingPeek {
@@ -363,10 +371,14 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
+
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
     availability_zones: Vec<String>,
+
+    /// Extra context to pass through to connector creation
+    coord_context: CoordContext,
 }
 
 /// Metadata about an active connection.
@@ -633,9 +645,13 @@ impl<S: Append + 'static> Coordinator<S> {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = sink_connector::build(builder.clone(), entry.id())
-                        .await
-                        .with_context(|| format!("recreating sink {}", entry.name()))?;
+                    let connector = sink_connector::build(
+                        builder.clone(),
+                        entry.id(),
+                        self.coord_context.clone(),
+                    )
+                    .await
+                    .with_context(|| format!("recreating sink {}", entry.name()))?;
                     self.handle_sink_connector_ready(
                         entry.id(),
                         entry.oid(),
@@ -1423,6 +1439,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             self.now(),
                             self.catalog.config().aws_external_id.clone(),
                             stmt,
+                            self.coord_context.librdkafka_debug,
                         ),
                         Err(e) => return tx.send(Err(e.into()), session),
                     };
@@ -2376,6 +2393,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let coord_context = self.coord_context.clone();
         task::spawn(
             || format!("sink_connector_ready:{}", sink.from),
             async move {
@@ -2385,7 +2403,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
-                        result: sink_connector::build(connector_builder, id).await,
+                        result: sink_connector::build(connector_builder, id, coord_context).await,
                         compute_instance,
                     }))
                     .expect("sending to internal_cmd_tx cannot fail");
@@ -4782,6 +4800,7 @@ pub async fn serve<S: Append + 'static>(
         secrets_controller,
         replica_sizes,
         availability_zones,
+        librdkafka_debug,
     }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4833,6 +4852,7 @@ pub async fn serve<S: Append + 'static>(
                 secrets_controller,
                 replica_sizes,
                 availability_zones,
+                coord_context: CoordContext { librdkafka_debug },
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

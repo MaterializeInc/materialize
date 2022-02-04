@@ -157,6 +157,7 @@ pub fn render_source<G>(
     storage_state: &mut crate::storage_state::StorageState,
     scope: &mut G,
     src_id: GlobalId,
+    render_context: crate::render::RenderContext,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
     Arc<dyn std::any::Any + Send + Sync>,
@@ -312,6 +313,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            render_context.clone(),
                         );
                         ((SourceType::Delimited(ok), err), cap)
                     }
@@ -323,6 +325,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            render_context.clone(),
                         );
                         ((SourceType::Delimited(ok), err), cap)
                     }
@@ -331,6 +334,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            render_context.clone(),
                         );
                         ((SourceType::ByteStream(ok), err), cap)
                     }
@@ -339,6 +343,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            render_context.clone(),
                         );
                         ((SourceType::ByteStream(ok), err), cap)
                     }
@@ -348,6 +353,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            render_context.clone(),
                         );
                         ((SourceType::Row(ok), err), cap)
                     }
@@ -465,6 +471,7 @@ where
                                                 storage_state,
                                                 scope,
                                                 tx_metadata.tx_metadata_global_id,
+                                                render_context,
                                             );
                                         needed_tokens.push(tx_token);
                                         error_collections.push(tx_source_err);

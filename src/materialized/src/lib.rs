@@ -126,6 +126,8 @@ pub struct Config {
     pub replica_sizes: ClusterReplicaSizeMap,
     /// Availability zones compute resources may be deployed in.
     pub availability_zones: Vec<String>,
+    /// The log level to set librdkafka to
+    pub librdkafka_debug: tracing::Level,
 }
 
 /// Configures TLS encryption for connections.
@@ -383,6 +385,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         secrets_controller,
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
+        librdkafka_debug: config.librdkafka_debug,
     })
     .await?;
 

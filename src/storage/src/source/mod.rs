@@ -54,7 +54,7 @@ use tracing::error;
 use mz_avro::types::Value;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{AwsExternalId, ExternalSourceConnector, MzOffset};
-use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
+use mz_dataflow_types::{DecodeError, RenderContext, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -174,7 +174,7 @@ where
         aws_external_id: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
-        metrics: crate::source::metrics::SourceBaseMetrics,
+        ctx: SourceContext,
     ) -> Result<Self, anyhow::Error> {
         S::new(
             source_name,
@@ -186,7 +186,7 @@ where
             aws_external_id,
             restored_offsets,
             encoding,
-            metrics,
+            ctx,
         )
         .map(Self)
     }
@@ -389,6 +389,11 @@ impl From<anyhow::Error> for SourceReaderError {
     }
 }
 
+pub struct SourceContext {
+    metrics: crate::source::metrics::SourceBaseMetrics,
+    librdkafka_debug: tracing::Level,
+}
+
 /// This trait defines the interface between Materialize and external sources, and
 /// must be implemented for every new kind of source.
 ///
@@ -415,7 +420,7 @@ pub trait SourceReader {
         aws_external_id: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
-        metrics: crate::source::metrics::SourceBaseMetrics,
+        ctx: SourceContext,
     ) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
@@ -958,6 +963,7 @@ pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_connector: &ExternalSourceConnector,
     aws_external_id: AwsExternalId,
+    render_context: RenderContext,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
@@ -1028,7 +1034,10 @@ where
                 aws_external_id.clone(),
                 restored_offsets,
                 encoding,
-                base_metrics.clone(),
+                SourceContext {
+                    metrics: base_metrics.clone(),
+                    librdkafka_debug: render_context.librdkafka_debug,
+                },
             ) {
                 Ok(source_reader) => Some(source_reader.into_stream(timestamp_frequency)),
                 Err(e) => {

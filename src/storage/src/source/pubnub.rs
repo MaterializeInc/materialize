@@ -23,8 +23,7 @@ use mz_dataflow_types::sources::{
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
-use super::metrics::SourceBaseMetrics;
-use crate::source::{SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{SourceContext, SourceMessage, SourceReader, SourceReaderError};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
@@ -48,7 +47,7 @@ impl SourceReader for PubNubSourceReader {
         _aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        _metrics: SourceBaseMetrics,
+        _: SourceContext,
     ) -> Result<Self, anyhow::Error> {
         let pubnub_conn = match connector {
             ExternalSourceConnector::PubNub(pubnub_conn) => pubnub_conn,

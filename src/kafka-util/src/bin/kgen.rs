@@ -694,7 +694,7 @@ async fn main() -> anyhow::Result<()> {
             let mut key_gen = key_gen.clone();
             let mut value_gen = value_gen.clone();
             let producer: ThreadedProducer<mz_kafka_util::client::MzClientContext> =
-                mz_kafka_util::client::create_new_client_config()
+                mz_kafka_util::client::create_new_client_config_simple()
                     .set("bootstrap.servers", args.bootstrap_server.to_string())
                     .create_with_context(mz_kafka_util::client::MzClientContext)
                     .unwrap();

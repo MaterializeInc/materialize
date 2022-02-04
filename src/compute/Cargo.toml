@@ -26,7 +26,7 @@ mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["process", "task", "tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }

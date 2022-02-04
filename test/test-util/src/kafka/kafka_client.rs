@@ -16,7 +16,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 
-use mz_kafka_util::client::{create_new_client_config, MzClientContext};
+use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 
 pub struct KafkaClient {
     producer: FutureProducer<MzClientContext>,
@@ -29,7 +29,7 @@ impl KafkaClient {
         group_id: &str,
         configs: &[(&str, &str)],
     ) -> Result<KafkaClient, anyhow::Error> {
-        let mut config = create_new_client_config();
+        let mut config = create_new_client_config_simple();
         config.set("bootstrap.servers", kafka_url);
         config.set("group.id", group_id);
         for (key, val) in configs {
@@ -52,7 +52,7 @@ impl KafkaClient {
         configs: &[(&str, &str)],
         timeout: Option<Duration>,
     ) -> Result<(), anyhow::Error> {
-        let mut config = create_new_client_config();
+        let mut config = create_new_client_config_simple();
         config.set("bootstrap.servers", &self.kafka_url);
 
         let client = config

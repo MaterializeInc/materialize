@@ -139,6 +139,10 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
 
+    let render_context = RenderContext {
+        librdkafka_debug: storage_state.librdkafka_debug,
+    };
+
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
@@ -161,6 +165,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                         storage_state,
                         region,
                         src_id.clone(),
+                        render_context.clone(),
                     );
 
                     // Capture the frontier of `ok` to present as the "source upper".

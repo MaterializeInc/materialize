@@ -591,6 +591,8 @@ impl Runner {
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
+            // TODO(guswynn): hook up tracing and "sqllogictest"
+            librdkafka_debug: tracing::Level::INFO,
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;

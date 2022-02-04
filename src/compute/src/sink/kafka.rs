@@ -137,6 +137,8 @@ where
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
             &compute_state.sink_metrics.kafka,
+            // TODO(guswynn): pipe this through correctly when sinks are in storaged
+            tracing::Level::INFO,
         );
 
         compute_state
@@ -434,9 +436,11 @@ impl KafkaSinkState {
         activator: Activator,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
         metrics: &KafkaBaseMetrics,
+        librdkafka_debug: tracing::Level,
     ) -> Self {
-        let config = Self::create_producer_config(&connector);
-        let consistency_client_config = Self::create_consistency_client_config(&connector);
+        let config = Self::create_producer_config(&connector, librdkafka_debug);
+        let consistency_client_config =
+            Self::create_consistency_client_config(&connector, librdkafka_debug);
 
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -486,8 +490,11 @@ impl KafkaSinkState {
         }
     }
 
-    fn create_producer_config(connector: &KafkaSinkConnector) -> ClientConfig {
-        let mut config = create_new_client_config();
+    fn create_producer_config(
+        connector: &KafkaSinkConnector,
+        librdkafka_debug: tracing::Level,
+    ) -> ClientConfig {
+        let mut config = create_new_client_config(librdkafka_debug);
         config.set("bootstrap.servers", &connector.addrs.to_string());
 
         // Ensure that messages are sinked in order and without duplicates. Note that
@@ -535,8 +542,11 @@ impl KafkaSinkState {
         config
     }
 
-    fn create_consistency_client_config(connector: &KafkaSinkConnector) -> ClientConfig {
-        let mut config = create_new_client_config();
+    fn create_consistency_client_config(
+        connector: &KafkaSinkConnector,
+        librdkafka_debug: tracing::Level,
+    ) -> ClientConfig {
+        let mut config = create_new_client_config(librdkafka_debug);
         config.set("bootstrap.servers", &connector.addrs.to_string());
         for (k, v) in connector.config_options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't
@@ -1023,6 +1033,7 @@ fn kafka<G>(
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
+    librdkafka_debug: tracing::Level,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1089,6 +1100,7 @@ where
         shared_gate_ts,
         write_frontier,
         metrics,
+        librdkafka_debug,
     )
 }
 
@@ -1112,6 +1124,7 @@ pub fn produce_to_kafka<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
+    librdkafka_debug: tracing::Level,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1131,6 +1144,7 @@ where
         activator,
         write_frontier,
         metrics,
+        librdkafka_debug,
     );
 
     let mut vector = Vec::new();

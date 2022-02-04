@@ -46,6 +46,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
+    /// The log level to set librdkafka to
+    pub librdkafka_debug: tracing::Level,
 }
 
 /// A handle to a running dataflow server.
@@ -140,6 +142,7 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 aws_external_id: aws_external_id.clone(),
                 timely_worker_index,
                 timely_worker_peers,
+                librdkafka_debug: config.librdkafka_debug,
             },
             storage_boundary,
             storage_response_tx,

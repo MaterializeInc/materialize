@@ -44,6 +44,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
+    /// The log level to set librdkafka to
+    pub librdkafka_debug: tracing::Level,
 }
 
 /// A handle to a running dataflow server.
@@ -121,7 +123,6 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
     };
     Ok((server, compute_client))
 }
-
 /// State maintained for each worker thread.
 ///
 /// Much of this state can be viewed as local variables for the worker thread,

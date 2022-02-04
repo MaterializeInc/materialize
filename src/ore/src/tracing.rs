@@ -22,7 +22,7 @@ use opentelemetry::KeyValue;
 use prometheus::IntCounterVec;
 use tonic::metadata::{MetadataKey, MetadataMap};
 use tonic::transport::Endpoint;
-use tracing::{Event, Subscriber};
+use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::format::{format, Format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
@@ -140,11 +140,11 @@ pub struct TracingConfig<'a> {
 
 /// Configures tracing according to the provided command-line arguments.
 /// Returns a `Write` stream that represents the main place `tracing` will
-/// log to.
+/// log to, and a `tracing::Level` that is the `librdkafka` debug level.
 pub async fn configure(
     config: TracingConfig<'_>,
     metrics_registry: &MetricsRegistry,
-) -> Result<Box<dyn Write>, anyhow::Error> {
+) -> Result<(Box<dyn Write>, tracing::Level), anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
     // before our custom panic hook is installed (because the panic hook needs
     // tracing configured to execute), so a panic here will not direct the
@@ -162,6 +162,12 @@ pub async fn configure(
         var_labels: ["severity"],
     ));
 
+    // TODO(guswynn):
+    // continure investigating how we can
+    // remove this `Targets` filter from the non-fmt layers, as described
+    // here:
+    // https://github.com/MaterializeInc/materialize/pull/10875
+
     let stack = tracing_subscriber::registry()
         .with(MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()))
         .with(
@@ -169,7 +175,7 @@ pub async fn configure(
                 .with_writer(io::stderr)
                 .with_ansi(atty::is(atty::Stream::Stderr))
                 .event_format(SubprocessFormat::new_default(config.prefix))
-                .with_filter(filter),
+                .with_filter(filter.clone()),
         );
 
     #[cfg(feature = "tokio-console")]
@@ -182,7 +188,19 @@ pub async fn configure(
     )
     .await?;
 
-    Ok(Box::new(io::stderr()))
+    let librdkafka_debug = if filter.would_enable("librdkafka", &Level::TRACE) {
+        Level::TRACE
+    } else if filter.would_enable("librdkafka", &Level::DEBUG) {
+        Level::DEBUG
+    } else if filter.would_enable("librdkafka", &Level::INFO) {
+        Level::INFO
+    } else if filter.would_enable("librdkafka", &Level::WARN) {
+        Level::WARN
+    } else {
+        Level::ERROR
+    };
+
+    Ok((Box::new(io::stderr()), librdkafka_debug))
 }
 
 /// A tracing [`Layer`] that allows hooking into the reporting/filtering chain

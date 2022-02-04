@@ -28,9 +28,7 @@ use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_repr::GlobalId;
 
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
-
-use super::metrics::SourceBaseMetrics;
+use crate::source::{NextMessage, SourceContext, SourceMessage, SourceReader, SourceReaderError};
 
 /// Contains all information necessary to ingest data from file sources
 pub struct FileSourceReader {
@@ -72,7 +70,7 @@ impl SourceReader for FileSourceReader {
         _: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        _: SourceBaseMetrics,
+        _: SourceContext,
     ) -> Result<Self, anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {

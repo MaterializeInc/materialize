@@ -20,7 +20,7 @@ use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use mz_dataflow_types::sources::{
@@ -32,10 +32,9 @@ use mz_kafka_util::{client::create_new_client_config, client::MzClientContext, K
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{NextMessage, SourceContext, SourceMessage, SourceReader, SourceReaderError};
 
 use self::metrics::KafkaPartitionMetrics;
-use super::metrics::SourceBaseMetrics;
 
 mod metrics;
 
@@ -88,13 +87,12 @@ impl SourceReader for KafkaSourceReader {
         _: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
-        base_metrics: SourceBaseMetrics,
+        ctx: SourceContext,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kafka(kc) => kc,
             _ => unreachable!(),
         };
-
         let KafkaSourceConnector {
             addrs,
             config_options,
@@ -109,6 +107,7 @@ impl SourceReader for KafkaSourceReader {
             group_id_prefix,
             cluster_id,
             &config_options,
+            ctx.librdkafka_debug,
         );
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
@@ -185,7 +184,7 @@ impl SourceReader for KafkaSourceReader {
             include_headers: kc.include_headers.is_some(),
             _metadata_thread_handle: metadata_thread_handle,
             partition_metrics: KafkaPartitionMetrics::new(
-                base_metrics,
+                ctx.metrics,
                 partition_ids,
                 topic,
                 source_id,
@@ -507,8 +506,9 @@ fn create_kafka_config(
     group_id_prefix: Option<String>,
     cluster_id: Uuid,
     config_options: &BTreeMap<String, String>,
+    librdkafka_debug: tracing::Level,
 ) -> ClientConfig {
-    let mut kafka_config = create_new_client_config();
+    let mut kafka_config = create_new_client_config(librdkafka_debug);
 
     // Broker configuration.
     kafka_config.set("bootstrap.servers", &addrs.to_string());
@@ -555,15 +555,7 @@ fn create_kafka_config(
         ),
     );
 
-    // Patch the librdkafka debug log system into the Rust `log` ecosystem.
-    // This is a very simple integration at the moment; enabling `debug`-level
-    // logs for the `librdkafka` target enables the full firehouse of librdkafka
-    // debug logs. We may want to investigate finer-grained control.
-    // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
-    if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
-        debug!("Enabling 'debug' for rdkafka");
-        kafka_config.set("debug", "all");
-    }
+    mz_kafka_util::client::conditionally_enable_debug_mode(librdkafka_debug, &mut kafka_config);
 
     // Set additional configuration operations from the user. While these look
     // arbitrary, other layers of the system tightly control which configuration
@@ -711,7 +703,7 @@ mod tests {
     use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
 
-    use super::create_new_client_config;
+    use mz_kafka_util::client::create_new_client_config_simple;
 
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
     // lead to a race condition where sometimes we receive messages from polling the main consumer
@@ -730,7 +722,7 @@ mod tests {
         let topic_name = "queue-test";
         let pid = 0;
 
-        let mut kafka_config = create_new_client_config();
+        let mut kafka_config = create_new_client_config_simple();
         kafka_config.set("bootstrap.servers", "localhost:9092".to_string());
         kafka_config.set("enable.auto.commit", "false");
         kafka_config.set("group.id", Uuid::new_v4().to_string());

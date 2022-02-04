@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::env;
 use std::fmt;
 use std::path::PathBuf;
 use std::process;
@@ -215,7 +216,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
-    let mut _tracing_stream = mz_ore::tracing::configure(
+    let (mut tracing_stream, _) = mz_ore::tracing::configure(
         mz_ore::tracing::TracingConfig {
             log_filter: &args.log_filter,
             opentelemetry_endpoint: None,
@@ -227,6 +228,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         &metrics_registry,
     )
     .await?;
+
+    writeln!(
+        tracing_stream,
+        "booting computed
+computed {mz_version}
+invoked as: {invocation}
+max log level: {max_log_level}",
+        mz_version = BUILD_INFO.human_version(),
+        invocation = mz_ore::process::invocation(),
+        max_log_level = ::tracing::level_filters::LevelFilter::current(),
+    )?;
 
     if args.workers == 0 {
         bail!("--workers must be greater than 0");
@@ -260,6 +272,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
+        // TODO(guswynn): hook up tracing and "dataflowd"
+        librdkafka_debug: tracing::Level::INFO,
     };
 
     let serve_config = ServeConfig {

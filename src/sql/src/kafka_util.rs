@@ -254,8 +254,9 @@ pub async fn create_consumer(
     broker: &str,
     topic: &str,
     options: &BTreeMap<String, String>,
+    librdkafka_debug: tracing::Level,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
-    let mut config = create_new_client_config();
+    let mut config = create_new_client_config(librdkafka_debug);
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
         config.set(k, v);

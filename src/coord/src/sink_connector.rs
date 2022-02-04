@@ -26,9 +26,10 @@ use crate::error::CoordError;
 pub async fn build(
     builder: SinkConnectorBuilder,
     id: GlobalId,
+    coord_context: crate::coord::CoordContext,
 ) -> Result<SinkConnector, CoordError> {
     match builder {
-        SinkConnectorBuilder::Kafka(k) => build_kafka(k, id).await,
+        SinkConnectorBuilder::Kafka(k) => build_kafka(k, id, coord_context).await,
         SinkConnectorBuilder::Persist(p) => build_persist_sink(p, id),
     }
 }
@@ -203,6 +204,7 @@ async fn publish_kafka_schemas(
 async fn build_kafka(
     builder: KafkaSinkConnectorBuilder,
     id: GlobalId,
+    coord_context: crate::coord::CoordContext,
 ) -> Result<SinkConnector, CoordError> {
     let maybe_append_nonce = {
         let reuse_topic = builder.reuse_topic;
@@ -218,7 +220,7 @@ async fn build_kafka(
     let topic = maybe_append_nonce(&builder.topic_prefix);
 
     // Create Kafka topic
-    let mut config = create_new_client_config();
+    let mut config = create_new_client_config(coord_context.librdkafka_debug);
     config.set("bootstrap.servers", &builder.broker_addrs.to_string());
     for (k, v) in builder.config_options.iter() {
         // Explicitly reject the statistics interval option here because its not

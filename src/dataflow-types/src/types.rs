@@ -229,6 +229,13 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub id: uuid::Uuid,
 }
 
+/// Extra context to pass through rendering of a source OR sink
+/// Should be kept cheaply-cloneable
+#[derive(Clone)]
+pub struct RenderContext {
+    pub librdkafka_debug: tracing::Level,
+}
+
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {

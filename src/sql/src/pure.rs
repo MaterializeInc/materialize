@@ -57,6 +57,7 @@ pub async fn purify_create_source(
     now: u64,
     aws_external_id: AwsExternalId,
     mut stmt: CreateSourceStatement<Raw>,
+    librdkafka_debug: tracing::Level,
 ) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
     let CreateSourceStatement {
         connector,
@@ -106,9 +107,10 @@ pub async fn purify_create_source(
                 // Verify that the provided security options are valid and then test them.
                 kafka_util::extract_config(&mut with_options_map)?
             };
-            let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
-                .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+            let consumer =
+                kafka_util::create_consumer(&broker, &topic, &config_options, librdkafka_debug)
+                    .await
+                    .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
 
             // Translate `kafka_time_offset` to `start_offset`.
             match kafka_util::lookup_start_offsets(

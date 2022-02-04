@@ -86,6 +86,8 @@ pub struct StorageState {
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
     pub timely_worker_peers: usize,
+    /// The debug level to set librdkafka to
+    pub librdkafka_debug: tracing::Level,
 }
 
 /// State about a single table.

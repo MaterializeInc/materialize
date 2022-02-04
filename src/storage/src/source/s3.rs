@@ -56,7 +56,7 @@ use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::GlobalId;
 
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{NextMessage, SourceContext, SourceMessage, SourceReader, SourceReaderError};
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
@@ -781,7 +781,7 @@ impl SourceReader for S3SourceReader {
         aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        metrics: SourceBaseMetrics,
+        ctx: SourceContext,
     ) -> Result<Self, anyhow::Error> {
         let s3_conn = match connector {
             ExternalSourceConnector::S3(s3_conn) => s3_conn,
@@ -808,7 +808,7 @@ impl SourceReader for S3SourceReader {
                     aws_external_id.clone(),
                     consumer_activator,
                     s3_conn.compression,
-                    metrics.clone(),
+                    ctx.metrics.clone(),
                 ),
             );
             for key_source in s3_conn.key_sources {
@@ -829,7 +829,7 @@ impl SourceReader for S3SourceReader {
                                 s3_conn.aws.clone(),
                                 aws_external_id.clone(),
                                 keys_tx.clone(),
-                                metrics.clone(),
+                                ctx.metrics.clone(),
                             ),
                         );
                     }
@@ -848,7 +848,7 @@ impl SourceReader for S3SourceReader {
                                 aws_external_id.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
-                                metrics.clone(),
+                                ctx.metrics.clone(),
                             ),
                         );
                     }
