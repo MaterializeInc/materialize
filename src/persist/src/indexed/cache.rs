@@ -66,8 +66,12 @@ impl<B> Clone for BlobCache<B> {
     }
 }
 
+const MB: usize = 1024 * 1024;
+const GB: usize = 1024 * MB;
+
 impl<B: BlobRead> BlobCache<B> {
     const META_KEY: &'static str = "META";
+    const DEFAULT_CACHE_SIZE_LIMIT: usize = 2 * GB;
 
     /// Returns a new, empty cache for the given [Blob] storage.
     pub fn new(
@@ -75,13 +79,14 @@ impl<B: BlobRead> BlobCache<B> {
         metrics: Arc<Metrics>,
         async_runtime: Arc<AsyncRuntime>,
         blob: B,
+        cache_size_limit: Option<usize>,
     ) -> Self {
         BlobCache {
             build_version: build.semver_version(),
             metrics,
             blob: Arc::new(Mutex::new(blob)),
             async_runtime,
-            cache: BlobCacheInner::new(),
+            cache: BlobCacheInner::new(cache_size_limit.unwrap_or(Self::DEFAULT_CACHE_SIZE_LIMIT)),
             prev_meta_len: 0,
         }
     }
@@ -117,7 +122,7 @@ impl<B: BlobRead> BlobCache<B> {
         // of two get calls for the same key.
         let ret = Arc::new(batch);
         self.cache
-            .maybe_add_unsealed(key.to_owned(), Arc::clone(&ret))?;
+            .maybe_add_unsealed(key.to_owned(), bytes_len, Arc::clone(&ret))?;
 
         drop(async_guard);
         Ok(ret)
@@ -178,7 +183,7 @@ impl<B: BlobRead> BlobCache<B> {
         // of two get calls for the same key.
         let ret = Arc::new(batch);
         self.cache
-            .maybe_add_trace(key.to_owned(), Arc::clone(&ret))?;
+            .maybe_add_trace(key.to_owned(), bytes_len, Arc::clone(&ret))?;
 
         drop(async_guard);
         Ok(ret)
@@ -316,7 +321,8 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.unsealed.blob_write_count.inc();
         self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
 
-        self.cache.maybe_add_unsealed(key, Arc::new(batch))?;
+        self.cache
+            .maybe_add_unsealed(key, usize::cast_from(val_len), Arc::new(batch))?;
 
         drop(async_guard);
         Ok((format, val_len))
@@ -373,7 +379,8 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.trace.blob_write_count.inc();
         self.metrics.trace.blob_write_bytes.inc_by(val_len);
 
-        self.cache.maybe_add_trace(key, Arc::new(batch))?;
+        self.cache
+            .maybe_add_trace(key, usize::cast_from(val_len), Arc::new(batch))?;
 
         drop(async_guard);
         Ok((format, val_len))
@@ -461,16 +468,21 @@ struct BlobCacheInner {
 }
 
 impl BlobCacheInner {
-    fn new() -> Self {
+    fn new(limit: usize) -> Self {
         BlobCacheInner {
-            unsealed: Arc::new(Mutex::new(BlobCacheCore::new())),
-            trace: Arc::new(Mutex::new(BlobCacheCore::new())),
+            unsealed: Arc::new(Mutex::new(BlobCacheCore::new(limit / 2))),
+            trace: Arc::new(Mutex::new(BlobCacheCore::new(limit / 2))),
         }
     }
 
-    fn maybe_add_unsealed(&self, key: String, data: Arc<BlobUnsealedBatch>) -> Result<(), Error> {
+    fn maybe_add_unsealed(
+        &self,
+        key: String,
+        size: usize,
+        data: Arc<BlobUnsealedBatch>,
+    ) -> Result<(), Error> {
         let mut unsealed = self.unsealed.lock()?;
-        unsealed.add(key, data);
+        unsealed.add(key, size, data);
         Ok(())
     }
 
@@ -485,9 +497,14 @@ impl BlobCacheInner {
         Ok(())
     }
 
-    fn maybe_add_trace(&self, key: String, data: Arc<BlobTraceBatch>) -> Result<(), Error> {
+    fn maybe_add_trace(
+        &self,
+        key: String,
+        size: usize,
+        data: Arc<BlobTraceBatch>,
+    ) -> Result<(), Error> {
         let mut trace = self.trace.lock()?;
-        trace.add(key, data);
+        trace.add(key, size, data);
         Ok(())
     }
 
@@ -505,28 +522,54 @@ impl BlobCacheInner {
 
 /// In-memory cache for arbitrary objects that can be shared across multiple
 /// threads.
+///
+/// TODO: this cache accounts for the serialized sizes of data it contains, but
+/// perhaps should look at the in-memory size instead.
 #[derive(Debug)]
 struct BlobCacheCore<D> {
-    dataz: HashMap<String, Arc<D>>,
+    // Map from key -> (data, size of data)
+    dataz: HashMap<String, (Arc<D>, usize)>,
+    size: usize,
+    limit: usize,
 }
 
 impl<D> BlobCacheCore<D> {
-    fn new() -> Self {
+    fn new(limit: usize) -> Self {
         BlobCacheCore {
             dataz: HashMap::new(),
+            size: 0,
+            limit,
         }
     }
 
-    fn add(&mut self, key: String, data: Arc<D>) {
-        self.dataz.insert(key, data);
+    /// Add an object to the cache, if doing so would not exceed the cache's
+    /// size limit.
+    fn add(&mut self, key: String, size: usize, data: Arc<D>) {
+        let new_size = self.size + size;
+        if new_size > self.limit {
+            return;
+        }
+
+        let prev = self.dataz.insert(key, (data, size));
+        if prev.is_none() {
+            self.size = new_size;
+        }
+
+        debug_assert!(self.limit >= self.size);
     }
 
     fn remove(&mut self, key: &str) {
-        self.dataz.remove(key);
+        let prev = self.dataz.remove(key);
+        if let Some((_, size)) = prev {
+            debug_assert!(self.size >= size);
+            self.size -= size;
+        }
+
+        debug_assert!(self.limit >= self.size);
     }
 
     fn get(&self, key: &str) -> Option<Arc<D>> {
-        self.dataz.get(key).map(|data| Arc::clone(&data))
+        self.dataz.get(key).map(|(data, _)| Arc::clone(&data))
     }
 }
 
@@ -544,6 +587,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
 
         // Whatever we write down roundtrips.

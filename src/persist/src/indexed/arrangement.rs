@@ -1041,6 +1041,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_trace_ts_upper_invariant"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1085,6 +1086,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_ts_lower_invariant"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1118,6 +1120,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_evict"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1193,6 +1196,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_snapshot"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1247,6 +1251,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_batch_trim"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1370,6 +1375,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
@@ -1525,6 +1531,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));

@@ -288,6 +288,7 @@ pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, Wall
         Arc::clone(&metrics),
         async_runtime,
         file_blob,
+        None,
     );
     let file_indexed =
         Indexed::new(file_log, blob_cache, metrics).expect("failed to create file indexed");
@@ -353,6 +354,7 @@ pub fn bench_blob_cache_set_unsealed_batch(
         metrics,
         Arc::clone(&async_runtime),
         mem_blob,
+        None,
     );
 
     // Create a directory that will automatically be dropped after the test finishes.
@@ -365,6 +367,7 @@ pub fn bench_blob_cache_set_unsealed_batch(
         metrics,
         async_runtime,
         file_blob,
+        None,
     );
 
     let batches = data.batches().collect::<Vec<_>>();

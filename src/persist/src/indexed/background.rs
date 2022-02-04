@@ -217,6 +217,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
 
@@ -301,6 +302,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob, async_runtime, metrics);
 
