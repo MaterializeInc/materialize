@@ -134,6 +134,9 @@ changes that have not yet been documented.
 - Follow PostgreSQL's type conversion rules for the relations involved in a
   `UNION`, `EXCEPT`, or `INTERSECT` operation {{% gh 3331 %}}.
 
+- Add the `md5`, `sha224`, `sha256`, `sha384`, and `sha512` [cryptography
+  functions](/sql/functions/#cryptography-func).
+
 {{< comment >}}
 Only add new release notes above this line.
 
