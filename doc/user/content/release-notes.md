@@ -107,6 +107,9 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Improve millisecond parsing for `interval`(/sql/types/interval) using the
+  PostgreSQL verbose format.
+
 - Add the [`greatest`](/sql/functions/#generic) and [`least`](/sql/functions/#generic)
   functions.
 

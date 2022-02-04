@@ -47,8 +47,8 @@ offers support for two types of `time_expr` syntax:
 
 - SQL Standard, i.e. `'Y-M D H:M:S.NS'`
 - PostgreSQL, i.e. repeated `int.frac time_unit`, e.g.:
-    - `'1 year 2 months 3.4 days 5 hours 6 minutes 7.8 seconds'`
-    - `'1y 2mon 3.4d 5h 6m 7.8s'`
+    - `'1 year 2 months 3.4 days 5 hours 6 minutes 7 seconds 8 milliseconds'`
+    - `'1y 2mon 3.4d 5h 6m 7s 8ms'`
 
 Like PostgreSQL, Materialize's implementation includes the following
 stipulations:
