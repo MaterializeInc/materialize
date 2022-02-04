@@ -167,13 +167,6 @@ pub enum StorageCommand {
         /// Previously stored timestamp bindings.
         bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
     },
-    /// Advance worker timestamp
-    AdvanceSourceTimestamp {
-        /// The ID of the timestamped source
-        id: GlobalId,
-        /// The associated update
-        update: crate::types::sources::persistence::TimestampSourceUpdate,
-    },
     /// Enable compaction in sources.
     ///
     /// Each entry in the vector names a source and provides a frontier after which
@@ -199,7 +192,6 @@ impl StorageCommandKind {
         match self {
             StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
-            StorageCommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
             StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
             StorageCommandKind::AllowSourceCompaction => "allows_source_compaction",
             StorageCommandKind::CreateSources => "create_sources",
@@ -425,17 +417,6 @@ pub trait StorageClient: Client {
             id,
             connector,
             bindings,
-        }))
-        .await
-    }
-    async fn advance_source_timestamp(
-        &mut self,
-        id: GlobalId,
-        update: crate::types::sources::persistence::TimestampSourceUpdate,
-    ) {
-        self.send(Command::Storage(StorageCommand::AdvanceSourceTimestamp {
-            id,
-            update,
         }))
         .await
     }

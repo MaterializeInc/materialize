@@ -116,10 +116,7 @@ use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{sinks::SinkAsOf, sources::Timeline};
 use dataflow_types::{
     sinks::{SinkConnector, TailSinkConnector},
-    sources::{
-        persistence::TimestampSourceUpdate, ExternalSourceConnector, PostgresSourceConnector,
-        SourceConnector,
-    },
+    sources::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector},
     DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
 };
 use expr::{
@@ -131,7 +128,7 @@ use ore::now::{to_datetime, NowFn};
 use ore::retry::Retry;
 use ore::soft_assert_eq;
 use ore::task;
-use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
+use ore::thread::JoinHandleExt;
 use repr::adt::numeric;
 use repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
 use sql::ast::display::AstDisplay;
@@ -173,7 +170,6 @@ use crate::session::{
 };
 use crate::sink_connector;
 use crate::tail::PendingTail;
-use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 
 mod antichain;
@@ -185,7 +181,6 @@ mod prometheus;
 pub enum Message {
     Command(Command),
     Worker(dataflow_types::client::Response),
-    AdvanceSourceTimestamp(AdvanceSourceTimestamp),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
     ScrapeMetrics,
@@ -203,12 +198,6 @@ pub struct SendDiffs {
     pub id: GlobalId,
     pub diffs: Result<Vec<(Row, Diff)>, CoordError>,
     pub kind: MutationKind,
-}
-
-#[derive(Debug)]
-pub struct AdvanceSourceTimestamp {
-    pub id: GlobalId,
-    pub update: TimestampSourceUpdate,
 }
 
 #[derive(Derivative)]
@@ -298,10 +287,6 @@ pub struct Coordinator {
     /// Channel to manange internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Channel to communicate source status updates to the timestamper thread.
-    ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
-    /// Handle to the timestamper thread. Drop order matters here! This must be
-    /// located after `ts_tx`.
-    _timestamper_thread_handle: JoinOnDropHandle<()>,
     metric_scraper: Scraper,
 
     /// The last known timestamp that was considered "open" (i.e. where writes
@@ -786,9 +771,6 @@ impl Coordinator {
                     // here.
                 }
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
-                Message::AdvanceSourceTimestamp(advance) => {
-                    self.message_advance_source_timestamp(advance).await
-                }
                 Message::ScrapeMetrics => self.message_scrape_metrics().await,
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
@@ -1067,15 +1049,6 @@ impl Coordinator {
                 tx.send(Err(e), session);
             }
         }
-    }
-
-    async fn message_advance_source_timestamp(
-        &mut self,
-        AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
-    ) {
-        self.dataflow_client
-            .advance_source_timestamp(id, update)
-            .await;
     }
 
     async fn message_scrape_metrics(&mut self) {
@@ -4472,19 +4445,12 @@ impl Coordinator {
                 .expect("loading timestamps from coordinator cannot fail");
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
-                    self.ts_tx
-                        .send(TimestampMessage::Add(source_id, s.connector.clone()))
-                        .expect("Failed to send CREATE Instance notice to timestamper");
-                    let connector = s.connector.clone();
                     self.dataflow_client
-                        .add_source_timestamping(source_id, connector, bindings)
+                        .add_source_timestamping(source_id, s.connector.clone(), bindings)
                         .await;
                 }
             }
         } else {
-            self.ts_tx
-                .send(TimestampMessage::Drop(source_id))
-                .expect("Failed to send DROP Instance notice to timestamper");
             self.dataflow_client
                 .drop_source_timestamping(source_id)
                 .await;
@@ -4645,23 +4611,6 @@ pub async fn serve(
 
     let metric_scraper = Scraper::new(logging.as_ref(), metrics_registry.clone())?;
 
-    let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let mut timestamper = Timestamper::new(
-        Duration::from_millis(10),
-        internal_cmd_tx.clone(),
-        ts_rx,
-        &metrics_registry,
-    );
-    let executor = TokioHandle::current();
-    let timestamper_thread_handle = thread::Builder::new()
-        .name("timestamper".to_string())
-        .spawn(move || {
-            let _executor_guard = executor.enter();
-            timestamper.run();
-        })
-        .unwrap()
-        .join_on_drop();
-
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
@@ -4681,8 +4630,6 @@ pub async fn serve(
                     .map(duration_to_timestamp_millis),
                 logging_enabled: logging.is_some(),
                 internal_cmd_tx,
-                ts_tx,
-                _timestamper_thread_handle: timestamper_thread_handle,
                 metric_scraper,
                 last_open_local_ts: 1,
                 writes_at_open_ts: false,

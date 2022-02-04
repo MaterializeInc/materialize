@@ -38,7 +38,7 @@ use dataflow_types::client::{
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    sources::{persistence::TimestampSourceUpdate, ExternalSourceConnector, SourceConnector},
+    sources::{ExternalSourceConnector, SourceConnector},
     DataflowError, PeekResponse,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
@@ -889,7 +889,7 @@ where
                 } = connector
                 {
                     let rt_default = TimestampBindingRc::new(
-                        Some(ts_frequency.as_millis().try_into().unwrap()),
+                        ts_frequency.as_millis().try_into().unwrap(),
                         self.now.clone(),
                     );
                     match connector {
@@ -929,7 +929,7 @@ where
                                 offset
                             );
                             data.add_partition(pid.clone(), None);
-                            data.add_binding(pid, timestamp, offset, false);
+                            data.add_binding(pid, timestamp, offset);
                         } else {
                             tracing::trace!(
                                 "NOT adding partition/binding on worker {}: ({}, {}, {})",
@@ -948,28 +948,6 @@ where
                         .insert(id, Antichain::from_elem(0));
                 } else {
                     assert!(bindings.is_empty());
-                }
-            }
-            StorageCommand::AdvanceSourceTimestamp { id, update } => {
-                if let Some(history) = self.storage_state.ts_histories.get_mut(&id) {
-                    match update {
-                        TimestampSourceUpdate::RealTime(new_partition) => {
-                            history.add_partition(new_partition, None);
-                        }
-                    };
-
-                    let sources = self
-                        .storage_state
-                        .ts_source_mapping
-                        .entry(id)
-                        .or_insert_with(Vec::new);
-                    for source in sources {
-                        if let Some(source) = source.upgrade() {
-                            if let Some(token) = &*source {
-                                token.activate();
-                            }
-                        }
-                    }
                 }
             }
             StorageCommand::AllowSourceCompaction(list) => {
