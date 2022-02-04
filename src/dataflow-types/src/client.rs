@@ -25,7 +25,6 @@ use crate::{
     Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
-use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 pub mod controller;
@@ -190,12 +189,6 @@ pub enum StorageCommand {
         /// The timestamp to advance to.
         advance_to: Timestamp,
     },
-    /// Enable persistence.
-    // TODO: to enable persistence in clustered mode, we'll need to figure out
-    // an alternative design that doesn't require serializing a persistence
-    // client.
-    #[serde(skip)]
-    EnablePersistence(RuntimeClient),
 }
 
 impl StorageCommandKind {
@@ -212,7 +205,6 @@ impl StorageCommandKind {
             StorageCommandKind::CreateSources => "create_sources",
             StorageCommandKind::DropSources => "drop_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
-            StorageCommandKind::EnablePersistence => "enable_persistence",
             StorageCommandKind::Insert => "insert",
         }
     }
@@ -464,10 +456,6 @@ pub trait StorageClient: Client {
             advance_to,
         }))
         .await
-    }
-    async fn enable_persistence(&mut self, runtime: RuntimeClient) {
-        self.send(Command::Storage(StorageCommand::EnablePersistence(runtime)))
-            .await
     }
 }
 

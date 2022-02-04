@@ -45,8 +45,10 @@ use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::metrics::MetricsRegistry;
 use ore::now::NowFn;
 use ore::result::ResultExt;
-use repr::{Diff, Row, RowArena, Timestamp};
+use repr::{DatumVec, Diff, Row, RowArena, Timestamp};
 
+use self::metrics::{ServerMetrics, WorkerMetrics};
+use crate::activator::RcActivator;
 use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
@@ -57,10 +59,6 @@ use crate::render::{self, ComputeState, StorageState};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
-
-use self::metrics::{ServerMetrics, WorkerMetrics};
-use crate::activator::RcActivator;
-use repr::DatumVec;
 
 mod metrics;
 
@@ -80,6 +78,8 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
+    /// A handle to a persistence runtime, if persistence is enabled.
+    pub persister: Option<persist::client::RuntimeClient>,
 }
 
 /// A handle to a running dataflow server.
@@ -148,7 +148,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 persisted_sources: PersistedSourceManager::new(),
                 sink_write_frontiers: HashMap::new(),
                 metrics,
-                persist: None,
+                persist: config.persister.clone(),
             },
             materialized_logger: None,
             command_rx,
@@ -877,9 +877,6 @@ where
                 }
             }
 
-            StorageCommand::EnablePersistence(runtime) => {
-                self.storage_state.persist = Some(runtime);
-            }
             StorageCommand::AddSourceTimestamping {
                 id,
                 connector,

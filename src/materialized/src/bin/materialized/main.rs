@@ -746,7 +746,7 @@ dataflow workers: {workers}",
         let min_step_interval = args.timestamp_frequency;
 
         PersistConfig {
-            runtime: Some(Arc::clone(&runtime)),
+            async_runtime: Some(Arc::clone(&runtime)),
             storage,
             user_table_enabled,
             system_table_enabled,
