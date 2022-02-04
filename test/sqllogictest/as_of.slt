@@ -54,3 +54,6 @@ SELECT * FROM data AS OF 1E38;
 
 query error decimal cannot be expressed in target primitive type
 SELECT * FROM data AS OF 1.2;
+
+query error cannot call mz_logical_timestamp in this context
+SELECT * FROM data AS OF mz_logical_timestamp();

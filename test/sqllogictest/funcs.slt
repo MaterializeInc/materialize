@@ -1339,4 +1339,4 @@ SELECT mz_internal.mz_error_if_null(1, '')
 query I
 SELECT pg_backend_pid()
 ----
--1
+1

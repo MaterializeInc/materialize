@@ -42,4 +42,4 @@
 # in this file). Although this error message is misleading, we don't
 # expect users to do this, so it's ok for now.
 ! INSERT INTO dec VALUES (mz_logical_timestamp())
-contains:calls to mz_logical_timestamp in in static or write queries are not supported
+contains:calls to mz_logical_timestamp in write statements are not supported

@@ -1021,11 +1021,22 @@ impl MirScalarExpr {
         }
     }
 
-    /// True iff the expression contains `NullaryFunc::MzLogicalTimestamp`.
+    /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
         self.visit_post(&mut |e| {
             if let MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) = e {
+                contains = true;
+            }
+        });
+        contains
+    }
+
+    /// True iff the expression contains a `NullaryFunc`.
+    pub fn contains_nullary(&self) -> bool {
+        let mut contains = false;
+        self.visit_post(&mut |e| {
+            if let MirScalarExpr::CallNullary(_) = e {
                 contains = true;
             }
         });

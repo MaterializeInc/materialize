@@ -152,7 +152,7 @@ pub fn plan_select(
         expr, finishing, ..
     } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
 
-    let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
+    let when = match as_of.map(|e| query::plan_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
     };
@@ -365,7 +365,7 @@ pub fn plan_tail(
         }
     };
 
-    let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
+    let ts = as_of.map(|e| query::plan_as_of(scx, e)).transpose()?;
     let options = TailOptions::try_from(options)?;
     Ok(Plan::Tail(TailPlan {
         from,

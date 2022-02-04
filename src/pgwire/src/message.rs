@@ -384,6 +384,7 @@ impl ErrorResponse {
             CoordError::UnknownParameter(_) => SqlState::INVALID_SQL_STATEMENT_NAME,
             CoordError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             CoordError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            CoordError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             // It's not immediately clear which error code to use here because a
