@@ -227,10 +227,14 @@ where
                 )
             };
 
-            let timestamp_histories = storage_state
+            let mut timestamp_histories = storage_state
                 .ts_histories
                 .get(&src_id)
                 .map(|history| history.clone());
+            // The operator observes the histories, but does not prevent compaction.
+            timestamp_histories.as_mut().map(|tsh| {
+                tsh.set_compaction_frontier(timely::progress::Antichain::new().borrow())
+            });
             let source_name = format!("{}-{}", connector.name(), uid);
             let source_config = SourceConfig {
                 name: source_name.clone(),

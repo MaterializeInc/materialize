@@ -259,6 +259,10 @@ impl PartitionTimestamps {
 ///
 /// This type is almost never meant to be used directly, and you probably want to
 /// use `TimestampBindingRc` instead.
+///
+/// The type maintains a durability frontier and a compaction frontier, with the
+/// invariant that the compaction frontier is never strictly greater than the
+/// durability frontier.
 #[derive(Debug)]
 pub struct TimestampBindingBox {
     /// List of partitions that we learned about from the coordinator. This is used by source
@@ -302,9 +306,11 @@ impl TimestampBindingBox {
         add: AntichainRef<Timestamp>,
     ) {
         self.compaction_frontier
-            .update_iter(remove.iter().map(|t| (*t, -1)));
-        self.compaction_frontier
             .update_iter(add.iter().map(|t| (*t, 1)));
+        self.compaction_frontier
+            .update_iter(remove.iter().map(|t| (*t, -1)));
+
+        assert!(!self.compaction_frontier.frontier().is_empty());
     }
 
     fn set_durability_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
@@ -314,6 +320,11 @@ impl TimestampBindingBox {
             self.durability_frontier.borrow(),
             new_frontier
         );
+        // Release a hold on the compaction frontier.
+        self.compaction_frontier
+            .update_iter(new_frontier.iter().map(|t| (*t, 1)));
+        self.compaction_frontier
+            .update_iter(self.durability_frontier.iter().map(|t| (*t, -1)));
         self.durability_frontier = new_frontier.to_owned();
     }
 
@@ -470,10 +481,15 @@ impl TimestampBindingRc {
             timestamp_update_interval,
             now,
         )));
-
+        // Increase the count associated with the compaction frontier, as there
+        // is a new reference to it.
+        let compaction_frontier = wrapper.borrow().compaction_frontier.frontier().to_owned();
+        wrapper
+            .borrow_mut()
+            .adjust_compaction_frontier(Antichain::new().borrow(), compaction_frontier.borrow());
         let ret = Self {
             wrapper: Rc::clone(&wrapper),
-            compaction_frontier: wrapper.borrow().compaction_frontier.frontier().to_owned(),
+            compaction_frontier,
         };
 
         ret
