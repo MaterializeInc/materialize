@@ -1772,6 +1772,9 @@ lazy_static! {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp, 2020;
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz, 1217;
             },
+            "degrees" => Scalar {
+                params!(Float64) => UnaryFunc::Degrees(func::Degrees), 1608;
+            },
             "digest" => Scalar {
                 params!(String, String) => BinaryFunc::DigestString, 44154;
                 params!(Bytes, String) => BinaryFunc::DigestBytes, 44155;
@@ -1987,6 +1990,9 @@ lazy_static! {
             "power" => Scalar {
                 params!(Float64, Float64) => BinaryFunc::Power, 1368;
                 params!(Numeric, Numeric) => BinaryFunc::PowerNumeric, 2169;
+            },
+            "radians" => Scalar {
+                params!(Float64) => UnaryFunc::Radians(func::Radians), 1609;
             },
             "repeat" => Scalar {
                 params!(String, Int32) => BinaryFunc::RepeatString, 1622;

@@ -117,6 +117,9 @@ changes that have not yet been documented.
 - Support the inverse [trigonometric functions](/sql/functions/#trigonometric-func)
   `asin`, `asinh`, `acos`, `acosh`, `atan`, `atanh`.
 
+- Support the [`radians`](/sql/functions/#trigonometric-func) and
+  [`degrees`](/sql/functions/#trigonometric-func) functions.
+
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`date`] value but a time-related field (e.g., `SECOND`).
 
