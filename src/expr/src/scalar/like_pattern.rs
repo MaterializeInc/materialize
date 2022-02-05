@@ -77,7 +77,7 @@ pub fn compile(pattern: &str, case_insensitive: bool, escape: char) -> Result<Ma
     Ok(Matcher {
         pattern: String::from(pattern),
         case_insensitive,
-        matcher_impl: matcher_impl,
+        matcher_impl,
     })
 }
 
