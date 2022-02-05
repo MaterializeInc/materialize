@@ -1125,6 +1125,10 @@ where
             None
         };
 
+        // Maintain a capability set that tracks the durability frontier.
+        use timely::dataflow::operators::CapabilitySet;
+        let mut durable_capability: Option<CapabilitySet<Timestamp>> = None;
+
         move |cap, bindings_cap, output, bindings_output| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
@@ -1142,6 +1146,16 @@ where
                     return SourceStatus::Done;
                 }
             };
+
+            // Maintain a capability set that tracks the durability frontier.
+            // This may initially *exceed* the durability frontier, so we
+            // must be careful attempting to downgrade it.
+            if let Some(capability_set) = durable_capability.as_mut() {
+                // We may fail to downgrade, but that is ok.
+                let _ = capability_set.try_downgrade(timestamp_histories.durability_frontier());
+            } else {
+                durable_capability = Some(CapabilitySet::from_elem(cap.clone()));
+            }
 
             // NOTE: It's **very** important that we get out any necessary
             // retractions/additions to the timestamp bindings before we downgrade beyond the
