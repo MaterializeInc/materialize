@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
+use std::mem;
 
+use derivative::Derivative;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
+use lowertest::MzReflect;
 
 // This implementation supports a couple of different methods of matching
 // text against a SQL LIKE pattern.
@@ -27,57 +28,33 @@ use crate::scalar::EvalError;
 // we can do better using built-in string matching.
 
 /// An object that can test whether a string matches a LIKE pattern.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
+#[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Matcher {
     pub pattern: String,
     pub case_insensitive: bool,
-    string_matcher: Option<StringMatcher>,
-    #[serde(with = "serde_regex")]
-    regex_matcher: Option<Regex>,
+    #[derivative(
+        PartialEq = "ignore",
+        Hash = "ignore",
+        Ord = "ignore",
+        PartialOrd = "ignore"
+    )]
+    matcher_impl: MatcherImpl,
 }
 
 impl Matcher {
     pub fn is_match(&self, text: &str) -> bool {
-        match &self.string_matcher {
-            Some(sm) => return sm.is_match(text),
-            _ => {}
-        }
-        match &self.regex_matcher {
-            Some(r) => r.is_match(text),
-            _ => false,
+        match &self.matcher_impl {
+            MatcherImpl::String(subpatterns) => is_match_subpatterns(subpatterns, text),
+            MatcherImpl::Regex(r) => r.is_match(text),
         }
     }
 }
 
-impl PartialEq<Matcher> for Matcher {
-    fn eq(&self, other: &Matcher) -> bool {
-        self.pattern == *other.pattern && self.case_insensitive == other.case_insensitive
-    }
-}
-
-impl Eq for Matcher {}
-
-impl PartialOrd for Matcher {
-    fn partial_cmp(&self, other: &Matcher) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Matcher {
-    fn cmp(&self, other: &Matcher) -> Ordering {
-        let result = self.pattern.cmp(&other.pattern);
-        if result.is_eq() {
-            return self.case_insensitive.cmp(&other.case_insensitive);
-        }
-        result
-    }
-}
-
-impl Hash for Matcher {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.pattern.hash(state);
-        self.case_insensitive.hash(state);
-    }
+#[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
+enum MatcherImpl {
+    String(Vec<Subpattern>),
+    Regex(#[serde(with = "serde_regex")] Regex),
 }
 
 /// Builds a Matcher that matches a SQL LIKE pattern.
@@ -92,19 +69,16 @@ pub fn compile(pattern: &str, case_insensitive: bool, escape: char) -> Result<Ma
     if pattern.len() > 8 << 10 {
         return Err(EvalError::LikePatternTooLong);
     }
-    let mut matcher = Matcher {
+    // TODO: Fall back to regex if the chain of sub-patterns is too long?
+    let matcher_impl = match case_insensitive {
+        false => MatcherImpl::String(build_subpatterns(pattern, escape)?),
+        true => MatcherImpl::Regex(build_regex(pattern, case_insensitive, escape)?),
+    };
+    Ok(Matcher {
         pattern: String::from(pattern),
         case_insensitive,
-        string_matcher: None,
-        regex_matcher: None,
-    };
-    if case_insensitive {
-        matcher.regex_matcher = Some(build_regex(pattern, case_insensitive, escape)?);
-    } else {
-        matcher.string_matcher = Some(build_string_matcher(pattern, escape)?);
-        // TODO: Fall back to regex if the chain of sub-patterns is too long?
-    }
-    Ok(matcher)
+        matcher_impl: matcher_impl,
+    })
 }
 
 /// Builds a regular expression that matches the same strings as a SQL
@@ -184,99 +158,83 @@ fn build_regex(pattern: &str, case_insensitive: bool, escape: char) -> Result<Re
 //     "__%__" = (4, many)
 //     "%%%_"  = (1, many)
 
-// Matches a chain of SUB-PATTERNs
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct StringMatcher {
+#[derive(Debug, Default, Clone, Deserialize, Serialize, MzReflect)]
+struct Subpattern {
     /// The minimum number of characters that can be consumed by the wildcard expression.
     consume: usize,
     /// Whether the wildcard expression can consume an arbitrary number of characters.
     many: bool,
     /// A string literal that is expected after the wildcards.
     suffix: String,
-    /// Any sub-patterns that come after this one.
-    next: Option<Box<StringMatcher>>,
 }
 
-impl StringMatcher {
-    pub fn is_match(&self, text: &str) -> bool {
-        let mut rest = text;
-        // Go ahead and skip the minimum number of characters the sub-pattern consumes:
-        if self.consume > 0 {
-            let mut chars = rest.chars();
-            for _ in 0..self.consume {
-                if chars.next().is_none() {
-                    return false;
-                }
-            }
-            rest = chars.as_str();
-        }
-        if self.many {
-            // The sub-pattern might consume any number of characters, but we need to find
-            // where it terminates so we can match any subsequent sub-patterns. We do this
-            // by searching for the suffix string using str::find.
-            //
-            // We could investigate using a fancier substring search like Boyer-Moore:
-            // https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm
-            //
-            // .. but it's likely not worth it. It's slower for small strings,
-            // and doesn't really start outperforming the naive approach until
-            // haystack sizes of 1KB or greater. See benchmarking results from:
-            // https://github.com/killerswan/boyer-moore-search/blob/master/README.md
-            //
-            // Another approach that may be interesteing to look at is a
-            // hardware-optimized search:
-            // http://0x80.pl/articles/simd-strfind.html
-            if self.suffix.len() == 0 {
-                // Nothing to find... This should only happen in the last sub-pattern.
-                assert!(self.next.is_none(), "empty suffix in middle of a pattern");
-                return true;
-            }
-            // Use rfind so we perform a greedy capture, like Regex.
-            let mut found = rest.rfind(&self.suffix);
-            loop {
-                match found {
-                    None => return false,
-                    Some(offset) => {
-                        let end = offset + self.suffix.len();
-                        let tmp = &rest[end..];
-                        match &self.next {
-                            None => return tmp.len() == 0,
-                            Some(next) => {
-                                if next.is_match(tmp) {
-                                    return true;
-                                }
-                            }
-                        }
-                        // Didn't match, look for the next rfind.
-                        if offset == 0 {
-                            return false;
-                        }
-                        found = rest[..(end - 1)].rfind(&self.suffix);
-                    }
-                }
-            }
-        }
-        // No string search needed, we just use a prefix match on rest.
-        if !rest.starts_with(&self.suffix) {
+fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
+    let (subpattern, subpatterns) = match subpatterns {
+        [] => return text.is_empty(),
+        [subpattern, subpatterns @ ..] => (subpattern, subpatterns),
+    };
+    // Go ahead and skip the minimum number of characters the sub-pattern consumes:
+    if subpattern.consume > 0 {
+        let mut chars = text.chars();
+        if chars.nth(subpattern.consume - 1).is_none() {
             return false;
         }
-        rest = &rest[self.suffix.len()..];
-        match &self.next {
-            None => rest.len() == 0,
-            Some(matcher) => matcher.is_match(rest),
+        text = chars.as_str();
+    }
+    if subpattern.many {
+        // The sub-pattern might consume any number of characters, but we need to find
+        // where it terminates so we can match any subsequent sub-patterns. We do this
+        // by searching for the suffix string using str::find.
+        //
+        // We could investigate using a fancier substring search like Boyer-Moore:
+        // https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm
+        //
+        // .. but it's likely not worth it. It's slower for small strings,
+        // and doesn't really start outperforming the naive approach until
+        // haystack sizes of 1KB or greater. See benchmarking results from:
+        // https://github.com/killerswan/boyer-moore-search/blob/master/README.md
+        //
+        // Another approach that may be interesteing to look at is a
+        // hardware-optimized search:
+        // http://0x80.pl/articles/simd-strfind.html
+        if subpattern.suffix.len() == 0 {
+            // Nothing to find... This should only happen in the last sub-pattern.
+            assert!(
+                subpatterns.is_empty(),
+                "empty suffix in middle of a pattern"
+            );
+            return true;
+        }
+        // Use rfind so we perform a greedy capture, like Regex.
+        let mut found = text.rfind(&subpattern.suffix);
+        loop {
+            match found {
+                None => return false,
+                Some(offset) => {
+                    let end = offset + subpattern.suffix.len();
+                    if is_match_subpatterns(subpatterns, &text[end..]) {
+                        return true;
+                    }
+                    // Didn't match, look for the next rfind.
+                    if offset == 0 {
+                        return false;
+                    }
+                    found = text[..(end - 1)].rfind(&subpattern.suffix);
+                }
+            }
         }
     }
+    // No string search needed, we just use a prefix match on rest.
+    if !text.starts_with(&subpattern.suffix) {
+        return false;
+    }
+    is_match_subpatterns(subpatterns, &text[subpattern.suffix.len()..])
 }
 
 /// Breaks a LIKE pattern into a chain of sub-patterns.
-fn build_string_matcher(pattern: &str, escape: char) -> Result<StringMatcher, EvalError> {
-    let mut head = StringMatcher {
-        consume: 0,
-        many: false,
-        suffix: String::from(""),
-        next: None,
-    };
-    let mut tail = &mut head;
+fn build_subpatterns(pattern: &str, escape: char) -> Result<Vec<Subpattern>, EvalError> {
+    let mut subpatterns = vec![];
+    let mut current = Subpattern::default();
     let mut in_wildcard = true;
     let mut in_escape = false;
 
@@ -287,37 +245,21 @@ fn build_string_matcher(pattern: &str, escape: char) -> Result<StringMatcher, Ev
                 in_wildcard = false;
             }
             '_' if !in_escape => {
-                if in_wildcard {
-                    tail.consume += 1;
-                } else {
-                    // start a new partial match
-                    tail.next = Some(Box::new(StringMatcher {
-                        consume: 1,
-                        many: false,
-                        suffix: String::from(""),
-                        next: None,
-                    }));
-                    tail = tail.next.as_deref_mut().unwrap();
+                if !in_wildcard {
+                    subpatterns.push(mem::take(&mut current));
                     in_wildcard = true;
                 }
+                current.consume += 1;
             }
             '%' if !in_escape => {
-                if in_wildcard {
-                    tail.many = true;
-                } else {
-                    // start a new partial match
-                    tail.next = Some(Box::new(StringMatcher {
-                        consume: 0,
-                        many: true,
-                        suffix: String::from(""),
-                        next: None,
-                    }));
-                    tail = tail.next.as_deref_mut().unwrap();
+                if !in_wildcard {
+                    subpatterns.push(mem::take(&mut current));
                     in_wildcard = true;
                 }
+                current.many = true;
             }
             c => {
-                tail.suffix.push(c);
+                current.suffix.push(c);
                 in_escape = false;
                 in_wildcard = false;
             }
@@ -326,10 +268,17 @@ fn build_string_matcher(pattern: &str, escape: char) -> Result<StringMatcher, Ev
     if in_escape {
         return Err(EvalError::UnterminatedLikeEscapeSequence);
     }
-    Ok(head)
+    subpatterns.push(mem::take(&mut current));
+    Ok(subpatterns)
 }
 
 // Unit Tests
+//
+// Most of the unit tests for LIKE and ILIKE can be found in:
+//    test/sqllogictest/cockroach/like.slt
+// These tests are here as a convenient place to run quick tests while
+// actively working on changes to the implementation. Make sure you
+// run the full test suite before submitting any changes.
 
 #[cfg(test)]
 mod test {
@@ -342,569 +291,45 @@ mod test {
             haystack: &'a str,
             matches: bool,
         }
+        let input = |haystack, matches| Input { haystack, matches };
         struct Pattern<'a> {
             needle: &'a str,
             case_insensitive: bool,
             escape: char,
             inputs: Vec<Input<'a>>,
         }
-
         let test_cases = vec![
             Pattern {
-                needle: "",
+                needle: "ban%na!",
                 case_insensitive: false,
                 escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "foo",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "bar",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "b_t",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bit",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "but",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "butt",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bar",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "_o",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fo",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "to",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "_漢",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![Input {
-                    haystack: "漢漢",
-                    matches: true,
-                }],
-            },
-            Pattern {
-                needle: "%AA%A",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![Input {
-                    haystack: "AAA",
-                    matches: true,
-                }],
-            },
-            Pattern {
-                needle: "%aa_",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![Input {
-                    haystack: "aaa",
-                    matches: true,
-                }],
-            },
-            Pattern {
-                needle: "__o",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "t",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "to",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "too",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "f___",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "t",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fo",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foods",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "bi_",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bi",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bin",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "bind",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bit",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "_i_i",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "b",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bi",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bid",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bidi",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "bidi!",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "wifi",
-                        matches: true,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "f%",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "f",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fi",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "bar",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "f%d",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "f",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fa",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fd",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fad",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foodie",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bar",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "f%%d",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "f",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fa",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fd",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fad",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "foodie",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bar",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "f%d%e",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "f",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fa",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fad",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fade",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "foodie",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fiddle",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "feed",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fde",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fded",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fdede",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fdedede",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fdedeeee",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fdedeeeed",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "bar",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "\\es\\_\\a\\p\\e",
-                case_insensitive: false,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "escape",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "es_ape",
-                        matches: true,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "\\es\\_\\a\\p\\e",
-                case_insensitive: true,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "escape",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "es_ape",
-                        matches: true,
-                    },
-                ],
+                inputs: vec![input("banana!", true)],
             },
             Pattern {
                 needle: "ban%na!",
                 case_insensitive: false,
                 escape: 'n',
-                inputs: vec![
-                    Input {
-                        haystack: "banana!",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "ba%a!",
-                        matches: true,
-                    },
-                ],
+                inputs: vec![input("banana!", false), input("ba%a!", true)],
             },
             Pattern {
                 needle: "ban%%%na!",
                 case_insensitive: false,
                 escape: '%',
-                inputs: vec![
-                    Input {
-                        haystack: "banana!",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "ban%na!",
-                        matches: true,
-                    },
-                ],
+                inputs: vec![input("banana!", false), input("ban%na!", true)],
             },
             Pattern {
                 needle: "foo",
                 case_insensitive: true,
                 escape: '\\',
                 inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "f",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "fo",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "foo",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "FOO",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "Foo",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "fOO",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "food",
-                        matches: false,
-                    },
-                ],
-            },
-            Pattern {
-                needle: "ΜΆΪΟΣ",
-                case_insensitive: true,
-                escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "M",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "ΜΆΪΟΣ",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "Μάϊος",
-                        matches: true,
-                    },
-                    Input {
-                        haystack: "Μάϊοςs",
-                        matches: false,
-                    },
-                    Input {
-                        haystack: "Looks Greek to me!",
-                        matches: false,
-                    },
+                    input("", false),
+                    input("f", false),
+                    input("fo", false),
+                    input("foo", true),
+                    input("FOO", true),
+                    input("Foo", true),
+                    input("fOO", true),
+                    input("food", false),
                 ],
             },
         ];

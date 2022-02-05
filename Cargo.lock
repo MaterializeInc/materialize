@@ -1844,6 +1844,7 @@ dependencies = [
  "csv",
  "datadriven",
  "dec",
+ "derivative",
  "encoding",
  "enum-iterator",
  "expr_test_util",
