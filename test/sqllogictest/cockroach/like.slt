@@ -428,6 +428,16 @@ SELECT 'bar' LIKE 'f%'
 ----
 false
 
+query B
+SELECT 'f' LIKE 'f%%%'
+----
+true
+
+query B
+SELECT 'foo' LIKE 'f%%%'
+----
+true
+
 # Mixed patterns
 
 query B
