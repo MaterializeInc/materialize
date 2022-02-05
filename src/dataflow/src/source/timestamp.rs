@@ -267,6 +267,8 @@ pub struct TimestampBindingBox {
     durability_frontier: Antichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: TimestampProposer,
+    /// Source operators that should be activated on durability changes.
+    pub activators: Vec<timely::scheduling::Activator>,
 }
 
 impl TimestampBindingBox {
@@ -277,6 +279,7 @@ impl TimestampBindingBox {
             compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: TimestampProposer::new(timestamp_update_interval, now),
+            activators: Vec::new(),
         }
     }
 
@@ -299,6 +302,9 @@ impl TimestampBindingBox {
             new_frontier
         );
         self.durability_frontier = new_frontier.to_owned();
+        for activator in self.activators.iter() {
+            activator.activate();
+        }
     }
 
     fn compact(&mut self) {
@@ -424,7 +430,8 @@ impl TimestampBindingBox {
 /// and hold back its compaction.
 #[derive(Debug)]
 pub struct TimestampBindingRc {
-    wrapper: Rc<RefCell<TimestampBindingBox>>,
+    /// The wrapped shared state.
+    pub wrapper: Rc<RefCell<TimestampBindingBox>>,
     compaction_frontier: Antichain<Timestamp>,
 }
 

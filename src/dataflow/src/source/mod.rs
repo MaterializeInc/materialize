@@ -1077,6 +1077,16 @@ where
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
 
+        // This source will need to be activated when the durability frontier changes.
+        if let Some(wrapper) = timestamp_histories.as_mut() {
+            let durability_activator = scope.activator_for(&info.address[..]);
+            wrapper
+                .wrapper
+                .borrow_mut()
+                .activators
+                .push(durability_activator);
+        }
+
         let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
         let mut source_metrics = SourceMetrics::new(
             base_metrics,
@@ -1258,6 +1268,12 @@ where
                     activator.activate_after(timestamp_frequency)
                 }
                 _ => (),
+            }
+
+            if let SourceStatus::Done = source_status {
+                if let Some(set) = durable_capability.as_mut() {
+                    set.downgrade(Vec::<Timestamp>::new());
+                }
             }
 
             source_status
