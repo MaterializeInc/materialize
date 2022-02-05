@@ -50,7 +50,7 @@ $ kafka-ingest format=avro topic=data partition=3 schema=${schema}
 
 > CREATE MATERIALIZED SOURCE direct_source1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (timestamp_frequency_ms = 1)
+  WITH (timestamp_frequency_ms = 90)
   FORMAT AVRO USING SCHEMA '${schema}';
 
 > CREATE MATERIALIZED SOURCE direct_source2
