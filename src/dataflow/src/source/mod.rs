@@ -850,12 +850,14 @@ where
 
         move |cap,
               _secondary_cap: &mut Capability<Timestamp>,
-              _durability_cap: &mut CapabilitySet<Timestamp>,
+              durability_cap: &mut CapabilitySet<Timestamp>,
               output,
               _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
                 return SourceStatus::Done;
             }
+
+            durability_cap.downgrade(Vec::<Timestamp>::new());
 
             let waker = futures::task::waker_ref(&activator);
             let mut context = Context::from_waker(&waker);
@@ -1163,8 +1165,6 @@ where
             };
 
             // Maintain a capability set that tracks the durability frontier.
-            // This may initially *exceed* the durability frontier, so we
-            // must be careful attempting to downgrade it.
             durability_cap.downgrade(timestamp_histories.durability_frontier());
 
             // NOTE: It's **very** important that we get out any necessary
