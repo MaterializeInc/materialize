@@ -43,7 +43,7 @@ where
 
     // Test how long it takes to compile a pattern.
     group.bench_function(format!("{}_compile", name), |b| {
-        b.iter(|| compile_fn(black_box("W_rdle%fun%")))
+        b.iter(|| compile_fn(black_box("a%b_c%d_e%f_g%h_i%j_k%l_")))
     });
 
     // Test some search scenarios:
