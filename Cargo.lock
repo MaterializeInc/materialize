@@ -1846,6 +1846,7 @@ dependencies = [
  "encoding",
  "enum-iterator",
  "expr_test_util",
+ "fallible-iterator",
  "hex",
  "hmac",
  "itertools",
@@ -5158,6 +5159,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "typemap_rev",
  "uncased",
  "url",
  "uuid",
@@ -5972,6 +5974,12 @@ dependencies = [
  "rand",
  "static_assertions",
 ]
+
+[[package]]
+name = "typemap_rev"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5b74f0a24b5454580a79abb6994393b09adf0ab8070f15827cb666255de155"
 
 [[package]]
 name = "typenum"

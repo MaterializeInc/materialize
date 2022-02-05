@@ -9,7 +9,7 @@
 
 //! Materialize-specific persistence configuration.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +29,7 @@ use persist::s3::{S3Blob, S3BlobConfig};
 use persist::storage::{Blob, LockInfo};
 use repr::Row;
 use serde::Serialize;
-use tokio::runtime::Runtime;
+use tokio::runtime::Runtime as TokioRuntime;
 use url::Url;
 
 use expr::GlobalId;
@@ -112,9 +112,12 @@ pub struct PersistS3Storage {
 #[derive(Clone, Debug)]
 pub struct PersistConfig {
     /// A runtime used for IO and cpu heavy work. The None case should only be
-    /// used for [PersistConfig::disabled] (which is an awkward artifact of us
-    /// currently initializing persistence in the Catalog startup).
-    pub runtime: Option<Arc<Runtime>>,
+    /// used for [PersistConfig::disabled] (which is an awkward historical
+    /// artifact).
+    ///
+    /// TODO(benesch): can probably drop the `Option` now, but I didn't see an
+    /// immediately obvious refactor.
+    pub async_runtime: Option<Arc<TokioRuntime>>,
     /// Where to store persisted data.
     pub storage: PersistStorage,
     /// Whether to persist all user tables. This is extremely experimental and
@@ -125,9 +128,9 @@ pub struct PersistConfig {
     /// extremely experimental and should not even be tried by users. It's
     /// initially here for end-to-end testing.
     pub system_table_enabled: bool,
-    /// Whether to make Kafka Upserts persistent for fast restarts. This is
+    /// Whether to make Kafka sources persistent for fast restarts. This is
     /// extremely experimental and should not even be tried by users.
-    pub kafka_upsert_source_enabled: bool,
+    pub kafka_sources_enabled: bool,
     /// Unstructured information stored in the "lock" files created by the
     /// log and blob to ensure that they are exclusive writers to those
     /// locations. This should contain whatever information might be useful to
@@ -135,18 +138,21 @@ pub struct PersistConfig {
     /// version of the creating process).
     pub lock_info: String,
     pub min_step_interval: Duration,
+    /// Maximum size of the in-memory blob storage cache, in bytes.
+    pub cache_size_limit: Option<usize>,
 }
 
 impl PersistConfig {
     pub fn disabled() -> Self {
         PersistConfig {
-            runtime: None,
+            async_runtime: None,
             storage: PersistStorage::File(PersistFileStorage::default()),
             user_table_enabled: false,
             system_table_enabled: false,
-            kafka_upsert_source_enabled: false,
+            kafka_sources_enabled: false,
             lock_info: Default::default(),
             min_step_interval: Duration::default(),
+            cache_size_limit: None,
         }
     }
 
@@ -155,28 +161,28 @@ impl PersistConfig {
     /// persistence features are disabled.
     pub async fn init(
         &self,
-        catalog_id: Uuid,
+        reentrance_id: Uuid,
         build: BuildInfo,
         reg: &MetricsRegistry,
     ) -> Result<PersisterWithConfig, Error> {
-        let persister = if self.user_table_enabled
+        let runtime = if self.user_table_enabled
             || self.system_table_enabled
-            || self.kafka_upsert_source_enabled
+            || self.kafka_sources_enabled
         {
-            let lock_reentrance_id = catalog_id.to_string();
+            let lock_reentrance_id = reentrance_id.to_string();
             let lock_info = LockInfo::new(lock_reentrance_id, self.lock_info.clone())?;
             let log = ErrorLog;
-            let persister = match &self.storage {
+            let runtime = match &self.storage {
                 PersistStorage::File(s) => {
                     let mut blob = FileBlob::open_exclusive((&s.blob_path).into(), lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
-                        RuntimeConfig::with_min_step_interval(self.min_step_interval),
+                        RuntimeConfig::new(self.min_step_interval, self.cache_size_limit),
                         log,
                         blob,
                         build,
                         reg,
-                        self.runtime.clone(),
+                        self.async_runtime.clone(),
                     )
                 }
                 PersistStorage::S3(s) => {
@@ -186,30 +192,47 @@ impl PersistConfig {
                     let mut blob = S3Blob::open_exclusive(config, lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
-                        RuntimeConfig::with_min_step_interval(self.min_step_interval),
+                        RuntimeConfig::new(self.min_step_interval, self.cache_size_limit),
                         log,
                         blob,
                         build,
                         reg,
-                        self.runtime.clone(),
+                        self.async_runtime.clone(),
                     )
                 }
             }?;
-            Some(persister)
+            Some(runtime)
         } else {
             None
         };
         Ok(PersisterWithConfig {
-            persister,
+            runtime,
             config: self.clone(),
+            table_details: BTreeMap::new(),
+            table_writer: None,
+            all_table_ids: vec![],
         })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct PersisterWithConfig {
+    /// The configuration of the persistence runtime.
     pub config: PersistConfig,
-    pub persister: Option<RuntimeClient>,
+    /// A client to the persistence runtime.
+    pub runtime: Option<RuntimeClient>,
+    /// Details about all persisted tables.
+    ///
+    /// Tables are only stored in the map if persistence is enabled for that
+    /// table.
+    pub table_details: BTreeMap<GlobalId, TablePersistDetails>,
+    /// A writer that can write atomically to all tables in `table_details`.
+    pub table_writer: Option<MultiWriteHandle>,
+    /// The persist stream IDs for all tables in `table_details`.
+    ///
+    /// This is a denormalized copy of information stored in `table_details` for
+    /// ease of use with some `MultiWriteHandle` APIs.
+    pub all_table_ids: Vec<PersistId>,
 }
 
 impl PersisterWithConfig {
@@ -230,25 +253,20 @@ impl PersisterWithConfig {
         }
     }
 
-    pub fn table_details(
-        &self,
-        id: GlobalId,
-        pretty: &str,
-    ) -> Result<Option<TablePersistDetails>, Error> {
-        self.table_details_from_name(self.stream_name(id, pretty))
+    /// Creates a persist stream name for a new table.
+    pub fn new_table_persist_name(&self, id: GlobalId, pretty: &str) -> Option<String> {
+        self.stream_name(id, pretty)
     }
 
-    pub fn table_details_from_name(
-        &self,
-        stream_name: Option<String>,
-    ) -> Result<Option<TablePersistDetails>, Error> {
-        let stream_name = match stream_name {
-            Some(x) => x,
-            None => return Ok(None),
+    /// Adds the given table to the set of tables managed by the persister.
+    pub fn add_table(&mut self, id: GlobalId, table: &catalog::Table) -> Result<(), Error> {
+        let stream_name = match &table.persist_name {
+            Some(x) => x.clone(),
+            None => return Ok(()),
         };
-        let persister = match self.persister.as_ref() {
+        let persister = match self.runtime.as_ref() {
             Some(x) => x,
-            None => return Ok(None),
+            None => return Ok(()),
         };
         let (write_handle, _) = persister.create_or_load(&stream_name);
 
@@ -269,14 +287,42 @@ impl PersisterWithConfig {
             format!("expected exactly one element in the persist compaction frontier")
         })?;
 
-        Ok(Some(TablePersistDetails {
+        let details = TablePersistDetails {
             stream_name,
             // We need to get the stream_id now because we cannot get it later since most methods
             // in the coordinator/catalog aren't fallible.
             stream_id: write_handle.stream_id()?,
             since_ts: *since_ts,
             write_handle,
-        }))
+        };
+        self.table_details.insert(id, details);
+        self.regenerate_table_metadata();
+        Ok(())
+    }
+
+    /// Removes the given table from the set of tables managed by the persister.
+    pub fn remove_table(&mut self, id: GlobalId) {
+        self.table_details.remove(&id);
+        self.regenerate_table_metadata();
+    }
+
+    fn regenerate_table_metadata(&mut self) {
+        self.all_table_ids = self.table_details.values().map(|td| td.stream_id).collect();
+
+        let mut write_handles = self.table_details.values().map(|td| &td.write_handle);
+        match write_handles.next() {
+            None => self.table_writer = None,
+            Some(first_write_handle) => {
+                let table_writer = self
+                    .table_writer
+                    .insert(MultiWriteHandle::new(first_write_handle));
+                for write_handle in write_handles {
+                    table_writer
+                        .add_stream(write_handle)
+                        .expect("write handles known to be from the same runtime");
+                }
+            }
+        }
     }
 
     /// Creates a [`SerializedSourcePersistDetails`] for a new source.
@@ -286,6 +332,10 @@ impl PersisterWithConfig {
         connector: &SourceConnector,
         pretty: &str,
     ) -> Option<SerializedSourcePersistDetails> {
+        if !self.config.kafka_sources_enabled {
+            return None;
+        }
+
         // NB: This gets written down in the catalog, so it should be
         // safe to change the naming, if necessary. See
         // Catalog::deserialize_item.
@@ -298,7 +348,7 @@ impl PersisterWithConfig {
                 connector: ExternalSourceConnector::Kafka(_),
                 envelope: SourceEnvelope::Upsert(_),
                 ..
-            } if self.config.kafka_upsert_source_enabled => Some(SerializedSourcePersistDetails {
+            } => Some(SerializedSourcePersistDetails {
                 primary_stream,
                 timestamp_bindings_stream,
                 envelope_details: crate::catalog::SerializedEnvelopePersistDetails::Upsert,
@@ -307,11 +357,21 @@ impl PersisterWithConfig {
                 connector: ExternalSourceConnector::Kafka(_),
                 envelope: SourceEnvelope::None(_),
                 ..
-            } if self.config.kafka_upsert_source_enabled => Some(SerializedSourcePersistDetails {
+            } => Some(SerializedSourcePersistDetails {
                 primary_stream,
                 timestamp_bindings_stream,
                 envelope_details: crate::catalog::SerializedEnvelopePersistDetails::None,
             }),
+            SourceConnector::External {
+                connector: ExternalSourceConnector::Kafka(_),
+                envelope,
+                ..
+            } => {
+                panic!(
+                    "Kafka Source persistence not yet implemented for envelope {:?}",
+                    envelope
+                );
+            }
             _ => None,
         }
     }
@@ -326,7 +386,7 @@ impl PersisterWithConfig {
             ..
         }: &catalog::Source,
     ) -> Result<Option<SourcePersistDesc>, Error> {
-        let persister = match self.persister.as_ref() {
+        let runtime = match self.runtime.as_ref() {
             Some(x) => x,
             None => return Ok(None),
         };
@@ -372,10 +432,10 @@ impl PersisterWithConfig {
             // descriptions for a batch of IDs in one go instead of getting them all separately. It
             // shouldn't be an issue right now, though.
             let primary_stream =
-                stream_desc_from_name(serialized_details.primary_stream.clone(), persister)?;
+                stream_desc_from_name(serialized_details.primary_stream.clone(), runtime)?;
             let timestamp_bindings_stream = stream_desc_from_name(
                 serialized_details.timestamp_bindings_stream.clone(),
-                persister,
+                runtime,
             )?;
 
             Ok(SourcePersistDesc {
@@ -391,9 +451,9 @@ impl PersisterWithConfig {
 
 fn stream_desc_from_name(
     name: String,
-    persister: &RuntimeClient,
+    runtime: &RuntimeClient,
 ) -> Result<PersistStreamDesc, Error> {
-    let description = persister.get_description(&name);
+    let description = runtime.get_description(&name);
     let description = match description {
         Ok(description) => description,
         Err(Error::UnknownRegistration(error_name)) if name == error_name => {
@@ -447,10 +507,4 @@ pub struct TablePersistDetails {
     pub since_ts: u64,
     #[serde(skip)]
     pub write_handle: StreamWriteHandle<Row, ()>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TablePersistMultiDetails {
-    pub all_table_ids: Vec<PersistId>,
-    pub write_handle: MultiWriteHandle,
 }

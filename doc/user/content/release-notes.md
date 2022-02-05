@@ -107,12 +107,18 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Add the [`greatest`](/sql/functions/#generic) and [`least`](/sql/functions/#generic)
+  functions.
+
 - Correctly deduplicate debezium topics that have more than one partition.
   Previous versions of materialize would experience data loss unless
   `deduplication=full` was used.
 
 - Support the inverse [trigonometric functions](/sql/functions/#trigonometric-func)
   `asin`, `asinh`, `acos`, `acosh`, `atan`, `atanh`.
+
+- Support the [`radians`](/sql/functions/#trigonometric-func) and
+  [`degrees`](/sql/functions/#trigonometric-func) functions.
 
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`date`] value but a time-related field (e.g., `SECOND`).
@@ -127,6 +133,12 @@ changes that have not yet been documented.
   from [`float`](/sql/types/float/) to [`numeric`](/sql/types/numeric/).
 
   This new behavior matches PostgreSQL v14.
+
+- Follow PostgreSQL's type conversion rules for the relations involved in a
+  `UNION`, `EXCEPT`, or `INTERSECT` operation {{% gh 3331 %}}.
+
+- Add the `md5`, `sha224`, `sha256`, `sha384`, and `sha512` [cryptography
+  functions](/sql/functions/#cryptography-func).
 
 {{< comment >}}
 Only add new release notes above this line.

@@ -1007,7 +1007,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Materialized(
-        memory="8G", options="--persistent-user-tables --persistent-kafka-upsert-source"
+        memory="8G", options="--persistent-user-tables --persistent-kafka-sources"
     ),
     Testdrive(),
 ]

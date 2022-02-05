@@ -1072,8 +1072,26 @@ mod tests {
             // probe here, because only the conditional input gets sealed. Ideally, we
             // would be able to insert a probe within the conditional_seal operator
             // itself but that's not possible at the moment.
-            for _ in 1..10 {
+            for _ in 0..10 {
                 worker.step();
+            }
+
+            // Hard shut down the dataflows. We have to do this because execute_directly
+            // will otherwise close the primary and condition inputs once this closure
+            // completes and then call step_or_park until no more dataflows remain.
+            //
+            // Unfortunately, this approach is a touch brittle for the conditional
+            // seal operator and the desired behavior of this test, as there is no
+            // guarantee that each operator will observe both inputs closing at
+            // the same time. In particular, the primary seal operator can observe
+            // that the primary input closed before the condition input, and
+            // inadvertently seal the primary to its frontier (4), even though
+            // the primary never advanced to 4.
+            //
+            // Sidestep this problem by directly closing the dataflow.
+            let dataflows = worker.installed_dataflows();
+            for dataflow in dataflows {
+                worker.drop_dataflow(dataflow);
             }
         });
 

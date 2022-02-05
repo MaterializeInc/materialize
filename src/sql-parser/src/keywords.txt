@@ -115,6 +115,7 @@ Forward
 From
 Full
 Graph
+Greatest
 Group
 Groups
 Gzip
@@ -148,6 +149,7 @@ Keys
 Kinesis
 Lateral
 Leading
+Least
 Left
 Level
 Like

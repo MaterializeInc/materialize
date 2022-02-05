@@ -144,3 +144,17 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=5
 id price
 --------
 6 10
+
+# Test that tails report progress messages even without new data
+> BEGIN
+
+> DECLARE c CURSOR FOR TAIL data_schema_inline WITH (SNAPSHOT = FALSE, PROGRESS = TRUE);
+
+> FETCH 1 FROM c WITH (timeout = '60s')
+15 true <null> <null> <null>
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=6
+{"com.materialize.cdc.progress":{"lower":[15],"upper":[20],"counts":[]}}
+
+> FETCH 1 FROM c WITH (timeout = '60s')
+20 true <null> <null> <null>

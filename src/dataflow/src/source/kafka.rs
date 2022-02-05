@@ -7,9 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rdkafka::consumer::base_consumer::PartitionQueue;
@@ -47,10 +46,10 @@ pub struct KafkaSourceReader {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
-    /// The number of known partitions.
-    known_partitions: i32,
     /// Worker ID
-    worker_id: i32,
+    worker_id: usize,
+    /// Total count of workers
+    worker_count: usize,
     /// Map from partition -> most recently read offset
     last_offsets: HashMap<i32, i64>,
     /// Map from partition -> offset to start reading at
@@ -61,6 +60,8 @@ pub struct KafkaSourceReader {
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     // The last statistics JSON blob received.
     last_stats: Option<Jsonb>,
+    /// The last partition we received
+    partition_info: Arc<Mutex<Option<Result<Vec<i32>, anyhow::Error>>>>,
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -72,8 +73,10 @@ impl SourceReader for KafkaSourceReader {
         source_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
+        worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         logger: Option<Logger>,
         _: SourceBaseMetrics,
@@ -84,8 +87,10 @@ impl SourceReader for KafkaSourceReader {
                     source_name,
                     source_id,
                     worker_id,
+                    worker_count,
                     consumer_activator,
                     kc,
+                    restored_offsets,
                     logger,
                 ),
                 None,
@@ -93,61 +98,6 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         }
     }
-    /// Ensures that a partition queue for `pid` exists.
-    /// In Kafka, partitions are assigned contiguously. This function consequently
-    /// creates partition queues for every p <= pid
-    fn add_partition(&mut self, pid: PartitionId, restored_offset: Option<MzOffset>) {
-        let pid = match pid {
-            PartitionId::Kafka(p) => p,
-            _ => unreachable!(),
-        };
-
-        // Passed-in initial offsets take precedence over potential user-configured start offsets.
-        // The reason is that an initial offset most likely comes from source state that we
-        // restored from persistence while start offsets are something that a user configured
-        // during the initial creation of the source. When restarting, we don't want to go all the
-        // way back to those starting offsets.
-        let start_offset = if let Some(restored_offset) = restored_offset {
-            // We can either start after the first message, which would be `MzOffset{1}` or not
-            // have a start offset. Other places use `MzOffset{0}` to denote a missing offset but
-            // we chose to use the more idiomatic `Option<MzOffset>` here.
-            assert!(
-                restored_offset.offset >= 1,
-                "Invalid initial offset {}",
-                restored_offset
-            );
-
-            // We subtract 1 here to convert from MzOffset (which is 1-based) to Kafka offset
-            // (which are 0-based).
-            let restored_offset = restored_offset.offset - 1;
-
-            // Also verify that we didn't regress from any user-configured start offsets.
-            if let Some(start_offset) = self.start_offsets.get(&pid) {
-                assert!(restored_offset >= *start_offset);
-            }
-
-            // We subtract 1 again because this will be put into `last_offsets`, which record the
-            // last offset that we read. A start offset of 5 means that the last read offset would
-            // have to be 4.
-            //
-            // Because of the assert above, this cannot go below -1, which would indicate that we
-            // start reading at 0.
-            restored_offset - 1
-        } else {
-            // Indicate a last offset of -1 if we have not been instructed to have a specific start
-            // offset for this topic.
-            *self.start_offsets.get(&pid).unwrap_or(&-1)
-        };
-
-        // Seek to the *next* offset (aka start_offset + 1) that we have not yet processed
-        self.create_partition_queue(pid, Offset::Offset(start_offset + 1));
-
-        let prev = self.last_offsets.insert(pid, start_offset);
-
-        assert!(prev.is_none());
-        self.known_partitions = cmp::max(self.known_partitions, pid + 1);
-    }
-
     fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
         self.get_next_kafka_message()
     }
@@ -159,8 +109,10 @@ impl KafkaSourceReader {
         source_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
+        worker_count: usize,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
+        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         logger: Option<Logger>,
     ) -> KafkaSourceReader {
         let KafkaSourceConnector {
@@ -171,7 +123,6 @@ impl KafkaSourceReader {
             cluster_id,
             ..
         } = kc;
-        let worker_id = worker_id.try_into().unwrap();
         let kafka_config = create_kafka_config(
             &source_name,
             &addrs,
@@ -186,23 +137,103 @@ impl KafkaSourceReader {
                 stats_tx,
             })
             .expect("Failed to create Kafka Consumer");
+        let consumer = Arc::new(consumer);
 
-        let start_offsets = kc.start_offsets.iter().map(|(k, v)| (*k, v - 1)).collect();
+        let mut start_offsets: HashMap<_, _> = kc
+            .start_offsets
+            .into_iter()
+            .map(|(pid, offset)| (pid, offset - 1))
+            .collect();
+
+        for (pid, offset) in restored_offsets {
+            let pid = match pid {
+                PartitionId::Kafka(id) => id,
+                _ => panic!("unexpected partition id type"),
+            };
+            if let Some(offset) = offset {
+                if let Some(start_offset) = start_offsets.get_mut(&pid) {
+                    *start_offset = std::cmp::max(offset.offset - 1, *start_offset);
+                } else {
+                    start_offsets.insert(pid, offset.offset - 1);
+                }
+            }
+        }
+
+        let partition_info = Arc::new(Mutex::new(None));
+        {
+            let partition_info = Arc::downgrade(&partition_info);
+            let topic = topic.clone();
+            let consumer = Arc::clone(&consumer);
+            let metadata_refresh_frequency = config_options
+                .get("topic.metadata.refresh.interval.ms")
+                // Safe conversion: statement::extract_config enforces that option is a value
+                // between 0 and 3600000
+                .map(|s| Duration::from_millis(s.parse().unwrap()))
+                // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                .unwrap_or_else(|| Duration::from_secs(300));
+
+            std::thread::Builder::new()
+                .name("kafka-metadata".to_string())
+                .spawn(move || {
+                    while let Some(partition_info) = partition_info.upgrade() {
+                        let info = get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
+                        *partition_info.lock().unwrap() = Some(info);
+                        std::thread::sleep(metadata_refresh_frequency);
+                    }
+                })
+                .unwrap();
+        }
 
         KafkaSourceReader {
             topic_name: topic,
             source_name,
             id: source_id,
             partition_consumers: VecDeque::new(),
-            known_partitions: 0,
-            consumer: Arc::new(consumer),
+            consumer,
             worker_id,
+            worker_count,
             last_offsets: HashMap::new(),
             start_offsets,
             logger,
             stats_rx,
             last_stats: None,
+            partition_info,
         }
+    }
+
+    /// Ensures that a partition queue for `pid` exists.
+    /// In Kafka, partitions are assigned contiguously. This function consequently
+    /// creates partition queues for every p <= pid
+    fn add_partition(&mut self, pid: PartitionId) {
+        if !crate::source::responsible_for(
+            &self.id.source_id,
+            self.worker_id,
+            self.worker_count,
+            &pid,
+        ) {
+            return;
+        }
+        let pid = match pid {
+            PartitionId::Kafka(p) => p,
+            _ => unreachable!(),
+        };
+        if self.last_offsets.contains_key(&pid) {
+            return;
+        }
+
+        // Indicate a last offset of -1 if we have not been instructed to have a specific start
+        // offset for this topic.
+        let start_offset = match self.start_offsets.get(&pid) {
+            // Seek to the *next* offset (aka start_offset + 1) that we have not yet processed
+            Some(offset) => *offset + 1,
+            None => 0,
+        };
+
+        self.create_partition_queue(pid, Offset::Offset(start_offset));
+
+        let prev = self.last_offsets.insert(pid, start_offset - 1);
+
+        assert!(prev.is_none());
     }
 
     /// Returns a count of total number of consumers for this source
@@ -314,6 +345,12 @@ impl KafkaSourceReader {
     fn get_next_kafka_message(
         &mut self,
     ) -> Result<NextMessage<Option<Vec<u8>>, Option<Vec<u8>>>, anyhow::Error> {
+        let partition_info = self.partition_info.lock().unwrap().take();
+        if let Some(partitions) = partition_info {
+            for pid in partitions? {
+                self.add_partition(PartitionId::Kafka(pid));
+            }
+        }
         let mut next_message = NextMessage::Pending;
 
         // Poll the consumer once. We split the consumer's partitions out into separate queues and
@@ -643,6 +680,20 @@ impl GlueConsumerContext {
 }
 
 impl ConsumerContext for GlueConsumerContext {}
+
+/// Return the list of partition ids associated with a specific topic
+fn get_kafka_partitions(
+    consumer: &BaseConsumer<GlueConsumerContext>,
+    topic: &str,
+    timeout: Duration,
+) -> Result<Vec<i32>, anyhow::Error> {
+    let metadata = consumer.fetch_metadata(Some(topic), timeout)?;
+    Ok(metadata.topics()[0]
+        .partitions()
+        .iter()
+        .map(|x| x.id())
+        .collect())
+}
 
 #[cfg(test)]
 mod tests {

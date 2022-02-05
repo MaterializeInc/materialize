@@ -66,7 +66,7 @@ By default, we recomend that developers without a strong preference of editor us
 Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
 setup for developing Materialize, and the one for which you are the most likely
 to be able to get help if something goes wrong. It's important to note that you
-**should not** install Microsoft's official Rust plugin, as it is known to
+**should not** install the "Rust" plugin, as it is known to
 conflict with Rust-Analyzer; the latter has far more advanced code navigation
 features and is the de-facto standard for developing Rust.
 
@@ -92,7 +92,10 @@ on Slack.
 Besides Rust-Analyzer, the only other known tool with good code navigation features
 is CLion along with its Rust plugin. This is a good choice for developers who prefer
 the JetBrains ecosystem, but we no longer recommend it by default, since
-Rust-Analyzer has long since caught up to it in maturity.
+Rust-Analyzer has long since caught up to it in maturity. If you are a
+Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
+JetBrains license. If you're not yet sure you want to use CLion, you can
+use the 30-day free trial.
 
 ### Debugging
 

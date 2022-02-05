@@ -22,7 +22,7 @@ use ore::task::RuntimeExt;
 
 use crate::error::Error;
 use crate::indexed::arrangement::Arrangement;
-use crate::indexed::cache::BlobCache;
+use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
 use crate::indexed::metrics::Metrics;
@@ -142,10 +142,14 @@ impl<B: Blob> Maintainer<B> {
 
         let mut updates = vec![];
 
-        let first_batch = blob.get_trace_batch_async(&first.key).recv()?;
+        let first_batch = blob
+            .get_trace_batch_async(&first.key, CacheHint::NeverAdd)
+            .recv()?;
         updates.extend(first_batch.updates.iter().flat_map(|u| u.iter()));
 
-        let second_batch = blob.get_trace_batch_async(&second.key).recv()?;
+        let second_batch = blob
+            .get_trace_batch_async(&second.key, CacheHint::NeverAdd)
+            .recv()?;
         updates.extend(second_batch.updates.iter().flat_map(|u| u.iter()));
 
         for ((_, _), ts, _) in updates.iter_mut() {
@@ -217,6 +221,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
 
@@ -278,7 +283,9 @@ mod tests {
         res.merged.size_bytes = 0;
         assert_eq!(res, expected_res);
 
-        let b2 = blob.get_trace_batch_async(&merged_key).recv()?;
+        let b2 = blob
+            .get_trace_batch_async(&merged_key, CacheHint::MaybeAdd)
+            .recv()?;
         let expected_updates = vec![
             (("k".as_bytes(), "v".as_bytes()), 2, 2),
             (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
@@ -301,6 +308,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob, async_runtime, metrics);
 

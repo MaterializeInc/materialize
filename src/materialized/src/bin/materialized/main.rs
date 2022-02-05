@@ -151,9 +151,14 @@ struct Args {
     #[structopt(long, hide = true)]
     persist_storage_enabled: bool,
 
-    /// Enable persistent Kafka UPSERT source. Has to be used with --experimental.
+    /// Enable persistent Kafka source. Has to be used with --experimental.
     #[structopt(long, hide = true)]
-    persistent_kafka_upsert_source: bool,
+    persistent_kafka_sources: bool,
+
+    /// Maximum allowed size of the in-memory persist storage cache, in bytes. Has
+    /// to be used with --experimental.
+    #[structopt(long, hide = true)]
+    persist_cache_size_limit: Option<usize>,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -708,14 +713,22 @@ dataflow workers: {workers}",
             })
         };
 
-        let kafka_upsert_source_enabled =
-            if args.experimental && args.persistent_kafka_upsert_source {
-                true
-            } else if args.persistent_kafka_upsert_source {
-                bail!("cannot specify --persistent-kafka-upsert-source without --experimental");
-            } else {
-                false
-            };
+        let persistent_kafka_sources_enabled = if args.experimental && args.persistent_kafka_sources
+        {
+            true
+        } else if args.persistent_kafka_sources {
+            bail!("cannot specify --persistent-kafka-sources without --experimental");
+        } else {
+            false
+        };
+
+        let cache_size_limit = {
+            if args.persist_cache_size_limit.is_some() && !args.experimental {
+                bail!("cannot specify --persist-cache-size-limit without --experimental");
+            }
+
+            args.persist_cache_size_limit
+        };
 
         let lock_info = format!(
             "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
@@ -733,13 +746,14 @@ dataflow workers: {workers}",
         let min_step_interval = args.timestamp_frequency;
 
         PersistConfig {
-            runtime: Some(Arc::clone(&runtime)),
+            async_runtime: Some(Arc::clone(&runtime)),
             storage,
             user_table_enabled,
             system_table_enabled,
-            kafka_upsert_source_enabled,
+            kafka_sources_enabled: persistent_kafka_sources_enabled,
             lock_info,
             min_step_interval,
+            cache_size_limit,
         }
     };
 

@@ -155,8 +155,6 @@ impl CatalogState {
         table: &Table,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let persisted_name_datum =
-            Datum::from(table.persist.as_ref().map(|p| p.stream_name.as_str()));
         vec![BuiltinTableUpdate {
             id: MZ_TABLES.id,
             row: Row::pack_slice(&[
@@ -164,7 +162,7 @@ impl CatalogState {
                 Datum::Int32(oid as i32),
                 Datum::Int64(schema_id),
                 Datum::String(name),
-                persisted_name_datum,
+                Datum::from(table.persist_name.as_deref()),
             ]),
             diff,
         }]

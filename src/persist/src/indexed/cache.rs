@@ -30,6 +30,15 @@ use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
 use crate::storage::{Atomicity, Blob, BlobRead};
 
+/// User hints for [BlobCache] operations.
+#[derive(Debug)]
+pub enum CacheHint {
+    /// Attempt to add the result of the given operation to the in-memory cache.
+    MaybeAdd,
+    /// Never add the result of the given operation to the in-memory cache.
+    NeverAdd,
+}
+
 /// A disk-backed cache for objects in [Blob] storage.
 ///
 /// The data for the objects in the cache is stored on disk, mmap'd, and a
@@ -49,9 +58,7 @@ pub struct BlobCache<B> {
     metrics: Arc<Metrics>,
     blob: Arc<Mutex<B>>,
     async_runtime: Arc<AsyncRuntime>,
-    // TODO: Use a disk-backed LRU cache.
-    unsealed: Arc<Mutex<HashMap<String, Arc<BlobUnsealedBatch>>>>,
-    trace: Arc<Mutex<HashMap<String, Arc<BlobTraceBatch>>>>,
+    cache: BlobCacheInner,
     prev_meta_len: u64,
 }
 
@@ -62,15 +69,18 @@ impl<B> Clone for BlobCache<B> {
             metrics: Arc::clone(&self.metrics),
             blob: Arc::clone(&self.blob),
             async_runtime: Arc::clone(&self.async_runtime),
-            unsealed: Arc::clone(&self.unsealed),
-            trace: Arc::clone(&self.trace),
+            cache: self.cache.clone(),
             prev_meta_len: self.prev_meta_len,
         }
     }
 }
 
+const MB: usize = 1024 * 1024;
+const GB: usize = 1024 * MB;
+
 impl<B: BlobRead> BlobCache<B> {
     const META_KEY: &'static str = "META";
+    const DEFAULT_CACHE_SIZE_LIMIT: usize = 2 * GB;
 
     /// Returns a new, empty cache for the given [Blob] storage.
     pub fn new(
@@ -78,14 +88,14 @@ impl<B: BlobRead> BlobCache<B> {
         metrics: Arc<Metrics>,
         async_runtime: Arc<AsyncRuntime>,
         blob: B,
+        cache_size_limit: Option<usize>,
     ) -> Self {
         BlobCache {
             build_version: build.semver_version(),
             metrics,
-            async_runtime,
             blob: Arc::new(Mutex::new(blob)),
-            unsealed: Arc::new(Mutex::new(HashMap::new())),
-            trace: Arc::new(Mutex::new(HashMap::new())),
+            async_runtime,
+            cache: BlobCacheInner::new(cache_size_limit.unwrap_or(Self::DEFAULT_CACHE_SIZE_LIMIT)),
             prev_meta_len: 0,
         }
     }
@@ -103,24 +113,31 @@ impl<B: BlobRead> BlobCache<B> {
     }
 
     /// Synchronously fetches the batch for the given key.
-    fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
+    fn fetch_unsealed_batch_sync(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> Result<Arc<BlobUnsealedBatch>, Error> {
         let async_guard = self.async_runtime.enter();
 
         let bytes = block_on(self.blob.lock()?.get(key))?
             .ok_or_else(|| Error::from(format!("no blob for unsealed batch at key: {}", key)))?;
+        let bytes_len = bytes.len();
         self.metrics
             .blob_read_cache_fetch_bytes
-            .inc_by(u64::cast_from(bytes.len()));
+            .inc_by(u64::cast_from(bytes_len));
         let batch: BlobUnsealedBatch = BlobUnsealedBatch::decode(&bytes).map_err(|err| {
             Error::from(format!("invalid unsealed batch at key {}: {}", key, err))
         })?;
 
+        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
-        let mut cache = self.unsealed.lock()?;
-        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
-        cache.insert(key.to_owned(), Arc::new(batch));
-        let ret = Arc::clone(&cache.get(key).unwrap());
+        let ret = Arc::new(batch);
+        if let CacheHint::MaybeAdd = hint {
+            self.cache
+                .maybe_add_unsealed(key.to_owned(), bytes_len, Arc::clone(&ret))?;
+        }
 
         drop(async_guard);
         Ok(ret)
@@ -128,24 +145,29 @@ impl<B: BlobRead> BlobCache<B> {
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_unsealed_batch_async(&self, key: &str) -> PFuture<Arc<BlobUnsealedBatch>> {
+    pub fn get_unsealed_batch_async(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> PFuture<Arc<BlobUnsealedBatch>> {
         let (tx, rx) = PFuture::new();
-        {
-            // New scope to ensure the cache lock is dropped during the
-            // (expensive) get.
-            let unsealed = match self.unsealed.lock() {
-                Ok(unsealed) => unsealed,
-                Err(err) => {
-                    tx.fill(Err(err.into()));
-                    return rx;
-                }
-            };
-            if let Some(entry) = unsealed.get(key) {
-                self.metrics.blob_read_cache_hit_count.inc();
-                tx.fill(Ok(Arc::clone(&entry)));
+        match self.cache.get_unsealed(key) {
+            Err(err) => {
+                // TODO: if there's an error reading from cache we could just
+                // fetch the batch directly from blob storage.
+                tx.fill(Err(err));
                 return rx;
             }
-            self.metrics.blob_read_cache_miss_count.inc();
+            Ok(Some(entry)) => {
+                self.metrics.blob_read_cache_hit_count.inc();
+                tx.fill(Ok(entry));
+                return rx;
+            }
+            Ok(None) => {
+                // If the object doesn't exist in the cache, fallback to fetching
+                // it directly from blob storage.
+                self.metrics.blob_read_cache_miss_count.inc();
+            }
         }
 
         // TODO: If a fetch for this key is already in progress join that one
@@ -155,7 +177,7 @@ impl<B: BlobRead> BlobCache<B> {
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
             let async_guard = cache.async_runtime.enter();
-            let res = cache.fetch_unsealed_batch_sync(&key);
+            let res = cache.fetch_unsealed_batch_sync(&key, hint);
             tx.fill(res);
             drop(async_guard);
         });
@@ -163,23 +185,30 @@ impl<B: BlobRead> BlobCache<B> {
     }
 
     /// Synchronously fetches the batch for the given key.
-    fn fetch_trace_batch_sync(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
+    fn fetch_trace_batch_sync(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> Result<Arc<BlobTraceBatch>, Error> {
         let async_guard = self.async_runtime.enter();
 
         let bytes = block_on(self.blob.lock()?.get(key))?
             .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
+        let bytes_len = bytes.len();
         self.metrics
             .blob_read_cache_fetch_bytes
-            .inc_by(u64::cast_from(bytes.len()));
+            .inc_by(u64::cast_from(bytes_len));
         let batch: BlobTraceBatch = BlobTraceBatch::decode(&bytes)
             .map_err(|err| Error::from(format!("invalid trace batch at key {}: {}", key, err)))?;
 
+        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
-        let mut cache = self.trace.lock()?;
-        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
-        cache.insert(key.to_owned(), Arc::new(batch));
-        let ret = Arc::clone(&cache.get(key).unwrap());
+        let ret = Arc::new(batch);
+        if let CacheHint::MaybeAdd = hint {
+            self.cache
+                .maybe_add_trace(key.to_owned(), bytes_len, Arc::clone(&ret))?;
+        }
 
         drop(async_guard);
         Ok(ret)
@@ -187,24 +216,29 @@ impl<B: BlobRead> BlobCache<B> {
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_trace_batch_async(&self, key: &str) -> PFuture<Arc<BlobTraceBatch>> {
+    pub fn get_trace_batch_async(
+        &self,
+        key: &str,
+        hint: CacheHint,
+    ) -> PFuture<Arc<BlobTraceBatch>> {
         let (tx, rx) = PFuture::new();
-        {
-            // New scope to ensure the cache lock is dropped during the
-            // (expensive) get.
-            let trace = match self.trace.lock() {
-                Ok(trace) => trace,
-                Err(err) => {
-                    tx.fill(Err(err.into()));
-                    return rx;
-                }
-            };
-            if let Some(entry) = trace.get(key) {
-                self.metrics.blob_read_cache_hit_count.inc();
-                tx.fill(Ok(Arc::clone(&entry)));
+        match self.cache.get_trace(key) {
+            Err(err) => {
+                // TODO: if there's an error reading from cache we could just
+                // fetch the batch directly from blob storage.
+                tx.fill(Err(err));
                 return rx;
             }
-            self.metrics.blob_read_cache_miss_count.inc();
+            Ok(Some(entry)) => {
+                self.metrics.blob_read_cache_hit_count.inc();
+                tx.fill(Ok(entry));
+                return rx;
+            }
+            Ok(None) => {
+                // If the batch doesn't exist in the cache, fallback to fetching
+                // it directly from blob storage.
+                self.metrics.blob_read_cache_miss_count.inc();
+            }
         }
 
         // TODO: If a fetch for this key is already in progress join that one
@@ -214,7 +248,7 @@ impl<B: BlobRead> BlobCache<B> {
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
             let async_guard = cache.async_runtime.enter();
-            let res = cache.fetch_trace_batch_sync(&key);
+            let res = cache.fetch_trace_batch_sync(&key, hint);
             tx.fill(res);
             drop(async_guard);
         });
@@ -316,7 +350,8 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.unsealed.blob_write_count.inc();
         self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
 
-        self.unsealed.lock()?.insert(key, Arc::new(batch));
+        self.cache
+            .maybe_add_unsealed(key, usize::cast_from(val_len), Arc::new(batch))?;
 
         drop(async_guard);
         Ok((format, val_len))
@@ -327,7 +362,7 @@ impl<B: Blob> BlobCache<B> {
         let async_guard = self.async_runtime.enter();
 
         let delete_start = Instant::now();
-        self.unsealed.lock()?.remove(&batch.key);
+        self.cache.remove_unsealed(&batch.key)?;
         block_on(self.blob.lock()?.delete(&batch.key))?;
         self.metrics
             .unsealed
@@ -373,7 +408,8 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.trace.blob_write_count.inc();
         self.metrics.trace.blob_write_bytes.inc_by(val_len);
 
-        self.trace.lock()?.insert(key, Arc::new(batch));
+        self.cache
+            .maybe_add_trace(key, usize::cast_from(val_len), Arc::new(batch))?;
 
         drop(async_guard);
         Ok((format, val_len))
@@ -384,7 +420,7 @@ impl<B: Blob> BlobCache<B> {
         let async_guard = self.async_runtime.enter();
 
         let delete_start = Instant::now();
-        self.trace.lock()?.remove(&batch.key);
+        self.cache.remove_trace(&batch.key)?;
         block_on(self.blob.lock()?.delete(&batch.key))?;
         self.metrics
             .trace
@@ -451,6 +487,121 @@ impl<B: Blob> BlobCache<B> {
     }
 }
 
+/// Internal, in-memory cache for objects in [Blob] storage that back an
+/// arrangement.
+#[derive(Clone, Debug)]
+struct BlobCacheInner {
+    // TODO: Use a disk-backed LRU cache.
+    unsealed: Arc<Mutex<BlobCacheCore<BlobUnsealedBatch>>>,
+    trace: Arc<Mutex<BlobCacheCore<BlobTraceBatch>>>,
+}
+
+impl BlobCacheInner {
+    fn new(limit: usize) -> Self {
+        BlobCacheInner {
+            unsealed: Arc::new(Mutex::new(BlobCacheCore::new(limit / 2))),
+            trace: Arc::new(Mutex::new(BlobCacheCore::new(limit / 2))),
+        }
+    }
+
+    fn maybe_add_unsealed(
+        &self,
+        key: String,
+        size: usize,
+        data: Arc<BlobUnsealedBatch>,
+    ) -> Result<(), Error> {
+        let mut unsealed = self.unsealed.lock()?;
+        unsealed.add(key, size, data);
+        Ok(())
+    }
+
+    fn get_unsealed(&self, key: &str) -> Result<Option<Arc<BlobUnsealedBatch>>, Error> {
+        let unsealed = self.unsealed.lock()?;
+        Ok(unsealed.get(key))
+    }
+
+    fn remove_unsealed(&self, key: &str) -> Result<(), Error> {
+        let mut unsealed = self.unsealed.lock()?;
+        unsealed.remove(key);
+        Ok(())
+    }
+
+    fn maybe_add_trace(
+        &self,
+        key: String,
+        size: usize,
+        data: Arc<BlobTraceBatch>,
+    ) -> Result<(), Error> {
+        let mut trace = self.trace.lock()?;
+        trace.add(key, size, data);
+        Ok(())
+    }
+
+    fn get_trace(&self, key: &str) -> Result<Option<Arc<BlobTraceBatch>>, Error> {
+        let trace = self.trace.lock()?;
+        Ok(trace.get(key))
+    }
+
+    fn remove_trace(&self, key: &str) -> Result<(), Error> {
+        let mut trace = self.trace.lock()?;
+        trace.remove(key);
+        Ok(())
+    }
+}
+
+/// In-memory cache for arbitrary objects that can be shared across multiple
+/// threads.
+///
+/// TODO: this cache accounts for the serialized sizes of data it contains, but
+/// perhaps should look at the in-memory size instead.
+#[derive(Debug)]
+struct BlobCacheCore<D> {
+    // Map from key -> (data, size of data)
+    dataz: HashMap<String, (Arc<D>, usize)>,
+    size: usize,
+    limit: usize,
+}
+
+impl<D> BlobCacheCore<D> {
+    fn new(limit: usize) -> Self {
+        BlobCacheCore {
+            dataz: HashMap::new(),
+            size: 0,
+            limit,
+        }
+    }
+
+    /// Add an object to the cache, if doing so would not exceed the cache's
+    /// size limit.
+    fn add(&mut self, key: String, size: usize, data: Arc<D>) {
+        let new_size = self.size + size;
+        if new_size > self.limit {
+            return;
+        }
+
+        let prev = self.dataz.insert(key, (data, size));
+        if prev.is_none() {
+            self.size = new_size;
+        }
+
+        debug_assert!(self.limit >= self.size);
+    }
+
+    fn remove(&mut self, key: &str) {
+        let prev = self.dataz.remove(key);
+        if let Some((_, size)) = prev {
+            debug_assert!(self.size >= size);
+            self.size -= size;
+        }
+
+        debug_assert!(self.limit >= self.size);
+    }
+
+    fn get(&self, key: &str) -> Option<Arc<D>> {
+        self.dataz.get(key).map(|(data, _)| Arc::clone(&data))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::mem::MemRegistry;
@@ -465,6 +616,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
 
         // Whatever we write down roundtrips.

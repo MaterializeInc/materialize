@@ -91,21 +91,33 @@ SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 %1 =
 | Get materialize.public.x (u1)
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
 | Project (#0)
 | Distinct group=(#0)
 
 %3 =
-| Get materialize.public.y (u3)
+| Get %2 (l1)
+| Map #0
+| Project (#0, #1)
+| Project (#1)
 
 %4 =
-| Join %0 %3
+| Get materialize.public.y (u3)
+
+%5 = Let l2 =
+| Join %0 %4
 | | implementation = Unimplemented
 
-%5 =
-| Union %2 %4
+%6 =
+| Get %5 (l2)
+| Map #0
+| Project (#0, #1)
+| Project (#1)
+
+%7 =
+| Union %3 %6
 | Filter (#0 = 3)
 
 EOF

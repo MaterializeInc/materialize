@@ -22,6 +22,7 @@ use ore::stack::maybe_grow;
 pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     pub indexes: &'a ArrangementFrontiers<Timestamp>,
+    pub persister: &'a PersisterWithConfig,
     /// A handle to the storage abstraction, which describe sources from their identifier.
     pub storage: &'a dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
 }
@@ -32,6 +33,7 @@ impl Coordinator {
         DataflowBuilder {
             catalog: self.catalog.state(),
             indexes: &self.indexes,
+            persister: &self.persister,
             storage: &self.dataflow_client,
         }
     }
@@ -55,7 +57,7 @@ impl Coordinator {
                 index_entry.name().to_string(),
                 dataflow_types::IndexDesc {
                     on_id: index.on,
-                    keys: index.keys.clone(),
+                    key: index.keys.clone(),
                 },
             ))
         }
@@ -84,7 +86,7 @@ impl<'a> DataflowBuilder<'a> {
             if let Some((index_id, keys)) = valid_index {
                 let index_desc = IndexDesc {
                     on_id: *id,
-                    keys: keys.to_vec(),
+                    key: keys.to_vec(),
                 };
                 let desc = self
                     .catalog
@@ -125,8 +127,7 @@ impl<'a> DataflowBuilder<'a> {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
 
                         let persist_desc = self
-                            .catalog
-                            .persist()
+                            .persister
                             .load_source_persist_desc(&source)
                             .map_err(CoordError::Persistence)?;
 
@@ -168,7 +169,7 @@ impl<'a> DataflowBuilder<'a> {
                     let on_type = on_entry.desc().unwrap().typ().clone();
                     let index_desc = IndexDesc {
                         on_id: get_id,
-                        keys: keys.clone(),
+                        key: keys.clone(),
                     };
                     dataflow.import_index(*id, index_desc, on_type, *view_id);
                 }

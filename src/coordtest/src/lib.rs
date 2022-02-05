@@ -124,13 +124,21 @@ impl CoordTest {
             experimental_mode,
             now: now.clone(),
             metrics_registry: metrics_registry.clone(),
+            persister: None,
         })?;
         let dataflow_client = InterceptingDataflowClient::new(dataflow_client);
 
         let data_directory = tempfile::tempdir()?;
+        let storage = coord::catalog::storage::Connection::open(
+            &data_directory.path().join("catalog"),
+            Some(experimental_mode),
+        )?;
+        let persister = PersistConfig::disabled()
+            .init(storage.cluster_id(), DUMMY_BUILD_INFO, &metrics_registry)
+            .await?;
         let (coord_handle, coord_client) = coord::serve(coord::Config {
             dataflow_client: Box::new(dataflow_client.clone()),
-            data_directory: data_directory.path(),
+            storage,
             logging: None,
             logical_compaction_window: None,
             timestamp_frequency: Duration::from_millis(1),
@@ -139,7 +147,7 @@ impl CoordTest {
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
             metrics_registry,
-            persist: PersistConfig::disabled(),
+            persister,
             now,
         })
         .await?;

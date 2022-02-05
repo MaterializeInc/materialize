@@ -26,7 +26,6 @@ use lazy_static::lazy_static;
 use ore::collections::CollectionExt;
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, EpochMillis, NowFn};
-use persist::client::MultiWriteHandle;
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -38,8 +37,6 @@ use dataflow_types::{
     sources::{SourceConnector, Timeline},
 };
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
-use persist::client::RuntimeClient as PersistClient;
-use persist::error::Error as PersistError;
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -59,9 +56,7 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::persistcfg::{
-    PersistConfig, PersisterWithConfig, TablePersistDetails, TablePersistMultiDetails,
-};
+use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session};
 use crate::CoordError;
 
@@ -119,7 +114,7 @@ pub struct Catalog {
 #[derive(Debug, Clone)]
 pub struct CatalogState {
     by_name: BTreeMap<String, Database>,
-    by_id: CatalogEntryMap,
+    by_id: BTreeMap<GlobalId, CatalogEntry>,
     by_oid: HashMap<u32, GlobalId>,
     /// Contains only enabled indexes from objects in the catalog; does not
     /// contain indexes disabled by e.g. the disable_user_indexes flag.
@@ -127,8 +122,6 @@ pub struct CatalogState {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
-    /// Handle to persistence runtime and feature configuration.
-    persist: PersisterWithConfig,
 }
 
 impl CatalogState {
@@ -143,7 +136,7 @@ impl CatalogState {
             CatalogItem::Table(table) => {
                 let connector = SourceConnector::Local {
                     timeline: table.timeline(),
-                    persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                    persisted_name: table.persist_name.clone(),
                 };
                 Some(dataflow_types::sources::SourceDesc {
                     name: entry.name().to_string(),
@@ -406,101 +399,6 @@ impl CatalogState {
         let id = &self.by_oid[oid];
         &self.by_id[id]
     }
-
-    pub fn persist(&self) -> &PersisterWithConfig {
-        &self.persist
-    }
-}
-
-// A newtype wrapper for the by_id map that makes it easier to reason about
-// maintenance of the persist_multi_details invariant (which is a cached value
-// derived from by_id, updated when by_id is updated).
-//
-// This intentionally impls Deref to make it transparently behave like the
-// BTreeMap for reads, but not DerefMut, so we have control of the mutation
-// paths.
-#[derive(Debug, Clone)]
-struct CatalogEntryMap {
-    by_id: BTreeMap<GlobalId, CatalogEntry>,
-    /// Handle allowing operations on multiple persisted streams, either for
-    /// atomicity (writing a user transaction over multiple tables) or
-    /// efficiency (advancing the timestamp of all user tables in bulk).
-    ///
-    /// Invariant: This contains the same ids and handles as the set of tables
-    /// currently being persisted (i.e it matches the output of
-    /// self.generate_persist_multi_details() and is updated whenever the set of
-    /// persisted tables changes).
-    persist_multi_details: Option<TablePersistMultiDetails>,
-}
-
-impl std::ops::Deref for CatalogEntryMap {
-    type Target = BTreeMap<GlobalId, CatalogEntry>;
-    fn deref(&self) -> &Self::Target {
-        &self.by_id
-    }
-}
-
-impl CatalogEntryMap {
-    pub fn new(by_id: BTreeMap<GlobalId, CatalogEntry>) -> Self {
-        let mut ret = CatalogEntryMap {
-            by_id,
-            persist_multi_details: None,
-        };
-        ret.persist_multi_details = ret.generate_persist_multi_details();
-        ret
-    }
-
-    pub fn get_mut(&mut self, key: &GlobalId) -> Option<&mut CatalogEntry> {
-        // NB: Unfortunately, there's no way for this to regenerate
-        // self.persist_multi_details after the mutation is finished. However,
-        // as of when this was written, none of the callsites used this to
-        // change whether the entry is persisted, so we should be fine.
-        self.by_id.get_mut(key)
-    }
-
-    pub fn insert(&mut self, key: GlobalId, value: CatalogEntry) -> Option<CatalogEntry> {
-        let ret = self.by_id.insert(key, value);
-        self.persist_multi_details = self.generate_persist_multi_details();
-        ret
-    }
-
-    pub fn remove(&mut self, key: &GlobalId) -> Option<CatalogEntry> {
-        let ret = self.by_id.remove(key);
-        self.persist_multi_details = self.generate_persist_multi_details();
-        ret
-    }
-
-    fn generate_persist_multi_details(&self) -> Option<TablePersistMultiDetails> {
-        let mut all_table_ids = Vec::new();
-        let mut handles = Vec::new();
-        for (_, entry) in self.by_id.iter() {
-            match entry.item() {
-                CatalogItem::Table(Table {
-                    persist: Some(persist),
-                    ..
-                }) => {
-                    all_table_ids.push(persist.stream_id);
-                    handles.push(&persist.write_handle);
-                }
-                _ => {}
-            }
-        }
-        MultiWriteHandle::new_from_streams(handles.into_iter())
-            .ok()
-            .map(|write_handle| TablePersistMultiDetails {
-                all_table_ids,
-                write_handle,
-            })
-    }
-
-    pub fn persist_multi_details(&self) -> Option<&TablePersistMultiDetails> {
-        // Verify the persist_multi_details invariant.
-        debug_assert_eq!(
-            &self.persist_multi_details,
-            &self.generate_persist_multi_details()
-        );
-        self.persist_multi_details.as_ref()
-    }
 }
 
 #[derive(Debug)]
@@ -574,7 +472,7 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
-    pub persist: Option<TablePersistDetails>,
+    pub persist_name: Option<String>,
 }
 
 impl Table {
@@ -912,52 +810,33 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub async fn open(
-        config: &Config<'_>,
-    ) -> Result<(Catalog, Vec<BuiltinTableUpdate>, Option<PersistClient>), Error> {
-        let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
-
-        // This is somewhat incorrect in a services/multi-node world. The
-        // reentrance id should be per-node not per-cluster. This is also an odd
-        // place to be booting the persistence system. But both of these are
-        // fine for now.
-        let persist = config
-            .persist
-            .init(
-                cluster_id,
-                config.build_info.clone(),
-                &config.metrics_registry,
-            )
-            .await?;
-        let persister = persist.persister.clone();
-
+    pub async fn open(config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
         let mut catalog = Catalog {
             state: CatalogState {
                 by_name: BTreeMap::new(),
-                by_id: CatalogEntryMap::new(BTreeMap::new()),
+                by_id: BTreeMap::new(),
                 by_oid: HashMap::new(),
                 enabled_indexes: HashMap::new(),
                 ambient_schemas: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
                 roles: HashMap::new(),
-                persist,
             },
-            storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             transient_revision: 0,
             config: sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
                 nonce: rand::random(),
-                experimental_mode,
+                experimental_mode: config.storage.experimental_mode(),
                 safe_mode: config.safe_mode,
-                cluster_id,
+                cluster_id: config.storage.cluster_id(),
                 session_id: Uuid::new_v4(),
                 build_info: config.build_info,
                 timestamp_frequency: config.timestamp_frequency,
                 now: config.now.clone(),
                 disable_user_indexes: config.disable_user_indexes,
             },
+            storage: Arc::new(Mutex::new(config.storage)),
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
@@ -1081,8 +960,10 @@ impl Catalog {
                         &index_columns,
                     );
                     let oid = catalog.allocate_oid()?;
-                    let persist = if table.persistent {
-                        catalog.persist_details(table.id, &name)?
+                    let persist_name = if table.persistent {
+                        config
+                            .persister
+                            .new_table_persist_name(table.id, &name.to_string())
                     } else {
                         None
                     };
@@ -1096,7 +977,7 @@ impl Catalog {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
-                            persist,
+                            persist_name,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -1237,7 +1118,7 @@ impl Catalog {
             builtin_table_updates.push(catalog.state.pack_role_update(role_name, 1));
         }
 
-        Ok((catalog, builtin_table_updates, persister))
+        Ok((catalog, builtin_table_updates))
     }
 
     /// Retuns the catalog's transient revision, which starts at 1 and is
@@ -1302,18 +1183,23 @@ impl Catalog {
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
     pub async fn open_debug(path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
-        let (catalog, _, _) = Self::open(&Config {
-            path,
+        let experimental_mode = None;
+        let metrics_registry = &MetricsRegistry::new();
+        let storage = storage::Connection::open(path, experimental_mode)?;
+        let (catalog, _) = Self::open(Config {
+            storage,
             enable_logging: true,
-            experimental_mode: None,
+            experimental_mode,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
             timestamp_frequency: Duration::from_secs(1),
             now,
-            persist: PersistConfig::disabled(),
             skip_migrations: true,
-            metrics_registry: &MetricsRegistry::new(),
+            metrics_registry,
             disable_user_indexes: false,
+            persister: &PersistConfig::disabled()
+                .init(Uuid::new_v4(), DUMMY_BUILD_INFO, metrics_registry)
+                .await?,
         })
         .await?;
         Ok(catalog)
@@ -1737,17 +1623,6 @@ impl Catalog {
         Ok(ret)
     }
 
-    /// Delete all timestamp bindings for a source
-    pub fn delete_timestamp_bindings(&mut self, source_id: GlobalId) -> Result<(), Error> {
-        let mut storage = self.storage();
-        let tx = storage.transaction()?;
-
-        tx.delete_timestamp_bindings(source_id)?;
-        tx.commit()?;
-
-        Ok(())
-    }
-
     /// Compact timestamp bindings for a source
     ///
     /// In practice this ends up being "remove all bindings less than a given timestamp"
@@ -1982,15 +1857,21 @@ impl Catalog {
                     let entry = self.get_by_id(&id);
                     // Prevent dropping a table's default index unless the table
                     // is being dropped too.
-                    if let CatalogItem::Index(Index { on, .. }) = entry.item() {
-                        if self.get_by_id(on).is_table()
-                            && self.default_index_for(*on) == Some(id)
-                            && !drop_ids.contains(on)
-                        {
-                            return Err(CoordError::Catalog(Error::new(
-                                ErrorKind::MandatoryTableIndex(entry.name().to_string()),
-                            )));
+                    match entry.item() {
+                        CatalogItem::Index(Index { on, .. }) => {
+                            if self.get_by_id(on).is_table()
+                                && self.default_index_for(*on) == Some(id)
+                                && !drop_ids.contains(on)
+                            {
+                                return Err(CoordError::Catalog(Error::new(
+                                    ErrorKind::MandatoryTableIndex(entry.name().to_string()),
+                                )));
+                            }
                         }
+                        CatalogItem::Source(_) => {
+                            tx.delete_timestamp_bindings(id)?;
+                        }
+                        _ => {}
                     }
                     if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
@@ -2254,7 +2135,7 @@ impl Catalog {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                table_persist_name: table.persist_name.clone(),
                 source_persist_details: None,
             },
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
@@ -2328,18 +2209,13 @@ impl Catalog {
                     source_persist_details.is_none(),
                     "got some source_persist_details while we didn't expect them for a table"
                 );
-                let persist = self
-                    .state
-                    .persist
-                    .table_details_from_name(table_persist_name)?;
-
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
                     desc: table.desc,
                     defaults: table.defaults,
                     conn_id: None,
                     depends_on: table.depends_on,
-                    persist,
+                    persist_name: table_persist_name,
                 })
             }
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
@@ -2552,18 +2428,6 @@ impl Catalog {
             }
         }
         relations.into_iter().collect()
-    }
-
-    pub fn persist_details(
-        &self,
-        id: GlobalId,
-        name: &FullName,
-    ) -> Result<Option<TablePersistDetails>, PersistError> {
-        self.state.persist.table_details(id, &name.to_string())
-    }
-
-    pub fn persist_multi_details(&self) -> Option<&TablePersistMultiDetails> {
-        self.state.by_id.persist_multi_details()
     }
 }
 
