@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
-    operators::{Capability, Event},
+    operators::{Capability, CapabilitySet, Event},
 };
 
 use anyhow::anyhow;
@@ -256,7 +256,15 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capabilities: Rc<RefCell<Option<(Capability<Timestamp>, Capability<Timestamp>)>>>,
+    capabilities: Rc<
+        RefCell<
+            Option<(
+                Capability<Timestamp>,
+                Capability<Timestamp>,
+                CapabilitySet<Timestamp>,
+            )>,
+        >,
+    >,
     activator: Activator,
 }
 
@@ -842,6 +850,7 @@ where
 
         move |cap,
               _secondary_cap: &mut Capability<Timestamp>,
+              _durability_cap: &mut CapabilitySet<Timestamp>,
               output,
               _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
@@ -1135,11 +1144,7 @@ where
             None
         };
 
-        // Maintain a capability set that tracks the durability frontier.
-        use timely::dataflow::operators::CapabilitySet;
-        let mut durable_capability: Option<CapabilitySet<Timestamp>> = None;
-
-        move |cap, bindings_cap, output, bindings_output| {
+        move |cap, bindings_cap, durability_cap, output, bindings_output| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
                 Some(source_reader) => source_reader,
@@ -1160,12 +1165,7 @@ where
             // Maintain a capability set that tracks the durability frontier.
             // This may initially *exceed* the durability frontier, so we
             // must be careful attempting to downgrade it.
-            if let Some(capability_set) = durable_capability.as_mut() {
-                // We may fail to downgrade, but that is ok.
-                let _ = capability_set.try_downgrade(timestamp_histories.durability_frontier());
-            } else {
-                durable_capability = Some(CapabilitySet::from_elem(cap.clone()));
-            }
+            durability_cap.downgrade(timestamp_histories.durability_frontier());
 
             // NOTE: It's **very** important that we get out any necessary
             // retractions/additions to the timestamp bindings before we downgrade beyond the
@@ -1268,12 +1268,6 @@ where
                     activator.activate_after(timestamp_frequency)
                 }
                 _ => (),
-            }
-
-            if let SourceStatus::Done = source_status {
-                if let Some(set) = durable_capability.as_mut() {
-                    set.downgrade(Vec::<Timestamp>::new());
-                }
             }
 
             source_status
