@@ -892,7 +892,6 @@ class PostgresInitialLoad(PgCdc):
     when creating a materialized source"""
 
     def shared(self) -> Action:
-        rows = ",".join(f"({i}, \'{i}')" for i in range(0, self.n()))
         return TdAction(
             f"""
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -903,8 +902,8 @@ CREATE SCHEMA public;
 DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
-INSERT INTO pk_table VALUES {rows}
+CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
+INSERT INTO pk_table SELECT x, x*2 FROM generate_series(1, {self.n()}) as x;
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 """
         )
