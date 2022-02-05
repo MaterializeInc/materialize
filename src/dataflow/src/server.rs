@@ -476,7 +476,6 @@ where
 
             // Report frontier information back the coordinator.
             self.report_compute_frontiers();
-            self.report_storage_frontiers();
             self.update_rt_timestamps();
             self.report_timestamp_bindings();
 
@@ -553,53 +552,6 @@ where
             }
         }
 
-        if !progress.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
-        }
-    }
-
-    /// Send progress information to the coordinator.
-    fn report_storage_frontiers(&mut self) {
-        fn add_progress(
-            id: GlobalId,
-            new_frontier: &Antichain<Timestamp>,
-            prev_frontier: &Antichain<Timestamp>,
-            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
-        ) {
-            let mut changes = ChangeBatch::new();
-            for time in prev_frontier.elements().iter() {
-                changes.update(time.clone(), -1);
-            }
-            for time in new_frontier.elements().iter() {
-                changes.update(time.clone(), 1);
-            }
-            changes.compact();
-            if !changes.is_empty() {
-                progress.push((id, changes));
-            }
-        }
-
-        let mut new_frontier = Antichain::new();
-        let mut progress = Vec::new();
-
-        for (id, history) in self.storage_state.ts_histories.iter() {
-            // Read the upper frontier and compare to what we've reported.
-            history.read_upper(&mut new_frontier);
-            let prev_frontier = self
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Source frontier missing!");
-            assert!(<_ as PartialOrder>::less_equal(
-                prev_frontier,
-                &new_frontier
-            ));
-            if prev_frontier != &new_frontier {
-                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                prev_frontier.clone_from(&new_frontier);
-            }
-        }
-
-        // TODO: We're lying here: sinks are not sources ...
         for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
@@ -617,7 +569,7 @@ where
         }
 
         if !progress.is_empty() {
-            self.send_storage_response(StorageResponse::Frontiers(progress));
+            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
         }
     }
 
