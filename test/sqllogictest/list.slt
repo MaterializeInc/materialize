@@ -144,7 +144,7 @@ SELECT (LIST [1, 2, 3][:])::text
 query T
 SELECT (LIST [1, 2, 3][100:])::text
 ----
-NULL
+{}
 
 # end exceeds maximum index
 query T
@@ -233,12 +233,12 @@ SELECT (LIST [[1, 2, 3], [4, 5]][2:2][1:1])::text
 query T
 SELECT (LIST [[1, 2, 3], [4, 5]][100:][:])::text
 ----
-NULL
+{}
 
 query T
 SELECT (LIST [[1, 2, 3], [4, 5]][:][100:])::text
 ----
-NULL
+{}
 
 # propagating NULL lists
 query T
@@ -292,11 +292,6 @@ query T
 SELECT list[[1,2], list[3,4]][2][2:]::text;
 ----
 {{2},{4}}
-
-# query T
-# select list[[1], [2]][:2][2:]::text;
-# ----
-# {}
 
 # 🔬🔬 list list slices + index
 
@@ -378,22 +373,22 @@ SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:][:][1:1])::text
 query T
 SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100:100])::text
 ----
-NULL
+{}
 
 query T
 SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:][100:100])::text
 ----
-NULL
+{}
 
 query T
 SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:][:][100:100])::text
 ----
-NULL
+{}
 
 query T
 SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:][100:100][:])::text
 ----
-NULL
+{}
 
 # propagating NULL lists
 query T
@@ -454,7 +449,7 @@ NULL
 query T
 SELECT ((LIST[[1, 2, 3], NULL, [4]]::INT LIST LIST)[2:3][2:2])::text
 ----
-NULL
+{}
 
 query T
 SELECT (LIST[1, 2, 3][NULL])::text
@@ -519,7 +514,7 @@ SELECT ((LIST[NULL]::INT LIST)[1:1])::text
 query T
 SELECT ((LIST[NULL, NULL]::INT LIST LIST)[:][1:1])::text
 ----
-NULL
+{}
 
 # Literal NULLs are NOT empty results and don't get reduced
 query T
@@ -543,7 +538,7 @@ SELECT ((LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3][2:2])::tex
 query T
 SELECT ((LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3][4:4])::text
 ----
-NULL
+{}
 
 # Outer list's second position produces empty results, but third position
 # produces value, so cannot be totally reduced
@@ -557,7 +552,7 @@ SELECT ((LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:][:][:])::text
 query T
 SELECT ((LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:][:][2:2])::text
 ----
-NULL
+{}
 
 # 🔬 Empty lists expressions
 
@@ -569,17 +564,17 @@ NULL
 query T
 SELECT ((LIST[]::INT LIST)[:])::text
 ----
-NULL
+{}
 
 query T
 SELECT ((LIST[]::INT LIST)[1:1])::text
 ----
-NULL
+{}
 
 query T
 SELECT ((LIST[]::INT LIST LIST)[1:1][1:1])::text
 ----
-NULL
+{}
 
 # 🔬 Other subscript values
 
@@ -637,7 +632,7 @@ NULL
 query T
 SELECT (LIST[1][9223372036854775807::bigint:9223372036854775807::bigint])::text
 ----
-NULL
+{}
 
 query T
 SELECT (LIST[1][9223372036854775807::bigint:-9223372036854775807::bigint])::text

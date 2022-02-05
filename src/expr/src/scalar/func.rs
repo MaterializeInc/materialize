@@ -5189,7 +5189,14 @@ fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a>
     }
 
     temp_storage.make_datum(|row| {
-        slice_and_descend(datums[0], &ranges, row);
+        let empty_results = slice_and_descend(datums[0], &ranges, row);
+        // Empty results return an empty list and not NULL.
+        if empty_results {
+            // SAFETY: 0 is always the beginning of the row, so truncating
+            // there drops any datums in the row.
+            unsafe { row.truncate(0) }
+            row.push(Datum::empty_list());
+        }
     })
 }
 
