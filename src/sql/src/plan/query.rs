@@ -3309,9 +3309,7 @@ fn plan_subscript_slice(
         !positions.is_empty(),
         "subscript expression must contain at least one position"
     );
-    if positions.len() > 1 {
-        ecx.require_experimental_mode("layered/multidimensional slicing")?;
-    }
+
     let ecx = &ecx.with_name("subscript (slicing)");
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);

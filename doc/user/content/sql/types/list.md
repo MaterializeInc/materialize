@@ -207,7 +207,7 @@ SELECT LIST[1,2,3,4,5][3:] AS three_to_five;
 ```
 
 If the first index exceeds the list's maximum index, the operation returns
-_NULL_:
+an empty list:
 
 ```sql
 SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
@@ -215,7 +215,7 @@ SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
 ```nofmt
  exceed_index
 --------------
-
+ {}
 ```
 
 If the last index exceeds the list’s maximum index, the operation returns all
@@ -232,9 +232,10 @@ SELECT LIST[1,2,3,4,5][2:10] AS two_to_end;
 
 #### Layered slices
 
-{{< experimental v0.5.1 >}}
-Layered slices
-{{< /experimental >}}
+{{< version-changed v0.20.0 >}}
+Prior versions of Materialize required
+experimental mode to perform layered slices.
+{{< /version-changed >}}
 
 To slice on layers beyond the first, indicate the range you want to slice along
 each layer, separating the ranges with square brackets:
@@ -256,6 +257,18 @@ SELECT LIST[[1,2], [3,4]][1:2][2:2][1:1] AS failed_third_dim_slice;
 ```nofmt
 ERROR:  cannot slice into 3 layers; list only has 2 layers
 ```
+
+If any subscript operation is a slice, all subscript operations are treated as
+slices. Subscripted expressions without colons (e.g. `[n]`) are rewritten to the equivalent of `[1:n]`.
+
+```sql
+SELECT LIST[[1,2], [3,4]][2][2:2] AS slice_second_lyr;
+```
+```nofmt
+ slice_second_lyr
+------------------
+ {{2},{4}}
+````
 
 ### Output format
 

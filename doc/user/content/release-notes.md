@@ -146,6 +146,12 @@ changes that have not yet been documented.
   multi-dimensional arrays, subscripting more than once always returns _NULL_
   {{% gh 9815 %}}.
 
+- Let users perform layered/multi-dimensional slices on [`list`] values.
+
+  The behavior of this feature mimics PostgreSQL subscript slices, with the
+  exception that you cannot slice along more layers than the list has. For
+  example, `int list list` supports at most two layers of slices.
+
 {{< comment >}}
 Only add new release notes above this line.
 
