@@ -10,32 +10,23 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use expr::like_pattern;
 
-// SMART, by Shel Silverstein
+// Ozymandias, by Percy Bysshe Shelley
+// written in 1818, in the public domain.
 const POEM: &[&str] = &[
-    "My dad gave me one dollar bill",
-    "'Cause I'm his smartest son,",
-    "And I swapped it for two shiny quarters",
-    "'Cause two is more than one!",
-    //
-    "And then I took the quarters",
-    "And traded them to Lou",
-    "For three dimes -- I guess he don't know",
-    "That three is more than two!",
-    //
-    "Just then, along came old blind Bates",
-    "And just 'cause he can't see",
-    "He gave me four nickels for my three dimes,",
-    "And four is more then three!",
-    //
-    "And I took the nickels to Hiram Coombs",
-    "Down at the seed-feed store,",
-    "And the fool gave me five pennies for them,",
-    "And five is more than four!",
-    //
-    "And then I went and showed my dad,",
-    "And he got red in the cheeks",
-    "And closed his eye and shook his head--",
-    "Too proud of me to speak!",
+    "I met a traveller from an antique land,",
+    "Who said -- Two vast and trunkless legs of stone",
+    "Stand in the desert... Near them, on the sand,",
+    "Half sunk a shattered visage lies, whose frown,",
+    "And wrinkled lip, and sneer of cold command,",
+    "Tell that its sculptor well those passions read",
+    "Which yet survive, stamped on these lifeless things,",
+    "The hand that mocked them, and the heart that fed;",
+    "And on the pedestal, these words appear:",
+    "My name is Ozymandias, King of Kings;",
+    "Look on my Works, ye Mighty, and despair!",
+    "Nothing beside remains. Round the decay",
+    "Of that colossal Wreck, boundless and bare",
+    "The lone and level sands stretch far away.",
 ];
 
 fn search_poem(needle: &like_pattern::Matcher) {
@@ -64,15 +55,15 @@ where
     group.bench_function(format!("{}_search_starts_with", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
-    matcher = compile_fn("%is%");
+    matcher = compile_fn("%and%");
     group.bench_function(format!("{}_search_contains", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
-    matcher = compile_fn("%is%more%");
+    matcher = compile_fn("%and%the%");
     group.bench_function(format!("{}_search_contains2", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
-    matcher = compile_fn("%is%more%than%");
+    matcher = compile_fn("%and%the%th%");
     group.bench_function(format!("{}_search_contains3", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
