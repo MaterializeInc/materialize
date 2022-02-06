@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
-    operators::{Capability, CapabilitySet, Event},
+    operators::{CapabilitySet, Event},
 };
 
 use anyhow::anyhow;
@@ -256,7 +256,7 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capabilities: Rc<RefCell<Option<(CapabilitySet<Timestamp>, Capability<Timestamp>)>>>,
+    capabilities: Rc<RefCell<Option<(CapabilitySet<Timestamp>, CapabilitySet<Timestamp>)>>>,
     activator: Activator,
 }
 
@@ -841,7 +841,7 @@ where
         );
 
         move |cap,
-              _secondary_cap: &mut Capability<Timestamp>,
+              _secondary_cap: &mut CapabilitySet<Timestamp>,
               output,
               _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
@@ -1153,24 +1153,15 @@ where
                 }
             };
 
-            // Maintain a capability set that tracks the durability frontier.
-            cap.downgrade(timestamp_histories.durability_frontier());
-
             // NOTE: It's **very** important that we get out any necessary
             // retractions/additions to the timestamp bindings before we downgrade beyond the
             // previous upper seal frontier. Otherwise, it can happen that a needed retraction
             // is not considered valid on a future restart attempt, and we will get an
             // inconsistency between the persisted timestamp bindings and persisted data.
             if let Some(ts_bindings_retractions) = ts_bindings_retractions.take() {
-                assert_eq!(
-                    *bindings_cap.time(),
-                    0,
-                    "did not emit retractions at the earliest possible time: source capability is already at {}", bindings_cap.time()
-                );
+                let cap = bindings_cap.delayed(&starting_ts);
 
-                bindings_cap.downgrade(&starting_ts);
-
-                let mut session = bindings_output.session(&bindings_cap);
+                let mut session = bindings_output.session(&cap);
 
                 let retraction_ts = starting_ts;
                 let ts_bindings_retractions = ts_bindings_retractions
@@ -1178,6 +1169,14 @@ where
                     .map(|(binding, diff)| (binding, retraction_ts, diff));
 
                 session.give_iterator(ts_bindings_retractions);
+            }
+
+            // Maintain a capability set that tracks the durability frontier.
+            let durability_frontier = timestamp_histories.durability_frontier();
+            cap.downgrade(durability_frontier.clone());
+            bindings_cap.downgrade(durability_frontier.clone());
+            for element in durability_frontier {
+                source_metrics.capability.set(element);
             }
 
             // Bound execution of operator to prevent a single operator from hogging
@@ -1244,11 +1243,6 @@ where
                 bindings_cap,
                 bindings_output,
             );
-
-            let closed_ts = timestamp_histories.closed_ts(&partition_cursors);
-            // Downgrade capability (if possible) before exiting
-            bindings_cap.downgrade(&closed_ts);
-            source_metrics.capability.set(closed_ts);
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
@@ -1503,7 +1497,7 @@ fn maybe_emit_timestamp_bindings(
     worker_id: usize,
     timestamp_bindings_updater: &mut Option<TimestampBindingUpdater>,
     timestamp_histories: &mut TimestampBindingRc,
-    bindings_cap: &Capability<u64>,
+    bindings_cap: &CapabilitySet<u64>,
     bindings_output: &mut OutputHandle<
         u64,
         ((SourceTimestamp, AssignedTimestamp), u64, isize),
@@ -1518,11 +1512,12 @@ fn maybe_emit_timestamp_bindings(
     };
 
     let changes = timestamp_bindings_updater.update(timestamp_histories);
+    let cap = &bindings_cap[0];
 
     // Emit required changes downstream.
     let to_emit = changes
         .into_iter()
-        .map(|(binding, diff)| (binding, bindings_cap.time().clone(), isize::cast_from(diff)));
+        .map(|(binding, diff)| (binding, cap.time().clone(), isize::cast_from(diff)));
 
     // We're collecting into a Vec because we want to log and emit. This is a bit
     // wasteful but we don't expect large numbers of bindings.
@@ -1533,10 +1528,10 @@ fn maybe_emit_timestamp_bindings(
         source_name,
         worker_id,
         to_emit,
-        bindings_cap
+        cap
     );
 
-    let mut session = bindings_output.session(bindings_cap);
+    let mut session = bindings_output.session(&cap);
     session.give_vec(&mut to_emit);
 }
 

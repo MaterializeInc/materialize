@@ -13,7 +13,7 @@ use std::rc::Rc;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
-use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
@@ -65,7 +65,7 @@ where
     B: FnOnce(OperatorInfo) -> L,
     L: FnMut(
             &mut CapabilitySet<Timestamp>,
-            &mut Capability<Timestamp>,
+            &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
             &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
         ) -> SourceStatus
@@ -85,6 +85,7 @@ where
         let secondary_capability = capabilities.pop().unwrap();
         let data_capability = capabilities.pop().unwrap();
         let data_capability = CapabilitySet::from_elem(data_capability);
+        let secondary_capability = CapabilitySet::from_elem(secondary_capability);
 
         let capabilities_rc = Rc::new(RefCell::new(Some((data_capability, secondary_capability))));
 

@@ -357,17 +357,6 @@ impl TimestampBindingBox {
         partition.add_binding(timestamp, offset);
     }
 
-    fn closed_ts(&self, cursors: &HashMap<PartitionId, MzOffset>) -> u64 {
-        let mut ts = self.upper();
-        for (pid, timestamps) in self.partitions.iter() {
-            let offset = cursors.get(pid).cloned().unwrap_or(MzOffset { offset: 0 });
-            if let Some(partition_ts) = timestamps.get_binding(offset) {
-                ts = std::cmp::min(ts, partition_ts);
-            }
-        }
-        ts
-    }
-
     fn get_or_propose_binding(&mut self, partition: &PartitionId, offset: MzOffset) -> Timestamp {
         if !self.partitions.contains_key(partition) {
             self.add_partition(partition.clone(), None);
@@ -525,12 +514,6 @@ impl TimestampBindingRc {
     /// All subsequent updates will either be at or in advance of this frontier.
     pub fn read_upper(&self, target: &mut Antichain<Timestamp>) {
         self.wrapper.borrow().read_upper(target)
-    }
-
-    /// Find the timestamp that has been closed across all partitions by consulting the currently known bindings and
-    /// the per partition cursors of the caller.
-    pub fn closed_ts(&self, cursors: &HashMap<PartitionId, MzOffset>) -> u64 {
-        self.wrapper.borrow().closed_ts(cursors)
     }
 
     /// Returns the list of partitions this source knows about.
