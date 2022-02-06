@@ -30,7 +30,6 @@ use std::time::Instant;
 use bytes::BufMut;
 use persist_types::Codec;
 use prost::Message;
-use timely::dataflow::operators::Capability;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::{ChangeBatch, Timestamp as TimelyTimestamp};
@@ -358,7 +357,7 @@ impl TimestampBindingBox {
         partition.add_binding(timestamp, offset);
     }
 
-    fn downgrade(&self, cap: &mut Capability<Timestamp>, cursors: &HashMap<PartitionId, MzOffset>) {
+    fn closed_ts(&self, cursors: &HashMap<PartitionId, MzOffset>) -> u64 {
         let mut ts = self.upper();
         for (pid, timestamps) in self.partitions.iter() {
             let offset = cursors.get(pid).cloned().unwrap_or(MzOffset { offset: 0 });
@@ -366,7 +365,7 @@ impl TimestampBindingBox {
                 ts = std::cmp::min(ts, partition_ts);
             }
         }
-        cap.downgrade(&ts);
+        ts
     }
 
     fn get_or_propose_binding(&mut self, partition: &PartitionId, offset: MzOffset) -> Timestamp {
@@ -528,14 +527,10 @@ impl TimestampBindingRc {
         self.wrapper.borrow().read_upper(target)
     }
 
-    /// Attempt to downgrade the given capability by consulting the currently known bindings and
+    /// Find the timestamp that has been closed across all partitions by consulting the currently known bindings and
     /// the per partition cursors of the caller.
-    pub fn downgrade(
-        &self,
-        cap: &mut Capability<Timestamp>,
-        cursors: &HashMap<PartitionId, MzOffset>,
-    ) {
-        self.wrapper.borrow().downgrade(cap, cursors)
+    pub fn closed_ts(&self, cursors: &HashMap<PartitionId, MzOffset>) -> u64 {
+        self.wrapper.borrow().closed_ts(cursors)
     }
 
     /// Returns the list of partitions this source knows about.

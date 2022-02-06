@@ -256,15 +256,7 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capabilities: Rc<
-        RefCell<
-            Option<(
-                Capability<Timestamp>,
-                Capability<Timestamp>,
-                CapabilitySet<Timestamp>,
-            )>,
-        >,
-    >,
+    capabilities: Rc<RefCell<Option<(CapabilitySet<Timestamp>, Capability<Timestamp>)>>>,
     activator: Activator,
 }
 
@@ -850,14 +842,11 @@ where
 
         move |cap,
               _secondary_cap: &mut Capability<Timestamp>,
-              durability_cap: &mut CapabilitySet<Timestamp>,
               output,
               _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
                 return SourceStatus::Done;
             }
-
-            durability_cap.downgrade(Vec::<Timestamp>::new());
 
             let waker = futures::task::waker_ref(&activator);
             let mut context = Context::from_waker(&waker);
@@ -878,7 +867,7 @@ where
                             ),
                         );
                         metrics.record_partition_offsets(metric_updates);
-                        cap.downgrade(&time);
+                        cap.downgrade(std::iter::once(time));
                     }
                     Some(Event::Message(time, data)) => {
                         output.session(&cap.delayed(&time)).give(data);
@@ -1146,7 +1135,7 @@ where
             None
         };
 
-        move |cap, bindings_cap, durability_cap, output, bindings_output| {
+        move |cap, bindings_cap, output, bindings_output| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
                 Some(source_reader) => source_reader,
@@ -1165,7 +1154,7 @@ where
             };
 
             // Maintain a capability set that tracks the durability frontier.
-            durability_cap.downgrade(timestamp_histories.durability_frontier());
+            cap.downgrade(timestamp_histories.durability_frontier());
 
             // NOTE: It's **very** important that we get out any necessary
             // retractions/additions to the timestamp bindings before we downgrade beyond the
@@ -1227,7 +1216,8 @@ where
                     }
                     Ok(NextMessage::Finished) => (SourceStatus::Done, MessageProcessing::Stopped),
                     Err(e) => {
-                        output.session(&cap).give(Err(e.to_string()));
+                        // TODO: this is not idiomatic.
+                        output.session(&cap[0]).give(Err(e.to_string()));
                         (SourceStatus::Done, MessageProcessing::Stopped)
                     }
                 };
@@ -1255,10 +1245,10 @@ where
                 bindings_output,
             );
 
+            let closed_ts = timestamp_histories.closed_ts(&partition_cursors);
             // Downgrade capability (if possible) before exiting
-            timestamp_histories.downgrade(cap, &partition_cursors);
-            bindings_cap.downgrade(cap.time());
-            source_metrics.capability.set(*cap.time());
+            bindings_cap.downgrade(&closed_ts);
+            source_metrics.capability.set(closed_ts);
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
@@ -1558,7 +1548,7 @@ fn maybe_emit_timestamp_bindings(
 fn handle_message<S: SourceReader>(
     message: SourceMessage<S::Key, S::Value>,
     bytes_read: &mut usize,
-    cap: &Capability<Timestamp>,
+    cap: &CapabilitySet<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
         Result<SourceOutput<S::Key, S::Value>, String>,
