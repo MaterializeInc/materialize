@@ -262,6 +262,7 @@ pub struct SourceToken {
                 Capability<Timestamp>,
                 Capability<Timestamp>,
                 CapabilitySet<Timestamp>,
+                CapabilitySet<Timestamp>,
             )>,
         >,
     >,
@@ -850,14 +851,16 @@ where
 
         move |cap,
               _secondary_cap: &mut Capability<Timestamp>,
-              durability_cap: &mut CapabilitySet<Timestamp>,
+              durability_cap1: &mut CapabilitySet<Timestamp>,
+              durability_cap2: &mut CapabilitySet<Timestamp>,
               output,
               _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
                 return SourceStatus::Done;
             }
 
-            durability_cap.downgrade(Vec::<Timestamp>::new());
+            durability_cap1.downgrade(Vec::<Timestamp>::new());
+            durability_cap2.downgrade(Vec::<Timestamp>::new());
 
             let waker = futures::task::waker_ref(&activator);
             let mut context = Context::from_waker(&waker);
@@ -931,7 +934,7 @@ where
         upstream_name,
         id,
         scope,
-        mut timestamp_histories,
+        timestamp_histories,
         worker_id,
         worker_count,
         timestamp_frequency,
@@ -954,6 +957,9 @@ where
     // errors. The errors here would likely be considered transitive or indefinite errors.
     let mut construction_errs = Vec::new();
 
+    let temp = timestamp_histories;
+    let timestamp_histories = &temp;
+
     // If we have persisted data, we initialize the starting timestamp to the latest upper seal
     // timestamp, such that we can start emitting data right at the time where it will become
     // sealed when we next downgrade the capability. We do this to ensure that necessary
@@ -964,7 +970,7 @@ where
                 let source_persist =
                     SourceReaderPersistence::new(name.clone(), persist_config.clone());
 
-                let timestamp_histories = timestamp_histories.as_mut().ok_or_else(|| {
+                let timestamp_histories = timestamp_histories.as_ref().ok_or_else(|| {
                     SourceError::new(
                         sql_name.clone(),
                         SourceErrorDetails::Persistence("missing timestamp histories".to_owned()),
@@ -1082,6 +1088,8 @@ where
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
+    let timestamp_histories = temp;
+
     let should_emit_timestamp_bindings = source_persist.is_some();
 
     let (stream, ts_bindings_stream, capability) = source(scope, name.clone(), move |info| {
@@ -1089,7 +1097,7 @@ where
         let activator = scope.activator_for(&info.address[..]);
 
         // This source will need to be activated when the durability frontier changes.
-        if let Some(wrapper) = timestamp_histories.as_mut() {
+        if let Some(wrapper) = timestamp_histories.as_ref() {
             let durability_activator = scope.activator_for(&info.address[..]);
             wrapper
                 .wrapper
@@ -1107,7 +1115,7 @@ where
             logger.clone(),
         );
         let restored_offsets = timestamp_histories
-            .as_mut()
+            .as_ref()
             .map(|ts| ts.partitions())
             .unwrap_or_default();
         let mut partition_cursors: HashMap<_, _> = restored_offsets
@@ -1146,7 +1154,7 @@ where
             None
         };
 
-        move |cap, bindings_cap, durability_cap, output, bindings_output| {
+        move |cap, bindings_cap, durability_cap1, durability_cap2, output, bindings_output| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
                 Some(source_reader) => source_reader,
@@ -1156,7 +1164,7 @@ where
             };
 
             // Check that we have a valid list of timestamp bindings.
-            let timestamp_histories = match &mut timestamp_histories {
+            let timestamp_histories = match &timestamp_histories {
                 Some(histories) => histories,
                 None => {
                     error!("Source missing list of timestamp bindings");
@@ -1165,7 +1173,8 @@ where
             };
 
             // Maintain a capability set that tracks the durability frontier.
-            durability_cap.downgrade(timestamp_histories.durability_frontier());
+            durability_cap1.downgrade(timestamp_histories.durability_frontier());
+            durability_cap2.downgrade(timestamp_histories.durability_frontier());
 
             // NOTE: It's **very** important that we get out any necessary
             // retractions/additions to the timestamp bindings before we downgrade beyond the
@@ -1179,9 +1188,9 @@ where
                     "did not emit retractions at the earliest possible time: source capability is already at {}", bindings_cap.time()
                 );
 
-                bindings_cap.downgrade(&starting_ts);
+                let delayed_binding_cap = bindings_cap.delayed(&starting_ts);
 
-                let mut session = bindings_output.session(&bindings_cap);
+                let mut session = bindings_output.session(&delayed_binding_cap);
 
                 let retraction_ts = starting_ts;
                 let ts_bindings_retractions = ts_bindings_retractions
@@ -1512,7 +1521,7 @@ fn maybe_emit_timestamp_bindings(
     source_name: &str,
     worker_id: usize,
     timestamp_bindings_updater: &mut Option<TimestampBindingUpdater>,
-    timestamp_histories: &mut TimestampBindingRc,
+    timestamp_histories: &TimestampBindingRc,
     bindings_cap: &Capability<u64>,
     bindings_output: &mut OutputHandle<
         u64,
