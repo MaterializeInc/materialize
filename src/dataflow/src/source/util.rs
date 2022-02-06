@@ -67,6 +67,7 @@ where
             &mut Capability<Timestamp>,
             &mut Capability<Timestamp>,
             &mut CapabilitySet<Timestamp>,
+            &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
             &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
         ) -> SourceStatus
@@ -85,12 +86,14 @@ where
         // `capabilities` should be a two-element vector.
         let secondary_capability = capabilities.pop().unwrap();
         let data_capability = capabilities.pop().unwrap();
-        let durability_capability = CapabilitySet::from_elem(data_capability.clone());
+        let durability_capability1 = CapabilitySet::from_elem(data_capability.clone());
+        let durability_capability2 = CapabilitySet::from_elem(data_capability.clone());
 
         let capabilities_rc = Rc::new(RefCell::new(Some((
             data_capability,
             secondary_capability,
-            durability_capability,
+            durability_capability1,
+            durability_capability2,
         ))));
 
         // Export a token to the outside word that will keep this source alive.
@@ -103,13 +106,14 @@ where
 
         move |_frontier| {
             let mut caps = capabilities_rc.borrow_mut();
-            if let Some((data_cap, secondary_cap, durability_capability)) = &mut *caps {
+            if let Some((data_cap, secondary_cap, d_cap1, d_cap2)) = &mut *caps {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
                 if let SourceStatus::Done = tick(
                     data_cap,
                     secondary_cap,
-                    durability_capability,
+                    d_cap1,
+                    d_cap2,
                     &mut data_output.activate(),
                     &mut secondary_output.activate(),
                 ) {
