@@ -30,8 +30,7 @@
 //! the frontier when being added to [`txn_reads`](Coordinator::txn_reads). The
 //! compaction frontier may change when a transaction ends (if it was the oldest
 //! transaction and the since was advanced after the transaction started) or
-//! when [`update_index_upper()`](Coordinator::update_index_upper) or
-//! [`update_storage_upper`](Coordinator::update_storage_upper) is run (if there
+//! when [`update_upper()`](Coordinator::update_upper) is run (if there
 //! are no in progress transactions before the new since). When it does, it is
 //! added to [`index_since_updates`](Coordinator::index_since_updates) or
 //! [`source_since_updates`](Coordinator::source_since_updates) and will be
@@ -872,7 +871,7 @@ impl Coordinator {
             }
             DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
                 for (name, changes) in updates {
-                    self.update_index_upper(&name, changes);
+                    self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
             }
@@ -1402,8 +1401,8 @@ impl Coordinator {
         frontier_changes
     }
 
-    /// Updates the upper frontier of a named view.
-    fn update_index_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
+    /// Updates the upper frontier of a maintained arrangement or sink.
+    fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
         if let Some(index_state) = self.indexes.get_mut(name) {
             let changes = Self::validate_update_iter(&mut index_state.upper, changes);
 
