@@ -41,6 +41,7 @@ members = [
     "src/sql-parser",
     "src/sql",
     "src/sqllogictest",
+    "src/stash",
     "src/testdrive",
     "src/timely-util",
     "src/transform",
