@@ -782,9 +782,15 @@ $ skip-if
 SELECT true
 ```
 
-`skip-if`, followed by a SQL statement will conditionally skip the rest of the `.td` file if the statement returns exactly `true`.
-If it returns anything but `true` or `false`, it will error. This can be useful to conditionally test things in different
-versions of materialize, and more!
+`skip-if` followed by a SQL statement will skip the rest of the `.td` file if
+the statement returns one row containing one column with the value `true`. If
+the statement returns `false`, then execution of the script proceeds normally.
+If the query returns anything but a single row with a single column containing a
+`boolean` value, testdrive will mark the script as failed and proceed with
+execution of the next script.
+
+This action can be useful to conditionally test things in different versions of
+Materialize, and more!
 
 [confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
 [aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md
