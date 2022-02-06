@@ -82,8 +82,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        _compute_state: &mut crate::render::ComputeState,
-        storage_state: &mut crate::render::StorageState,
+        compute_state: &mut crate::render::ComputeState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
@@ -142,7 +141,7 @@ where
             &metrics.kafka,
         );
 
-        storage_state
+        compute_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 
