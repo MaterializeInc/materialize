@@ -87,7 +87,7 @@ where
         let secondary_capability = capabilities.pop().unwrap();
         let data_capability = capabilities.pop().unwrap();
         let durability_capability1 = CapabilitySet::from_elem(data_capability.clone());
-        let durability_capability2 = CapabilitySet::from_elem(data_capability.clone());
+        let durability_capability2 = CapabilitySet::from_elem(secondary_capability.clone());
 
         let capabilities_rc = Rc::new(RefCell::new(Some((
             data_capability,
