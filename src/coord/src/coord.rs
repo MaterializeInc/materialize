@@ -30,8 +30,7 @@
 //! the frontier when being added to [`txn_reads`](Coordinator::txn_reads). The
 //! compaction frontier may change when a transaction ends (if it was the oldest
 //! transaction and the since was advanced after the transaction started) or
-//! when [`update_index_upper()`](Coordinator::update_index_upper) or
-//! [`update_storage_upper`](Coordinator::update_storage_upper) is run (if there
+//! when [`update_upper()`](Coordinator::update_upper) is run (if there
 //! are no in progress transactions before the new since). When it does, it is
 //! added to [`index_since_updates`](Coordinator::index_since_updates) or
 //! [`source_since_updates`](Coordinator::source_since_updates) and will be
@@ -872,13 +871,7 @@ impl Coordinator {
             }
             DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
                 for (name, changes) in updates {
-                    self.update_index_upper(&name, changes);
-                }
-                self.maintenance().await;
-            }
-            DataflowResponse::Storage(StorageResponse::Frontiers(updates)) => {
-                for (name, changes) in updates {
-                    self.update_storage_upper(&name, changes);
+                    self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
             }
@@ -898,45 +891,40 @@ impl Coordinator {
                     if let Some(source_state) = self.sources.get_mut(&source_id) {
                         // Apply the updates the dataflow worker sent over, and check if there
                         // were any changes to the source's upper frontier.
-                        let changes: Vec<_> = source_state
-                            .durability
-                            .update_iter(changes.drain())
-                            .collect();
+                        let changes: Vec<_> =
+                            source_state.upper.update_iter(changes.drain()).collect();
 
                         if !changes.is_empty() {
                             // The source's durability frontier changed as a result of the updates sent over
                             // by the dataflow workers. Advance the durability frontier known to the dataflow worker
                             // to indicate that these bindings have been persisted.
                             durability_updates
-                                .push((source_id, source_state.durability.frontier().to_owned()));
+                                .push((source_id, source_state.upper.frontier().to_owned()));
+
+                            // Allow compaction to advance.
+                            if let Some(compaction_window_ms) = source_state.compaction_window_ms {
+                                if !source_state.upper.frontier().is_empty() {
+                                    self.since_handles
+                                        .get_mut(&source_id)
+                                        .unwrap()
+                                        .maybe_advance(source_state.upper.frontier().iter().map(
+                                            |time| {
+                                                compaction_window_ms
+                                                    * (time.saturating_sub(compaction_window_ms)
+                                                        / compaction_window_ms)
+                                            },
+                                        ));
+                                }
+                            }
                         }
 
                         // Let's also check to see if we can compact any of the bindings we've received.
-                        let compaction_ts = if <_ as PartialOrder>::less_equal(
-                            &source_state.since.borrow().frontier(),
-                            &source_state.durability.frontier(),
-                        ) {
-                            // In this case we have persisted ahead of the compaction frontier and can safely compact
-                            // up to it
-                            *source_state
-                                .since
-                                .borrow()
-                                .frontier()
-                                .first()
-                                .expect("known to exist")
-                        } else {
-                            // Otherwise, the compaction frontier is ahead of what we've persisted so far, but we can
-                            // still potentially compact up whatever we have persisted to this point.
-                            // Note that we have to subtract from the durability frontier because it functions as the
-                            // least upper bound of whats been persisted, and we decline to compact up to the empty
-                            // frontier.
-                            source_state
-                                .durability
-                                .frontier()
-                                .first()
-                                .unwrap_or(&0)
-                                .saturating_sub(1)
-                        };
+                        let compaction_ts = *source_state
+                            .since
+                            .borrow()
+                            .frontier()
+                            .first()
+                            .expect("known to exist");
 
                         self.catalog
                             .compact_timestamp_bindings(source_id, compaction_ts)
@@ -1413,8 +1401,8 @@ impl Coordinator {
         frontier_changes
     }
 
-    /// Updates the upper frontier of a named view.
-    fn update_index_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
+    /// Updates the upper frontier of a maintained arrangement or sink.
+    fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
         if let Some(index_state) = self.indexes.get_mut(name) {
             let changes = Self::validate_update_iter(&mut index_state.upper, changes);
 
@@ -1449,40 +1437,9 @@ impl Coordinator {
             }
         } else if self.sources.get_mut(name).is_some() {
             panic!(
-                "expected an update for an index, instead got update for source {}",
+                "expected an update for an index or sink, instead got update for source {}",
                 name
             );
-        } else if self.sink_writes.get_mut(name).is_some() {
-            panic!(
-                "expected an update for an index, instead got update for sink {}",
-                name
-            );
-        }
-    }
-
-    /// Updates the upper frontier of a named source or sink.
-    fn update_storage_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
-        if self.indexes.get_mut(name).is_some() {
-            panic!(
-                "expected an update for a source or a sink, instead got update for index {}",
-                name
-            );
-        } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes = Self::validate_update_iter(&mut source_state.upper, changes);
-
-            if !changes.is_empty() {
-                if let Some(compaction_window_ms) = source_state.compaction_window_ms {
-                    if !source_state.upper.frontier().is_empty() {
-                        self.since_handles.get_mut(name).unwrap().maybe_advance(
-                            source_state.upper.frontier().iter().map(|time| {
-                                compaction_window_ms
-                                    * (time.saturating_sub(compaction_window_ms)
-                                        / compaction_window_ms)
-                            }),
-                        );
-                    }
-                }
-            }
         } else if let Some(sink_state) = self.sink_writes.get_mut(name) {
             // Only one dataflow worker should give updates for sinks
             let changes = Self::validate_update_iter(&mut sink_state.frontier, changes);
