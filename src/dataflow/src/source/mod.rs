@@ -1259,6 +1259,8 @@ where
             timestamp_histories.downgrade(cap, &partition_cursors);
             bindings_cap.downgrade(cap.time());
             source_metrics.capability.set(*cap.time());
+            // Downgrade compaction frontier to track the current time.
+            timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
