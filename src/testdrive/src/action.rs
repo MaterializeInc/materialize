@@ -541,10 +541,6 @@ pub(crate) async fn build(
                         }
                         continue;
                     }
-                    "set-execution-count" => {
-                        // Skip, has already been handled
-                        continue;
-                    }
                     "sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment" => {
                         Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
                     }
