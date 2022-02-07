@@ -960,11 +960,13 @@ where
     let temp = timestamp_histories;
     let timestamp_histories = &temp;
 
-    // If we have persisted data, we initialize the starting timestamp to the latest upper seal
-    // timestamp, such that we can start emitting data right at the time where it will become
-    // sealed when we next downgrade the capability. We do this to ensure that necessary
-    // retractions are considered valid on a future restore attempt.
-    let (source_persist, restored_bindings, mut ts_bindings_retractions, starting_ts) =
+    // If we have persisted data, we need to know the latest upper seal timestamp, such that we
+    // can start emitting data right at the time where it will become sealed when we next downgrade
+    // the capability. We do this to ensure that necessary retractions are considered valid on a
+    // future restore attempt. We also need to do this to make sure that we don't emit updates that
+    // are not beyond the seal frontier, because that would cause errors when trying to persist
+    // them.
+    let (source_persist, restored_bindings, mut ts_bindings_retractions, persistence_seal_ts) =
         match persist_config {
             Some(persist_config) => {
                 let source_persist =
@@ -1188,11 +1190,15 @@ where
                     "did not emit retractions at the earliest possible time: source capability is already at {}", bindings_cap.time()
                 );
 
-                let delayed_binding_cap = bindings_cap.delayed(&starting_ts);
+                // We need to downgrade both capabilities to the latest persistence seal.
+                // Otherwise, there would be errors when persisting them, because they would not be
+                // beyond the seal frontier.
+                cap.downgrade(&persistence_seal_ts);
+                bindings_cap.downgrade(&persistence_seal_ts);
 
-                let mut session = bindings_output.session(&delayed_binding_cap);
+                let mut session = bindings_output.session(&bindings_cap);
 
-                let retraction_ts = starting_ts;
+                let retraction_ts = persistence_seal_ts;
                 let ts_bindings_retractions = ts_bindings_retractions
                     .into_iter()
                     .map(|(binding, diff)| (binding, retraction_ts, diff));
