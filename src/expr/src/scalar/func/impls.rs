@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod array;
 mod boolean;
 mod byte;
 mod char;
@@ -27,6 +28,7 @@ mod timestamp;
 mod uuid;
 mod varchar;
 
+pub use self::array::*;
 pub use self::char::*;
 pub use self::uuid::*;
 pub use boolean::*;
