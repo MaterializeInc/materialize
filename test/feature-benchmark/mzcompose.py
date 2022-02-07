@@ -37,10 +37,10 @@ from materialize.mzcompose.services import Kafka as KafkaService
 from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
     Materialized,
+    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
-    Postgres,
 )
 
 #
@@ -231,7 +231,9 @@ root_scenario: {args.root_scenario}"""
 
     print(f"scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}")
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry", "postgres"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
 
     report = Report()
     has_regressions = False
