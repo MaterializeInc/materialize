@@ -62,6 +62,44 @@ const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 /// User-settable configuration parameters.
 #[derive(Debug)]
 pub struct Config {
+    // === Testdrive options. ===
+    /// Variables to make available to the testdrive script.
+    ///
+    /// The value of each entry will be made available to the script in a
+    /// variable named `arg.KEY`.
+    pub arg_vars: BTreeMap<String, String>,
+    /// A random number to distinguish each run of a testdrive script.
+    pub seed: Option<u32>,
+    /// Whether to reset Materialize state before executing each script and
+    /// to clean up AWS state after each script.
+    pub reset: bool,
+    /// Force the use of the specified temporary directory to use.
+    ///
+    /// If unspecified, testdrive creates a temporary directory with a random
+    /// name.
+    pub temp_dir: Option<String>,
+    /// The default timeout for cancellable operations.
+    pub default_timeout: Duration,
+    /// The initial backoff interval for retry operations.
+    ///
+    /// Set to 0 to retry immediately on failure.
+    pub initial_backoff: Duration,
+    /// Backoff factor to use for retry operations.
+    ///
+    /// Set to 1 to retry at a steady pace.
+    pub backoff_factor: f64,
+
+    // === Materialize options. ===
+    /// The connection parameters for the materialized instance that testdrive
+    /// will connect to.
+    pub materialized_pgconfig: tokio_postgres::Config,
+    /// An optional path to the catalog file for the materialized instance.
+    ///
+    /// If present, testdrive will periodically verify that the on-disk catalog
+    /// matches its expectations.
+    pub materialized_catalog_path: Option<PathBuf>,
+
+    // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
     pub kafka_addr: String,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
@@ -71,55 +109,42 @@ pub struct Config {
     pub schema_registry_url: Url,
     /// An optional path to a TLS certificate that testdrive will present when
     /// performing client authentication.
+    ///
+    /// The keystore must be in the PKCS#12 format.
     pub cert_path: Option<String>,
     /// An optional password for the TLS certificate.
-    pub cert_pass: Option<String>,
-    /// An optional username for the basic auth for the Confluent Schema Registry
+    pub cert_password: Option<String>,
+    /// An optional username for basic authentication with the Confluent Schema
+    /// Registry.
     pub ccsr_username: Option<String>,
-    /// An optional password for the basic auth for the Confluent Schema Registry
+    /// An optional password for basic authentication with the Confluent Schema
+    /// Registry.
     pub ccsr_password: Option<String>,
-    /// The account for testdrive to use when connecting to AWS.
-    pub aws_account: String,
-    /// The configuration for testdrive to use when connecting to AWS.
+
+    // === AWS options. ===
+    /// The configuration to use when connecting to AWS.
     pub aws_config: AwsConfig,
-    /// The connection parameters for the materialized instance that testdrive
-    /// will connect to.
-    pub materialized_pgconfig: tokio_postgres::Config,
-    /// An optional path to the catalog file for the materialized instance.
-    ///
-    /// If present, testdrive will periodically verify that the on-disk catalog
-    /// matches its expectations.
-    pub materialized_catalog_path: Option<PathBuf>,
-    /// Whether to reset Materialized and AWS's state at the start of each script.
-    pub reset: bool,
-    /// The default timeout to use for any operation that is retried.
-    pub default_timeout: Duration,
-
-    /// Starting backoff value to use when retrying
-    pub initial_backoff: Duration,
-
-    /// Backoff factor to use when retrying
-    pub backoff_factor: f64,
-
-    /// Arguments for the testdrive script to expose as variables.
-    ///
-    /// Entries will be provided to testrive scripts as the variable named `arg.KEY`
-    pub arg_vars: BTreeMap<String, String>,
-
-    /// A random number to distinguish each run of a testdrive script.
-    pub seed: Option<u32>,
-    /// Force the use of a specific temporary directory
-    pub temp_dir: Option<String>,
+    /// The ID of the AWS account that `aws_config` configures.
+    pub aws_account: String,
 }
 
 pub struct State {
+    // === Testdrive state. ===
+    arg_vars: BTreeMap<String, String>,
     seed: u32,
     temp_path: PathBuf,
-    _tempfile_handle: Option<tempfile::TempDir>,
+    _tempfile: Option<tempfile::TempDir>,
+    default_timeout: Duration,
+    initial_backoff: Duration,
+    backoff_factor: f64,
+
+    // === Materialize state. ===
     materialized_catalog_path: Option<PathBuf>,
     materialized_addr: String,
     materialized_user: String,
     pgclient: tokio_postgres::Client,
+
+    // === Confluent state. ===
     schema_registry_url: Url,
     ccsr_client: mz_ccsr::Client,
     kafka_addr: String,
@@ -128,22 +153,24 @@ pub struct State {
     kafka_config: ClientConfig,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
     kafka_topics: HashMap<String, usize>,
+
+    // === AWS state. ===
     aws_account: String,
     aws_config: AwsConfig,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
-    arg_vars: BTreeMap<String, String>,
     s3_client: S3Client,
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
-    default_timeout: Duration,
-    initial_backoff: Duration,
-    backoff_factor: f64,
+
+    // === Database driver state. ===
     mysql_clients: HashMap<String, mysql_async::Conn>,
     postgres_clients: HashMap<String, tokio_postgres::Client>,
     sql_server_clients:
         HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
+
+    // === Things that shouldn't be state. ===
     pub(crate) skip_rest: bool,
 }
 
@@ -647,7 +674,7 @@ pub async fn create_state(
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
     let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
 
-    let (_tempfile_handle, temp_path) = match &config.temp_dir {
+    let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
             fs::create_dir_all(temp_dir).context("creating temporary directory")?;
             (None, PathBuf::from(&temp_dir))
@@ -707,7 +734,7 @@ pub async fn create_state(
 
         if let Some(cert_path) = &config.cert_path {
             let cert = fs::read(cert_path).context("reading cert")?;
-            let pass = config.cert_pass.as_deref().unwrap_or("").to_owned();
+            let pass = config.cert_password.as_deref().unwrap_or("").to_owned();
             let ident = mz_ccsr::tls::Identity::from_pkcs12_der(cert, pass)
                 .context("reading keystore file as pkcs12")?;
             ccsr_config = ccsr_config.identity(ident);
@@ -732,8 +759,8 @@ pub async fn create_state(
         if let Some(cert_path) = &config.cert_path {
             kafka_config.set("security.protocol", "ssl");
             kafka_config.set("ssl.keystore.location", cert_path);
-            if let Some(cert_pass) = &config.cert_pass {
-                kafka_config.set("ssl.keystore.password", cert_pass);
+            if let Some(cert_password) = &config.cert_password {
+                kafka_config.set("ssl.keystore.password", cert_password);
             }
         }
         for (key, value) in &config.kafka_opts {
@@ -768,14 +795,22 @@ pub async fn create_state(
     let sqs_client = mz_aws_util::sqs::client(&config.aws_config);
 
     let state = State {
+        // === Testdrive state. ===
+        arg_vars: config.arg_vars.clone(),
         seed,
         temp_path,
-        _tempfile_handle,
-        arg_vars: config.arg_vars.clone(),
+        _tempfile,
+        default_timeout: config.default_timeout,
+        initial_backoff: config.initial_backoff,
+        backoff_factor: config.backoff_factor,
+
+        // === Materialize state. ===
         materialized_catalog_path,
         materialized_addr,
         materialized_user,
         pgclient,
+
+        // === Confluent state. ===
         schema_registry_url,
         ccsr_client,
         kafka_addr,
@@ -784,6 +819,8 @@ pub async fn create_state(
         kafka_config,
         kafka_producer,
         kafka_topics,
+
+        // === AWS state. ===
         aws_account: config.aws_account.clone(),
         aws_config: config.aws_config.clone(),
         kinesis_client,
@@ -792,12 +829,13 @@ pub async fn create_state(
         s3_buckets_created: BTreeSet::new(),
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
-        default_timeout: config.default_timeout,
-        initial_backoff: config.initial_backoff,
-        backoff_factor: config.backoff_factor,
+
+        // === Database driver state. ===
         mysql_clients: HashMap::new(),
         postgres_clients: HashMap::new(),
         sql_server_clients: HashMap::new(),
+
+        // === Things that shouldn't be state. ===
         skip_rest: false,
     };
     Ok((state, pgconn_task))
