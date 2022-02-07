@@ -7,21 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
+use tokio_postgres::types::Type;
 
-use crate::action::{Action, Context, State};
+use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
 pub struct SkipIfAction {
     query: String,
-    context: Context,
 }
 
-pub fn build_publish(cmd: BuiltinCommand, context: Context) -> Result<SkipIfAction, anyhow::Error> {
+pub fn build_skip_if(cmd: BuiltinCommand) -> Result<SkipIfAction, anyhow::Error> {
     Ok(SkipIfAction {
-        query: cmd.input.join(" "),
-        context,
+        query: cmd.input.join("\n"),
     })
 }
 
@@ -38,25 +37,22 @@ impl Action for SkipIfAction {
             .await
             .context("failed to prepare skip-if query")?;
 
-        let actual: Vec<_> = state
-            .pgclient
-            .query(&stmt, &[])
-            .await
-            .context("executing query failed")?
-            .into_iter()
-            .map(|row| crate::action::sql::decode_row(row, self.context.clone()))
-            .collect::<Result<_, _>>()?;
+        if stmt.columns().len() != 1 || *stmt.columns()[0].type_() != Type::BOOL {
+            bail!("skip-if query must return exactly one boolean column");
+        }
 
-        if vec![vec!["true".to_string()]] == actual {
+        let should_skip: bool = state
+            .pgclient
+            .query_one(&stmt, &[])
+            .await
+            .context("executing skip-if query failed")?
+            .get(0);
+
+        if should_skip {
             println!("skip-if query returned true; skipping rest of file");
             state.skip_rest = true;
-        } else if vec![vec!["false".to_string()]] == actual {
-            println!("skip-if query returned false; continuing");
         } else {
-            bail!(
-                "skip-if query did not return `true` or `false`: {:?}",
-                actual
-            );
+            println!("skip-if query returned false; continuing");
         }
 
         Ok(())

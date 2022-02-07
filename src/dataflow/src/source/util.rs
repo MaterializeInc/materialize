@@ -13,7 +13,7 @@ use std::rc::Rc;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
@@ -66,6 +66,7 @@ where
     L: FnMut(
             &mut Capability<Timestamp>,
             &mut Capability<Timestamp>,
+            &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
             &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
         ) -> SourceStatus
@@ -84,8 +85,13 @@ where
         // `capabilities` should be a two-element vector.
         let secondary_capability = capabilities.pop().unwrap();
         let data_capability = capabilities.pop().unwrap();
+        let durability_capability = CapabilitySet::from_elem(data_capability.clone());
 
-        let capabilities_rc = Rc::new(RefCell::new(Some((data_capability, secondary_capability))));
+        let capabilities_rc = Rc::new(RefCell::new(Some((
+            data_capability,
+            secondary_capability,
+            durability_capability,
+        ))));
 
         // Export a token to the outside word that will keep this source alive.
         token = Some(SourceToken {
@@ -97,12 +103,13 @@ where
 
         move |_frontier| {
             let mut caps = capabilities_rc.borrow_mut();
-            if let Some((data_cap, secondary_cap)) = &mut *caps {
+            if let Some((data_cap, secondary_cap, durability_capability)) = &mut *caps {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
                 if let SourceStatus::Done = tick(
                     data_cap,
                     secondary_cap,
+                    durability_capability,
                     &mut data_output.activate(),
                     &mut secondary_output.activate(),
                 ) {

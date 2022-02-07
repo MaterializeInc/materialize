@@ -23,7 +23,7 @@ use repr::{RelationDesc, ScalarType};
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
     ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, Raw, SelectStatement,
-    Statement, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
+    Statement, TailRelation, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
@@ -31,7 +31,7 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
-    PeekWhen, Plan, ReadThenWritePlan, TailPlan,
+    PeekWhen, Plan, ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -283,9 +283,18 @@ with_options! {
 
 pub fn describe_tail(
     scx: &StatementContext,
-    TailStatement { name, options, .. }: TailStatement<Raw>,
+    TailStatement {
+        relation, options, ..
+    }: TailStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let sql_object = scx.resolve_item(name)?;
+    let relation_desc = match relation {
+        TailRelation::Name(name) => scx.resolve_item(name)?.desc()?.clone(),
+        TailRelation::Query(query) => {
+            let query::PlannedQuery { desc, .. } =
+                query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+            desc
+        }
+    };
     let options = TailOptions::try_from(options)?;
     let progress = options.progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_column(
@@ -296,12 +305,11 @@ pub fn describe_tail(
         desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
     desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
-    for (name, ty) in sql_object.desc()?.iter() {
-        let mut ty = ty.clone();
+    for (name, mut ty) in relation_desc.into_iter() {
         if progress {
             ty.nullable = true;
         }
-        desc = desc.with_column(name.clone(), ty);
+        desc = desc.with_column(name, ty);
     }
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -309,36 +317,59 @@ pub fn describe_tail(
 pub fn plan_tail(
     scx: &StatementContext,
     TailStatement {
-        name,
+        relation,
         options,
         as_of,
     }: TailStatement<Raw>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
-    let entry = scx.resolve_item(name)?;
+    let from = match relation {
+        TailRelation::Name(name) => {
+            let entry = scx.resolve_item(name)?;
+            match entry.item_type() {
+                CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
+                    TailFrom::Id(entry.id())
+                }
+                CatalogItemType::Func
+                | CatalogItemType::Index
+                | CatalogItemType::Sink
+                | CatalogItemType::Type => bail!(
+                    "'{}' cannot be tailed because it is a {}",
+                    entry.name(),
+                    entry.item_type(),
+                ),
+            }
+        }
+        TailRelation::Query(query) => {
+            // There's no way to apply finishing operations to a `TAIL`
+            // directly. So we wrap the query in another query so that the
+            // user-supplied query is planned as a subquery whose `ORDER
+            // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
+            let query = Query::query(query);
+            let query = plan_query(
+                scx,
+                query,
+                &Params::empty(),
+                QueryLifetime::OneShot(scx.pcx()?),
+            )?;
+            assert!(query.finishing.is_trivial(query.desc.arity()));
+            TailFrom::Query {
+                expr: query.expr,
+                desc: query.desc,
+                depends_on: query.depends_on,
+            }
+        }
+    };
+
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let options = TailOptions::try_from(options)?;
-
-    match entry.item_type() {
-        CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
-            Ok(Plan::Tail(TailPlan {
-                id: entry.id(),
-                ts,
-                with_snapshot: options.snapshot.unwrap_or(true),
-                copy_to,
-                emit_progress: options.progress.unwrap_or(false),
-                object_columns: entry.desc()?.arity(),
-            }))
-        }
-        CatalogItemType::Func
-        | CatalogItemType::Index
-        | CatalogItemType::Sink
-        | CatalogItemType::Type => bail!(
-            "'{}' cannot be tailed because it is a {}",
-            entry.name(),
-            entry.item_type(),
-        ),
-    }
+    Ok(Plan::Tail(TailPlan {
+        from,
+        ts,
+        with_snapshot: options.snapshot.unwrap_or(true),
+        copy_to,
+        emit_progress: options.progress.unwrap_or(false),
+    }))
 }
 
 pub fn describe_table(

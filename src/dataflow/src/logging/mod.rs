@@ -17,7 +17,7 @@ pub mod timely;
 use std::time::Duration;
 
 use ::timely::communication::Push;
-use ::timely::dataflow::channels::{Bundle, Message};
+use ::timely::dataflow::channels::Bundle;
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
 use ::timely::dataflow::operators::generic::OutputHandle;
 use ::timely::dataflow::operators::Capability;
@@ -166,7 +166,7 @@ where
             output_handle,
             port,
             cap: None,
-            buffer: Vec::with_capacity(Message::<T, (D, T, R)>::default_length()),
+            buffer: Vec::with_capacity(::timely::container::buffer::default_capacity::<(D, T, R)>()),
         }
     }
 

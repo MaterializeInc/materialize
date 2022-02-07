@@ -6,12 +6,17 @@ edition = "2021"
 publish = false
 rust-version = "1.58.0"
 
+[[bench]]
+name = "like_pattern"
+harness = false
+
 [dependencies]
 aho-corasick = "0.7.18"
 anyhow = "1.0.52"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
-dec = "0.4.7"
+dec = "0.4.8"
+derivative = "2.2.0"
 encoding = "0.2.0"
 enum-iterator = "0.7.0"
 fallible-iterator = "0.2.0"
@@ -32,6 +37,7 @@ regex-syntax = "0.6.25"
 repr = { path = "../repr" }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
+serde_regex = "1.1.0"
 sha-1 = "0.10.0"
 sha2 = "0.10.1"
 uncased = "0.9.6"
@@ -39,6 +45,7 @@ uuid = "0.8.2"
 paste = "1"
 
 [dev-dependencies]
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 datadriven = "0.6.0"
 expr_test_util = { path = "../expr-test-util"}
 ore = { path = "../ore" }

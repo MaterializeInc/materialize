@@ -14,9 +14,13 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
+use ore::stack::maybe_grow;
+
+use dataflow_types::sinks::SinkDesc;
+use dataflow_types::IndexDesc;
+
 use super::*;
 use crate::error::RematerializedSourceType;
-use ore::stack::maybe_grow;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a> {
@@ -185,7 +189,7 @@ impl<'a> DataflowBuilder<'a> {
         &mut self,
         name: String,
         id: GlobalId,
-        index_description: dataflow_types::IndexDesc,
+        index_description: IndexDesc,
     ) -> Result<DataflowDesc, CoordError> {
         let on_entry = self.catalog.get_by_id(&index_description.on_id);
         let on_type = on_entry.desc().unwrap().typ().clone();
@@ -208,16 +212,28 @@ impl<'a> DataflowBuilder<'a> {
         &mut self,
         name: String,
         id: GlobalId,
-        sink_description: dataflow_types::sinks::SinkDesc,
+        sink_description: SinkDesc,
     ) -> Result<DataflowDesc, CoordError> {
         let mut dataflow = DataflowDesc::new(name);
+        self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
+        Ok(dataflow)
+    }
+
+    /// Like `build_sink_dataflow`, but builds the sink dataflow into the
+    /// existing dataflow description instead of creating one from scratch.
+    pub fn build_sink_dataflow_into(
+        &mut self,
+        dataflow: &mut DataflowDesc,
+        id: GlobalId,
+        sink_description: SinkDesc,
+    ) -> Result<(), CoordError> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
-        self.import_into_dataflow(&sink_description.from, &mut dataflow)?;
+        self.import_into_dataflow(&sink_description.from, dataflow)?;
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        transform::optimize_dataflow(dataflow, self.catalog.enabled_indexes())?;
 
-        Ok(dataflow)
+        Ok(())
     }
 }

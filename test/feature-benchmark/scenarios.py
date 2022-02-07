@@ -881,3 +881,50 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 """
             + str(self.n())
         )
+
+
+class PgCdc(Scenario):
+    pass
+
+
+class PostgresInitialLoad(PgCdc):
+    """Measure the time it takes to read 1M existing records from Postgres
+    when creating a materialized source"""
+
+    def shared(self) -> Action:
+        return TdAction(
+            f"""
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+
+DROP PUBLICATION IF EXISTS mz_source;
+CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
+INSERT INTO pk_table SELECT x, x*2 FROM generate_series(1, {self.n()}) as x;
+ALTER TABLE pk_table REPLICA IDENTITY FULL;
+"""
+        )
+
+    def before(self) -> Action:
+        return TdAction(
+            f"""
+> DROP SOURCE IF EXISTS mz_source_pgcdc;
+            """
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> CREATE MATERIALIZED SOURCE mz_source_pgcdc
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  PUBLICATION 'mz_source';
+  /* A */
+
+> SELECT count(*) FROM mz_source_pgcdc
+  /* B */
+{self.n()}
+            """
+        )

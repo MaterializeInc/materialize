@@ -242,7 +242,7 @@ ORDER BY
 | |   delta %1 %4.(#0) %0.(#0) %2.(#0) %3.(#0)
 | |   delta %2 %3.(#0) %0.(#3) %1.(#1) %4.(#0)
 | |   delta %3 %2.(#2) %0.(#3) %1.(#1) %4.(#0)
-| Filter (#5 = 15), (#26 = "EUROPE"), "^.*BRASS$" ~(varchartostr(#4))
+| Filter (#5 = 15), (#26 = "EUROPE"), "%BRASS" ~~(varchartostr(#4))
 | Project (#0, #2, #10, #11, #13..#15, #19, #22)
 
 %6 =
@@ -726,7 +726,7 @@ ORDER BY
 | |   delta %3 %0.(#0) %1.(#0) %5.(#0) %2.(#1, #2) %4.(#0)
 | |   delta %4 %2.(#0) %3.(#0, #1) %0.(#0) %1.(#0) %5.(#0)
 | |   delta %5 %1.(#3) %2.(#2) %3.(#0, #1) %0.(#0) %4.(#0)
-| Filter "^.*green.*$" ~(varchartostr(#1))
+| Filter "%green%" ~~(varchartostr(#1))
 | Project (#20..#22, #35, #41, #47)
 | Reduce group=(#5, extract_year_d(#4))
 | | agg sum(((#1 * (1 - #2)) - (#3 * #0)))
@@ -970,7 +970,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#1)
 | |   delta %1 %0.(#0)
-| Filter !("^.*special.*requests.*$" ~(varchartostr(#16)))
+| Filter !("%special%requests%" ~~(varchartostr(#16)))
 | Project (#0..#8)
 
 %3 =
@@ -1037,7 +1037,7 @@ WHERE
 | Filter (#10 >= 1995-09-01), (datetots(#10) < 1995-10-01 00:00:00)
 | Project (#5, #6, #20)
 | Reduce group=()
-| | agg sum(if "^PROMO.*$" ~(varchartostr(#2)) then {(#0 * (1 - #1))} else {0})
+| | agg sum(if "PROMO%" ~~(varchartostr(#2)) then {(#0 * (1 - #1))} else {0})
 | | agg sum((#0 * (1 - #1)))
 
 %3 =
@@ -1176,7 +1176,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| Filter (#8 != "Brand#45"), !("^MEDIUM POLISHED.*$" ~(varchartostr(#9))), ((((((((#10 = 14) || (#10 = 49)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9))
+| Filter (#8 != "Brand#45"), !("MEDIUM POLISHED%" ~~(varchartostr(#9))), ((((((((#10 = 14) || (#10 = 49)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9))
 | Project (#1, #8..#10)
 
 %3 = Let l1 =
@@ -1201,7 +1201,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %5 %6.(#0)
 | |   delta %6 %5.(#0)
-| Filter "^.*Customer.*Complaints.*$" ~(varchartostr(#7))
+| Filter "%Customer%Complaints%" ~~(varchartostr(#7))
 | Project (#0)
 | Negate
 
@@ -1531,7 +1531,7 @@ ORDER BY
 %6 = Let l1 =
 | Join %3 %4 %5 (= #1 #6)
 | | implementation = Differential %4.(#0) %5.(#0) %3.()
-| Filter "^forest.*$" ~(varchartostr(#7))
+| Filter "forest%" ~~(varchartostr(#7))
 | Project (#0..#3)
 
 %7 =

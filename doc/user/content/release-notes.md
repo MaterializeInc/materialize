@@ -107,6 +107,20 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
+  is called with a [`date`] value but a time-related field (e.g., `SECOND`).
+
+  Previous versions of Materialize would incorrectly return `0` in these cases.
+  The new behavior matches PostgreSQL.
+
+  [`date_part`](/sql/functions/date-part/) still returns a `0` in these cases,
+  which matches the PostgreSQL behavior {{% gh 9853 %}}.
+
+- **Breaking change.** Change the return type of [`extract`](/sql/functions/extract/)
+  from [`float`](/sql/types/float/) to [`numeric`](/sql/types/numeric/).
+
+  This new behavior matches PostgreSQL v14 {{% gh 9853 %}}.
+
 - Improve millisecond parsing for [`interval`](/sql/types/interval) using the
   PostgreSQL verbose format {{% gh 6420 %}}.
 
@@ -123,25 +137,17 @@ changes that have not yet been documented.
 - Support the [`radians`](/sql/functions/#trigonometric-func) and
   [`degrees`](/sql/functions/#trigonometric-func) functions.
 
-- **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
-  is called with a [`date`] value but a time-related field (e.g., `SECOND`).
-
-  Previous versions of Materialize would incorrectly return `0` in these cases.
-  The new behavior matches PostgreSQL.
-
-  [`date_part`](/sql/functions/date-part/) still returns a `0` in these cases,
-  which matches the PostgreSQL behavior.
-
-- **Breaking change.** Change the return type of [`extract`](/sql/functions/extract/)
-  from [`float`](/sql/types/float/) to [`numeric`](/sql/types/numeric/).
-
-  This new behavior matches PostgreSQL v14.
-
 - Follow PostgreSQL's type conversion rules for the relations involved in a
   `UNION`, `EXCEPT`, or `INTERSECT` operation {{% gh 3331 %}}.
 
 - Add the `md5`, `sha224`, `sha256`, `sha384`, and `sha512` [cryptography
   functions](/sql/functions/#cryptography-func).
+
+- Support casting [`array`] types to [`list`] types.
+
+- Improve the performance of SQL `LIKE` expressions.
+
+- Add `SELECT` statement support to [`TAIL`](/sql/tail).
 
 {{< comment >}}
 Only add new release notes above this line.

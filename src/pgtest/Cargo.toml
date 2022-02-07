@@ -9,7 +9,7 @@ rust-version = "1.58.0"
 [dependencies]
 anyhow = "1.0.52"
 bytes = "1.1.0"
-clap = { version = "3.0.13", features = ["derive"] }
+clap = { version = "3.0.14", features = ["derive"] }
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 ore = { path = "../ore" }

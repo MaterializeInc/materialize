@@ -1047,35 +1047,35 @@ TAIL foo.bar
 ----
 TAIL foo.bar
 =>
-Tail(TailStatement { name: UnresolvedObjectName([Ident("foo"), Ident("bar")]), options: [], as_of: None })
+Tail(TailStatement { relation: Name(UnresolvedObjectName([Ident("foo"), Ident("bar")])), options: [], as_of: None })
 
 parse-statement
 TAIL foo.bar AS OF 123
 ----
 TAIL foo.bar AS OF 123
 =>
-Tail(TailStatement { name: UnresolvedObjectName([Ident("foo"), Ident("bar")]), options: [], as_of: Some(Value(Number("123"))) })
+Tail(TailStatement { relation: Name(UnresolvedObjectName([Ident("foo"), Ident("bar")])), options: [], as_of: Some(Value(Number("123"))) })
 
 parse-statement
 TAIL foo.bar AS OF now()
 ----
 TAIL foo.bar AS OF now()
 =>
-Tail(TailStatement { name: UnresolvedObjectName([Ident("foo"), Ident("bar")]), options: [], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
+Tail(TailStatement { relation: Name(UnresolvedObjectName([Ident("foo"), Ident("bar")])), options: [], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT) AS OF now()
 ----
 TAIL foo.bar WITH (snapshot) AS OF now()
 =>
-Tail(TailStatement { name: UnresolvedObjectName([Ident("foo"), Ident("bar")]), options: [WithOption { key: Ident("snapshot"), value: None }], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
+Tail(TailStatement { relation: Name(UnresolvedObjectName([Ident("foo"), Ident("bar")])), options: [WithOption { key: Ident("snapshot"), value: None }], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
 TAIL foo.bar WITH (snapshot = false, timestamps) AS OF now()
 =>
-Tail(TailStatement { name: UnresolvedObjectName([Ident("foo"), Ident("bar")]), options: [WithOption { key: Ident("snapshot"), value: Some(Value(Boolean(false))) }, WithOption { key: Ident("timestamps"), value: None }], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
+Tail(TailStatement { relation: Name(UnresolvedObjectName([Ident("foo"), Ident("bar")])), options: [WithOption { key: Ident("snapshot"), value: Some(Value(Boolean(false))) }, WithOption { key: Ident("timestamps"), value: None }], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT false)
@@ -1083,6 +1083,13 @@ TAIL foo.bar WITH (SNAPSHOT false)
 error: Expected equals sign, found FALSE
 TAIL foo.bar WITH (SNAPSHOT false)
                             ^
+
+parse-statement
+TAIL (SELECT * FROM a)
+----
+TAIL (SELECT * FROM a)
+=>
+Tail(TailStatement { relation: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None })
 
 parse-statement
 CREATE TABLE public.customer (

@@ -17,11 +17,11 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.2"
 dataflow-types = { path = "../dataflow-types" }
 derivative = "2.2.0"
-dec = "0.4.7"
+dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 fail = { version = "0.5.0", features = ["failpoints"] }
-futures = "0.3.19"
+futures = "0.3.21"
 interchange = { path = "../interchange" }
 itertools = "0.10.3"
 kafka-util = { path = "../kafka-util" }
@@ -43,7 +43,7 @@ repr = { path = "../repr" }
 rusqlite = { version = "0.26.1", features = ["bundled", "unlock_notify"] }
 serde = "1.0.136"
 serde_json = "1.0.78"
-semver = { version = "1.0.4"}
+semver = { version = "1.0.5"}
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"

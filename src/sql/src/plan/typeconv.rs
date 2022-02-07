@@ -398,6 +398,7 @@ lazy_static! {
                 let ty = from_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastArrayToString { ty }))
             }),
+            (Array, List) => Explicit: CastArrayToListOneDim(func::CastArrayToListOneDim),
 
             // LIST
             (List, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {

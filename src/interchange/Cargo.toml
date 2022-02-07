@@ -18,9 +18,9 @@ base64 = "0.13.0"
 byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-dec = "0.4.7"
+dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.19"
+futures = "0.3.21"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"

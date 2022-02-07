@@ -40,13 +40,12 @@ use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
-use crate::message::CopyFormatParams;
 use crate::message::{
-    self, decode_copy_format, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS,
-    VERSION_3,
+    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
 use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
+use pgcopy::CopyFormatParams;
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -1360,8 +1359,8 @@ where
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
             pgrepr::Format,
         ) = match format {
-            CopyFormat::Text => (message::encode_copy_row_text, pgrepr::Format::Text),
-            CopyFormat::Binary => (message::encode_copy_row_binary, pgrepr::Format::Binary),
+            CopyFormat::Text => (pgcopy::encode_copy_row_text, pgrepr::Format::Text),
+            CopyFormat::Binary => (pgcopy::encode_copy_row_binary, pgrepr::Format::Binary),
             _ => {
                 return self
                     .error(ErrorResponse::error(
@@ -1487,7 +1486,7 @@ where
         let params: CopyFormatParams = match params.try_into() {
             Ok(params) => params,
             Err(e) => {
-                return self.error(e).await;
+                return self.error(e.into()).await;
             }
         };
 
@@ -1540,7 +1539,7 @@ where
             .collect::<Vec<pgrepr::Type>>();
 
         if let State::Ready = next_state {
-            let rows = match decode_copy_format(&data, &column_types, params) {
+            let rows = match pgcopy::decode_copy_format(&data, &column_types, params) {
                 Ok(rows) => rows,
                 Err(e) => {
                     return self

@@ -347,11 +347,11 @@ impl MirScalarExpr {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                let flags = if *case_insensitive { "i" } else { "" };
-                                *e = match like_pattern::build_regex(&pattern, flags) {
-                                    Ok(regex) => expr1
+                                *e = match like_pattern::compile(&pattern, *case_insensitive, '\\')
+                                {
+                                    Ok(matcher) => expr1
                                         .take()
-                                        .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
+                                        .call_unary(UnaryFunc::IsLikePatternMatch(matcher)),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
                                         e.typ(&relation_type).scalar_type,

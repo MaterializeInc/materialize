@@ -8,7 +8,7 @@ rust-version = "1.58.0"
 
 [dependencies]
 anyhow = "1.0.52"
-futures = "0.3.19"
+futures = "0.3.21"
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
 native-tls = "0.2.8"
 openssl = { version = "0.10.38", features = ["vendored"] }

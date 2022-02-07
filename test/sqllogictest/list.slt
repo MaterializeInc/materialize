@@ -2532,3 +2532,37 @@ query T
 SELECT list_remove(LIST[[1,2],[1],[1,2,3],LIST[1]], LIST[1,2,3])::text
 ----
 {{1,2},{1},{1}}
+
+# array to list
+query T
+SELECT '{1,2,3}'::int[]::int list::text;
+----
+{1,2,3}
+
+query T
+SELECT pg_typeof('{1,2,3}'::int[]::int list);
+----
+integer list
+
+query T
+SELECT '{}'::int[]::int list::text;
+----
+{}
+
+query T
+SELECT pg_typeof('{1,2,3}'::int[]::int list);
+----
+integer list
+
+query T
+SELECT NULL::int[]::int list::text;
+----
+NULL
+
+query T
+SELECT pg_typeof(NULL::int[]::int list);
+----
+integer list
+
+query error invalid input syntax for type array: parsing multi-dimensional arrays is not supported
+SELECT '{{1},{2},{3}}'::int[]::int list::text;
