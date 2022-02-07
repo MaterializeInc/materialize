@@ -500,9 +500,7 @@ pub(crate) async fn build(
                     "schema-registry-wait-schema" => Box::new(
                         schema_registry::build_wait(builtin, context.clone()).map_err(wrap_err)?,
                     ),
-                    "skip-if" => Box::new(
-                        skip_if::build_publish(builtin, context.clone()).map_err(wrap_err)?,
-                    ),
+                    "skip-if" => Box::new(skip_if::build_skip_if(builtin).map_err(wrap_err)?),
                     "sql-server-connect" => {
                         Box::new(sql_server::build_connect(builtin).map_err(wrap_err)?)
                     }
