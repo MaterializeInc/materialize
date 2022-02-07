@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
@@ -17,7 +16,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ::http::Uri;
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
@@ -51,13 +50,12 @@ mod protobuf;
 mod psql;
 mod s3;
 mod schema_registry;
+mod set;
 mod skip_if;
 mod sleep;
 mod sql;
 mod sql_server;
 mod verify_timestamp_compaction;
-
-const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -135,8 +133,11 @@ pub struct State {
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
+    timeout: Duration,
     initial_backoff: Duration,
     backoff_factor: f64,
+    regex: Option<Regex>,
+    regex_replacement: String,
 
     // === Materialize state. ===
     materialized_catalog_path: Option<PathBuf>,
@@ -172,15 +173,6 @@ pub struct State {
 
     // === Things that shouldn't be state. ===
     pub(crate) skip_rest: bool,
-}
-
-#[derive(Clone)]
-pub struct Context {
-    timeout: Duration,
-    initial_backoff: Duration,
-    backoff_factor: f64,
-    regex: Option<Regex>,
-    regex_replacement: String,
 }
 
 impl State {
@@ -380,14 +372,6 @@ pub(crate) async fn build(
     let mut out = Vec::new();
     let mut vars = HashMap::new();
 
-    let mut context = Context {
-        timeout: state.default_timeout,
-        initial_backoff: state.initial_backoff,
-        backoff_factor: state.backoff_factor,
-        regex: None,
-        regex_replacement: DEFAULT_REGEX_REPLACEMENT.to_string(),
-    };
-
     vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
     vars.insert(
         "testdrive.kafka-addr-resolved".into(),
@@ -479,9 +463,9 @@ pub(crate) async fn build(
                     "avro-ocf-append" => {
                         Box::new(avro_ocf::build_append(builtin).map_err(wrap_err)?)
                     }
-                    "avro-ocf-verify" => Box::new(
-                        avro_ocf::build_verify(builtin, context.clone()).map_err(wrap_err)?,
-                    ),
+                    "avro-ocf-verify" => {
+                        Box::new(avro_ocf::build_verify(builtin).map_err(wrap_err)?)
+                    }
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
                     "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
                     "http-request" => Box::new(http::build_request(builtin).map_err(wrap_err)?),
@@ -492,9 +476,7 @@ pub(crate) async fn build(
                         Box::new(kafka::build_create_topic(builtin).map_err(wrap_err)?)
                     }
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
-                    "kafka-verify" => {
-                        Box::new(kafka::build_verify(builtin, context.clone()).map_err(wrap_err)?)
-                    }
+                    "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "kafka-verify-schema" => {
                         Box::new(kafka::build_verify_schema(builtin).map_err(wrap_err)?)
                     }
@@ -524,9 +506,9 @@ pub(crate) async fn build(
                     "schema-registry-publish" => {
                         Box::new(schema_registry::build_publish(builtin).map_err(wrap_err)?)
                     }
-                    "schema-registry-wait-schema" => Box::new(
-                        schema_registry::build_wait(builtin, context.clone()).map_err(wrap_err)?,
-                    ),
+                    "schema-registry-wait-schema" => {
+                        Box::new(schema_registry::build_wait(builtin).map_err(wrap_err)?)
+                    }
                     "skip-if" => Box::new(skip_if::build_skip_if(builtin).map_err(wrap_err)?),
                     "sql-server-connect" => {
                         Box::new(sql_server::build_connect(builtin).map_err(wrap_err)?)
@@ -547,26 +529,9 @@ pub(crate) async fn build(
                     "s3-add-notifications" => {
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
-                    "set-regex" => {
-                        context.regex = Some(builtin.args.parse("match").map_err(wrap_err)?);
-                        context.regex_replacement = match builtin.args.opt_string("replacement") {
-                            None => DEFAULT_REGEX_REPLACEMENT.into(),
-                            Some(replacement) => replacement,
-                        };
-                        continue;
-                    }
+                    "set-regex" => Box::new(set::build_regex(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
-                        let duration = builtin.args.string("duration").map_err(wrap_err)?;
-                        if duration.to_lowercase() == "default" {
-                            context.timeout = state.default_timeout;
-                        } else {
-                            // do not allow the timeout to be set below the default
-                            context.timeout = cmp::max(
-                                mz_repr::util::parse_duration(&duration).map_err(wrap_err)?,
-                                state.default_timeout,
-                            );
-                        }
-                        continue;
+                        Box::new(set::build_sql_timeout(builtin).map_err(wrap_err)?)
                     }
                     "sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment" => {
                         Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
@@ -604,7 +569,7 @@ pub(crate) async fn build(
                         }
                     }
                 }
-                Box::new(sql::build_sql(sql, context.clone()).map_err(wrap_err)?)
+                Box::new(sql::build_sql(sql).map_err(wrap_err)?)
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
@@ -614,7 +579,7 @@ pub(crate) async fn build(
                 } else {
                     subst(&sql.expected_error)?
                 };
-                Box::new(sql::build_fail_sql(sql, context.clone()).map_err(wrap_err)?)
+                Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?)
             }
         };
         out.push(PosAction {
@@ -801,8 +766,11 @@ pub async fn create_state(
         temp_path,
         _tempfile,
         default_timeout: config.default_timeout,
+        timeout: config.default_timeout,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
+        regex: None,
+        regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
 
         // === Materialize state. ===
         materialized_catalog_path,

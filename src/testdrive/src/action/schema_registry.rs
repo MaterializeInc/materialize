@@ -9,13 +9,13 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, Context, State};
+use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
 pub struct PublishAction {
@@ -76,16 +76,12 @@ impl Action for PublishAction {
 
 pub struct WaitSchemaAction {
     schema: String,
-    context: Context,
 }
 
-pub fn build_wait(
-    mut cmd: BuiltinCommand,
-    context: Context,
-) -> Result<WaitSchemaAction, anyhow::Error> {
+pub fn build_wait(mut cmd: BuiltinCommand) -> Result<WaitSchemaAction, anyhow::Error> {
     let schema = cmd.args.string("schema")?;
     cmd.args.done()?;
-    Ok(WaitSchemaAction { schema, context })
+    Ok(WaitSchemaAction { schema })
 }
 
 #[async_trait]
@@ -98,7 +94,7 @@ impl Action for WaitSchemaAction {
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)
-            .max_duration(self.context.timeout)
+            .max_duration(state.timeout)
             .retry_async(|_| async {
                 state
                     .ccsr_client

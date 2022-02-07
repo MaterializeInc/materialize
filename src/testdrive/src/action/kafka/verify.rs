@@ -11,7 +11,7 @@ use std::cmp;
 use std::str;
 use std::time::Duration;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -19,7 +19,7 @@ use rdkafka::message::Message;
 use tokio::pin;
 use tokio_stream::StreamExt;
 
-use crate::action::{Action, Context, State};
+use crate::action::{Action, State};
 use crate::format::{avro, json};
 use crate::parser::BuiltinCommand;
 
@@ -38,14 +38,10 @@ pub struct VerifyAction {
     consistency: Option<SinkConsistencyFormat>,
     sort_messages: bool,
     expected_messages: Vec<String>,
-    context: Context,
     partial_search: Option<usize>,
 }
 
-pub fn build_verify(
-    mut cmd: BuiltinCommand,
-    context: Context,
-) -> Result<VerifyAction, anyhow::Error> {
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => SinkFormat::Avro,
         "json" => SinkFormat::Json {
@@ -75,7 +71,6 @@ pub fn build_verify(
         consistency,
         sort_messages,
         expected_messages,
-        context,
         partial_search,
     })
 }
@@ -234,8 +229,8 @@ impl Action for VerifyAction {
                     value_schema,
                     &self.expected_messages,
                     &actual_messages,
-                    &self.context.regex,
-                    &self.context.regex_replacement,
+                    &state.regex,
+                    &state.regex_replacement,
                     self.partial_search.is_some(),
                 )
             }
@@ -270,8 +265,8 @@ impl Action for VerifyAction {
                     *key,
                     &self.expected_messages,
                     &actual_messages,
-                    &self.context.regex,
-                    &self.context.regex_replacement,
+                    &state.regex,
+                    &state.regex_replacement,
                 )
             }
         }

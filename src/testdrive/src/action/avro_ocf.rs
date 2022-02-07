@@ -13,12 +13,12 @@ use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, Context, State, SyncAction};
+use crate::action::{Action, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
 
@@ -119,13 +119,9 @@ where
 pub struct VerifyAction {
     sink: String,
     expected: Vec<String>,
-    context: Context,
 }
 
-pub fn build_verify(
-    mut cmd: BuiltinCommand,
-    context: Context,
-) -> Result<VerifyAction, anyhow::Error> {
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
     let sink = cmd.args.string("sink")?;
     let expected = cmd.input;
     cmd.args.done()?;
@@ -133,11 +129,7 @@ pub fn build_verify(
         // The goal isn't security, but preventing mistakes.
         bail!("separators in file sink names are forbidden");
     }
-    Ok(VerifyAction {
-        sink,
-        expected,
-        context,
-    })
+    Ok(VerifyAction { sink, expected })
 }
 
 #[async_trait]
@@ -184,8 +176,8 @@ impl Action for VerifyAction {
                 &schema,
                 &self.expected,
                 &actual,
-                &self.context.regex,
-                &self.context.regex_replacement,
+                &state.regex,
+                &state.regex_replacement,
             )
         })
     }

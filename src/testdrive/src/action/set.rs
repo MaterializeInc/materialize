@@ -24,7 +24,7 @@ pub struct RegexAction {
     replacement: String,
 }
 
-pub fn build_regex(cmd: BuiltinCommand) -> Result<RegexAction, anyhow::Error> {
+pub fn build_regex(mut cmd: BuiltinCommand) -> Result<RegexAction, anyhow::Error> {
     let regex = cmd.args.parse("match")?;
     let replacement = cmd
         .args
@@ -51,12 +51,12 @@ pub struct SqlTimeoutAction {
     duration: Option<Duration>,
 }
 
-pub fn build_sql_timeout(cmd: BuiltinCommand) -> Result<SqlTimeoutAction, anyhow::Error> {
+pub fn build_sql_timeout(mut cmd: BuiltinCommand) -> Result<SqlTimeoutAction, anyhow::Error> {
     let duration = cmd.args.string("duration")?;
     let duration = if duration.to_lowercase() == "default" {
         None
     } else {
-        Some(repr::util::parse_duration(&duration).context("parsing duration")?)
+        Some(mz_repr::util::parse_duration(&duration).context("parsing duration")?)
     };
     cmd.args.done()?;
     Ok(SqlTimeoutAction { duration })
