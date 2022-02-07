@@ -3252,19 +3252,22 @@ fn plan_subscript_scalar(
 
     Ok(match &ty {
         ScalarType::Array(..) => {
-            if indexes.len() > 1 {
-                CoercibleScalarExpr::LiteralNull
-            } else {
-                expr.call_binary(
-                    plan_expr(ecx, &indexes[0])?.cast_to(
-                        ecx,
-                        CastContext::Explicit,
-                        &ScalarType::Int64,
-                    )?,
-                    BinaryFunc::ArrayIndex,
-                )
-                .into()
+            let mut exprs = Vec::with_capacity(indexes.len() + 1);
+            exprs.push(expr);
+
+            for i in indexes {
+                exprs.push(plan_expr(ecx, i)?.cast_to(
+                    ecx,
+                    CastContext::Explicit,
+                    &ScalarType::Int64,
+                )?);
             }
+
+            HirScalarExpr::CallVariadic {
+                func: VariadicFunc::ArrayIndex,
+                exprs,
+            }
+            .into()
         }
         ScalarType::List { .. } => {
             let depth = indexes.len();

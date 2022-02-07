@@ -142,9 +142,7 @@ changes that have not yet been documented.
 
 - Support sequences of subscript operations on [`array`] values when
   indexing/accessing individual elements (as opposed to taking slices/ranges of
-  values). However, because Materialize does not currently support
-  multi-dimensional arrays, subscripting more than once always returns _NULL_
-  {{% gh 9815 %}}.
+  values) {{% gh 9815 %}}.
 
 - Let users perform layered/multi-dimensional slices on [`list`] values.
 

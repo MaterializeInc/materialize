@@ -2247,7 +2247,6 @@ pub enum BinaryFunc {
     EncodedBytesCharLength,
     ListLengthMax { max_dim: usize },
     ArrayContains,
-    ArrayIndex,
     ArrayLength,
     ArrayLower,
     ArrayRemove,
@@ -2498,7 +2497,6 @@ impl BinaryFunc {
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
             BinaryFunc::ArrayLength => Ok(eager!(array_length)),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
-            BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
             BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
             BinaryFunc::ArrayRemove => eager!(array_remove, temp_storage),
             BinaryFunc::ArrayUpper => Ok(eager!(array_upper)),
@@ -2644,12 +2642,6 @@ impl BinaryFunc {
                 input1_type.scalar_type.unwrap_map_value_type().clone(),
             ))
             .nullable(true),
-
-            ArrayIndex => input1_type
-                .scalar_type
-                .unwrap_array_element_type()
-                .clone()
-                .nullable(true),
 
             ListLengthMax { .. } | ArrayLength | ArrayLower | ArrayUpper => {
                 ScalarType::Int64.nullable(true)
@@ -2869,7 +2861,6 @@ impl BinaryFunc {
             | TextConcat
             | IsRegexpMatch { .. }
             | ArrayContains
-            | ArrayIndex
             | ArrayLength
             | ArrayLower
             | ArrayUpper
@@ -3070,7 +3061,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
-            BinaryFunc::ArrayIndex => f.write_str("array_index"),
             BinaryFunc::ArrayLength => f.write_str("array_length"),
             BinaryFunc::ArrayLower => f.write_str("array_lower"),
             BinaryFunc::ArrayRemove => f.write_str("array_remove"),
@@ -5099,6 +5089,42 @@ where
     }
 }
 
+fn array_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    let array = datums[0].unwrap_array();
+
+    let dims = array.dims();
+
+    if dims.len() != datums.len() - 1 {
+        // You missed the datums "layer"
+        return Datum::Null;
+    }
+
+    let mut final_idx = 0;
+
+    for (
+        ArrayDimension {
+            lower_bound,
+            length,
+        },
+        idx,
+    ) in dims.into_iter().zip_eq(datums[1..].iter())
+    {
+        let idx = idx.unwrap_int64();
+        if idx < lower_bound as i64 {
+            // Datums don't exist in this layer at this index
+            return Datum::Null;
+        }
+
+        final_idx = final_idx * length + (idx as usize - 1);
+    }
+
+    array
+        .elements()
+        .iter()
+        .nth(final_idx)
+        .unwrap_or(Datum::Null)
+}
+
 fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let mut buf = datums[0];
 
@@ -5366,18 +5392,6 @@ fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         None => Datum::Null,
         Some(dim) => Datum::Int64(dim.length as i64),
     }
-}
-
-fn array_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Datum::Null;
-    }
-    a.unwrap_array()
-        .elements()
-        .iter()
-        .nth(i as usize - 1)
-        .unwrap_or(Datum::Null)
 }
 
 fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -5710,6 +5724,7 @@ pub enum VariadicFunc {
     ArrayToString {
         elem_type: ScalarType,
     },
+    ArrayIndex,
     ListCreate {
         // We need to know the element type to type empty lists.
         elem_type: ScalarType,
@@ -5765,6 +5780,8 @@ impl VariadicFunc {
             VariadicFunc::ArrayToString { elem_type } => {
                 eager!(array_to_string, elem_type, temp_storage)
             }
+            VariadicFunc::ArrayIndex => Ok(eager!(array_index)),
+
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
             }
@@ -5819,6 +5836,11 @@ impl VariadicFunc {
                 }
             }
             ArrayToString { .. } => ScalarType::String.nullable(true),
+            ArrayIndex => input_types[0]
+                .scalar_type
+                .unwrap_array_element_type()
+                .clone()
+                .nullable(true),
             ListCreate { elem_type } => {
                 // commented out to work around
                 // https://github.com/MaterializeInc/materialize/issues/8963
@@ -5888,6 +5910,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
             VariadicFunc::ArrayToString { .. } => f.write_str("array_to_string"),
+            VariadicFunc::ArrayIndex => f.write_str("list_index"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListIndex => f.write_str("list_index"),
