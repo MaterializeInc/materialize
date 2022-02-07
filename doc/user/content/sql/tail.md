@@ -31,6 +31,7 @@ Clients can use `TAIL` to:
 Field | Use
 ------|-----
 _object&lowbar;name_ | The name of the source, table, or view that you want to tail.
+_select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to tail.
 _timestamp&lowbar;expression_ | The logical time at which the `TAIL` begins as a [`bigint`] representing milliseconds since the Unix epoch. See [`AS OF`](#as-of) below.
 
 ### `WITH` options

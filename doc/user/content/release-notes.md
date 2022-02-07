@@ -144,6 +144,8 @@ changes that have not yet been documented.
 
 - Improve the performance of SQL `LIKE` expressions.
 
+- Add `SELECT` statement support to [`TAIL`](/sql/tail).
+
 {{< comment >}}
 Only add new release notes above this line.
 
