@@ -26,7 +26,7 @@ from materialize.scratch import (
     whoami,
 )
 
-MAX_AGE = datetime.timedelta(days=1.5)
+MAX_AGE_DAYS = 1.5
 
 
 def multi_json(s: str) -> List[Dict[Any, Any]]:
@@ -81,7 +81,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
             "Hint: `dev-box` is a good starter!"
         ),
     )
-    parser.add_argument("--max-age-days", type=float, default=MAX_AGE)
+    parser.add_argument("--max-age-days", type=float, default=MAX_AGE_DAYS)
 
 
 def run(args: argparse.Namespace) -> None:
