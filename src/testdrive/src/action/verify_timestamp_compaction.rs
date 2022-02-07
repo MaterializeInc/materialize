@@ -21,7 +21,7 @@ use mz_ore::retry::Retry;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::PartialName;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct VerifyTimestampCompactionAction {
@@ -51,7 +51,7 @@ impl Action for VerifyTimestampCompactionAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         if let Some(path) = &state.materialized_catalog_path {
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));
             Retry::default()
@@ -105,13 +105,14 @@ impl Action for VerifyTimestampCompactionAction {
                             );
                         }
                     }
-                }).await
+                }).await?;
+            Ok(ControlFlow::Continue)
         } else {
             println!(
                 "Skipping timestamp binding compaction verification for {:?}.",
                 self.source
             );
-            Ok(())
+            Ok(ControlFlow::Continue)
         }
     }
 }

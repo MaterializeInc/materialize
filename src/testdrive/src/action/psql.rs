@@ -13,7 +13,7 @@ use tokio::process::Command;
 
 use mz_ore::option::OptionExt;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::text;
 
@@ -36,7 +36,7 @@ impl Action for ExecuteAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let output = Command::new("psql")
             .args(&[
                 "--pset",
@@ -63,6 +63,6 @@ impl Action for ExecuteAction {
             text::print_diff(&self.expected_output, &*stdout);
             bail!("psql returned unexpected output (diff above)");
         }
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

@@ -20,6 +20,7 @@ use itertools::Itertools;
 
 use mz_ore::display::DisplayExt;
 
+use self::action::ControlFlow;
 use self::error::{ErrorLocation, PosError};
 use self::parser::LineReader;
 
@@ -93,9 +94,9 @@ async fn run_line_reader(
 
     for a in &actions {
         let redo = a.action.redo(&mut state);
-        redo.await.map_err(|e| PosError::new(e, a.pos))?;
-        if state.skip_rest {
-            break;
+        match redo.await.map_err(|e| PosError::new(e, a.pos))? {
+            ControlFlow::Continue => (),
+            ControlFlow::Break => break,
         }
     }
 

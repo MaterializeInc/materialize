@@ -14,7 +14,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use regex::Regex;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
@@ -40,10 +40,10 @@ impl Action for RegexAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         state.regex = Some(self.regex.clone());
         state.regex_replacement = self.replacement.clone();
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -68,11 +68,11 @@ impl Action for SqlTimeoutAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         state.timeout = cmp::max(
             self.duration.unwrap_or(state.default_timeout),
             state.default_timeout,
         );
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

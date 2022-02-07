@@ -12,7 +12,7 @@ use async_trait::async_trait;
 
 use mz_ore::str::StrExt;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct ExecuteAction {
@@ -35,7 +35,7 @@ impl Action for ExecuteAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let client = state
             .sql_server_clients
             .get_mut(&self.name)
@@ -49,6 +49,6 @@ impl Action for ExecuteAction {
                 .context("executing SQL Server query")?;
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

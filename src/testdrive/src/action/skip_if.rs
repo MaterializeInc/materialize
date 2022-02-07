@@ -11,7 +11,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio_postgres::types::Type;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct SkipIfAction {
@@ -30,7 +30,7 @@ impl Action for SkipIfAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stmt = state
             .pgclient
             .prepare(&self.query)
@@ -50,11 +50,10 @@ impl Action for SkipIfAction {
 
         if should_skip {
             println!("skip-if query returned true; skipping rest of file");
-            state.skip_rest = true;
+            Ok(ControlFlow::Break)
         } else {
             println!("skip-if query returned false; continuing");
+            Ok(ControlFlow::Continue)
         }
-
-        Ok(())
     }
 }

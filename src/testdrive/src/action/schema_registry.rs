@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct PublishAction {
@@ -51,7 +51,7 @@ impl Action for PublishAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let mut references = vec![];
         for reference in &self.references {
             let subject = state
@@ -70,7 +70,7 @@ impl Action for PublishAction {
             .publish_schema(&self.subject, &self.schema, self.schema_type, &references)
             .await
             .context("publishing schema")?;
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -90,7 +90,7 @@ impl Action for WaitSchemaAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)
@@ -103,6 +103,7 @@ impl Action for WaitSchemaAction {
                     .context("fetching schema")
                     .and(Ok(()))
             })
-            .await
+            .await?;
+        Ok(ControlFlow::Continue)
     }
 }

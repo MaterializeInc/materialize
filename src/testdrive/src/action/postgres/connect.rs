@@ -10,7 +10,7 @@
 use anyhow::bail;
 use async_trait::async_trait;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::postgres::postgres_client;
 
@@ -36,9 +36,9 @@ impl Action for ConnectAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let client = postgres_client(&self.url).await?;
         state.postgres_clients.insert(self.name.clone(), client);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

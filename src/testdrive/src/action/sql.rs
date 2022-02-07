@@ -32,7 +32,7 @@ use mz_sql_parser::ast::{
     CreateViewStatement, Raw, Statement, ViewDefinition,
 };
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
 
 pub struct SqlAction {
@@ -102,7 +102,7 @@ impl Action for SqlAction {
         }
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::*;
 
         let query = &self.cmd.query;
@@ -196,7 +196,7 @@ impl Action for SqlAction {
             }
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -361,7 +361,7 @@ impl Action for FailSqlAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::{Commit, Rollback};
 
         let query = &self.query;
@@ -406,7 +406,8 @@ impl Action for FailSqlAction {
                     Err(e)
                 }
             }
-        }).await
+        }).await?;
+        Ok(ControlFlow::Continue)
     }
 }
 

@@ -170,9 +170,6 @@ pub struct State {
     postgres_clients: HashMap<String, tokio_postgres::Client>,
     sql_server_clients:
         HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
-
-    // === Things that shouldn't be state. ===
-    pub(crate) skip_rest: bool,
 }
 
 impl State {
@@ -340,15 +337,20 @@ pub struct PosAction {
     pub action: Box<dyn Action + Send + Sync>,
 }
 
+pub enum ControlFlow {
+    Continue,
+    Break,
+}
+
 #[async_trait]
 pub trait Action {
     async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error>;
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error>;
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
 }
 
 pub trait SyncAction: Send + Sync {
     fn undo(&self, state: &mut State) -> Result<(), anyhow::Error>;
-    fn redo(&self, state: &mut State) -> Result<(), anyhow::Error>;
+    fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
 }
 
 #[async_trait]
@@ -360,7 +362,7 @@ where
         tokio::task::block_in_place(|| self.undo(state))
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         tokio::task::block_in_place(|| self.redo(state))
     }
 }
@@ -802,9 +804,6 @@ pub async fn create_state(
         mysql_clients: HashMap::new(),
         postgres_clients: HashMap::new(),
         sql_server_clients: HashMap::new(),
-
-        // === Things that shouldn't be state. ===
-        skip_rest: false,
     };
     Ok((state, pgconn_task))
 }

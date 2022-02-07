@@ -24,7 +24,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
 
 use crate::action::file::{build_compression, Compression};
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct CreateBucketAction {
@@ -43,7 +43,7 @@ impl Action for CreateBucketAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Creating S3 bucket {}", bucket);
 
@@ -72,7 +72,7 @@ impl Action for CreateBucketAction {
                 ..
             }) => {
                 state.s3_buckets_created.insert(bucket);
-                Ok(())
+                Ok(ControlFlow::Continue)
             }
             Err(e) => Err(e).context("creating bucket"),
         }
@@ -106,7 +106,7 @@ impl Action for PutObjectAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Put S3 object {}/{}", bucket, self.key);
 
@@ -136,7 +136,9 @@ impl Action for PutObjectAction {
             .send()
             .await
             .map(|_| ())
-            .context("putting to S3")
+            .context("putting to S3")?;
+
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -160,7 +162,7 @@ impl Action for DeleteObjectAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Deleting S3 objects {}: {}", bucket, self.keys.join(", "));
         state
@@ -181,7 +183,7 @@ impl Action for DeleteObjectAction {
             .send()
             .await
             .context("deleting S3 objects")?;
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -222,7 +224,7 @@ impl Action for AddBucketNotifications {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         let queue = format!("{}-{}", self.queue_prefix, state.seed);
 
@@ -395,7 +397,7 @@ impl Action for AddBucketNotifications {
                 attempts + 1,
                 start.elapsed()
             );
-            Ok(())
+            Ok(ControlFlow::Continue)
         } else {
             println!(
                 " Error, never got messages (after {} attempts and {:?})",

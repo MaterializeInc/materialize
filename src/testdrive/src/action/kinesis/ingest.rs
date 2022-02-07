@@ -15,7 +15,7 @@ use rand::{thread_rng, Rng};
 
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct IngestAction {
@@ -43,7 +43,7 @@ impl Action for IngestAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stream_name = format!("{}-{}", self.stream_prefix, state.seed);
 
         for row in &self.rows {
@@ -82,6 +82,6 @@ impl Action for IngestAction {
                 .await
                 .context("putting Kinesis record")?;
         }
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

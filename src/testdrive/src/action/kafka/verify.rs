@@ -19,7 +19,7 @@ use rdkafka::message::Message;
 use tokio::pin;
 use tokio_stream::StreamExt;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::format::{avro, json};
 use crate::parser::BuiltinCommand;
 
@@ -121,7 +121,7 @@ impl Action for VerifyAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic: String = match self.consistency {
             None => get_topic(&self.sink, "topic", state).await?,
             Some(SinkConsistencyFormat::Debezium) => {
@@ -232,7 +232,7 @@ impl Action for VerifyAction {
                     &state.regex,
                     &state.regex_replacement,
                     self.partial_search.is_some(),
-                )
+                )?
             }
             SinkFormat::Json { key } => {
                 assert!(
@@ -267,9 +267,10 @@ impl Action for VerifyAction {
                     &actual_messages,
                     &state.regex,
                     &state.regex_replacement,
-                )
+                )?
             }
         }
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -311,7 +312,7 @@ impl Action for VerifySchemaAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic = get_topic(&self.sink, "topic", state).await?;
 
         match &self.format {
@@ -369,6 +370,6 @@ impl Action for VerifySchemaAction {
             }
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

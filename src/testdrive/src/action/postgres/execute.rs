@@ -10,7 +10,7 @@
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::postgres::postgres_client;
 
@@ -34,7 +34,7 @@ impl Action for ExecuteAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let client;
         let client = if self.connection.starts_with("postgres://") {
             client = postgres_client(&self.connection).await?;
@@ -54,6 +54,6 @@ impl Action for ExecuteAction {
                 .context("executing postgres query")?;
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

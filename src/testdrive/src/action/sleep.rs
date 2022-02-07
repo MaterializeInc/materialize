@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::Context;
 use rand::Rng;
 
-use crate::action::{State, SyncAction};
+use crate::action::{ControlFlow, State, SyncAction};
 use crate::parser::BuiltinCommand;
 
 pub struct SleepAction {
@@ -44,7 +44,7 @@ impl SyncAction for SleepAction {
         Ok(())
     }
 
-    fn redo(&self, _: &mut State) -> Result<(), anyhow::Error> {
+    fn redo(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let sleep = if self.random {
             let mut rng = rand::thread_rng();
             rng.gen_range(Duration::from_secs(0)..self.duration)
@@ -53,6 +53,6 @@ impl SyncAction for SleepAction {
         };
         println!("Sleeping for {:?}", sleep);
         thread::sleep(sleep);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
