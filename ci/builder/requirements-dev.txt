@@ -27,7 +27,7 @@ twine==3.8.0
 types-prettytable==2.1.2
 types-psutil==5.8.20
 types-PyMYSQL==1.0.13
-types-PyYAML==6.0.3
+types-PyYAML==6.0.4
 types-requests==2.27.7
 types-setuptools==57.4.8
 types-toml==0.10.3
