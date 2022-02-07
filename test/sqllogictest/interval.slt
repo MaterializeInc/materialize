@@ -784,7 +784,8 @@ SELECT (interval '-1' day + interval '1' day) = (interval '1' day + interval '-1
 ----
 true
 
-# Millisecond parsing
+## Millisecond parsing
+
 query T
 SELECT INTERVAL '1 milliseconds'
 ----
@@ -807,3 +808,6 @@ SELECT INTERVAL '1.0 second 42 milliseconds'
 
 statement error Cannot set MILLISECONDS field if SECOND field has a fraction component
 SELECT INTERVAL '1.5 second 42 milliseconds'
+
+statement error Expected one of YEAR or MONTH or DAY or HOUR or MINUTE or SECOND or YEARS or MONTHS or DAYS or HOURS or MINUTES or SECONDS, found identifier "milliseconds"
+SELECT INTERVAL '6 days 1.5 second 42 milliseconds' HOURS to MILLISECONDS
