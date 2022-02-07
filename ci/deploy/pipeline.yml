@@ -75,3 +75,13 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
+
+  - label: ":nightmare: Full Nightly"
+    trigger: nightlies
+    async: true
+    branches: "v*.*rc*"
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
