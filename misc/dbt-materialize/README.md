@@ -51,6 +51,8 @@ Macro | Purpose
 ------|----------
 `mz_generate_name(identifier)` | Generates a fully-qualified name (including the database and schema) given an object name.
 
+We provide a `materialize-dbt-utils` package with Materialize-specific implementations of dispatched macros from `dbt-utils`. To use this package in your dbt project, check the latest installation instructions in [dbt Hub](https://hub.getdbt.com/materializeinc/materialize_dbt_utils/latest/).
+
 ### Seeds
 
 [`dbt seed`](https://docs.getdbt.com/reference/commands/seed/) will create a
