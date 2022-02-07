@@ -1419,6 +1419,7 @@ dependencies = [
  "pdqselect",
  "persist",
  "persist-types",
+ "pgcopy",
  "postgres-protocol",
  "postgres-util",
  "prometheus",
@@ -3918,6 +3919,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgcopy"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "csv",
+ "pgrepr",
+ "repr",
+ "sql",
+]
+
+[[package]]
 name = "pgrepr"
 version = "0.0.0"
 dependencies = [
@@ -3966,6 +3978,7 @@ dependencies = [
  "openssl",
  "ordered-float",
  "ore",
+ "pgcopy",
  "pgrepr",
  "postgres",
  "repr",

@@ -42,6 +42,7 @@ ore = { path = "../ore", features = ["task"]  }
 pdqselect = "0.1.1"
 persist = { path = "../persist" }
 persist-types = { path = "../persist-types" }
+pgcopy = { path = "../pgcopy" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }

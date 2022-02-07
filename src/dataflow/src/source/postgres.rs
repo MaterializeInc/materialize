@@ -13,9 +13,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use futures::TryStreamExt;
+use futures::{pin_mut, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
@@ -197,26 +196,38 @@ impl PostgresSourceReader {
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
         for info in publication_tables {
-            // TODO(petrosagg): use a COPY statement here for more efficient network transfer
-            let data = client
-                .simple_query(&format!(
-                    "SELECT * FROM {:?}.{:?}",
-                    info.namespace, info.name
-                ))
+            let relation_id: Datum = (info.rel_id as i32).into();
+            let reader = client
+                .copy_out_simple(
+                    format!(
+                        "COPY {:?}.{:?} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
+                        info.namespace, info.name
+                    )
+                    .as_str(),
+                )
                 .await?;
-            for msg in data {
-                if let SimpleQueryMessage::Row(row) = msg {
-                    let mut mz_row = Row::default();
-                    let rel_id: Datum = (info.rel_id as i32).into();
-                    mz_row.push(rel_id);
-                    mz_row.push_list((0..row.len()).map(|n| {
-                        let a: Datum = row.get(n).into();
-                        a
-                    }));
-                    try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
-                }
+
+            pin_mut!(reader);
+            let mut mz_row = Row::default();
+            while let Some(Ok(b)) = reader.next().await {
+                mz_row.push(relation_id);
+                // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
+                // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
+                let parser = pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+
+                let mut raw_values = parser.iter_raw(info.schema.len() as i32);
+                try_fatal!(mz_row.push_list_with(|rp| -> Result<(), anyhow::Error> {
+                    while let Some(raw_value) = raw_values.next() {
+                        let value = std::str::from_utf8(raw_value?)?;
+                        rp.push(Datum::String(value));
+                    }
+                    Ok(())
+                }));
+                let row = mz_row.finish_and_reuse();
+                try_recoverable!(snapshot_tx.insert(row.clone()).await);
+                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&row))).await);
             }
+
             self.metrics.tables.inc();
         }
         self.metrics.lsn.set(self.lsn.into());

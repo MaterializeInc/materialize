@@ -23,6 +23,7 @@ tracing = "0.1.29"
 openssl = { version = "0.10.38", features = ["vendored"] }
 ordered-float = { version = "2.10.0", features = ["serde"] }
 ore = { path = "../ore" }
+pgcopy = { path = "../pgcopy" }
 pgrepr = { path = "../pgrepr" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 repr = { path = "../repr" }
