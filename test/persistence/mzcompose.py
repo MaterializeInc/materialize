@@ -55,6 +55,7 @@ def workflow_default(c: Composition) -> None:
 
     workflow_disable_user_indexes(c)
     workflow_compaction(c)
+    workflow_s3(c)
 
 
 def workflow_kafka_sources(c: Composition) -> None:
@@ -204,3 +205,21 @@ def workflow_compaction(c: Composition) -> None:
     c.rm("materialized", "testdrive-svc", destroy_volumes=True)
 
     c.rm_volumes("mzdata")
+
+
+# Run tests using the S3 implementation of Blob.
+def workflow_s3(c: Composition) -> None:
+    seed = round(time.time())
+    tests = {
+        "kafka-sources": workflow_kafka_sources,
+        "user-tables": workflow_user_tables,
+    }
+
+    for test_name, test_fn in tests.items():
+        materialized = Materialized(
+            options=f"{mz_options} --persist-storage-enabled --persist-storage=s3://mtlz-test-persist-1d-lifecycle-delete/mzcompose-persistence-s3-{test_name}-{seed}",
+        )
+
+        testdrive = Testdrive(no_reset=True, default_timeout="120s")
+        with c.override(materialized, testdrive):
+            test_fn(c)

@@ -127,6 +127,7 @@ steps:
     depends_on: build-x86_64
     artifact_paths: junit_mzcompose_*.xml
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: persistence
 
