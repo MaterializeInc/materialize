@@ -784,7 +784,7 @@ SELECT (interval '-1' day + interval '1' day) = (interval '1' day + interval '-1
 ----
 true
 
-## Millisecond parsing
+## Millisecond/Microsecond parsing
 
 query T
 SELECT INTERVAL '1 milliseconds'
@@ -806,8 +806,66 @@ SELECT INTERVAL '1.0 second 42 milliseconds'
 ----
 00:00:01.042
 
-statement error Cannot set MILLISECONDS field if SECOND field has a fraction component
+query T
+SELECT INTERVAL '5 microseconds'
+----
+00:00:00.000005
+
+query T
+SELECT INTERVAL '5000006 microseconds'
+----
+00:00:05.000006
+
+query T
+SELECT INTERVAL '27 second 24 microseconds'
+----
+00:00:27.000024
+
+query T
+SELECT INTERVAL '27.0 second 24 microseconds'
+----
+00:00:27.000024
+
+query T
+SELECT INTERVAL '27.0 second 46 milliseconds 24 microseconds'
+----
+00:00:27.046024
+
+statement error Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component
 SELECT INTERVAL '1.5 second 42 milliseconds'
+
+statement error Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component
+SELECT INTERVAL '1.5 second 43 microseconds'
+
+statement error Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component
+SELECT INTERVAL '1.5 second 42 milliseconds 43 microseconds'
 
 statement error Expected one of YEAR or MONTH or DAY or HOUR or MINUTE or SECOND or YEARS or MONTHS or DAYS or HOURS or MINUTES or SECONDS, found identifier "milliseconds"
 SELECT INTERVAL '6 days 1.5 second 42 milliseconds' HOURS to MILLISECONDS
+
+## Millennium/Century/Decade parsing
+
+query T
+SELECT INTERVAL '1 millennium'
+----
+1000 years
+
+query T
+SELECT INTERVAL '2 century'
+----
+200 years
+
+query T
+SELECT INTERVAL '3 decade'
+----
+30 years
+
+query T
+SELECT INTERVAL '4 year'
+----
+4 years
+
+query T
+SELECT INTERVAL '1 millenniums 2 centuries 3 decades 4 years'
+----
+1234 years

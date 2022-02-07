@@ -279,7 +279,11 @@ impl Interval {
                 self.months = 0;
                 self.duration %= f.next_largest().nanos_multiplier() as i128
             }
-            DateTimeField::Milliseconds => {
+            DateTimeField::Millennium
+            | DateTimeField::Century
+            | DateTimeField::Decade
+            | DateTimeField::Milliseconds
+            | DateTimeField::Microseconds => {
                 unreachable!(format!("Cannot truncate interval by {}", f))
             }
         }
@@ -355,7 +359,9 @@ impl Interval {
             Day | Hour | Minute => {
                 self.duration -= self.duration % f.nanos_multiplier() as i128;
             }
-            Milliseconds => unreachable!(format!("Cannot truncate interval by {}", f)),
+            Millennium | Century | Decade | Milliseconds | Microseconds => {
+                unreachable!(format!("Cannot truncate interval by {}", f))
+            }
         }
         Ok(())
     }
