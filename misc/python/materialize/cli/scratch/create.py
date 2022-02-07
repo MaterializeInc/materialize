@@ -26,7 +26,7 @@ from materialize.scratch import (
     whoami,
 )
 
-MAX_AGE = datetime.timedelta(weeks=1)
+MAX_AGE = datetime.timedelta(days=1.5)
 
 
 def multi_json(s: str) -> List[Dict[Any, Any]]:
@@ -81,6 +81,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
             "Hint: `dev-box` is a good starter!"
         ),
     )
+    parser.add_argument("--max-age-days", type=float, default=MAX_AGE)
 
 
 def run(args: argparse.Namespace) -> None:
@@ -110,6 +111,10 @@ def run(args: argparse.Namespace) -> None:
     if args.ssh and len(descs) != 1:
         raise RuntimeError("Cannot use `--ssh` with {} instances".format(len(descs)))
 
+    if args.max_age_days <= 0:
+        raise RuntimeError(f"max_age_days must be positive, got {args.max_age_days}")
+    max_age = datetime.timedelta(days=args.max_age_days)
+
     instances = launch_cluster(
         descs,
         subnet_id=args.subnet_id,
@@ -117,7 +122,7 @@ def run(args: argparse.Namespace) -> None:
         security_group_id=args.security_group_id,
         instance_profile=args.instance_profile,
         extra_tags=extra_tags,
-        delete_after=datetime.datetime.utcnow() + MAX_AGE,
+        delete_after=datetime.datetime.utcnow() + max_age,
         git_rev=args.git_rev,
         extra_env={},
     )
