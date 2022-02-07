@@ -121,6 +121,9 @@ changes that have not yet been documented.
 
   This new behavior matches PostgreSQL v14 {{% gh 9853 %}}.
 
+- Improve millisecond parsing for [`interval`](/sql/types/interval) using the
+  PostgreSQL verbose format {{% gh 6420 %}}.
+
 - Add the [`greatest`](/sql/functions/#generic) and [`least`](/sql/functions/#generic)
   functions.
 

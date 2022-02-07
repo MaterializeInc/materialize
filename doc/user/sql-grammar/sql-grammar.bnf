@@ -439,7 +439,7 @@ tail_stmt ::=
     ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
     ('AS OF' timestamp_expression)?
 time_unit ::=
-  'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND'
+  'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS'
 type_bool ::=
   ( 'TRUE' | 'FALSE' )
 type_date ::=

@@ -4182,6 +4182,7 @@ fn parser_datetimefield_to_adt(
         Hour => repr::adt::datetime::DateTimeField::Hour,
         Minute => repr::adt::datetime::DateTimeField::Minute,
         Second => repr::adt::datetime::DateTimeField::Second,
+        Milliseconds => repr::adt::datetime::DateTimeField::Milliseconds,
     }
 }
 
