@@ -142,6 +142,8 @@ changes that have not yet been documented.
 
 - Support casting [`array`] types to [`list`] types.
 
+- Improve the performance of SQL `LIKE` expressions.
+
 {{< comment >}}
 Only add new release notes above this line.
 
