@@ -20,7 +20,7 @@ enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 expr = { path = "../expr" }
-futures = "0.3.19"
+futures = "0.3.21"
 globset = { version = "0.4.8", features = ["serde1"] }
 interchange = { path = "../interchange" }
 persist-types = { path = "../persist-types" }

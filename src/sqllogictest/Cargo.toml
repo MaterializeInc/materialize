@@ -13,7 +13,7 @@ clap = { version = "3.0.14", features = ["derive"] }
 coord = { path = "../coord" }
 expr = { path = "../expr" }
 fallible-iterator = "0.2.0"
-futures = "0.3.19"
+futures = "0.3.21"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
 md-5 = "0.10.0"

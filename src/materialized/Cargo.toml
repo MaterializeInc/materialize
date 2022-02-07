@@ -46,7 +46,7 @@ dataflowd = { path = "../dataflowd" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
-futures = "0.3.19"
+futures = "0.3.21"
 hex = "0.4.3"
 hyper = { version = "0.14.16", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"

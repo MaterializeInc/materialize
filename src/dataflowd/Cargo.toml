@@ -19,4 +19,4 @@ tracing-subscriber = "0.3.7"
 tokio = { version = "1.16.1", features = ["macros", "rt-multi-thread"] }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.6.9", features = ["codec"] }
-futures = "0.3.19"
+futures = "0.3.21"
