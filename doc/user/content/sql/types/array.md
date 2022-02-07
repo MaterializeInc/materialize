@@ -132,15 +132,31 @@ Array element | Catalog name | OID
 
 ### Valid casts
 
-You can [cast](/sql/functions/cast) all array types to
-[`text`](/sql/types/text) by assignment.
-
+You can [cast](/sql/functions/cast) all array types to:
+- [`text`](../text) (by assignment)
+- [`list`](../list) (explicit)
 
 {{< version-added v0.7.4 >}}
 You can cast `text` to any array type. The input must conform to the [textual
 format](#textual-format) described above, with the additional restriction that
 you cannot yet use a cast to construct a multidimensional array.
 {{< /version-added >}}
+
+### Array to `list` casts
+
+You can cast any type of array to a list of the same element type, as long as
+the array has only 0 or 1 dimensions, i.e. you can cast `integer[]` to `integer
+list`, as long as the array is empty or does not contain any arrays itself. Note
+that Materialize does not provide support for multi-dimensional arrays, so the
+latter condition is already impossible, but this requirement is unlikely to
+change even if Materialize does eventually support multi-dimensional arrays.
+
+```sql
+SELECT pg_typeof('{1,2,3}`::integer[]::integer list);
+```
+```
+integer list
+```
 
 ## Examples
 

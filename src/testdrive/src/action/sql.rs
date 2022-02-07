@@ -480,7 +480,7 @@ pub fn print_query(query: &str) {
     println!("> {}", query);
 }
 
-pub(crate) fn decode_row(row: Row, context: Context) -> Result<Vec<String>, anyhow::Error> {
+pub fn decode_row(row: Row, context: Context) -> Result<Vec<String>, anyhow::Error> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),

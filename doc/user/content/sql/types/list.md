@@ -475,7 +475,8 @@ You can [cast](../../functions/cast) `list` to:
 
 You can [cast](../../functions/cast) the following types to `list`:
 
-- [`text`](../text)(explicitly). See [details](#text-to-list-casts).
+- [arrays](../array) (explicitly). See [details](../array#array-to-list-casts).
+- [`text`](../text) (explicitly). See [details](#text-to-list-casts).
 - Other `lists` as noted above.
 
 ### Known limitations

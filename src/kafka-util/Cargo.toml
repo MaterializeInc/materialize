@@ -10,9 +10,9 @@ rust-version = "1.58.0"
 anyhow = "1.0.52"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.0.13", features = ["derive"] }
+clap = { version = "3.0.14", features = ["derive"] }
 crossbeam = "0.8.1"
-futures = "0.3.19"
+futures = "0.3.21"
 mz-avro = { path = "../avro" }
 num_cpus = "1.13.1"
 ore = { path = "../ore", features = ["network"] }

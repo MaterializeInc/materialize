@@ -140,6 +140,8 @@ changes that have not yet been documented.
 - Add the `md5`, `sha224`, `sha256`, `sha384`, and `sha512` [cryptography
   functions](/sql/functions/#cryptography-func).
 
+- Support casting [`array`] types to [`list`] types.
+
 - Improve the performance of SQL `LIKE` expressions.
 
 {{< comment >}}

@@ -27,10 +27,10 @@ async-trait = { version = "0.1.52", optional = true }
 anyhow = { version = "1.0.52", optional = true }
 bytes = { version = "1.1.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
-clap = { version = "3.0.13", optional = true }
+clap = { version = "3.0.14", optional = true }
 ctor = { version = "0.1.21", optional = true }
 either = "1.6.1"
-futures = { version = "0.3.19", optional = true }
+futures = { version = "0.3.21", optional = true }
 lazy_static = "1.4.0"
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.
@@ -50,5 +50,5 @@ tokio-openssl = { version = "0.6.3", optional = true }
 tracing-subscriber = { version = "0.3.7", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
 
 [dev-dependencies]
-crossbeam-utils = "0.8.6"
+crossbeam-utils = "0.8.7"
 tokio = { version = "1.16.1", features = ["macros"] }

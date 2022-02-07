@@ -9,8 +9,8 @@ rust-version = "1.58.0"
 [dependencies]
 anyhow = "1.0.52"
 byteorder = "1.4.3"
-clap = { version = "3.0.13", features = ["derive"] }
-futures = "0.3.19"
+clap = { version = "3.0.14", features = ["derive"] }
+futures = "0.3.21"
 json = "0.12.4"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 ore = { path = "../../src/ore" }
