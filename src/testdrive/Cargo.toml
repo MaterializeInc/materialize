@@ -21,7 +21,7 @@ byteorder = "1.4.3"
 bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.0.13", features = ["derive"] }
+clap = { version = "3.0.14", features = ["derive"] }
 coord = { path = "../coord" }
 flate2 = "1.0.22"
 futures = "0.3.19"
