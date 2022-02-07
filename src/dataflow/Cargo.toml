@@ -27,7 +27,7 @@ dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.
 enum-iterator = "0.7.0"
 expr = { path = "../expr" }
 flate2 = "1.0.22"
-futures = "0.3.19"
+futures = "0.3.21"
 globset = "0.4.8"
 inotify = "0.10.0"
 interchange = { path = "../interchange" }

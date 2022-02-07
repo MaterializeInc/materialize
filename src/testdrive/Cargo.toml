@@ -24,7 +24,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.0.14", features = ["derive"] }
 coord = { path = "../coord" }
 flate2 = "1.0.22"
-futures = "0.3.19"
+futures = "0.3.21"
 globset = "0.4.8"
 http = "0.2.6"
 interchange = { path = "../interchange" }

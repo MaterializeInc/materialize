@@ -16,7 +16,7 @@ coord = { path = "../coord" }
 csv = "1.1.6"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-futures = "0.3.19"
+futures = "0.3.21"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 tracing = "0.1.29"
