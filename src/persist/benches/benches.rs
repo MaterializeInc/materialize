@@ -15,16 +15,21 @@ mod snapshot;
 mod writer;
 
 pub fn bench_persist(c: &mut Criterion) {
+    // Override the default of "info" here because the s3 library is chatty on
+    // info while initializing. It's good info to have in mz logs, but ends
+    // being as spammy in these benchmarks.
+    ore::test::init_logging_default("warn");
     let data = DataGenerator::default();
 
     end_to_end::bench_load(&data, &mut c.benchmark_group("end_to_end/load"));
     end_to_end::bench_replay(&data, &mut c.benchmark_group("end_to_end/replay"));
 
+    snapshot::bench_blob_get(&data, &mut c.benchmark_group("snapshot/blob_get"));
     snapshot::bench_mem(&data, &mut c.benchmark_group("snapshot/mem"));
     snapshot::bench_file(&data, &mut c.benchmark_group("snapshot/file"));
 
     writer::bench_log(&mut c.benchmark_group("writer/log"));
-    writer::bench_blob(&data, &mut c.benchmark_group("writer/blob"));
+    writer::bench_blob_set(&data, &mut c.benchmark_group("writer/blob_set"));
     writer::bench_encode_batch(&data, &mut c.benchmark_group("writer/encode_batch"));
     writer::bench_blob_cache_set_unsealed_batch(
         &data,

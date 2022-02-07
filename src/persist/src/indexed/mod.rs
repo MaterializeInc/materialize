@@ -1516,6 +1516,7 @@ mod tests {
             Arc::clone(&metrics),
             Arc::clone(&async_runtime),
             blob,
+            None,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime, Arc::clone(&metrics));
         let i = Indexed::new(log, blob, metrics)?;

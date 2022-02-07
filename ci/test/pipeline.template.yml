@@ -265,6 +265,13 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: s3-resumption
 
+  - id: kafka-resumption
+    label: Kafka resumption tests
+    depends_on: build-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-resumption
+
   - id: kafka-exactly-once
     label: Kafka exactly-once tests
     depends_on: build-x86_64

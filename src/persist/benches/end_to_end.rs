@@ -44,7 +44,7 @@ pub fn bench_load(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
 
     g.throughput(Throughput::Bytes(data.goodput_bytes()));
     g.bench_function(BenchmarkId::new("s3", data.goodput_pretty()), move |b| {
-        b.iter(|| bench_load_s3_one_iter(&data, &config))
+        b.iter(|| bench_load_s3_one_iter(&data, &config).expect("failed to run load iter"))
     });
 }
 

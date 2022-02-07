@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
+use expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
@@ -26,7 +27,6 @@ use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::plan::Permutation;
 use repr::{datum_list_size, datum_size, Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for timely logs.
@@ -44,7 +44,7 @@ pub fn construct<A: Allocate>(
     config: &LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
-) -> std::collections::HashMap<LogVariant, (KeysValsHandle, Permutation)> {
+) -> std::collections::HashMap<LogVariant, KeysValsHandle> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
     let peers = worker.peers();
 
@@ -457,8 +457,13 @@ pub fn construct<A: Allocate>(
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
-                let (permutation, value) =
-                    Permutation::construct_from_columns(&key, variant.desc().arity());
+                let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
+                    &key.iter()
+                        .cloned()
+                        .map(MirScalarExpr::Column)
+                        .collect::<Vec<_>>(),
+                    variant.desc().arity(),
+                );
                 let trace = collection
                     .map({
                         let mut row_packer = Row::default();
@@ -473,7 +478,7 @@ pub fn construct<A: Allocate>(
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant, (trace, permutation));
+                result.insert(variant, trace);
             }
         }
         result

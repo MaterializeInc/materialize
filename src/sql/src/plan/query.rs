@@ -39,10 +39,10 @@ use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
-    Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
-    Query, Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, SubscriptPosition,
-    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
-    Value, Values,
+    HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
+    Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement,
+    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins,
+    UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -1321,32 +1321,98 @@ fn plan_set_expr(
             left,
             right,
         } => {
+            // Plan the LHS and RHS.
             let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
-            let (right_expr, _right_scope) = plan_set_expr(qcx, right)?;
+            let (right_expr, right_scope) = plan_set_expr(qcx, right)?;
 
-            // TODO(jamii) this type-checking is redundant with
-            // HirRelationExpr::typ, but currently it seems that we need both
-            // because HirRelationExpr::typ is not allowed to return errors
-            let left_types = qcx.relation_type(&left_expr).column_types;
-            let right_types = qcx.relation_type(&right_expr).column_types;
-            if left_types.len() != right_types.len() {
+            // Validate that the LHS and RHS are the same width.
+            let left_type = qcx.relation_type(&left_expr);
+            let right_type = qcx.relation_type(&right_expr);
+            if left_type.arity() != right_type.arity() {
                 sql_bail!(
                     "each {} query must have the same number of columns: {} vs {}",
                     op,
-                    left_types.len(),
-                    right_types.len(),
+                    left_type.arity(),
+                    right_type.arity(),
                 );
             }
-            for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
-                if left_col_type.union(right_col_type).is_err() {
-                    sql_bail!(
+
+            // Match the types of the corresponding columns on the LHS and RHS
+            // using the normal type coercion rules. This is equivalent to
+            // `coerce_homogeneous_exprs`, but implemented in terms of
+            // `HirRelationExpr` rather than `HirScalarExpr`.
+            let left_ecx = &ExprContext {
+                qcx: &qcx,
+                name: &op.to_string(),
+                scope: &left_scope,
+                relation_type: &left_type,
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_windows: false,
+            };
+            let right_ecx = &ExprContext {
+                qcx: &qcx,
+                name: &op.to_string(),
+                scope: &right_scope,
+                relation_type: &right_type,
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_windows: false,
+            };
+            let mut left_casts = vec![];
+            let mut right_casts = vec![];
+            for (i, (left_type, right_type)) in left_type
+                .column_types
+                .iter()
+                .zip(right_type.column_types.iter())
+                .enumerate()
+            {
+                let type_hint = None;
+                let types = &[
+                    Some(left_type.scalar_type.clone()),
+                    Some(right_type.scalar_type.clone()),
+                ];
+                let target = match typeconv::guess_best_common_type(types, type_hint) {
+                    Some(t) => t,
+                    None => sql_bail!(
                         "{} types {} and {} cannot be matched",
                         op,
-                        qcx.humanize_scalar_type(&left_col_type.scalar_type),
-                        qcx.humanize_scalar_type(&right_col_type.scalar_type)
-                    );
+                        qcx.humanize_scalar_type(&left_type.scalar_type),
+                        qcx.humanize_scalar_type(&right_type.scalar_type)
+                    ),
+                };
+                match typeconv::plan_cast(
+                    left_ecx,
+                    CastContext::Implicit,
+                    HirScalarExpr::column(i),
+                    &target,
+                ) {
+                    Ok(expr) => left_casts.push(expr),
+                    Err(_) => sql_bail!(
+                        "{} types {} and {} cannot be matched",
+                        op,
+                        qcx.humanize_scalar_type(&left_type.scalar_type),
+                        qcx.humanize_scalar_type(&target),
+                    ),
+                }
+                match typeconv::plan_cast(
+                    right_ecx,
+                    CastContext::Implicit,
+                    HirScalarExpr::column(i),
+                    &target,
+                ) {
+                    Ok(expr) => right_casts.push(expr),
+                    Err(_) => sql_bail!(
+                        "{} types {} and {} cannot be matched",
+                        op,
+                        qcx.humanize_scalar_type(&target),
+                        qcx.humanize_scalar_type(&right_type.scalar_type),
+                    ),
                 }
             }
+            let project_key: Vec<_> = (left_type.arity()..left_type.arity() * 2).collect();
+            let left_expr = left_expr.map(left_casts).project(project_key.clone());
+            let right_expr = right_expr.map(right_casts).project(project_key);
 
             let relation_expr = match op {
                 SetOperator::Union => {
@@ -1420,7 +1486,7 @@ fn plan_values(
     let nrows = values.len();
 
     // Arrange input expressions by columns, not rows, so that we can
-    // call `plan_homogeneous_exprs` on each column.
+    // call `coerce_homogeneous_exprs` on each column.
     let mut cols = vec![vec![]; ncols];
     for row in values {
         if row.len() != ncols {
@@ -2558,7 +2624,10 @@ fn invent_column_name(
                     Some((name.item.into(), NameQuality::High))
                 }
             }
-            Expr::Coalesce { .. } => Some(("coalesce".into(), NameQuality::High)),
+            Expr::HomogenizingFunction { function, .. } => Some((
+                function.to_string().to_lowercase().into(),
+                NameQuality::High,
+            )),
             Expr::NullIf { .. } => Some(("nullif".into(), NameQuality::High)),
             Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
@@ -2995,7 +3064,9 @@ fn plan_expr_inner<'a>(
             results,
             else_result,
         } => Ok(plan_case(ecx, operand, conditions, results, else_result)?.into()),
-        Expr::Coalesce { exprs } => plan_coalesce(ecx, exprs),
+        Expr::HomogenizingFunction { function, exprs } => {
+            plan_homogenizing_function(ecx, function, exprs)
+        }
         Expr::NullIf { l_expr, r_expr } => Ok(plan_case(
             ecx,
             &None,
@@ -3119,11 +3190,24 @@ fn plan_or(
     .into())
 }
 
-fn plan_coalesce(ecx: &ExprContext, exprs: &[Expr<Aug>]) -> Result<CoercibleScalarExpr, PlanError> {
+fn plan_homogenizing_function(
+    ecx: &ExprContext,
+    function: &HomogenizingFunction,
+    exprs: &[Expr<Aug>],
+) -> Result<CoercibleScalarExpr, PlanError> {
     assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
     let expr = HirScalarExpr::CallVariadic {
-        func: VariadicFunc::Coalesce,
-        exprs: coerce_homogeneous_exprs("coalesce", ecx, plan_exprs(ecx, exprs)?, None)?,
+        func: match function {
+            HomogenizingFunction::Coalesce => VariadicFunc::Coalesce,
+            HomogenizingFunction::Greatest => VariadicFunc::Greatest,
+            HomogenizingFunction::Least => VariadicFunc::Least,
+        },
+        exprs: coerce_homogeneous_exprs(
+            &function.to_string().to_lowercase(),
+            ecx,
+            plan_exprs(ecx, exprs)?,
+            None,
+        )?,
     };
     Ok(expr.into())
 }
@@ -4322,7 +4406,10 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
     fn visit_expr_mut(&mut self, expr: &mut Expr<Aug>) {
         let (disallowed_context, func) = match expr {
             Expr::Case { .. } => (Some("CASE"), None),
-            Expr::Coalesce { .. } => (Some("COALESCE"), None),
+            Expr::HomogenizingFunction {
+                function: HomogenizingFunction::Coalesce,
+                ..
+            } => (Some("COALESCE"), None),
             Expr::Function(func) if self.in_select_item => {
                 // If we're in a SELECT list, replace table functions with a uuid identifier
                 // and save the table func so it can be planned elsewhere.

@@ -25,7 +25,6 @@ use crate::{
     Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
-use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 pub mod controller;
@@ -168,13 +167,6 @@ pub enum StorageCommand {
         /// Previously stored timestamp bindings.
         bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
     },
-    /// Advance worker timestamp
-    AdvanceSourceTimestamp {
-        /// The ID of the timestamped source
-        id: GlobalId,
-        /// The associated update
-        update: crate::types::sources::persistence::TimestampSourceUpdate,
-    },
     /// Enable compaction in sources.
     ///
     /// Each entry in the vector names a source and provides a frontier after which
@@ -190,12 +182,6 @@ pub enum StorageCommand {
         /// The timestamp to advance to.
         advance_to: Timestamp,
     },
-    /// Enable persistence.
-    // TODO: to enable persistence in clustered mode, we'll need to figure out
-    // an alternative design that doesn't require serializing a persistence
-    // client.
-    #[serde(skip)]
-    EnablePersistence(RuntimeClient),
 }
 
 impl StorageCommandKind {
@@ -206,13 +192,11 @@ impl StorageCommandKind {
         match self {
             StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
-            StorageCommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
             StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
             StorageCommandKind::AllowSourceCompaction => "allows_source_compaction",
             StorageCommandKind::CreateSources => "create_sources",
             StorageCommandKind::DropSources => "drop_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
-            StorageCommandKind::EnablePersistence => "enable_persistence",
             StorageCommandKind::Insert => "insert",
         }
     }
@@ -436,17 +420,6 @@ pub trait StorageClient: Client {
         }))
         .await
     }
-    async fn advance_source_timestamp(
-        &mut self,
-        id: GlobalId,
-        update: crate::types::sources::persistence::TimestampSourceUpdate,
-    ) {
-        self.send(Command::Storage(StorageCommand::AdvanceSourceTimestamp {
-            id,
-            update,
-        }))
-        .await
-    }
     async fn allow_source_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
         self.send(Command::Storage(StorageCommand::AllowSourceCompaction(
             frontiers,
@@ -464,10 +437,6 @@ pub trait StorageClient: Client {
             advance_to,
         }))
         .await
-    }
-    async fn enable_persistence(&mut self, runtime: RuntimeClient) {
-        self.send(Command::Storage(StorageCommand::EnablePersistence(runtime)))
-            .await
     }
 }
 
@@ -702,6 +671,22 @@ pub mod partitioned {
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
+        /// Sources that have presented timestamping responses.
+        ///
+        /// This set is currently needed to map the multi-worker progress utterances
+        /// of the timestamping responses into single-worker utterances. When a source
+        /// is first observed in these responses, we increment the `Timestamp::minimum`
+        /// count by `self.parts - 1`, which prepares the recipients for the eventual
+        /// number of `self.parts` retractions of that time.
+        ///
+        /// TODO(mcsherry): This can be improved with help from the source of these
+        /// messages communicating this change when it starts the process, so that
+        /// this type does not need to retain the state indefinitely. We could also
+        /// count down from `self.parts` and clean up at zero, but it seemed hard to
+        /// correctly sniff "first message" without introducing additional composability
+        /// bugs. Check with me when we end up in a state that this grows too large
+        /// to manage and we'll figure it out.
+        source_timestamping: std::collections::HashSet<GlobalId>,
     }
 
     impl PartitionedClientState {
@@ -711,6 +696,7 @@ pub mod partitioned {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
+                source_timestamping: Default::default(),
             }
         }
 
@@ -769,6 +755,18 @@ pub mod partitioned {
                     } else {
                         None
                     }
+                }
+                // Avoid multiple retractions of minimum time, to present as updates from one worker.
+                Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
+                    for (id, changes) in feedback.changes.iter_mut() {
+                        if self.source_timestamping.insert(*id) {
+                            use timely::progress::Timestamp;
+                            changes.update(Timestamp::minimum(), (self.parts as i64) - 1);
+                        }
+                    }
+                    Some(Response::Storage(StorageResponse::TimestampBindings(
+                        feedback,
+                    )))
                 }
                 Response::Compute(ComputeResponse::PeekResponse(connection, response)) => {
                     // Incorporate new peek responses; awaiting all responses.

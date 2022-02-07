@@ -9,16 +9,18 @@
 
 //! Logic related to the creation of dataflow sources.
 
-use std::rc::Rc;
+use std::any::Any;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Map, OkErr, UnorderedInput};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::{Concat, Map, OkErr, Probe, UnorderedInput};
+use timely::dataflow::{ProbeHandle, Scope, Stream};
 
-use persist::client::StreamWriteHandle;
+use persist::client::{MultiWriteHandle, StreamWriteHandle};
 use persist::operators::source::PersistedSource;
 use persist::operators::stream::{AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
@@ -29,6 +31,7 @@ use dataflow_types::*;
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use ore::now::NowFn;
 use repr::{Diff, Row, Timestamp};
+use timely::progress::Antichain;
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -37,6 +40,7 @@ use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
+use crate::render::StorageState;
 use crate::server::LocalInput;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
@@ -463,7 +467,10 @@ where
                                         &ts_bindings,
                                         upsert_state_handle,
                                         bindings_handle,
+                                        &src_id,
                                         &source_name,
+                                        storage_state,
+                                        &mut additional_tokens,
                                     );
 
                                     (sealed_upsert, upsert_err)
@@ -511,7 +518,10 @@ where
                                             &ts_bindings,
                                             envelope_config.write_handle.clone(),
                                             bindings_config.write_handle.clone(),
+                                            &src_id,
                                             &source_name,
+                                            storage_state,
+                                            &mut additional_tokens,
                                         );
 
                                         // NOTE: Persistence errors don't go through the same
@@ -790,7 +800,10 @@ fn seal_and_await<G, D1, D2, K1, V1, K2, V2>(
     bindings_stream: &Stream<G, (D2, Timestamp, Diff)>,
     write: StreamWriteHandle<K1, V1>,
     bindings_write: StreamWriteHandle<K2, V2>,
+    source_id: &GlobalId,
     source_name: &str,
+    storage_state: &mut StorageState,
+    additional_tokens: &mut Vec<Rc<dyn std::any::Any>>,
 ) -> Stream<G, (D1, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -801,8 +814,41 @@ where
     K2: Codec + timely::Data,
     V2: Codec + timely::Data,
 {
-    let sealed_stream =
-        stream.conditional_seal(&source_name, bindings_stream, write, bindings_write);
+    let sealed_stream = stream.conditional_seal(
+        &source_name,
+        bindings_stream,
+        write.clone(),
+        bindings_write.clone(),
+    );
+
+    // The compaction since of persisted sources is upper-bounded by two frontiers: a) the
+    // compaction that the coordinator allows, and b) the seal frontier of the involved persistent
+    // collections.
+
+    // We need to obey a) because that's what the coordinator wants, and b) because if we persisted
+    // past (or up to) the seal frontier we would not be able to distinguish between valid and
+    // invalid updates based on the upper seal frontier when restarting.
+    //
+    // We get the upper seal frontier using a probe handle, and we expect the coordinator to call
+    // `allow_compaction` on the stashed `CompactionHandle` to present it's view of what should be
+    // allowed.
+
+    let mut probe: ProbeHandle<Timestamp> = ProbeHandle::new();
+    sealed_stream.probe_with(&mut probe);
+
+    let mut compaction_handle = MultiWriteHandle::new(&write);
+    compaction_handle
+        .add_stream(&bindings_write)
+        .expect("only fails on usage errors");
+
+    let source_token = storage_state.persisted_sources.add_source(
+        source_id,
+        source_name,
+        probe,
+        compaction_handle,
+    );
+
+    additional_tokens.push(source_token);
 
     // Don't send data forward to "dataflow" until the frontier
     // tells us that we both persisted and sealed it.
@@ -814,6 +860,129 @@ where
     let sealed_stream = sealed_stream.await_frontier(&source_name);
 
     sealed_stream
+}
+
+/// A `PersistedSourceManager` stores maps from global identifiers to the one rendered persistent
+/// instance of a source.
+///
+/// NOTE: There can only ever be one running (rendered) instance of a persisted source. The manager
+/// will panic when trying to add more than one instance for a given source id.
+pub struct PersistedSourceManager {
+    /// Handles that allow setting the compaction frontier for a persisted source.
+    compaction_handles: HashMap<GlobalId, Weak<BoundedCompactionHandle>>,
+}
+
+impl PersistedSourceManager {
+    pub fn new() -> Self {
+        PersistedSourceManager {
+            compaction_handles: HashMap::new(),
+        }
+    }
+
+    /// Binds the given `frontier_probe` and `compaction_handle` to the `source_id`. This will
+    /// panic if there is already a source for the given id. This returns a "token" that should
+    /// be stashed in the customary places to prevent the stored information from vanishing before
+    /// its time.
+    pub fn add_source(
+        &mut self,
+        source_id: &GlobalId,
+        source_name: &str,
+        frontier_probe: ProbeHandle<Timestamp>,
+        compaction_handle: MultiWriteHandle,
+    ) -> Rc<dyn Any> {
+        let compaction_handle = BoundedCompactionHandle::new(frontier_probe, compaction_handle);
+
+        let compaction_token = Rc::new(compaction_handle);
+
+        let previous = self
+            .compaction_handles
+            .insert(source_id.clone(), Rc::downgrade(&compaction_token));
+
+        match previous {
+            Some(compaction_handle) => {
+                if compaction_handle.upgrade().is_some() {
+                    panic!(
+                        "cannot have multiple rendered instances for persisted source {} ({})",
+                        source_id, source_name
+                    );
+                }
+            }
+            None => (), // All good!
+        }
+
+        compaction_token as Rc<dyn Any>
+    }
+
+    /// Enables compaction of sources associated with the identifier.
+    pub fn allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
+        if let Some(compaction_handle) = self.compaction_handles.get(&id) {
+            let compaction_handle = match compaction_handle.upgrade() {
+                Some(handle) => handle,
+                None => {
+                    // Clean up the expired weak handle.
+                    //
+                    // NOTE: Right now, there is no explicit message when a rendered source
+                    // instance is dropped. Sources are droppped implicitly when all their
+                    // consumers are dropped, and we notice that when the token that holds
+                    // onto the strong Rc to the compaction handle is dropped.
+                    self.compaction_handles.remove(&id);
+                    return;
+                }
+            };
+
+            compaction_handle.allow_compaction(frontier);
+        }
+    }
+
+    /// Removes the maintained state for source `id`.
+    pub fn del_source(&mut self, id: &GlobalId) -> bool {
+        self.compaction_handles.remove(&id).is_some()
+    }
+}
+
+/// A handle that allows setting a compaction frontier that is bounded by an upper bound.
+struct BoundedCompactionHandle {
+    /// Upper frontier up to which we are not allowed to compact.
+    upper_bound_probe: ProbeHandle<Timestamp>,
+
+    /// Underlying compaction handle.
+    compaction_handle: MultiWriteHandle,
+}
+
+impl BoundedCompactionHandle {
+    /// Creates a new [`BoundedCompactionHandle`] that bounds compaction using the given
+    /// `upper_bound_fn` and forwards compaction requests to the given `compaction_handle`
+    pub fn new(
+        upper_bound_probe: ProbeHandle<Timestamp>,
+        compaction_handle: MultiWriteHandle,
+    ) -> Self {
+        Self {
+            upper_bound_probe,
+            compaction_handle,
+        }
+    }
+
+    fn allow_compaction(&self, since: Antichain<Timestamp>) {
+        let mut upper_bound = self.upper_bound_probe.with_frontier(|frontier| {
+            Antichain::from(
+                frontier
+                    .iter()
+                    .cloned()
+                    // Is is **very** important to not compact up to the seal frontier, as
+                    // mentioned above.
+                    .map(|e| e.saturating_sub(1))
+                    .collect::<Vec<_>>(),
+            )
+        });
+
+        upper_bound.meet_assign(&since);
+
+        // NOTE: We simply shoot off the `allow_compaction()` request and don't even block
+        // on the response. This will mean we don't get any feedback and log errors. But
+        // compactions are not necessary for correctness and there are means (metrics) for figuring
+        // out if the frontier does in fact advance.
+        let _ = self.compaction_handle.allow_compaction_all(upper_bound);
+    }
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience

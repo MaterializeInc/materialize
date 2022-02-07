@@ -775,5 +775,16 @@ Block the test until the specified schema has been defined at the schema registr
 Executes a command against Materialize via `psql`. This is intended for testing
 `psql`-specific commands like `\dn`.
 
+## Conditionally skipping the rest of a `.td` file
+
+```
+$ skip-if
+SELECT true
+```
+
+`skip-if`, followed by a SQL statement will conditionally skip the rest of the `.td` file if the statement returns exactly `true`.
+If it returns anything but `true` or `false`, it will error. This can be useful to conditionally test things in different
+versions of materialize, and more!
+
 [confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
 [aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md

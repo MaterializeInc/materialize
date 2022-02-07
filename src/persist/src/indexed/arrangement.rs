@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::Error;
 use crate::indexed::background::{CompactTraceReq, CompactTraceRes};
-use crate::indexed::cache::BlobCache;
+use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{
     ArrangementMeta, BlobTraceBatch, TraceBatchMeta, UnsealedBatchMeta,
@@ -334,7 +334,7 @@ impl Arrangement {
             // - ts_lower <= hi
             // - ts_upper > lo
             if ts_lower.less_equal(&meta.ts_upper) && !ts_upper.less_equal(&meta.ts_lower) {
-                batches.push(blob.get_unsealed_batch_async(&meta.key));
+                batches.push(blob.get_unsealed_batch_async(&meta.key, CacheHint::MaybeAdd));
             }
         }
 
@@ -423,7 +423,7 @@ impl Arrangement {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.trace_ts_upper().less_equal(&batch.ts_upper));
         let updates = ColumnarRecordsVec::from_iter(
-            blob.get_unsealed_batch_async(&batch.key)
+            blob.get_unsealed_batch_async(&batch.key, CacheHint::NeverAdd)
                 .recv()?
                 .updates
                 .iter()
@@ -574,7 +574,22 @@ impl Arrangement {
         let since = self.since();
         let mut batches = Vec::with_capacity(self.trace_batches.len());
         for meta in self.trace_batches.iter() {
-            batches.push(blob.get_trace_batch_async(&meta.key));
+            // We want to save these results to the cache (if possible) because
+            // currently the cache is purely in-memory and thus will be empty on
+            // restart. This policy is much more clearly worthwhile for unsealed
+            // batches, as every unsealed batch will eventually get moved into
+            // trace and therefore every unsealed batch we can populate in the
+            // saves us an external read later.
+            //
+            // The rationale for trace is more unclear. If the size of all data
+            // in trace ends up being smaller than the size of the cache then
+            // clearly populating the cache is better. Otherwise, we could get
+            // unlucky and fill the cache with one large trace batch that won't
+            // get compacted for a very long time. We chose to allow trace snapshots
+            // to populate the cache because the default cache size is small
+            // enough that in real workloads large batches won't pollute the
+            // cache.
+            batches.push(blob.get_trace_batch_async(&meta.key, CacheHint::MaybeAdd));
         }
         TraceSnapshot {
             ts_upper,
@@ -1041,6 +1056,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_trace_ts_upper_invariant"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1085,6 +1101,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_ts_lower_invariant"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1118,6 +1135,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_evict"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1193,6 +1211,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_snapshot"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1247,6 +1266,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_batch_trim"),
+            None,
         );
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
@@ -1370,6 +1390,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
@@ -1525,6 +1546,7 @@ mod tests {
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
+            None,
         );
         let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));

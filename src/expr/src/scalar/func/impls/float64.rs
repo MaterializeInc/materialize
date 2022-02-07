@@ -299,6 +299,18 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    fn radians(a: f64) -> f64 {
+        a.to_radians()
+    }
+);
+
+sqlfunc!(
+    fn degrees(a: f64) -> f64 {
+        a.to_degrees()
+    }
+);
+
+sqlfunc!(
     #[sqlname = "log10f64"]
     fn log10(a: f64) -> Result<f64, EvalError> {
         if a.is_sign_negative() {

@@ -40,7 +40,6 @@ mod id_alloc;
 mod persistcfg;
 mod sink_connector;
 mod tail;
-mod timestamp;
 mod util;
 
 pub mod catalog;
@@ -53,4 +52,3 @@ pub use crate::error::CoordError;
 pub use crate::persistcfg::{
     PersistConfig, PersistFileStorage, PersistS3Storage, PersistStorage, PersisterWithConfig,
 };
-pub use crate::timestamp::Timestamper;

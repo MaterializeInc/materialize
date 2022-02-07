@@ -156,6 +156,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
+        persister: None,
     })?;
 
     let mut conn = dataflowd::tcp::framed_server(conn);

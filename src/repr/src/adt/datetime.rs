@@ -209,7 +209,7 @@ impl DateTimeField {
     ///
     /// # Panics
     ///
-    /// Panics if called on a non-duration field or a field smaller than a second.
+    /// Panics if called on a non-duration field or a field larger than or equal to a second.
     pub fn seconds_divider(self) -> i64 {
         use DateTimeField::*;
         match self {
@@ -858,9 +858,21 @@ impl ParsedDateTime {
                     self.minute = u;
                 }
                 Second if self.second.is_none() => {
+                    if u.as_ref().unwrap().fraction != 0 && self.millisecond.is_some() {
+                        return Err(format!(
+                            "Cannot set {} field if {} field has a fraction component",
+                            Milliseconds, f
+                        ));
+                    }
                     self.second = u;
                 }
-                Milliseconds if self.millisecond.is_none() && !self.seconds_has_fraction() => {
+                Milliseconds if self.millisecond.is_none() => {
+                    if self.seconds_has_fraction() {
+                        return Err(format!(
+                            "Cannot set {} field if {} field has a fraction component",
+                            f, Second
+                        ));
+                    }
                     self.millisecond = u;
                 }
                 _ => return Err(format!("{} field set twice", f)),
@@ -870,7 +882,7 @@ impl ParsedDateTime {
     }
 
     fn seconds_has_fraction(&self) -> bool {
-        return self.second.is_some() && self.second.as_ref().unwrap().fraction > 0;
+        return self.second.is_some() && self.second.as_ref().unwrap().fraction != 0;
     }
 
     pub fn check_datelike_bounds(&mut self) -> Result<(), String> {
@@ -3221,6 +3233,32 @@ mod test {
                 "1h 2ms",
                 Second,
             ),
+            (
+                ParsedDateTime {
+                    millisecond: Some(DateTimeFieldValue::new(42, 900_000_000)),
+                    ..Default::default()
+                },
+                "42.9 milliseconds",
+                Milliseconds,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeFieldValue::new(5, 0)),
+                    millisecond: Some(DateTimeFieldValue::new(37, 660_000_000)),
+                    ..Default::default()
+                },
+                "5.0 seconds 37.66 milliseconds",
+                Milliseconds,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeFieldValue::new(14, 0)),
+                    millisecond: Some(DateTimeFieldValue::new(60, 0)),
+                    ..Default::default()
+                },
+                "14 days 60 ms",
+                Milliseconds,
+            ),
         ];
 
         for test in test_cases.iter() {
@@ -3335,6 +3373,16 @@ mod test {
                 "-9223372036854775808 seconds",
                 Day,
                 "Unable to parse value as a number at index 20: number too large to fit in target type",
+            ),
+            (
+                "1.234 second 5 ms",
+                Second,
+                "Cannot set MILLISECONDS field if SECOND field has a fraction component",
+            ),
+            (
+                "7 ms 4.321 second",
+                Second,
+                "Cannot set MILLISECONDS field if SECOND field has a fraction component",
             ),
             (
                 "1.0us",
@@ -3546,6 +3594,7 @@ fn test_parseddatetime_add_field() {
         hour: Some(DateTimeFieldValue::new(3, 0)),
         minute: Some(DateTimeFieldValue::new(4, 0)),
         second: Some(DateTimeFieldValue::new(5, 0)),
+        millisecond: Some(DateTimeFieldValue::new(6, 0)),
         ..Default::default()
     };
 
@@ -3556,6 +3605,7 @@ fn test_parseddatetime_add_field() {
         hour: Some(DateTimeFieldValue::new(3, 555_555_555)),
         minute: Some(DateTimeFieldValue::new(4, 555_555_555)),
         second: Some(DateTimeFieldValue::new(5, 555_555_555)),
+        millisecond: Some(DateTimeFieldValue::new(6, 555_555_555)),
         ..Default::default()
     };
 
@@ -3566,6 +3616,12 @@ fn test_parseddatetime_add_field() {
         hour: Some(DateTimeFieldValue::new(-3, -555_555_555)),
         minute: Some(DateTimeFieldValue::new(-4, -555_555_555)),
         second: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+        millisecond: Some(DateTimeFieldValue::new(-6, -555_555_555)),
+        ..Default::default()
+    };
+
+    let pdt_ms_rollover = ParsedDateTime {
+        millisecond: Some(DateTimeFieldValue::new(1002, 666_666_666)),
         ..Default::default()
     };
 
@@ -3574,7 +3630,8 @@ fn test_parseddatetime_add_field() {
     run_test_parseddatetime_add_field(pdt_unit.clone(), Day, (0, 2 * 60 * 60 * 24, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Hour, (0, 3 * 60 * 60, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Minute, (0, 4 * 60, 0));
-    run_test_parseddatetime_add_field(pdt_unit, Second, (0, 5, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Second, (0, 5, 0));
+    run_test_parseddatetime_add_field(pdt_unit, Milliseconds, (0, 0, 6 * 1_000_000));
     run_test_parseddatetime_add_field(pdt_frac.clone(), Year, (18, 0, 0));
     run_test_parseddatetime_add_field(
         pdt_frac.clone(),
@@ -3617,13 +3674,21 @@ fn test_parseddatetime_add_field() {
         ),
     );
     run_test_parseddatetime_add_field(
-        pdt_frac,
+        pdt_frac.clone(),
         Second,
         (
             0,
             // 00:00:05.555556
             5,
             555_555_555,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac,
+        Milliseconds,
+        (
+            0, 0, // 00:00:00.006556
+            6_555_555,
         ),
     );
     run_test_parseddatetime_add_field(pdt_frac_neg.clone(), Year, (-18, 0, 0));
@@ -3668,13 +3733,29 @@ fn test_parseddatetime_add_field() {
         ),
     );
     run_test_parseddatetime_add_field(
-        pdt_frac_neg,
+        pdt_frac_neg.clone(),
         Second,
         (
             0,
             // -00:00:05.555556
             -5,
             -555_555_555,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac_neg,
+        Milliseconds,
+        (
+            0, 0, // -00:00:00.006556
+            -6_555_555,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_ms_rollover,
+        Milliseconds,
+        (
+            0, // 00:00:01.002667
+            1, 2_666_666,
         ),
     );
 

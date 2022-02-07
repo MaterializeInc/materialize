@@ -18,14 +18,39 @@
 # root of this repository.
 
 query B
+SELECT '' LIKE 'TEST'
+----
+false
+
+query B
+SELECT 'T' LIKE 'TEST'
+----
+false
+
+query B
 SELECT 'TEST' LIKE 'TEST'
 ----
 true
 
 query B
+SELECT 'TESTS' LIKE 'TEST'
+----
+false
+
+query B
+SELECT 'TESTESTEST' LIKE 'TEST'
+----
+false
+
+query B
 SELECT 'TEST' LIKE 'test'
 ----
 false
+
+query B
+SELECT 'TEST' ILIKE 'test'
+----
+true
 
 query B
 SELECT 'TEST' LIKE 'TESTER'
@@ -37,11 +62,20 @@ SELECT 'TEST' LIKE ''
 ----
 false
 
-
 query B
 SELECT '' LIKE ''
 ----
 true
+
+query B
+SELECT '' LIKE '%'
+----
+true
+
+query B
+SELECT '' LIKE '_'
+----
+false
 
 query B
 SELECT 'a
@@ -72,6 +106,372 @@ false
 
 query B
 SELECT 'a'::char(10) NOT ILIKE 'a'
+----
+true
+
+query B
+SELECT '' LIKE 'foo'
+----
+false
+
+query B
+SELECT 'foo' LIKE 'foo'
+----
+true
+
+query B
+SELECT 'bar' LIKE 'foo'
+----
+false
+
+query B
+SELECT 'foo' LIKE 'food'
+----
+false
+
+# UNICODE and case folding
+
+query B
+SELECT 'TEST' LIKE 'ΜΆΪΟΣ'
+----
+false
+
+query B
+SELECT 'ΜΆΪΟΣ' LIKE 'ΜΆΪΟΣ'
+----
+true
+
+query B
+SELECT 'Μάϊος' LIKE 'ΜΆΪΟΣ'
+----
+false
+
+query B
+SELECT 'Μάϊος' ILIKE 'ΜΆΪΟΣ'
+----
+true
+
+# Single-character wildcard in middle of pattern
+
+query B
+SELECT 'foo' LIKE 'b_t'
+----
+false
+
+query B
+SELECT 'b' LIKE 'b_t'
+----
+false
+
+query B
+SELECT 'bt' LIKE 'b_t'
+----
+false
+
+query B
+SELECT 'but' LIKE 'b_t'
+----
+true
+
+query B
+SELECT 'butt' LIKE 'b_t'
+----
+false
+
+query B
+SELECT 'boot' LIKE 'b__t'
+----
+true
+
+query B
+SELECT 'ii' LIKE '_i_i'
+----
+false
+
+query B
+SELECT 'iii' LIKE '_i_i'
+----
+false
+
+query B
+SELECT 'wifi' LIKE '_i_i'
+----
+true
+
+query B
+SELECT 'wifi!' LIKE '_i_i'
+----
+false
+
+# Single-character wildcard at beginning of pattern
+
+query B
+SELECT 'a' LIKE '_'
+----
+true
+
+query B
+SELECT 'aa' LIKE '_'
+----
+false
+
+query B
+SELECT 't' LIKE '_o'
+----
+false
+
+query B
+SELECT 'to' LIKE '_o'
+----
+true
+
+query B
+SELECT 'too' LIKE '_o'
+----
+false
+
+query B
+SELECT 'to' LIKE '__o'
+----
+false
+
+query B
+SELECT 'too' LIKE '__o'
+----
+true
+
+query B
+SELECT 'tool' LIKE '__o'
+----
+false
+
+query B
+SELECT '漢漢' LIKE '_漢'
+----
+true
+
+# Single-character wildcard at the end of a pattern
+
+query B
+SELECT 'a' LIKE 'a_'
+----
+false
+
+query B
+SELECT 'aa' LIKE 'a_'
+----
+true
+
+query B
+SELECT 'f' LIKE 'f___'
+----
+false
+
+query B
+SELECT 'foo' LIKE 'f___'
+----
+false
+
+query B
+SELECT 'food' LIKE 'f___'
+----
+true
+
+query B
+SELECT 'foods' LIKE 'f___'
+----
+false
+
+query B
+SELECT '漢漢' LIKE '漢_'
+----
+true
+
+# Multiple-character wildcard at beginning of pattern
+
+query B
+SELECT '' LIKE '%a'
+----
+false
+
+query B
+SELECT 'a' LIKE '%a'
+----
+true
+
+query B
+SELECT 'b' LIKE '%a'
+----
+false
+
+query B
+SELECT 'aaa' LIKE '%a'
+----
+true
+
+query B
+SELECT 'baaa' LIKE '%a'
+----
+true
+
+query B
+SELECT 'bad' LIKE '%a'
+----
+false
+
+query B
+SELECT 'a' LIKE '%%%%a'
+----
+true
+
+query B
+SELECT 'baaa' LIKE '%%%%a'
+----
+true
+
+query B
+SELECT 'AAA' LIKE '%AA%A'
+----
+true
+
+# Multiple-character wildcard in middle of pattern
+
+query B
+SELECT '' LIKE 'f%d'
+----
+false
+
+query B
+SELECT 'fd' LIKE 'f%d'
+----
+true
+
+query B
+SELECT 'fa' LIKE 'f%d'
+----
+false
+
+query B
+SELECT 'fad' LIKE 'f%d'
+----
+true
+
+query B
+SELECT 'food' LIKE 'f%d'
+----
+true
+
+query B
+SELECT 'fooooooooooooood' LIKE 'f%d'
+----
+true
+
+query B
+SELECT 'foods' LIKE 'f%d'
+----
+false
+
+query B
+SELECT 'bar' LIKE 'f%d'
+----
+false
+
+query B
+SELECT 'fad' LIKE 'f%%d'
+----
+true
+
+query B
+SELECT 'food' LIKE 'f%%d'
+----
+true
+
+query B
+SELECT 'foods' LIKE 'f%%d'
+----
+false
+
+query B
+SELECT 'food' LIKE 'f%d%e'
+----
+false
+
+query B
+SELECT 'foodie' LIKE 'f%d%e'
+----
+true
+
+# Multiple-character wildcard at end of pattern
+
+query B
+SELECT '' LIKE 'f%'
+----
+false
+
+query B
+SELECT 'f' LIKE 'f%'
+----
+true
+
+query B
+SELECT 'fi' LIKE 'f%'
+----
+true
+
+query B
+SELECT 'foo' LIKE 'f%'
+----
+true
+
+query B
+SELECT 'bar' LIKE 'f%'
+----
+false
+
+query B
+SELECT 'f' LIKE 'f%%%'
+----
+true
+
+query B
+SELECT 'foo' LIKE 'f%%%'
+----
+true
+
+# Mixed patterns
+
+query B
+SELECT 'aaa' LIKE '%aa_'
+----
+true
+
+query B
+SELECT 'fd' LIKE 'f%_d'
+----
+false
+
+query B
+SELECT 'fed' LIKE 'f%_d'
+----
+true
+
+query B
+SELECT 'food' LIKE 'f%_d'
+----
+true
+
+query B
+SELECT 'fd' LIKE 'f_%d'
+----
+false
+
+query B
+SELECT 'fed' LIKE 'f_%d'
+----
+true
+
+query B
+SELECT 'food' LIKE 'f_%d'
 ----
 true
 

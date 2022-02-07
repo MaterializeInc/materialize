@@ -38,28 +38,27 @@ use dataflow_types::client::{
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    sources::{persistence::TimestampSourceUpdate, ExternalSourceConnector, SourceConnector},
+    sources::{ExternalSourceConnector, SourceConnector},
     DataflowError, PeekResponse,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::metrics::MetricsRegistry;
 use ore::now::NowFn;
 use ore::result::ResultExt;
-use repr::{Diff, Row, RowArena, Timestamp};
+use repr::{DatumVec, Diff, Row, RowArena, Timestamp};
 
+use self::metrics::{ServerMetrics, WorkerMetrics};
+use crate::activator::RcActivator;
 use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
+use crate::render::sources::PersistedSourceManager;
 use crate::render::{self, ComputeState, StorageState};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
-
-use self::metrics::{ServerMetrics, WorkerMetrics};
-use crate::activator::RcActivator;
-use repr::DatumVec;
 
 mod metrics;
 
@@ -79,6 +78,8 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
+    /// A handle to a persistence runtime, if persistence is enabled.
+    pub persister: Option<persist::client::RuntimeClient>,
 }
 
 /// A handle to a running dataflow server.
@@ -144,9 +145,10 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 source_descriptions: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
+                persisted_sources: PersistedSourceManager::new(),
                 sink_write_frontiers: HashMap::new(),
                 metrics,
-                persist: None,
+                persist: config.persister.clone(),
             },
             materialized_logger: None,
             command_rx,
@@ -408,35 +410,35 @@ where
         }
 
         // Install traces as maintained indexes
-        for (log, (trace, permutation)) in t_traces {
+        for (log, trace) in t_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (trace, permutation)) in r_traces {
+        for (log, trace) in r_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (trace, permutation)) in d_traces {
+        for (log, trace) in d_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (trace, permutation)) in m_traces {
+        for (log, trace) in m_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
+                .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
@@ -762,13 +764,10 @@ where
                 timestamp,
                 conn_id,
                 finishing,
-                mut map_filter_project,
+                map_filter_project,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.compute_state.traces.get(&id).unwrap().clone();
-                trace_bundle
-                    .permutation()
-                    .permute_safe_mfp_plan(&mut map_filter_project);
                 let timestamp_frontier = Antichain::from_elem(timestamp);
                 let empty_frontier = Antichain::new();
                 trace_bundle
@@ -839,10 +838,12 @@ where
                 // Nothing to do at the moment, but in the future prepare source ingestion.
             }
             StorageCommand::DropSources(names) => {
-                // The only sources that currently require actions are local inputs.
                 for name in names {
                     // Drop table-related state.
                     self.storage_state.local_inputs.remove(&name);
+
+                    // Clean up potentially left over persisted source state.
+                    self.storage_state.persisted_sources.del_source(&name);
                 }
             }
 
@@ -876,9 +877,6 @@ where
                 }
             }
 
-            StorageCommand::EnablePersistence(runtime) => {
-                self.storage_state.persist = Some(runtime);
-            }
             StorageCommand::AddSourceTimestamping {
                 id,
                 connector,
@@ -891,7 +889,7 @@ where
                 } = connector
                 {
                     let rt_default = TimestampBindingRc::new(
-                        Some(ts_frequency.as_millis().try_into().unwrap()),
+                        ts_frequency.as_millis().try_into().unwrap(),
                         self.now.clone(),
                     );
                     match connector {
@@ -931,7 +929,7 @@ where
                                 offset
                             );
                             data.add_partition(pid.clone(), None);
-                            data.add_binding(pid, timestamp, offset, false);
+                            data.add_binding(pid, timestamp, offset);
                         } else {
                             tracing::trace!(
                                 "NOT adding partition/binding on worker {}: ({}, {}, {})",
@@ -952,38 +950,19 @@ where
                     assert!(bindings.is_empty());
                 }
             }
-            StorageCommand::AdvanceSourceTimestamp { id, update } => {
-                if let Some(history) = self.storage_state.ts_histories.get_mut(&id) {
-                    match update {
-                        TimestampSourceUpdate::RealTime(new_partition) => {
-                            history.add_partition(new_partition, None);
-                        }
-                    };
-
-                    let sources = self
-                        .storage_state
-                        .ts_source_mapping
-                        .entry(id)
-                        .or_insert_with(Vec::new);
-                    for source in sources {
-                        if let Some(source) = source.upgrade() {
-                            if let Some(token) = &*source {
-                                token.activate();
-                            }
-                        }
-                    }
-                }
-            }
             StorageCommand::AllowSourceCompaction(list) => {
                 for (id, frontier) in list {
                     if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                         ts_history.set_compaction_frontier(frontier.borrow());
                     }
+
+                    self.storage_state
+                        .persisted_sources
+                        .allow_compaction(id, frontier);
                 }
             }
             StorageCommand::DropSourceTimestamping { id } => {
                 let prev = self.storage_state.ts_histories.remove(&id);
-
                 if prev.is_none() {
                     tracing::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
                 }

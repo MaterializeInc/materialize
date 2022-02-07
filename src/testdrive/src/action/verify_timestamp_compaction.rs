@@ -56,7 +56,7 @@ impl Action for VerifyTimestampCompactionAction {
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));
             Retry::default()
                 .initial_backoff(Duration::from_secs(1))
-                .max_duration(Duration::from_secs(10))
+                .max_duration(Duration::from_secs(30))
                 .retry_async(|retry_state| {
                     let initial_highest = Arc::clone(&initial_highest_base);
                     async move {
@@ -74,24 +74,25 @@ impl Action for VerifyTimestampCompactionAction {
 
                         // We consider progress to be eventually compacting at least up to the original highest
                         // timestamp binding.
+                        let lo_binding= bindings.iter().map(|(_, ts, _)| *ts).min();
                         let progress = if retry_state.i == 0 {
                             initial_highest.store(
-                                bindings.iter().map(|(_, ts, _)| ts).fold(u64::MIN, |a, &b| a.max(b)),
+                                bindings.iter().map(|(_, ts, _)| *ts).max().unwrap_or(u64::MIN),
                                 Ordering::SeqCst,
                             );
                             false
                         } else {
                             self.permit_progress &&
-                                (bindings.iter().map(|(_, ts, _)| ts).fold(u64::MAX, |a, &b| a.min(b))
-                                    >= initial_highest.load(Ordering::SeqCst))
+                                (lo_binding.unwrap_or(u64::MAX) >= initial_highest.load(Ordering::SeqCst))
                         };
 
                         println!(
-                            "Verifying timestamp binding compaction for {:?}.  Found {:?} vs expected {:?}.  Progress: {:?}",
+                            "Verifying timestamp binding compaction for {:?}.  Found {:?} vs expected {:?}.  Progress: {:?} vs {:?}",
                             self.source,
                             bindings.len(),
                             self.max_size,
-                            progress,
+                            lo_binding,
+                            initial_highest.load(Ordering::SeqCst),
                         );
 
                         if bindings.len() <= self.max_size || progress {

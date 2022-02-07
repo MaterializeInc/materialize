@@ -356,11 +356,11 @@ lazy_static! {
                     cast_expr: Box::new(cast_expr),
                 })))
             }),
-            (String, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            (String, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
-            (String, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            (String, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
@@ -371,7 +371,7 @@ lazy_static! {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
-            (Char, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            (Char, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
@@ -640,9 +640,9 @@ pub fn guess_best_common_type(
         .iter()
         .max_by_key(|scalar_type| match scalar_type {
             // TypeCategory::String
-            ScalarType::VarChar { .. } => 0,
+            ScalarType::String => 0,
             ScalarType::Char { .. } => 1,
-            ScalarType::String => 2,
+            ScalarType::VarChar { .. } => 2,
             // TypeCategory::Numeric
             ScalarType::Int16 => 3,
             ScalarType::Int32 => 4,

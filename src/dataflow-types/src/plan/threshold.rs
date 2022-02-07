@@ -23,9 +23,12 @@
 //!     is beneficial to use this operator if the number of retractions is expected to be small, and
 //!     if a potential downstream operator does not expect its input to be arranged.
 
-use crate::plan::EnsureArrangement;
-use crate::plan::Permutation;
+use std::collections::HashMap;
+
+use expr::{permutation_for_arrangement, MirScalarExpr};
 use serde::{Deserialize, Serialize};
+
+use super::AvailableCollections;
 
 /// A plan describing how to compute a threshold operation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,50 +45,60 @@ impl ThresholdPlan {
     /// This is likely either an empty vector, for no arrangement,
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
-    pub fn keys(&self) -> Vec<Vec<expr::MirScalarExpr>> {
-        // Accumulate keys into this vector, and return it.
-        let mut keys = Vec::new();
+    pub fn keys(&self) -> AvailableCollections {
         match self {
             ThresholdPlan::Basic(plan) => {
-                keys.push(plan.ensure_arrangement.0.clone());
+                AvailableCollections::new_arranged(vec![plan.ensure_arrangement.clone()])
             }
-            ThresholdPlan::Retractions(_plan) => {}
+            ThresholdPlan::Retractions(_plan) => AvailableCollections::new_raw(),
         }
-        keys
     }
 }
 
 /// A plan to maintain all inputs with positive counts.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicThresholdPlan {
-    /// Description of how to arrange the output
-    pub ensure_arrangement: EnsureArrangement,
+    /// Description of how the input has been arranged, and how to arrange the output
+    pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
 }
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
 /// in order to maintain an equivalent collection compared to [BasicThresholdPlan].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RetractionsThresholdPlan {
-    /// Description of how to arrange the output
-    pub ensure_arrangement: EnsureArrangement,
+    /// Description of how the input has been arranged
+    pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
 }
 
 impl ThresholdPlan {
     /// Construct the plan from the number of columns (`arity`). `maintain_retractions` allows to
     /// switch between an implementation that maintains rows with negative counts (`true`), or
     /// rows with positive counts (`false`).
-    pub fn create_from(arity: usize, maintain_retractions: bool) -> Self {
+    ///
+    /// Also returns the arrangement and thinning required for the input.
+    pub fn create_from(
+        arity: usize,
+        maintain_retractions: bool,
+    ) -> (
+        Self,
+        (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
+    ) {
         // Arrange the input by all columns in order.
         let mut all_columns = Vec::new();
         for column in 0..arity {
             all_columns.push(expr::MirScalarExpr::Column(column));
         }
-        let (permutation, thinning) = Permutation::construct_from_expr(&all_columns, arity);
+        let (permutation, thinning) = permutation_for_arrangement(&all_columns, arity);
         let ensure_arrangement = (all_columns, permutation, thinning);
-        if maintain_retractions {
-            ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement })
+        let plan = if maintain_retractions {
+            ThresholdPlan::Retractions(RetractionsThresholdPlan {
+                ensure_arrangement: ensure_arrangement.clone(),
+            })
         } else {
-            ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement })
-        }
+            ThresholdPlan::Basic(BasicThresholdPlan {
+                ensure_arrangement: ensure_arrangement.clone(),
+            })
+        };
+        (plan, ensure_arrangement)
     }
 }

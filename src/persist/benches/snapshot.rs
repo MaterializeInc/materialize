@@ -9,8 +9,12 @@
 
 //! Benchmarks for reading from different parts of an [Indexed]
 
+use std::sync::Arc;
+
 use criterion::measurement::WallTime;
 use criterion::{black_box, Bencher, BenchmarkGroup, BenchmarkId, Throughput};
+use tokio::runtime::Runtime as AsyncRuntime;
+
 use ore::metrics::MetricsRegistry;
 
 use persist::client::{RuntimeClient, StreamReadHandle};
@@ -19,9 +23,63 @@ use persist::file::FileBlob;
 use persist::indexed::Snapshot;
 use persist::mem::MemRegistry;
 use persist::runtime::{self, RuntimeConfig};
-use persist::storage::{Blob, LockInfo};
+use persist::s3::{S3Blob, S3BlobConfig};
+use persist::storage::{Atomicity, Blob, BlobRead, LockInfo};
 use persist::workload::{self, DataGenerator};
 use persist_types::Codec;
+use uuid::Uuid;
+
+pub fn bench_blob_get(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
+    g.throughput(Throughput::Bytes(data.goodput_bytes()));
+
+    let key = Uuid::new_v4().to_string();
+    let blob_val = workload::flat_blob(&data);
+
+    {
+        let mut mem_blob = MemRegistry::new()
+            .blob_no_reentrance()
+            .expect("creating a MemBlob cannot fail");
+
+        futures_executor::block_on(mem_blob.set(&key, blob_val.clone(), Atomicity::AllowNonAtomic))
+            .expect("failed to write data");
+        g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
+            b.iter(|| {
+                let actual =
+                    bench_blob_get_one_iter(&mem_blob, &key).expect("failed to run blob_get iter");
+                assert_eq!(actual.len(), blob_val.len());
+            });
+        });
+        futures_executor::block_on(mem_blob.close()).expect("failed to close mem_blob");
+    }
+
+    // Only run s3 benchmarks if the magic env vars are set.
+    if let Some(config) =
+        futures_executor::block_on(S3BlobConfig::new_for_test()).expect("failed to load s3 config")
+    {
+        let async_runtime = Arc::new(AsyncRuntime::new().expect("failed to create async runtime"));
+        let async_guard = async_runtime.enter();
+        let mut s3_blob =
+            S3Blob::open_exclusive(config, LockInfo::new_no_reentrance("blob_get_s3".into()))
+                .expect("failed to create S3Blob");
+
+        futures_executor::block_on(s3_blob.set(&key, blob_val.clone(), Atomicity::AllowNonAtomic))
+            .expect("failed to write data");
+        g.bench_function(BenchmarkId::new("s3", data.goodput_pretty()), |b| {
+            b.iter(|| {
+                let actual =
+                    bench_blob_get_one_iter(&s3_blob, &key).expect("failed to run blob_get iter");
+                assert_eq!(actual.len(), blob_val.len());
+            });
+        });
+        futures_executor::block_on(s3_blob.close()).expect("failed to close s3_blob");
+        drop(async_guard);
+    }
+}
+
+fn bench_blob_get_one_iter<B: BlobRead>(blob: &B, key: &str) -> Result<Vec<u8>, Error> {
+    futures_executor::block_on(blob.get(key))?
+        .ok_or_else(|| Error::from(format!("missing blob at key: {}", key)))
+}
 
 fn read_full_snapshot<K: Codec + Ord, V: Codec + Ord>(
     read: &StreamReadHandle<K, V>,

@@ -1,6 +1,19 @@
 # dbt-materialize Changelog
 
-## 1.0.0 - 2021-01-03
+## Unreleased
+
+* Disable transactions. This avoids errors of the form "CREATE ... must be
+  executed outside of a transaction block" ([materialize-dbt-utils#11]).
+
+  Materialize's transactions are not powerful enough to support dbt's use cases.
+  Disabling transactions follows the precedent set by the dbt-snowflake and
+  dbt-bigquery adapters.
+
+* Respect type overrides in the views created by seeds.
+
+[materialize-dbt-utils#11]: https://github.com/MaterializeInc/materialize-dbt-utils/issues/11
+
+## 1.0.1 - 2021-01-03
 
 * Upgrade to `dbt-postgres` v1.0.1.
 

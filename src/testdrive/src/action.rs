@@ -51,6 +51,7 @@ mod protobuf;
 mod psql;
 mod s3;
 mod schema_registry;
+mod skip_if;
 mod sleep;
 mod sql;
 mod sql_server;
@@ -143,6 +144,7 @@ pub struct State {
     postgres_clients: HashMap<String, tokio_postgres::Client>,
     sql_server_clients:
         HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
+    pub(crate) skip_rest: bool,
 }
 
 #[derive(Clone)]
@@ -498,6 +500,9 @@ pub(crate) async fn build(
                     "schema-registry-wait-schema" => Box::new(
                         schema_registry::build_wait(builtin, context.clone()).map_err(wrap_err)?,
                     ),
+                    "skip-if" => Box::new(
+                        skip_if::build_publish(builtin, context.clone()).map_err(wrap_err)?,
+                    ),
                     "sql-server-connect" => {
                         Box::new(sql_server::build_connect(builtin).map_err(wrap_err)?)
                     }
@@ -799,6 +804,7 @@ pub async fn create_state(
         mysql_clients: HashMap::new(),
         postgres_clients: HashMap::new(),
         sql_server_clients: HashMap::new(),
+        skip_rest: false,
     };
     Ok((state, pgconn_task))
 }

@@ -237,6 +237,24 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
+    // Load the coordinator catalog from disk.
+    let coord_storage = coord::catalog::storage::Connection::open(
+        &config.data_directory.join("catalog"),
+        Some(config.experimental_mode),
+    )?;
+
+    // Initialize persistence runtime.
+    let persister = config
+        .persist
+        .init(
+            // Safe to use the cluster ID as the reentrance ID because
+            // `materialized` can only run as a single node.
+            coord_storage.cluster_id(),
+            BUILD_INFO,
+            &config.metrics_registry,
+        )
+        .await?;
+
     // Initialize dataflow server.
     let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
         workers,
@@ -247,13 +265,14 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         experimental_mode: config.experimental_mode,
         now: SYSTEM_TIME.clone(),
         metrics_registry: config.metrics_registry.clone(),
+        persister: persister.runtime.clone(),
     })?;
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client: Box::new(dataflow_client),
         logging: config.logging,
-        data_directory: &config.data_directory,
+        storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
@@ -261,7 +280,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
         metrics_registry: config.metrics_registry.clone(),
-        persist: config.persist,
+        persister,
         now: SYSTEM_TIME.clone(),
     })
     .await?;

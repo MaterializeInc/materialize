@@ -783,3 +783,27 @@ query B
 SELECT (interval '-1' day + interval '1' day) = (interval '1' day + interval '-1' day)
 ----
 true
+
+# Millisecond parsing
+query T
+SELECT INTERVAL '1 milliseconds'
+----
+00:00:00.001
+
+query T
+SELECT INTERVAL '1002 milliseconds'
+----
+00:00:01.002
+
+query T
+SELECT INTERVAL '1 second 42 milliseconds'
+----
+00:00:01.042
+
+query T
+SELECT INTERVAL '1.0 second 42 milliseconds'
+----
+00:00:01.042
+
+statement error Cannot set MILLISECONDS field if SECOND field has a fraction component
+SELECT INTERVAL '1.5 second 42 milliseconds'
