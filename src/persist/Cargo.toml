@@ -37,7 +37,7 @@ bytes = "1.1.0"
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
-futures-executor = "0.3.16"
+futures-executor = "0.3.21"
 futures-util = "0.3.19"
 lazy_static = "1.4.0"
 tracing = "0.1.29"
