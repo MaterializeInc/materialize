@@ -83,6 +83,7 @@ pub fn purify(
     };
 
     let now = catalog.now();
+    let aws_external_id = catalog.config().aws_external_id.clone();
 
     async move {
         if let Statement::CreateSource(CreateSourceStatement {
@@ -173,18 +174,22 @@ pub fn purify(
                     file = Some(f);
                 }
                 CreateSourceConnector::S3 { .. } => {
-                    let aws_config = normalize::aws_config(&mut with_options_map, None)?;
+                    let aws_config =
+                        normalize::aws_config(&mut with_options_map, None, aws_external_id)?;
                     validate_aws_credentials(&aws_config).await?;
                 }
                 CreateSourceConnector::Kinesis { arn } => {
                     let region = arn
                         .parse::<ARN>()
-                        .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
+                        .context("Unable to parse provided ARN")?
                         .region
                         .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-                    let aws_config =
-                        normalize::aws_config(&mut with_options_map, Some(region.into()))?;
+                    let aws_config = normalize::aws_config(
+                        &mut with_options_map,
+                        Some(region.into()),
+                        aws_external_id,
+                    )?;
                     validate_aws_credentials(&aws_config).await?;
                 }
                 CreateSourceConnector::Postgres {

@@ -427,7 +427,9 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let external_id = scx.catalog.config().aws_external_id.clone();
+
+            let aws = normalize::aws_config(&mut with_options, Some(region.into()), external_id)?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
             let encoding = get_encoding(format, envelope, with_options_original)?;
@@ -459,7 +461,9 @@ pub fn plan_create_source(
             pattern,
             compression,
         } => {
-            let aws = normalize::aws_config(&mut with_options, None)?;
+            let external_id = scx.catalog.config().aws_external_id.clone();
+
+            let aws = normalize::aws_config(&mut with_options, None, external_id)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {

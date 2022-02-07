@@ -1398,11 +1398,15 @@ pub mod sources {
         },
     }
 
-    /// A role for Materialize to assume when performing AWS API calls
+    /// A role for Materialize to assume when performing AWS API calls.
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AssumeRole {
-        /// The Amazon Resource Name of the Role to assume
+    pub struct AwsAssumeRole {
+        /// The Amazon Resource Name of the role to assume.
         pub arn: String,
+        /// The External ID for this customer Materialize provides during role assumption.
+        ///
+        /// <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+        pub external_id: Option<String>,
     }
 
     impl AwsConfig {
@@ -1456,12 +1460,15 @@ pub mod sources {
                 )),
             };
 
-            if let Some(AssumeRole { arn }) = &self.role {
+            if let Some(AwsAssumeRole { arn, external_id }) = &self.role {
                 let mut role = AssumeRoleProvider::builder(arn).session_name("materialized");
                 // This affects which region to perform STS on, not where
                 // anything else happens.
                 if let Some(region) = &region {
                     role = role.region(region.clone());
+                }
+                if let Some(external_id) = &external_id {
+                    role = role.external_id(external_id);
                 }
                 cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
             }

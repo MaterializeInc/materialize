@@ -146,6 +146,7 @@ impl CoordTest {
             disable_user_indexes: false,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
+            aws_external_id: None,
             metrics_registry,
             persister,
             now,

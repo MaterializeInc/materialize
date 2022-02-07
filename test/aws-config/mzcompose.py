@@ -21,6 +21,7 @@ from mypy_boto3_sts import STSClient
 from materialize.mzcompose import Composition, UIError
 from materialize.mzcompose.services import Materialized, Testdrive
 
+EXTERNAL_ID = str(random.randrange(0, 2**64))
 SEED = random.randrange(0, 2**32)
 DISCARD = "http://127.0.0.1:9"
 
@@ -31,7 +32,7 @@ DISCARD = "http://127.0.0.1:9"
 # container, perhaps because of docker-in-docker and external permissions.
 #
 # This works in both local dev and buildkite.
-LOCAL_DIR = Path(__file__).parent.joinpath(f"mzcompose-aws-config-{SEED}").resolve()
+LOCAL_DIR = (Path(__file__).parent / f"mzcompose-aws-config-{SEED}").resolve()
 
 AWS_VOLUME = [f"{LOCAL_DIR}:/root/.aws"]
 
@@ -46,6 +47,15 @@ SERVICES = [
         seed=SEED,
     ),
 ]
+
+# Service overrides for specifying external id
+
+MZ_EID = Materialized(
+    forward_aws_credentials=False,
+    options=f"--aws-external-id={EXTERNAL_ID}",
+    environment_extra=[f"AWS_EC2_METADATA_SERVICE_ENDPOINT={DISCARD}"],
+    volumes_extra=AWS_VOLUME,
+)
 
 
 def workflow_default(c: Composition) -> None:
@@ -65,7 +75,12 @@ def workflow_default(c: Composition) -> None:
     try:
         allowed = create_role(iam, "Allow", current_user, created_roles)
         denied = create_role(iam, "Deny", current_user, created_roles)
-        profile_contents = gen_profile_text(session, allowed.arn, denied.arn)
+        requires_eid = create_role(
+            iam, "Allow", current_user, created_roles, external_id=EXTERNAL_ID
+        )
+        profile_contents = gen_profile_text(
+            session, allowed.arn, requires_eid.arn, denied.arn
+        )
 
         wait_for_role(sts, allowed.arn)
 
@@ -73,6 +88,7 @@ def workflow_default(c: Composition) -> None:
             f"--aws-region={aws_region}",
             f"--var=allowed-role-arn={allowed.arn}",
             f"--var=denied-role-arn={denied.arn}",
+            f"--var=role-requires-eid={requires_eid.arn}",
         ]
 
         # == Run core tests ==
@@ -87,6 +103,14 @@ def workflow_default(c: Composition) -> None:
             *td_args,
             "test.td",
         )
+        c.run(
+            "testdrive-svc",
+            *td_args,
+            # no reset because the next test wants to validate behavior with
+            # the previous catalog
+            "--no-reset",
+            "test-externalid-missing.td",
+        )
 
         # == Tests that restarting materialized without a profile doesn't bork mz ==
 
@@ -96,6 +120,8 @@ def workflow_default(c: Composition) -> None:
         # commands to hang entirely after a restart, this no longer happens
         # but this step restarts to catch it if it comes back.
         c.stop("materialized")
+
+        rm_aws_config(LOCAL_DIR)
 
         c.up("materialized")
 
@@ -109,6 +135,16 @@ def workflow_default(c: Composition) -> None:
         write_aws_config(LOCAL_DIR, profile_contents)
         c.run("testdrive-svc", *td_args, "test-restart-with-creds.td")
 
+        # == Test that requires --aws-external-id has been supplied ==
+        print("+++ Test AWS External IDs")
+        c.stop("materialized")
+        c.rm("materialized")
+
+        with c.override(MZ_EID):
+            c.up("materialized")
+            c.wait_for_materialized("materialized")
+            write_aws_config(LOCAL_DIR, profile_contents)
+            c.run("testdrive-svc", *td_args, "test-externalid-present.td")
     finally:
         errored = False
         for role in created_roles:
@@ -201,6 +237,7 @@ def create_role(
 def gen_profile_text(
     session: boto3.Session,
     allowed_role_arn: str,
+    allowed_eid_role_arn: str,
     denied_role_arn: str,
 ) -> str:
     creds = session.get_credentials()
@@ -216,6 +253,13 @@ region = {region}
 [profile allowed]
 source_profile = credentials
 role_arn = {allowed_role_arn}
+region = {region}
+
+# expect fail in first case
+
+[profile allowed-eid]
+source_profile = credentials
+role_arn = {allowed_eid_role_arn}
 region = {region}
 
 # expected failure profiles
