@@ -222,7 +222,7 @@ impl DateTimeField {
     ///
     /// # Panics
     ///
-    /// Panics if called on a non-duration field or a field smaller than a nanosecond.
+    /// Panics if called on a non-duration field.
     pub fn nanos_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
@@ -461,7 +461,6 @@ impl ParsedDateTime {
         nanos: &mut i64,
     ) -> Result<(), String> {
         use DateTimeField::*;
-
         match d {
             Year => {
                 let (y, y_f) = match self.units_of(Year) {
@@ -3741,7 +3740,7 @@ fn test_parseddatetime_add_field() {
         ),
     );
     run_test_parseddatetime_add_field(
-        pdt_frac_neg.clone(),
+        pdt_frac_neg,
         Milliseconds,
         (
             0, 0, // -00:00:00.006556
