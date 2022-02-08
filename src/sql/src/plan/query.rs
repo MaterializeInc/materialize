@@ -4176,6 +4176,9 @@ fn parser_datetimefield_to_adt(
 ) -> repr::adt::datetime::DateTimeField {
     use sql_parser::ast::DateTimeField::*;
     match dtf {
+        Millennium => repr::adt::datetime::DateTimeField::Millennium,
+        Century => repr::adt::datetime::DateTimeField::Century,
+        Decade => repr::adt::datetime::DateTimeField::Decade,
         Year => repr::adt::datetime::DateTimeField::Year,
         Month => repr::adt::datetime::DateTimeField::Month,
         Day => repr::adt::datetime::DateTimeField::Day,
@@ -4183,6 +4186,7 @@ fn parser_datetimefield_to_adt(
         Minute => repr::adt::datetime::DateTimeField::Minute,
         Second => repr::adt::datetime::DateTimeField::Second,
         Milliseconds => repr::adt::datetime::DateTimeField::Milliseconds,
+        Microseconds => repr::adt::datetime::DateTimeField::Microseconds,
     }
 }
 

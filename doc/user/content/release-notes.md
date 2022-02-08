@@ -124,6 +124,10 @@ changes that have not yet been documented.
 - **Breaking change.** Change the output of [`format_type`](/sql/functions/#system-information-func)
   to match Postgres for some specific types.
 
+- Add `microsecond`, `month`, `decade`, `century`, `millennium` units
+  to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
+  format {{% gh 10532 %}}.
+
 - Improve millisecond parsing for [`interval`](/sql/types/interval) using the
   PostgreSQL verbose format {{% gh 6420 %}}.
 
