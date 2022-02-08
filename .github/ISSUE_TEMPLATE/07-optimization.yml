@@ -17,18 +17,18 @@ body:
       description: |
         Each question should be answered comprehensively but using as few sentences as possible. This is the only mandatory section needed for the issue to be discussed in a refinement session.
       value: |
-        ### What does the transformation do?
+        #### What does the transformation do?
         <!-- Give a representative SQL query. -->
 
-        ### Why should we add it?
+        #### Why should we add it?
 
-        ### When would it be good to have?
+        #### When would it be good to have?
 
-        ### When would it be ineffectual?
+        #### When would it be ineffectual?
 
-        ### When would be bad to have?
+        #### When would be bad to have?
 
-        ### In the worst case, how would it degrade performance?
+        #### In the worst case, how would it degrade performance?
     validations:
       required: true
   - type: textarea
@@ -46,11 +46,11 @@ body:
 
         If the transformation is always good to have, you only have to fill out the first subsection.
       value: |
-        ### What is the benefit of the transformation?
+        #### What is the benefit of the transformation?
 
-        ### What is the overhead?
+        #### What is the overhead?
 
-        ### When would the transformation be worthwhile?
+        #### When would the transformation be worthwhile?
         <!-- Intuitively, this should be when benefit > overhead, but sometimes a benefit with regards to X comes at a cost with regards to Y, and it would be worthwhile to discuss when it is worthwhile to sacrifice Y to gain a benefit in X. -->
   - type: textarea
     attributes:
@@ -63,10 +63,10 @@ body:
       description: |
         Implementation details can be filled in only after the proposal was approved during a refinement session (in general this decision should be informed by the accompanying cost model).
       value: |
-        ### Describe the implementation.
+        #### Describe the implementation.
 
-        ### Which queries will do better with the given implementation?
+        #### Which queries will do better with the given implementation?
 
-        ### Which queries will do worse?
+        #### Which queries will do worse?
 
-        ### Break the implementation down into stages.
+        #### Break the implementation down into stages.
