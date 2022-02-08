@@ -187,6 +187,7 @@ class KafkaPartitions(Generator):
         print(
             """> CREATE MATERIALIZED SOURCE s1
             FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-partitions-${testdrive.seed}'
+            WITH (topic_metadata_refresh_interval_ms = 1000)
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
             ENVELOPE NONE;
             """
