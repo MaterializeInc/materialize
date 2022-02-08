@@ -489,7 +489,7 @@ Improve PostgreSQL compatibility:
   error of the form "exceeded recursion limit of {X}".
 
 - Correctly autogenerate views from Postgres sources during [`CREATE
-  VIEWS`](/sql/create-source/postgres/#creating-views) when the upstream table
+  VIEWS`](/sql/create-source/postgres/#creating-replication-views) when the upstream table
   contains numeric columns with no specified scale and precision {{% gh 9268
   %}}.
 
