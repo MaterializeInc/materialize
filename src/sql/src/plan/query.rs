@@ -2844,6 +2844,7 @@ fn plan_expr_inner<'a>(
         Expr::AnySubquery { .. } => unreachable!("Expr::AnySubquery not desugared"),
         Expr::AllSubquery { .. } => unreachable!("Expr::AllSubquery not desugared"),
         Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
+        Expr::Like { .. } => unreachable!("Expr::Between not desugared"),
     }
 }
 
