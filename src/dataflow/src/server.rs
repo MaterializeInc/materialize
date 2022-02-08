@@ -671,19 +671,13 @@ where
                         }
                     }
 
-                    let sources_captured = render::build_storage_dataflow(
-                        self.timely_worker,
-                        &mut self.storage_state,
-                        &dataflow,
-                        self.now.clone(),
-                        &self.dataflow_source_metrics,
-                    );
-
-                    render::build_compute_dataflow(
+                    render::build_dataflow(
                         self.timely_worker,
                         &mut self.compute_state,
-                        sources_captured,
+                        &mut self.storage_state,
                         dataflow,
+                        self.now.clone(),
+                        &self.dataflow_source_metrics,
                         &self.dataflow_sink_metrics,
                     );
                 }
