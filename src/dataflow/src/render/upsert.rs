@@ -47,7 +47,7 @@ struct UpsertSourceData {
 /// When `persist_config` is `Some` this will write upsert state to the configured persistent
 /// collection and restore state from it. This does now, however, seal the backing collection. It
 /// is the responsibility of the caller to ensure that the collection is sealed up.
-pub(crate) fn upsert<G>(
+pub(crate) fn upsert<G, F, P>(
     source_name: &str,
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
@@ -58,12 +58,33 @@ pub(crate) fn upsert<G>(
     persist_config: Option<
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
     >,
+    // this callback is designed to allow the CALLER to
+    // transform whatever `Row` comes out of decode for the VALUE (not key)
+    // and produce either a `None` (say they determined the row MEANS `null`
+    // somehow) or `Some(Row)`, where the internal row is ONLY the values
+    // (no keys). This allows the upsert core logic to try to trim
+    // copies of keys as much as possible.
+    //
+    // It is also passed a mutable refernce to a `Row` to be used as
+    // an efficient way to pack rows (using `Row::finish_and_reuse`),
+    // if thats desired
+    //
+    // TODO(guswynn): this is currently unused by `persistent_upsert`,
+    // merge `persistent_upsert` and `upsert_core`
+    transform_value: F,
+    // `post_process` is a callback passed the current size of the data
+    // `upsert_core` is tracking, allowing callees to set metrics, etc.
+    // TODO(guswynn): this is currently unused by `persistent_upsert`,
+    // merge `persistent_upsert` and `upsert_core`
+    post_process: P,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
+    F: FnMut(Row, &mut Row) -> Option<Row> + 'static,
+    P: Fn(u64) + 'static,
 {
     // Currently, the upsert-specific transformations run in the
     // following order:
@@ -152,6 +173,8 @@ where
                 predicates,
                 position_or,
                 as_of_frontier,
+                transform_value,
+                post_process,
             );
 
             let upsert_errs = operator::empty(&stream.scope());
@@ -290,16 +313,21 @@ fn evaluate(
 }
 
 /// Internal core upsert logic.
-fn upsert_core<G>(
+fn upsert_core<G, F, P>(
     stream: &Stream<G, DecodeResult>,
     key_arity: usize,
     source_arity: usize,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
+    // See the docs on `self::upsert`
+    mut transform_value: F,
+    post_process: P,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
 where
     G: Scope<Timestamp = Timestamp>,
+    F: FnMut(Row, &mut Row) -> Option<Row> + 'static,
+    P: Fn(u64) + 'static,
 {
     let result_stream = stream.unary_frontier(
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
@@ -346,6 +374,11 @@ where
                             .entry(key)
                             .or_insert_with(Default::default);
 
+                        let new_value = match new_value {
+                            Some(Ok(row)) => transform_value(row, &mut row_packer).map(Ok),
+                            other => other,
+                        };
+
                         let new_entry = UpsertSourceData {
                             raw_data: SourceData {
                                 value: new_value.map(ResultExt::err_into),
@@ -389,23 +422,25 @@ where
                                 Some(Ok(decoded_key)) => {
                                     let decoded_value = match data.raw_data.value {
                                         None => Ok(None),
-                                        Some(value) => value.and_then(|row| {
-                                            let mut datums = Vec::with_capacity(source_arity);
+                                        Some(value) => {
+                                            value.and_then(|row| {
+                                                let mut datums = Vec::with_capacity(source_arity);
 
-                                            // The datums we send to `evaluate` contain the keys
-                                            // and the values in order, so indexing works
-                                            datums.extend(decoded_key.iter());
+                                                // The datums we send to `evaluate` contain the keys
+                                                // and the values in order, so indexing works
+                                                datums.extend(decoded_key.iter());
 
-                                            datums.extend(row.iter());
-                                            datums.extend(data.metadata.iter());
-                                            evaluate(
-                                                &datums,
-                                                &predicates,
-                                                &position_or,
-                                                &mut row_packer,
-                                            )
-                                            .map_err(DataflowError::from)
-                                        }),
+                                                datums.extend(row.iter());
+                                                datums.extend(data.metadata.iter());
+                                                evaluate(
+                                                    &datums,
+                                                    &predicates,
+                                                    &position_or,
+                                                    &mut row_packer,
+                                                )
+                                                .map_err(DataflowError::from)
+                                            })
+                                        }
                                     };
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
                                     // We store errors as well as non-None values, so that they can be
@@ -473,6 +508,7 @@ where
                 for time in removed_times {
                     to_send.remove(&time);
                 }
+                post_process(current_values.len() as u64)
             }
         },
     );

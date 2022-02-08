@@ -405,6 +405,7 @@ where
                         // render envelopes
                         match &envelope {
                             SourceEnvelope::Debezium(dbz_envelope) => {
+                                let key_arity = key_desc.map(|kd| kd.arity());
                                 let (stream, errors) = super::debezium::render(
                                     dbz_envelope,
                                     &results,
@@ -412,12 +413,11 @@ where
                                     storage_state.metrics.clone(),
                                     src_id,
                                     dataflow_id,
-                                )
-                                .inner
-                                .ok_err(|(res, time, diff)| match res {
-                                    Ok(v) => Ok((v, time, diff)),
-                                    Err(e) => Err((e, time, diff)),
-                                });
+                                    as_of_frontier.clone(),
+                                    &mut linear_operators,
+                                    key_arity,
+                                    src.desc.typ().arity(),
+                                );
                                 (stream.as_collection(), Some(errors.as_collection()))
                             }
                             SourceEnvelope::Upsert(_key_envelope) => {
@@ -437,6 +437,8 @@ where
                                     source_persist_config
                                         .as_ref()
                                         .map(|config| config.upsert_config().clone()),
+                                    |row, _| Some(row),
+                                    |_| {},
                                 );
 
                                 // When persistence is enabled we need to seal up both the
