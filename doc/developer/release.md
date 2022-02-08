@@ -18,8 +18,8 @@ section of our docs.
 The release process kicks off every week on Wednesday morning, where "morning"
 is determined by the timezone of that week's release manager. The release
 commit, however, is not dependent on when the release process starts: it is
-always chosen to be the *last* commit on `main` at 12:01am EST (00:01 EST) on
-Wednesday. If there were outstanding release blockers at 12:01am EST, either the
+always chosen to be the *last* commit on `main` at 05:00 UTC (midnight EST) on
+Wednesday. If there were outstanding release blockers at 05:00 UTC, either the
 fixes need to be backported on top of that commit or the release needs to be
 skipped.
 
