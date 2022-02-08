@@ -34,10 +34,15 @@ pub use controller::Controller;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
     /// A compute command.
-    Compute(ComputeCommand),
+    Compute(ComputeCommand, ComputeInstanceId),
     /// A storage command.
     Storage(StorageCommand),
 }
+
+/// An abstraction allowing us to name difference compute instances.
+type ComputeInstanceId = usize;
+/// A default value whose use we can track down and remove later.
+pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
 
 /// Commands related to the computation and maintenance of views.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
@@ -47,6 +52,10 @@ pub enum Command {
     doc = "The kind of compute command that was received"
 )]
 pub enum ComputeCommand {
+    /// Indicates the creation of an instance, and is the first command for its compute instance.
+    CreateInstance,
+    /// Indicates the termination of an instance, and is the last command for its compute instance.
+    DropInstance,
     /// Create a sequence of dataflows.
     ///
     /// Each of the dataflows must contain `as_of` members that are valid
@@ -113,6 +122,8 @@ impl ComputeCommandKind {
     pub fn metric_name(&self) -> &'static str {
         match self {
             // TODO: This breaks metrics. Not sure that's a problem.
+            ComputeCommandKind::CreateInstance => "create_instance",
+            ComputeCommandKind::DropInstance => "drop_instance",
             ComputeCommandKind::AllowIndexCompaction => "allow_index_compaction",
             ComputeCommandKind::CancelPeek => "cancel_peek",
             ComputeCommandKind::CreateDataflows => "create_dataflows",
@@ -215,7 +226,7 @@ impl Command {
             vec![self]
         } else {
             match self {
-                Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
+                Command::Compute(ComputeCommand::CreateDataflows(dataflows), instance) => {
                     let mut dataflows_parts = vec![Vec::new(); parts];
 
                     for dataflow in dataflows {
@@ -251,7 +262,7 @@ impl Command {
                     }
                     dataflows_parts
                         .into_iter()
-                        .map(|x| Command::Compute(ComputeCommand::CreateDataflows(x)))
+                        .map(|x| Command::Compute(ComputeCommand::CreateDataflows(x), instance))
                         .collect()
                 }
                 Command::Storage(StorageCommand::Insert { id, updates }) => {
@@ -275,7 +286,7 @@ impl Command {
     /// added to `cease` will uninstall frontier tracking.
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
+            Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
                 for dataflow in dataflows.iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         start.push(*sink_id)
@@ -285,12 +296,12 @@ impl Command {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::DropIndexes(index_ids)) => {
+            Command::Compute(ComputeCommand::DropIndexes(index_ids), _instance) => {
                 for id in index_ids.iter() {
                     cease.push(*id);
                 }
             }
-            Command::Compute(ComputeCommand::DropSinks(sink_ids)) => {
+            Command::Compute(ComputeCommand::DropSinks(sink_ids), _instance) => {
                 for id in sink_ids.iter() {
                     cease.push(*id);
                 }
@@ -301,7 +312,7 @@ impl Command {
             Command::Storage(StorageCommand::DropSourceTimestamping { id }) => {
                 cease.push(*id);
             }
-            Command::Compute(ComputeCommand::EnableLogging(logging_config)) => {
+            Command::Compute(ComputeCommand::EnableLogging(logging_config), _instance) => {
                 start.extend(logging_config.log_identifiers());
             }
             _ => {
@@ -314,7 +325,7 @@ impl Command {
     /// Must remain unique over all variants of `Command`.
     pub fn metric_name(&self) -> &'static str {
         match self {
-            Command::Compute(command) => ComputeCommandKind::from(command).metric_name(),
+            Command::Compute(command, _instance) => ComputeCommandKind::from(command).metric_name(),
             Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
         }
     }
@@ -323,24 +334,38 @@ impl Command {
 /// Methods that reflect actions that can be performed against a compute instance.
 #[async_trait::async_trait]
 pub trait ComputeClient: Client {
-    async fn create_dataflows(&mut self, dataflows: Vec<DataflowDescription<crate::plan::Plan>>) {
-        self.send(Command::Compute(ComputeCommand::CreateDataflows(dataflows)))
-            .await
-    }
-    async fn drop_sinks(&mut self, sink_identifiers: Vec<GlobalId>) {
-        self.send(Command::Compute(ComputeCommand::DropSinks(
-            sink_identifiers,
-        )))
+    async fn create_dataflows(
+        &mut self,
+        instance: ComputeInstanceId,
+        dataflows: Vec<DataflowDescription<crate::plan::Plan>>,
+    ) {
+        self.send(Command::Compute(
+            ComputeCommand::CreateDataflows(dataflows),
+            instance,
+        ))
         .await
     }
-    async fn drop_indexes(&mut self, index_identifiers: Vec<GlobalId>) {
-        self.send(Command::Compute(ComputeCommand::DropIndexes(
-            index_identifiers,
-        )))
+    async fn drop_sinks(&mut self, instance: ComputeInstanceId, sink_identifiers: Vec<GlobalId>) {
+        self.send(Command::Compute(
+            ComputeCommand::DropSinks(sink_identifiers),
+            instance,
+        ))
+        .await
+    }
+    async fn drop_indexes(
+        &mut self,
+        instance: ComputeInstanceId,
+        index_identifiers: Vec<GlobalId>,
+    ) {
+        self.send(Command::Compute(
+            ComputeCommand::DropIndexes(index_identifiers),
+            instance,
+        ))
         .await
     }
     async fn peek(
         &mut self,
+        instance: ComputeInstanceId,
         id: GlobalId,
         key: Option<Row>,
         conn_id: u32,
@@ -348,30 +373,42 @@ pub trait ComputeClient: Client {
         finishing: RowSetFinishing,
         map_filter_project: expr::SafeMfpPlan,
     ) {
-        self.send(Command::Compute(ComputeCommand::Peek {
-            id,
-            key,
-            conn_id,
-            timestamp,
-            finishing,
-            map_filter_project,
-        }))
+        self.send(Command::Compute(
+            ComputeCommand::Peek {
+                id,
+                key,
+                conn_id,
+                timestamp,
+                finishing,
+                map_filter_project,
+            },
+            instance,
+        ))
         .await
     }
-    async fn cancel_peek(&mut self, conn_id: u32) {
-        self.send(Command::Compute(ComputeCommand::CancelPeek { conn_id }))
-            .await
-    }
-    async fn allow_index_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
-        self.send(Command::Compute(ComputeCommand::AllowIndexCompaction(
-            frontiers,
-        )))
+    async fn cancel_peek(&mut self, instance: ComputeInstanceId, conn_id: u32) {
+        self.send(Command::Compute(
+            ComputeCommand::CancelPeek { conn_id },
+            instance,
+        ))
         .await
     }
-    async fn enable_logging(&mut self, logging_config: LoggingConfig) {
-        self.send(Command::Compute(ComputeCommand::EnableLogging(
-            logging_config,
-        )))
+    async fn allow_index_compaction(
+        &mut self,
+        instance: ComputeInstanceId,
+        frontiers: Vec<(GlobalId, Antichain<Timestamp>)>,
+    ) {
+        self.send(Command::Compute(
+            ComputeCommand::AllowIndexCompaction(frontiers),
+            instance,
+        ))
+        .await
+    }
+    async fn enable_logging(&mut self, instance: ComputeInstanceId, logging_config: LoggingConfig) {
+        self.send(Command::Compute(
+            ComputeCommand::EnableLogging(logging_config),
+            instance,
+        ))
         .await
     }
 }
