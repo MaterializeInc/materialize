@@ -121,6 +121,9 @@ changes that have not yet been documented.
 
   This new behavior matches PostgreSQL v14 {{% gh 9853 %}}.
 
+- **Breaking change.** Change the output of [`format_type`](/sql/functions/#system-information-func)
+  to match Postgres for some specific types.
+
 - Improve millisecond parsing for [`interval`](/sql/types/interval) using the
   PostgreSQL verbose format {{% gh 6420 %}}.
 

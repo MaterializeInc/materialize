@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use pgrepr::Type;
 use repr::adt::system::{Oid, RegClass, RegProc, RegType};
 
 use crate::EvalError;
@@ -57,5 +58,15 @@ sqlfunc!(
             feature: "pg_get_constraintdef".to_string(),
             issue_no: Some(9483),
         })
+    }
+);
+
+sqlfunc!(
+    fn mz_type_name<'a>(oid: Oid) -> Option<String> {
+        if let Some(t) = Type::from_oid(oid.0 as u32) {
+            Some(t.name().to_string())
+        } else {
+            None
+        }
     }
 );

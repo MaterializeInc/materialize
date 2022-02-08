@@ -3412,6 +3412,7 @@ pub enum UnaryFunc {
     PgColumnSize(PgColumnSize),
     PgGetConstraintdef(PgGetConstraintdef),
     MzRowSize(MzRowSize),
+    MzTypeName(MzTypeName),
 }
 
 derive_unary!(
@@ -3485,6 +3486,7 @@ derive_unary!(
     PgColumnSize,
     PgGetConstraintdef,
     MzRowSize,
+    MzTypeName,
     IsNull,
     IsTrue,
     IsFalse,
@@ -3614,6 +3616,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | PgGetConstraintdef(_)
             | MzRowSize(_)
+            | MzTypeName(_)
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
@@ -3839,6 +3842,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | PgGetConstraintdef(_)
             | MzRowSize(_)
+            | MzTypeName(_)
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
@@ -4089,6 +4093,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | PgGetConstraintdef(_)
             | MzRowSize(_)
+            | MzTypeName(_)
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
@@ -4290,6 +4295,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | PgGetConstraintdef(_)
             | MzRowSize(_)
+            | MzTypeName(_)
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
@@ -4360,6 +4366,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | PgGetConstraintdef(_)
             | MzRowSize(_)
+            | MzTypeName(_)
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)

@@ -121,6 +121,30 @@ impl Type {
             postgres_types::Type::REGCLASS => Some(Type::RegClass),
             postgres_types::Type::REGPROC => Some(Type::RegProc),
             postgres_types::Type::REGTYPE => Some(Type::RegType),
+            postgres_types::Type::BOOL_ARRAY => Some(Type::Array(Box::new(Type::Bool))),
+            postgres_types::Type::BYTEA_ARRAY => Some(Type::Array(Box::new(Type::Bytea))),
+            postgres_types::Type::BPCHAR_ARRAY => Some(Type::Array(Box::new(Type::Char))),
+            postgres_types::Type::DATE_ARRAY => Some(Type::Array(Box::new(Type::Date))),
+            postgres_types::Type::FLOAT4_ARRAY => Some(Type::Array(Box::new(Type::Float4))),
+            postgres_types::Type::FLOAT8_ARRAY => Some(Type::Array(Box::new(Type::Float8))),
+            postgres_types::Type::INT2_ARRAY => Some(Type::Array(Box::new(Type::Int2))),
+            postgres_types::Type::INT4_ARRAY => Some(Type::Array(Box::new(Type::Int4))),
+            postgres_types::Type::INT8_ARRAY => Some(Type::Array(Box::new(Type::Int8))),
+            postgres_types::Type::INTERVAL_ARRAY => Some(Type::Array(Box::new(Type::Interval))),
+            postgres_types::Type::JSONB_ARRAY => Some(Type::Array(Box::new(Type::Jsonb))),
+            postgres_types::Type::NUMERIC_ARRAY => Some(Type::Array(Box::new(Type::Numeric))),
+            postgres_types::Type::OID_ARRAY => Some(Type::Array(Box::new(Type::Oid))),
+            postgres_types::Type::TEXT_ARRAY => Some(Type::Array(Box::new(Type::Text))),
+            postgres_types::Type::TIME_ARRAY => Some(Type::Array(Box::new(Type::Time))),
+            postgres_types::Type::TIMESTAMP_ARRAY => Some(Type::Array(Box::new(Type::Timestamp))),
+            postgres_types::Type::TIMESTAMPTZ_ARRAY => {
+                Some(Type::Array(Box::new(Type::TimestampTz)))
+            }
+            postgres_types::Type::UUID_ARRAY => Some(Type::Array(Box::new(Type::Uuid))),
+            postgres_types::Type::VARCHAR_ARRAY => Some(Type::Array(Box::new(Type::VarChar))),
+            postgres_types::Type::REGCLASS_ARRAY => Some(Type::Array(Box::new(Type::RegClass))),
+            postgres_types::Type::REGPROC_ARRAY => Some(Type::Array(Box::new(Type::RegProc))),
+            postgres_types::Type::REGTYPE_ARRAY => Some(Type::Array(Box::new(Type::RegType))),
             _ => None,
         }
     }
@@ -194,6 +218,7 @@ impl Type {
             &postgres_types::Type::DATE_ARRAY => "date[]",
             &postgres_types::Type::FLOAT4_ARRAY => "real[]",
             &postgres_types::Type::FLOAT8_ARRAY => "double precision[]",
+            &postgres_types::Type::INT2_ARRAY => "smallint[]",
             &postgres_types::Type::INT4_ARRAY => "integer[]",
             &postgres_types::Type::INT8_ARRAY => "bigint[]",
             &postgres_types::Type::INTERVAL_ARRAY => "interval[]",
