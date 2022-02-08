@@ -43,12 +43,19 @@ where
     I: IntoIterator,
     <I as IntoIterator>::Item: EventIterator<T, D> + 'static,
 {
+    /// Replay a collection of [EventIterator]s into a Timely stream.
+    ///
+    /// * `scope`: The [Scope] to replay into.
+    /// * `name`: Human-readable debug name of the Timely operator.
+    /// * `period`: Reschedule the operator once the period has elapsed.
+    ///    Provide [Duration::MAX] to disable periodic scheduling.
+    /// * `rc_activator`: An activator to trigger the operator.
     fn mz_replay<S: Scope<Timestamp = T>>(
         self,
         scope: &mut S,
         name: &str,
         period: Duration,
-        mut rc_activator: RcActivator,
+        rc_activator: RcActivator,
     ) -> Stream<S, D> {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
@@ -68,9 +75,15 @@ where
 
         builder.build(move |progress| {
             rc_activator.ack();
-            if last_active + period <= Instant::now() || !started {
+            if last_active
+                .checked_add(period)
+                .map_or(false, |next_active| next_active <= Instant::now())
+                || !started
+            {
                 last_active = Instant::now();
-                activator.activate_after(period);
+                if period < Duration::MAX {
+                    activator.activate_after(period);
+                }
             }
 
             if !started {

@@ -82,13 +82,12 @@ where
 
     fn render_continuous_sink(
         &self,
-        _compute_state: &mut crate::render::ComputeState,
-        storage_state: &mut crate::render::StorageState,
+        compute_state: &mut crate::render::ComputeState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         metrics: &SinkBaseMetrics,
-    ) -> Option<Box<dyn Any>>
+    ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
     {
@@ -142,7 +141,7 @@ where
             &metrics.kafka,
         );
 
-        storage_state
+        compute_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 
@@ -951,7 +950,7 @@ fn kafka<G>(
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
-) -> Box<dyn Any>
+) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1028,7 +1027,7 @@ pub fn produce_to_kafka<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
-) -> Box<dyn Any>
+) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1288,7 +1287,7 @@ where
         }),
     );
 
-    Box::new(KafkaSinkToken { shutdown_flag })
+    Rc::new(KafkaSinkToken { shutdown_flag })
 }
 
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.

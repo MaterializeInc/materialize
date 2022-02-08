@@ -24,7 +24,6 @@ use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
-use crate::render::RelevantTokens;
 use crate::sink::SinkBaseMetrics;
 
 impl<G> Context<G, Row, Timestamp>
@@ -35,8 +34,7 @@ where
     pub(crate) fn export_sink(
         &mut self,
         compute_state: &mut crate::render::ComputeState,
-        storage_state: &mut crate::render::StorageState,
-        tokens: &mut RelevantTokens,
+        tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
@@ -45,15 +43,10 @@ where
         let sink_render = get_sink_render_for(&sink.connector);
 
         // put together tokens that belong to the export
-        let mut needed_source_tokens = Vec::new();
-        let mut needed_additional_tokens = Vec::new();
-        let mut needed_sink_tokens = Vec::new();
+        let mut needed_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(addls) = tokens.additional_tokens.get(&import_id) {
-                needed_additional_tokens.extend_from_slice(addls);
-            }
-            if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(Rc::clone(&source_token));
+            if let Some(token) = tokens.get(&import_id) {
+                needed_tokens.push(Rc::clone(&token))
             }
         }
 
@@ -86,27 +79,16 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
 
-        let sink_token = sink_render.render_continuous_sink(
-            compute_state,
-            storage_state,
-            sink,
-            sink_id,
-            collection,
-            metrics,
-        );
+        let sink_token =
+            sink_render.render_continuous_sink(compute_state, sink, sink_id, collection, metrics);
 
         if let Some(sink_token) = sink_token {
-            needed_sink_tokens.push(sink_token);
+            needed_tokens.push(sink_token);
         }
 
-        let tokens = Rc::new((
-            needed_sink_tokens,
-            needed_source_tokens,
-            needed_additional_tokens,
-        ));
         compute_state
             .dataflow_tokens
-            .insert(sink_id, Box::new(tokens));
+            .insert(sink_id, Box::new(needed_tokens));
     }
 }
 
@@ -234,12 +216,11 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::render::ComputeState,
-        storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         metrics: &SinkBaseMetrics,
-    ) -> Option<Box<dyn Any>>
+    ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>;
 }

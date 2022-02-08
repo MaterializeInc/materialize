@@ -9,6 +9,7 @@
 
 use std::any::Any;
 use std::fs::OpenOptions;
+use std::rc::Rc;
 
 use differential_dataflow::{Collection, Hashable};
 
@@ -46,12 +47,11 @@ where
     fn render_continuous_sink(
         &self,
         _compute_state: &mut crate::render::ComputeState,
-        _storage_state: &mut crate::render::StorageState,
         _sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         _metrics: &SinkBaseMetrics,
-    ) -> Option<Box<dyn Any>>
+    ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
     {

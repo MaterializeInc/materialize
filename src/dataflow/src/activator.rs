@@ -47,7 +47,7 @@ impl RcActivator {
     }
 
     /// Register an additional [Activator] with this [RcActivator].
-    pub fn register(&mut self, activator: Activator) {
+    pub fn register(&self, activator: Activator) {
         self.inner.borrow_mut().register(activator)
     }
 
@@ -55,12 +55,12 @@ impl RcActivator {
     ///
     /// The implementation is free to ignore activations and only release them once a sufficient
     /// volume has been accumulated.
-    pub fn activate(&mut self) {
+    pub fn activate(&self) {
         self.inner.borrow_mut().activate()
     }
 
     /// Acknowledge the activation, which enables new activations to be scheduled.
-    pub fn ack(&mut self) {
+    pub fn ack(&self) {
         self.inner.borrow_mut().ack()
     }
 }

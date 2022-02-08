@@ -102,18 +102,23 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::rc::Weak;
+use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
+use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::to_stream::ToStream;
+use timely::dataflow::operators::Capture;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
+use crate::activator::RcActivator;
 use dataflow_types::*;
 use expr::{GlobalId, Id};
 use itertools::Itertools;
@@ -123,10 +128,12 @@ use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::event::ActivatedEventPusher;
 use crate::metrics::Metrics;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::sources::PersistedSourceManager;
+use crate::replay::MzReplay;
 use crate::server::LocalInput;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -160,6 +167,9 @@ pub struct ComputeState {
     /// The entries are pairs of sink identifier (to identify the tail instance)
     /// and the response itself.
     pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+    /// Frontier of sink writes (all subsequent writes will be at times at or
+    /// equal to this frontier)
+    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
 }
 
 /// Worker-local state related to the ingress or egress of collections of data.
@@ -183,41 +193,39 @@ pub struct StorageState {
     pub persisted_sources: PersistedSourceManager,
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
-    /// Frontier of sink writes (all subsequent writes will be at times at or
-    /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
 }
 
-/// A container for "tokens" that are relevant to an in-construction dataflow.
-///
-/// Tokens are used by consumers of data to keep their sources of data running.
-/// Once all tokens referencing a source are dropped, the source can shut down,
-/// which will wind down (eventually) the dataflow containing it.
-#[derive(Default)]
-pub struct RelevantTokens {
-    /// The source tokens for all sources that have been built in this context.
-    pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
-    /// Any other tokens that need to be dropped when an object is dropped.
-    pub additional_tokens: HashMap<GlobalId, Vec<Rc<dyn Any>>>,
-    /// Tokens for CDCv2 capture sources that have been built in this context.
-    pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
+/// Information about each source that must be communicated between storage and compute layers.
+pub struct SourceBoundary {
+    /// Captured `row` updates representing a differential collection.
+    pub ok:
+        ActivatedEventPusher<Rc<EventLink<repr::Timestamp, (Row, repr::Timestamp, repr::Diff)>>>,
+    /// Captured error updates representing a differential collection.
+    pub err: ActivatedEventPusher<
+        Rc<EventLink<repr::Timestamp, (DataflowError, repr::Timestamp, repr::Diff)>>,
+    >,
+    /// A token that should be dropped to terminate the source.
+    pub token: Rc<dyn std::any::Any>,
 }
 
-/// Build a dataflow from a description.
-pub fn build_dataflow<A: Allocate>(
+/// Assemble the "storage" side of a dataflow, i.e. the sources.
+///
+/// This method creates a new dataflow to host the implementations of sources for the `dataflow`
+/// argument, and returns assets for each source that can import the results into a new dataflow.
+pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
-    compute_state: &mut ComputeState,
     storage_state: &mut StorageState,
-    dataflow: DataflowDescription<plan::Plan>,
+    dataflow: &DataflowDescription<plan::Plan>,
     now: NowFn,
     source_metrics: &SourceBaseMetrics,
-    sink_metrics: &SinkBaseMetrics,
-) {
+) -> BTreeMap<GlobalId, SourceBoundary> {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let materialized_logging = timely_worker.log_register().get("materialized");
+
+    let mut results = BTreeMap::new();
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -225,8 +233,9 @@ pub fn build_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
-            let mut tokens = RelevantTokens::default();
+            let as_of = dataflow.as_of.clone().unwrap();
+            let dataflow_id = scope.addr().into_element();
+            let debug_name = format!("{}-sources", dataflow.debug_name);
 
             assert!(
                 !dataflow
@@ -241,31 +250,96 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (src_id, source) in &dataflow.source_imports {
-                let (collection_bundle, (source_token, additional_tokens)) =
-                    crate::render::sources::import_source(
-                        &context.debug_name,
-                        context.dataflow_id,
-                        &context.as_of_frontier,
-                        source.clone(),
-                        storage_state,
-                        region,
-                        materialized_logging.clone(),
-                        src_id.clone(),
-                        now.clone(),
-                        source_metrics,
-                    );
+                let ((ok, err), token) = crate::render::sources::import_source(
+                    &debug_name,
+                    dataflow_id,
+                    &as_of,
+                    source.clone(),
+                    storage_state,
+                    region,
+                    materialized_logging.clone(),
+                    src_id.clone(),
+                    now.clone(),
+                    source_metrics,
+                );
 
+                let ok_activator = RcActivator::new(format!("{debug_name}-ok"), 1);
+                let err_activator = RcActivator::new(format!("{debug_name}-err"), 1);
+
+                let ok_handle =
+                    ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator.clone());
+                let err_handle =
+                    ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator.clone());
+
+                results.insert(
+                    *src_id,
+                    SourceBoundary {
+                        ok: ActivatedEventPusher::<_>::clone(&ok_handle),
+                        err: ActivatedEventPusher::<_>::clone(&err_handle),
+                        token,
+                    },
+                );
+
+                ok.inner.capture_into(ok_handle);
+                err.inner.capture_into(err_handle);
+            }
+        })
+    });
+
+    results
+}
+
+/// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
+///
+/// This method imports sources from provided assets, and then builds the remaining
+/// dataflow using "compute-local" assets like shared arrangements, and producing
+/// both arrangements and sinks.
+pub fn build_compute_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    compute_state: &mut ComputeState,
+    sources: BTreeMap<GlobalId, SourceBoundary>,
+    dataflow: DataflowDescription<plan::Plan>,
+    sink_metrics: &SinkBaseMetrics,
+) {
+    let worker_logging = timely_worker.log_register().get("timely");
+    let name = format!("Dataflow: {}", &dataflow.debug_name);
+
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // The scope.clone() occurs to allow import in the region.
+        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // so that other similar uses (e.g. with iterative scopes) do not require weird
+        // alternate type signatures.
+        scope.clone().region_named(&name, |region| {
+            let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
+            let mut tokens = BTreeMap::new();
+
+            // Import declared sources into the rendering context.
+            for (source_id, source) in sources.into_iter() {
                 // Associate collection bundle with the source identifier.
-                context.insert_id(Id::Global(*src_id), collection_bundle);
+                let ok = Some(source.ok.inner)
+                    .mz_replay(
+                        region,
+                        &format!("{name}-{source_id}"),
+                        Duration::MAX,
+                        source.ok.activator,
+                    )
+                    .as_collection();
+                let err = Some(source.err.inner)
+                    .mz_replay(
+                        region,
+                        &format!("{name}-{source_id}-err"),
+                        Duration::MAX,
+                        source.err.activator,
+                    )
+                    .as_collection();
+                context.insert_id(
+                    Id::Global(source_id),
+                    CollectionBundle::from_collections(ok, err),
+                );
 
                 // Associate returned tokens with the source identifier.
-                let prior = tokens.source_tokens.insert(*src_id, source_token);
+                let prior = tokens.insert(source_id, source.token);
                 assert!(prior.is_none());
-                tokens
-                    .additional_tokens
-                    .entry(*src_id)
-                    .or_insert_with(Vec::new)
-                    .extend(additional_tokens);
             }
 
             // Import declared indexes into the rendering context.
@@ -307,7 +381,6 @@ pub fn build_dataflow<A: Allocate>(
             for (sink_id, imports, sink) in sinks {
                 context.export_sink(
                     compute_state,
-                    storage_state,
                     &mut tokens,
                     imports,
                     sink_id,
@@ -326,7 +399,7 @@ where
     fn import_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut RelevantTokens,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
@@ -353,15 +426,10 @@ where
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                 ),
             );
-            tokens
-                .additional_tokens
-                .entry(idx_id)
-                .or_insert_with(Vec::new)
-                .push(Rc::new((
-                    ok_button.press_on_drop(),
-                    err_button.press_on_drop(),
-                    token,
-                )));
+            tokens.insert(
+                idx_id,
+                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+            );
         } else {
             panic!(
                 "import of index {} failed while building dataflow {}",
@@ -383,23 +451,18 @@ where
     fn export_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut RelevantTokens,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
         // put together tokens that belong to the export
-        let mut needed_source_tokens = Vec::new();
-        let mut needed_additional_tokens = Vec::new();
+        let mut needed_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(addls) = tokens.additional_tokens.get(&import_id) {
-                needed_additional_tokens.extend_from_slice(addls);
-            }
-            if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(Rc::clone(&source_token));
+            if let Some(token) = tokens.get(&import_id) {
+                needed_tokens.push(Rc::clone(&token));
             }
         }
-        let tokens = Rc::new((needed_source_tokens, needed_additional_tokens));
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(
                 "Arrangement alarmingly absent! id: {:?}",
@@ -410,7 +473,7 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {

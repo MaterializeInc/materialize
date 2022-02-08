@@ -69,7 +69,7 @@ pub(crate) fn import_table<G>(
     persisted_name: Option<String>,
 ) -> (
     LocalInput,
-    crate::render::CollectionBundle<G, Row, Timestamp>,
+    (Collection<G, Row>, Collection<G, DataflowError>),
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -124,16 +124,13 @@ where
         })
         .as_collection();
 
-    let collection_bundle =
-        crate::render::CollectionBundle::from_collections(ok_collection, err_collection);
-
-    (local_input, collection_bundle)
+    (local_input, (ok_collection, err_collection))
 }
 
 /// Constructs a `CollectionBundle` and tokens from source arguments.
 ///
-/// The first return value is the collection bundle, and the second a pair of source and additional
-/// tokens, that are used to control the demolition of the source.
+/// The first returned pair are the row and error collections, and the
+/// second is a token that will keep the source alive as long as it is held.
 pub(crate) fn import_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
@@ -150,11 +147,8 @@ pub(crate) fn import_source<G>(
     now: NowFn,
     base_metrics: &SourceBaseMetrics,
 ) -> (
-    crate::render::CollectionBundle<G, Row, Timestamp>,
-    (
-        Rc<Option<crate::source::SourceToken>>,
-        Vec<Rc<dyn std::any::Any>>,
-    ),
+    (Collection<G, Row>, Collection<G, DataflowError>),
+    Rc<dyn std::any::Any>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -167,7 +161,7 @@ where
     }
 
     // Tokens that we should return from the method.
-    let mut additional_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
+    let mut needed_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
 
     // Before proceeding, we may need to remediate sources with non-trivial relational
     // expressions that post-process the bare source. If the expression is trivial, a
@@ -180,12 +174,12 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
-            let (local_input, collection_bundle) =
+            let (local_input, (ok, err)) =
                 import_table(as_of_frontier, storage_state, scope, persisted_name);
             storage_state.local_inputs.insert(src_id, local_input);
 
             // TODO(mcsherry): Local tables are a special non-source we should relocate.
-            (collection_bundle, (Rc::new(None), Vec::new()))
+            ((ok, err), Rc::new(()))
         }
 
         SourceConnector::External {
@@ -380,7 +374,7 @@ where
                             schema_registry_config,
                             confluent_wire_format,
                         );
-                        additional_tokens.push(Rc::new(token));
+                        needed_tokens.push(Rc::new(token));
                         (oks, None)
                     } else {
                         let (results, extra_token) = match ok_source {
@@ -404,7 +398,7 @@ where
                             ),
                         };
                         if let Some(tok) = extra_token {
-                            additional_tokens.push(Rc::new(tok));
+                            needed_tokens.push(Rc::new(tok));
                         }
 
                         // render envelopes
@@ -470,7 +464,7 @@ where
                                         &src_id,
                                         &source_name,
                                         storage_state,
-                                        &mut additional_tokens,
+                                        &mut needed_tokens,
                                     );
 
                                     (sealed_upsert, upsert_err)
@@ -521,7 +515,7 @@ where
                                             &src_id,
                                             &source_name,
                                             storage_state,
-                                            &mut additional_tokens,
+                                            &mut needed_tokens,
                                         );
 
                                         // NOTE: Persistence errors don't go through the same
@@ -632,10 +626,6 @@ where
             use differential_dataflow::operators::consolidate::ConsolidateStream;
             collection = collection.consolidate_stream();
 
-            // Introduce the stream by name, as an unarranged collection.
-            let collection_bundle =
-                crate::render::CollectionBundle::from_collections(collection, err_collection);
-
             let source_token = Rc::new(capability);
 
             // We also need to keep track of this mapping globally to activate sources
@@ -646,8 +636,10 @@ where
                 .or_insert_with(Vec::new)
                 .push(Rc::downgrade(&source_token));
 
-            // Return the source token for capability manipulation, and any additional tokens.
-            (collection_bundle, (source_token, additional_tokens))
+            needed_tokens.push(source_token);
+
+            // Return the collections and any needed tokens.
+            ((collection, err_collection), Rc::new(needed_tokens))
         }
     }
 }
@@ -803,7 +795,7 @@ fn seal_and_await<G, D1, D2, K1, V1, K2, V2>(
     source_id: &GlobalId,
     source_name: &str,
     storage_state: &mut StorageState,
-    additional_tokens: &mut Vec<Rc<dyn std::any::Any>>,
+    needed_tokens: &mut Vec<Rc<dyn std::any::Any>>,
 ) -> Stream<G, (D1, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -814,12 +806,12 @@ where
     K2: Codec + timely::Data,
     V2: Codec + timely::Data,
 {
-    let sealed_stream = stream.conditional_seal(
-        &source_name,
-        bindings_stream,
-        write.clone(),
-        bindings_write.clone(),
-    );
+    let mut seal_handle = MultiWriteHandle::new(&write);
+    seal_handle
+        .add_stream(&bindings_write)
+        .expect("handles known to be from same persist runtime");
+
+    let sealed_stream = stream.seal(&source_name, vec![bindings_stream.probe()], seal_handle);
 
     // The compaction since of persisted sources is upper-bounded by two frontiers: a) the
     // compaction that the coordinator allows, and b) the seal frontier of the involved persistent
@@ -848,7 +840,7 @@ where
         compaction_handle,
     );
 
-    additional_tokens.push(source_token);
+    needed_tokens.push(source_token);
 
     // Don't send data forward to "dataflow" until the frontier
     // tells us that we both persisted and sealed it.

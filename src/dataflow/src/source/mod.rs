@@ -268,13 +268,6 @@ pub struct SourceToken {
     activator: Activator,
 }
 
-impl SourceToken {
-    /// Re-activates the associated timely source operator.
-    pub fn activate(&self) {
-        self.activator.activate();
-    }
-}
-
 impl Drop for SourceToken {
     fn drop(&mut self) {
         *self.capabilities.borrow_mut() = None;
@@ -908,7 +901,7 @@ where
 /// The returned `Stream` of persisted timestamp bindings can be used to track the persistence
 /// frontier and should be used to seal up the backing collection to that frontier. This function
 /// does not do any sealing and it is the responsibility of the caller to eventually do that, for
-/// example using [`conditional_seal`](persist::operators::stream::Seal::conditional_seal).
+/// example using [`seal`](persist::operators::stream::Seal::seal).
 pub(crate) fn create_source<G, S: 'static>(
     config: SourceConfig<G>,
     source_connector: &ExternalSourceConnector,
@@ -1259,6 +1252,8 @@ where
             timestamp_histories.downgrade(cap, &partition_cursors);
             bindings_cap.downgrade(cap.time());
             source_metrics.capability.set(*cap.time());
+            // Downgrade compaction frontier to track the current time.
+            timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation

@@ -139,6 +139,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 traces: TraceManager::new(trace_metrics, worker_idx),
                 dataflow_tokens: HashMap::new(),
                 tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+                sink_write_frontiers: HashMap::new(),
             },
             storage_state: StorageState {
                 local_inputs: HashMap::new(),
@@ -146,7 +147,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 persisted_sources: PersistedSourceManager::new(),
-                sink_write_frontiers: HashMap::new(),
                 metrics,
                 persist: config.persister.clone(),
             },
@@ -288,7 +288,7 @@ where
         }
 
         // Register each logger endpoint.
-        let mut activator = t_activator.clone();
+        let activator = t_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -297,7 +297,7 @@ where
             }),
         );
 
-        let mut activator = r_activator.clone();
+        let activator = r_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely/reachability",
             Logger::new(
@@ -348,7 +348,7 @@ where
             ),
         );
 
-        let mut activator = d_activator.clone();
+        let activator = d_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "differential/arrange",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -357,7 +357,7 @@ where
             }),
         );
 
-        let mut activator = m_activator.clone();
+        let activator = m_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "materialized",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -552,7 +552,7 @@ where
             }
         }
 
-        for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
+        for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
                 .reported_frontiers
@@ -671,13 +671,19 @@ where
                         }
                     }
 
-                    render::build_dataflow(
+                    let sources_captured = render::build_storage_dataflow(
                         self.timely_worker,
-                        &mut self.compute_state,
                         &mut self.storage_state,
-                        dataflow,
+                        &dataflow,
                         self.now.clone(),
                         &self.dataflow_source_metrics,
+                    );
+
+                    render::build_compute_dataflow(
+                        self.timely_worker,
+                        &mut self.compute_state,
+                        sources_captured,
+                        dataflow,
                         &self.dataflow_sink_metrics,
                     );
                 }
@@ -686,7 +692,7 @@ where
             ComputeCommand::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
-                    self.storage_state.sink_write_frontiers.remove(&id);
+                    self.compute_state.sink_write_frontiers.remove(&id);
                     self.compute_state.dataflow_tokens.remove(&id);
                 }
             }
