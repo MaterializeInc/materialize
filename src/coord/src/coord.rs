@@ -1485,7 +1485,10 @@ impl Coordinator {
             // well.
             let item = self.catalog.try_get_by_id(*id).map(|e| e.item());
             if let Some(CatalogItem::Index(catalog::Index { on, .. })) = item {
-                if let Some(persist) = self.persister.table_details.get(&id) {
+                // We only want to forward since updates to persist if they:
+                //  - are from the primary index on a table
+                //  - and that table itself is currently persisted
+                if let Some(persist) = self.persister.table_details.get(&on) {
                     if self.catalog.default_index_for(*on) == Some(*id) {
                         table_since_updates.push((persist.stream_id, frontier.clone()));
                         table_source_since_updates.push((*on, frontier.clone()));
