@@ -91,10 +91,14 @@ where
         // An activator that allows futures to re-schedule this operator when ready.
         let activator = Arc::new(scope.sync_activator_for(&persist_op.operator_info().address[..]));
 
+        // We retain capabilities for all failed writes, to ensure that the data output frontier
+        // cannot advance once we have errored.
         let mut pending_futures = VecDeque::new();
 
         persist_op.build(move |_capabilities| {
-            move |_frontiers| {
+            let mut errored_capabilities = CapabilitySet::new();
+
+            move |frontiers| {
                 let mut data_output = data_output.activate();
                 let mut error_output = error_output.activate();
 
@@ -148,6 +152,8 @@ where
 
                                     // TODO: make error retractable? Probably not...
                                     session.give((error, *error_cap.time(), 1));
+
+                                    errored_capabilities.insert(cap.delayed(error_cap.time()));
                                 }
                             }
 
@@ -159,6 +165,11 @@ where
                             break;
                         }
                     }
+                }
+
+                // Release our errored capabilities, to allow downstream operators to shut down.
+                if frontiers[0].is_empty() {
+                    errored_capabilities.downgrade(frontiers[0].frontier().iter().cloned());
                 }
             }
         });
