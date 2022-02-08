@@ -643,13 +643,18 @@ where
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Compute(cmd) => self.handle_compute_command(cmd),
+            Command::Compute(cmd, _instance) => self.handle_compute_command(cmd),
             Command::Storage(cmd) => self.handle_storage_command(cmd),
         }
     }
 
     fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
+            ComputeCommand::CreateInstance | ComputeCommand::DropInstance => {
+                // Can be ignored for the moment.
+                // Should eventually be filtered outside of this method,
+                // as we are already deep in a specific instance.
+            }
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
