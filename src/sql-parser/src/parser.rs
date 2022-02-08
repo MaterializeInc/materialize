@@ -913,17 +913,6 @@ impl<'a> Parser<'a> {
             Token::Op(s) => Some(Op::bare(s)),
             Token::Eq => Some(Op::bare("=")),
             Token::Star => Some(Op::bare("*")),
-            Token::Keyword(ILIKE) => Some(Op::bare("~~*")),
-            Token::Keyword(LIKE) => Some(Op::bare("~~")),
-            Token::Keyword(NOT) => {
-                if self.parse_keyword(LIKE) {
-                    Some(Op::bare("!~~"))
-                } else if self.parse_keyword(ILIKE) {
-                    Some(Op::bare("!~~*"))
-                } else {
-                    None
-                }
-            }
             Token::Keyword(OPERATOR) => {
                 self.expect_token(&Token::LParen)?;
                 let op = self.parse_operator()?;
@@ -1012,17 +1001,21 @@ impl<'a> Parser<'a> {
                     negated: false,
                     construct: IsExprConstruct::Null,
                 }),
-                NOT | IN | BETWEEN => {
+                NOT | IN | LIKE | ILIKE | BETWEEN => {
                     self.prev_token();
                     let negated = self.parse_keyword(NOT);
                     if self.parse_keyword(IN) {
                         self.parse_in(expr, negated)
                     } else if self.parse_keyword(BETWEEN) {
                         self.parse_between(expr, negated)
+                    } else if self.parse_keyword(LIKE) {
+                        self.parse_like(expr, false, negated)
+                    } else if self.parse_keyword(ILIKE) {
+                        self.parse_like(expr, true, negated)
                     } else {
                         self.expected(
                             self.peek_pos(),
-                            "IN or BETWEEN after NOT",
+                            "IN, BETWEEN, LIKE, or ILIKE after NOT",
                             self.peek_token(),
                         )
                     }
@@ -1230,6 +1223,23 @@ impl<'a> Parser<'a> {
             negated,
             low: Box::new(low),
             high: Box::new(high),
+        })
+    }
+
+    /// Parses `LIKE <pattern> [ ESCAPE <char> ]`, assuming the `LIKE` keyword was already consumed
+    fn parse_like(&mut self, expr: Expr<Raw>, case_insensitive: bool, negated: bool) -> Result<Expr<Raw>, ParserError> {
+        let pattern = self.parse_subexpr(Precedence::Like)?;        
+        let escape = if self.parse_keyword(ESCAPE) {
+            Some(Box::new(self.parse_subexpr(Precedence::Like)?))
+        } else {
+            None
+        };
+        Ok(Expr::Like {
+            expr: Box::new(expr),
+            pattern: Box::new(pattern),
+            escape,
+            case_insensitive,
+            negated,
         })
     }
 

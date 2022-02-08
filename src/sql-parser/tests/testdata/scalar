@@ -43,22 +43,52 @@ And { left: Op { op: Op { namespace: [], op: "<>" }, expr1: Identifier([Ident("s
 parse-scalar
 name LIKE '%a'
 ----
-Op { op: Op { namespace: [], op: "~~" }, expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: false, negated: false }
 
 parse-scalar
 name NOT LIKE '%a'
 ----
-Op { op: Op { namespace: [], op: "!~~" }, expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: false, negated: true }
+
+parse-scalar
+name LIKE '%a' ESCAPE '\\'
+----
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: Some(Value(String("\\\\"))), case_insensitive: false, negated: false }
+
+parse-scalar
+name NOT LIKE '%a' ESCAPE '~'
+----
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: Some(Value(String("~"))), case_insensitive: false, negated: true }
+
+parse-scalar
+name ILIKE '%a'
+----
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: true, negated: false }
+
+parse-scalar
+name NOT ILIKE '%a'
+----
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: true, negated: true }
+
+parse-scalar
+name ILIKE '%a' ESCAPE '~'
+----
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: Some(Value(String("~"))), case_insensitive: true, negated: false }
+
+parse-scalar
+name NOT ILIKE '%a' ESCAPE '~'
+----
+Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: Some(Value(String("~"))), case_insensitive: true, negated: true }
 
 parse-scalar
 name LIKE '%a' IS NULL
 ----
-IsExpr { expr: Op { op: Op { namespace: [], op: "~~" }, expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }, construct: Null, negated: false }
+IsExpr { expr: Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: false, negated: false }, construct: Null, negated: false }
 
 parse-scalar
 name NOT LIKE '%a' IS NULL
 ----
-IsExpr { expr: Op { op: Op { namespace: [], op: "!~~" }, expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }, construct: Null, negated: false }
+IsExpr { expr: Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: false, negated: true }, construct: Null, negated: false }
 
 parse-scalar
 name IS TRUE
