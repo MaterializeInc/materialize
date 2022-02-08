@@ -126,7 +126,7 @@ changes that have not yet been documented.
 
 - Add `microsecond`, `month`, `decade`, `century`, `millennium` units
   to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
-  format.
+  format {{% gh 10532 %}}.
 
 - Improve millisecond parsing for [`interval`](/sql/types/interval) using the
   PostgreSQL verbose format {{% gh 6420 %}}.
