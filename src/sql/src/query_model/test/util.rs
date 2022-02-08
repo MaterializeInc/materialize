@@ -28,6 +28,7 @@ pub(crate) mod qgm {
     }
 }
 
+// #[allow(dead_code)]
 pub(crate) mod exp {
     use super::*;
 
@@ -57,6 +58,46 @@ pub(crate) mod exp {
     pub(crate) fn gt(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
             func: expr::BinaryFunc::Gt,
+            expr1: Box::new(lhs),
+            expr2: Box::new(rhs),
+        }
+    }
+
+    pub(crate) fn gte(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
+        BoxScalarExpr::CallBinary {
+            func: expr::BinaryFunc::Gte,
+            expr1: Box::new(lhs),
+            expr2: Box::new(rhs),
+        }
+    }
+
+    pub(crate) fn lt(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
+        BoxScalarExpr::CallBinary {
+            func: expr::BinaryFunc::Lt,
+            expr1: Box::new(lhs),
+            expr2: Box::new(rhs),
+        }
+    }
+
+    pub(crate) fn lte(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
+        BoxScalarExpr::CallBinary {
+            func: expr::BinaryFunc::Lte,
+            expr1: Box::new(lhs),
+            expr2: Box::new(rhs),
+        }
+    }
+
+    pub(crate) fn eq(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
+        BoxScalarExpr::CallBinary {
+            func: expr::BinaryFunc::Eq,
+            expr1: Box::new(lhs),
+            expr2: Box::new(rhs),
+        }
+    }
+
+    pub(crate) fn not_eq(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
+        BoxScalarExpr::CallBinary {
+            func: expr::BinaryFunc::NotEq,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }

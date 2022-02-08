@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Defines the [`NonNullRequirements`] attribute.
+//! Defines the [`PropagatedNulls`] attribute.
 //!
 //! The attribute value is a vector of column references corresponding
 //! to the columns of the associated `QueryBox`.
@@ -20,15 +20,15 @@ use crate::query_model::model::{BoxId, BoxScalarExpr, ColumnReference, Model};
 use std::collections::HashSet;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
-pub(crate) struct NonNullRequirements;
+pub(crate) struct PropagatedNulls;
 
-impl AttributeKey for NonNullRequirements {
+impl AttributeKey for PropagatedNulls {
     type Value = Vec<HashSet<ColumnReference>>;
 }
 
-impl Attribute for NonNullRequirements {
+impl Attribute for PropagatedNulls {
     fn attr_id(&self) -> &'static str {
-        "NonNullRequirements"
+        "PropagatedNulls"
     }
 
     fn requires(&self) -> Vec<Box<dyn Attribute>> {
@@ -41,19 +41,19 @@ impl Attribute for NonNullRequirements {
         let value = r#box
             .columns
             .iter()
-            .map(|x| non_null_requirements(&x.expr))
+            .map(|x| propagated_nulls(&x.expr))
             .collect::<Vec<_>>();
 
         // TODO: remove this
         // println!("|box[{}].columns| = {:?}", box_id, r#box.columns.len());
         // println!("attr[{}] = {:?}", box_id, value);
 
-        r#box.attributes.set::<NonNullRequirements>(value);
+        r#box.attributes.set::<PropagatedNulls>(value);
     }
 }
 
 /// Returns all columns that *must* be non-Null for the `expr` to be non-Null.
-pub(crate) fn non_null_requirements(expr: &BoxScalarExpr) -> HashSet<ColumnReference> {
+pub(crate) fn propagated_nulls(expr: &BoxScalarExpr) -> HashSet<ColumnReference> {
     use BoxScalarExpr::*;
     let mut result = HashSet::new();
 
@@ -86,9 +86,12 @@ pub(crate) fn non_null_requirements(expr: &BoxScalarExpr) -> HashSet<ColumnRefer
                         Some(vec![])
                     }
                 }
-                // The branches of an if are computed lazily, but the condition is not
-                // so we can descend into it safely
-                If { cond, .. } => Some(vec![cond]),
+                // The branches of an if are computed lazily, but the condition is not.
+                // However, nulls propagate to the condition are cast to false.
+                // Consequently, we currently don't do anything here.
+                // TODO: I think we might be able to take use the intersection of the
+                // results in the two branches.
+                If { .. } => Some(vec![]),
                 // TODO the non-null requeriments of an aggregate expression can
                 // be pused down to, for example, convert an outer join into an
                 // inner join
@@ -133,19 +136,19 @@ mod tests {
                 exp::gt(exp::cref(q_id, 0), exp::cref(q_id, 1)),
                 exp::gt(exp::cref(q_id, 2), exp::cref(q_id, 3)),
             ));
-            // C1: (#0 > #1) && isnull(#1)
+            // C2: (#0 > #1) && isnull(#1)
             b.add_column(exp::and(
                 exp::gt(exp::cref(q_id, 0), exp::cref(q_id, 1)),
                 exp::not(exp::isnull(exp::cref(q_id, 1))),
             ));
         }
 
-        NonNullRequirements.derive(&mut model, s_id);
+        PropagatedNulls.derive(&mut model, s_id);
 
         {
             let s_box = model.get_box(s_id);
 
-            let act_value = s_box.attributes.get::<NonNullRequirements>();
+            let act_value = s_box.attributes.get::<PropagatedNulls>();
             let exp_value = &vec![
                 HashSet::from([cref(q_id, 0), cref(q_id, 1), cref(q_id, 2), cref(q_id, 3)]),
                 HashSet::from([]),
