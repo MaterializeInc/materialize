@@ -129,8 +129,8 @@ where
 
 /// Constructs a `CollectionBundle` and tokens from source arguments.
 ///
-/// The first return value is the collection bundle, and the second a pair of source and additional
-/// tokens, that are used to control the demolition of the source.
+/// The first returned pair are the row and error collections, and the
+/// second is a token that will keep the source alive as long as it is held.
 pub(crate) fn import_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
@@ -638,7 +638,7 @@ where
 
             needed_tokens.push(source_token);
 
-            // Return the source token for capability manipulation, and any additional tokens.
+            // Return the collections and any needed tokens.
             ((collection, err_collection), Rc::new(needed_tokens))
         }
     }
