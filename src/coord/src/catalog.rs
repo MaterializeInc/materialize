@@ -2333,8 +2333,8 @@ pub struct SerializedSourcePersistDetails {
     /// internal implementation detail.
     pub primary_stream: String,
 
-    /// Persisted stream of timestamp bindings.
-    pub timestamp_bindings_stream: String,
+    /// Persisted stream of source read-offsets.
+    pub offsets_stream: String,
 
     /// Any additional details that we need to make the envelope logic stateful.
     pub envelope_details: SerializedEnvelopePersistDetails,
@@ -2351,7 +2351,7 @@ impl From<SourcePersistDesc> for SerializedSourcePersistDetails {
     fn from(source_persist_desc: SourcePersistDesc) -> Self {
         SerializedSourcePersistDetails {
             primary_stream: source_persist_desc.primary_stream,
-            timestamp_bindings_stream: source_persist_desc.timestamp_bindings_stream,
+            offsets_stream: source_persist_desc.offsets_stream,
             envelope_details: source_persist_desc.envelope_desc.into(),
         }
     }

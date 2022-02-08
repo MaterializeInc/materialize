@@ -357,7 +357,14 @@ impl TimestampBindingBox {
     fn downgrade(&self, cap: &mut Capability<Timestamp>, cursors: &HashMap<PartitionId, MzOffset>) {
         let mut ts = self.upper();
         for (pid, timestamps) in self.partitions.iter() {
-            let offset = cursors.get(pid).cloned().unwrap_or(MzOffset { offset: 0 });
+            let offset = match cursors.get(pid).cloned() {
+                Some(offset) => MzOffset {
+                    // The cursors store the offset of the last read message while we want to now
+                    // the potential binding for future messages, so we add 1.
+                    offset: offset.offset + 1,
+                },
+                None => MzOffset { offset: 1 },
+            };
             if let Some(partition_ts) = timestamps.get_binding(offset) {
                 ts = std::cmp::min(ts, partition_ts);
             }
@@ -720,103 +727,90 @@ impl Codec for AssignedTimestamp {
     }
 }
 
-/// Helper that can track the timestamp bindings from a [`TimestampBindingRc`] and emit
-/// differential updates that can be used to reconstruct the timestamp bindings.
+/// Helper that can track offset cursors and emit differential updates that can be used to
+/// reconstruct the offsets as they were at a given time.
 ///
 /// This can be used to tee off a "stream" of differential updates that can be used to maintain a
-/// copy of the current state of the bindings. For example, to persist them.
-pub struct TimestampBindingUpdater {
-    /// Current upper frontier of timestamp bindings, to avoid allocating a new [`Antichain`] on
-    /// every invocation.
-    current_bindings_frontier: Antichain<Timestamp>,
-
+/// copy of the current state of the offsets. For example, to persist them.
+pub struct OffsetsUpdater {
     /// Consolidated view of the changes that we have emitted up to the latest invocation of
     /// `update`.
-    current_bindings: ChangeBatch<(SourceTimestamp, AssignedTimestamp)>,
+    current_offsets: ChangeBatch<SourceTimestamp>,
 }
 
-impl TimestampBindingUpdater {
-    /// Creates a new [`TimestampBindingUpdater`]. We need the `initial_bindings` to bootstrap the
-    /// internal view with the current state of the bindings that the outside consumer of the
-    /// updates has.
-    ///
-    /// Note: You will usually not want to bootstrap this from a `TimestampBindingsRc` but instead
-    /// from bindings that were restored from persistence. The reason is that the bindings in the
-    /// `TimestampBindingsRc` can come from other sources and we must ensure that our internal view
-    /// matches the state we have in persistence.
-    pub fn new(initial_bindings: Vec<(SourceTimestamp, AssignedTimestamp)>) -> Self {
-        let mut current_bindings = ChangeBatch::new();
-        current_bindings.extend(initial_bindings.into_iter().map(|binding| (binding, 1)));
+impl OffsetsUpdater {
+    /// Creates a new [`OffsetsUpdater`]. We need the `initial_offsets` to bootstrap the internal
+    /// view with the current state of the offsets that the outside consumer of the updates has.
+    pub fn new<'a>(initial_offsets: impl Iterator<Item = (&'a PartitionId, &'a MzOffset)>) -> Self {
+        let mut current_offsets = ChangeBatch::new();
 
-        Self {
-            current_bindings_frontier: Antichain::from_elem(Timestamp::MIN),
-            current_bindings,
-        }
+        // NOTE: The cursor points to the _next_ message while we need to record the
+        // last read message.
+        let initial_offsets = initial_offsets.map(|(partition, offset)| {
+            (
+                SourceTimestamp {
+                    partition: partition.clone(),
+                    offset: *offset,
+                },
+                1,
+            )
+        });
+
+        current_offsets.extend(initial_offsets);
+
+        Self { current_offsets }
     }
 
-    /// Brings the internal view of the bindings up to date with the bindings in the given
-    /// `timestamp_histories` and returns any changes as differential updates.
-    pub fn update(
+    /// Brings the internal view of the offsets up to date with the given offsets and returns any
+    /// changes as differential updates.
+    pub fn update<'a>(
         &mut self,
-        timestamp_histories: &TimestampBindingRc,
-    ) -> impl Iterator<Item = ((SourceTimestamp, AssignedTimestamp), i64)> {
+        offsets: impl Iterator<Item = (&'a PartitionId, &'a MzOffset)>,
+    ) -> impl Iterator<Item = (SourceTimestamp, i64)> {
         // We either have a binding or we don't. There can never be other multiplicities.
         mz_ore::soft_assert!(self
-            .current_bindings
+            .current_offsets
             .iter()
             .all(|(_binding, diff)| *diff == 1 || *diff == 0));
 
-        // First, update our view of the latest bindings upper.
-        self.current_bindings_frontier.clear();
-        timestamp_histories.read_upper(&mut self.current_bindings_frontier);
-
-        // Then, determine what changes we have to apply (both to the output stream and our
-        // internal view) to bring us in sync with the current state of bindings in timestamp_histories.
+        // Determine what changes we have to apply (both to the output stream and our internal
+        // view) to bring us in sync with the current state of offsets as presented.
         //
         // We do this by first inverting all of the updates that we had previously and then
-        // applying the current state from timestamp_histories to that. Updates that are in the
-        // previous state and the new state will cancel out, while updates that are no longer in the
-        // current state will remain as `-1`s and new updates will remain as `1`s. If there are no
-        // changes since the last invocation, the negated changes and the current updates from
-        // `timestamp_histories` will cancel out and we don't emit anything.
-        let inverted_current_bindings = self
-            .current_bindings
+        // applying the new state to that. Updates that are in the previous state and the new state
+        // will cancel out, while updates that are no longer in the current state will remain as
+        // `-1`s and new updates will remain as `1`s. If there are no changes since the last
+        // invocation, the negated changes and the newly presented updates will cancel out and we
+        // don't emit anything.
+        let inverted_current_offsets = self
+            .current_offsets
             .iter()
             .cloned()
-            .map(|(binding, diff)| (binding, -diff));
-        let mut bindings_change = ChangeBatch::new();
-        bindings_change.extend(inverted_current_bindings);
+            .map(|(offset, diff)| (offset, -diff));
+        let mut offsets_change = ChangeBatch::new();
+        offsets_change.extend(inverted_current_offsets);
 
-        // TODO: This seems wasteful. We could just add a get_bindings() which returns all bindings.
-        let lowest_frontier = Antichain::from_elem(u64::MIN);
-        let new_bindings = timestamp_histories
-            .get_bindings_in_range(
-                lowest_frontier.borrow(),
-                self.current_bindings_frontier.borrow(),
+        let offsets = offsets.map(|(partition, offset)| {
+            (
+                SourceTimestamp {
+                    partition: partition.clone(),
+                    offset: *offset,
+                },
+                1,
             )
-            .into_iter()
-            .map(|(partition, assigned_ts, offset)| {
-                (
-                    (
-                        SourceTimestamp { partition, offset },
-                        AssignedTimestamp(assigned_ts),
-                    ),
-                    1,
-                )
-            });
+        });
 
-        bindings_change.extend(new_bindings);
+        offsets_change.extend(offsets);
 
-        self.current_bindings
-            .extend(bindings_change.iter().cloned());
+        self.current_offsets.extend(offsets_change.iter().cloned());
 
         // We either have a binding or we don't. There can never be other multiplicities.
         mz_ore::soft_assert!(self
-            .current_bindings
+            .current_offsets
             .iter()
-            .all(|(_binding, diff)| *diff == 1 || *diff == 0));
+            .all(|(_offsets, diff)| *diff == 1 || *diff == 0));
 
-        bindings_change.into_inner().into_iter()
+        offsets_change.into_inner().into_iter()
     }
 }
 
@@ -855,161 +849,65 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_updater_simple_updates() {
-        let timestamp_histories = TimestampBindingRc::new(1000, (|| 50).into());
-        let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
+    fn offsets_updater_simple_updates() {
+        let mut offsets = HashMap::new();
+        let mut offsets_updater = OffsetsUpdater::new(offsets.iter());
 
-        timestamp_histories.add_partition(PartitionId::Kafka(0));
+        offsets.insert(PartitionId::Kafka(0), MzOffset { offset: 0 });
 
-        timestamp_histories.add_binding(PartitionId::Kafka(0), 42, MzOffset { offset: 4 });
-
-        let actual_updates = timestamp_binding_updater
-            .update(&timestamp_histories)
-            .collect::<Vec<_>>();
+        let actual_updates = offsets_updater.update(offsets.iter()).collect::<Vec<_>>();
         let expected_updates = vec![(
-            (
-                SourceTimestamp {
-                    partition: PartitionId::Kafka(0),
-                    offset: MzOffset { offset: 4 },
-                },
-                AssignedTimestamp(42),
-            ),
+            SourceTimestamp {
+                partition: PartitionId::Kafka(0),
+                offset: MzOffset { offset: 0 },
+            },
             1,
         )];
         assert_eq!(actual_updates, expected_updates);
 
-        timestamp_histories.add_binding(PartitionId::Kafka(0), 43, MzOffset { offset: 5 });
+        offsets.insert(PartitionId::Kafka(0), MzOffset { offset: 5 });
 
-        let actual_updates = timestamp_binding_updater
-            .update(&timestamp_histories)
-            .collect::<Vec<_>>();
-        let expected_updates = vec![(
+        let actual_updates = offsets_updater.update(offsets.iter()).collect::<Vec<_>>();
+        let expected_updates = vec![
+            (
+                SourceTimestamp {
+                    partition: PartitionId::Kafka(0),
+                    offset: MzOffset { offset: 0 },
+                },
+                -1,
+            ),
             (
                 SourceTimestamp {
                     partition: PartitionId::Kafka(0),
                     offset: MzOffset { offset: 5 },
                 },
-                AssignedTimestamp(43),
+                1,
             ),
-            1,
-        )];
+        ];
         assert_eq!(actual_updates, expected_updates);
     }
 
     // Verify that we don't emit new updates when repeatedly calling `update()` with unchanged
-    // timestamp history.
+    // offsets.
     #[test]
-    fn timestamp_updater_repeated_update() {
-        let timestamp_histories = TimestampBindingRc::new(1000, (|| 50).into());
-        let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
+    fn offsets_updater_repeated_update() {
+        let mut offsets = HashMap::new();
+        let mut offsets_updater = OffsetsUpdater::new(offsets.iter());
 
-        timestamp_histories.add_partition(PartitionId::Kafka(0));
+        offsets.insert(PartitionId::Kafka(0), MzOffset { offset: 4 });
 
-        timestamp_histories.add_binding(PartitionId::Kafka(0), 42, MzOffset { offset: 4 });
-
-        let actual_updates = timestamp_binding_updater
-            .update(&timestamp_histories)
-            .collect::<Vec<_>>();
+        let actual_updates = offsets_updater.update(offsets.iter()).collect::<Vec<_>>();
         let expected_updates = vec![(
-            (
-                SourceTimestamp {
-                    partition: PartitionId::Kafka(0),
-                    offset: MzOffset { offset: 4 },
-                },
-                AssignedTimestamp(42),
-            ),
+            SourceTimestamp {
+                partition: PartitionId::Kafka(0),
+                offset: MzOffset { offset: 4 },
+            },
             1,
         )];
         assert_eq!(actual_updates, expected_updates);
 
-        let actual_updates = timestamp_binding_updater
-            .update(&timestamp_histories)
-            .collect::<Vec<_>>();
+        let actual_updates = offsets_updater.update(offsets.iter()).collect::<Vec<_>>();
         assert_eq!(actual_updates, vec![]);
-    }
-
-    // Compaction will remove some bindings. We verify that we see retractions for them in the
-    // emitted changes.
-    #[test]
-    fn timestamp_updater_compaction() {
-        let mut timestamp_histories = TimestampBindingRc::new(1000, (|| 50).into());
-        let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
-
-        timestamp_histories.add_partition(PartitionId::Kafka(0));
-
-        timestamp_histories.add_binding(PartitionId::Kafka(0), 42, MzOffset { offset: 4 });
-        timestamp_histories.add_binding(PartitionId::Kafka(0), 43, MzOffset { offset: 5 });
-        timestamp_histories.add_binding(PartitionId::Kafka(0), 44, MzOffset { offset: 6 });
-
-        let mut actual_updates = timestamp_binding_updater
-            .update(&timestamp_histories)
-            .collect::<Vec<_>>();
-        let mut expected_updates = vec![
-            (
-                (
-                    SourceTimestamp {
-                        partition: PartitionId::Kafka(0),
-                        offset: MzOffset { offset: 4 },
-                    },
-                    AssignedTimestamp(42),
-                ),
-                1,
-            ),
-            (
-                (
-                    SourceTimestamp {
-                        partition: PartitionId::Kafka(0),
-                        offset: MzOffset { offset: 5 },
-                    },
-                    AssignedTimestamp(43),
-                ),
-                1,
-            ),
-            (
-                (
-                    SourceTimestamp {
-                        partition: PartitionId::Kafka(0),
-                        offset: MzOffset { offset: 6 },
-                    },
-                    AssignedTimestamp(44),
-                ),
-                1,
-            ),
-        ];
-        actual_updates.sort();
-        expected_updates.sort();
-        assert_eq!(actual_updates, expected_updates);
-
-        let compaction_frontier = Antichain::from_elem(44);
-        timestamp_histories.set_compaction_frontier(compaction_frontier.borrow());
-        let mut actual_updates = timestamp_binding_updater
-            .update(&timestamp_histories)
-            .collect::<Vec<_>>();
-        let mut expected_updates = vec![
-            (
-                (
-                    SourceTimestamp {
-                        partition: PartitionId::Kafka(0),
-                        offset: MzOffset { offset: 4 },
-                    },
-                    AssignedTimestamp(42),
-                ),
-                -1,
-            ),
-            (
-                (
-                    SourceTimestamp {
-                        partition: PartitionId::Kafka(0),
-                        offset: MzOffset { offset: 5 },
-                    },
-                    AssignedTimestamp(43),
-                ),
-                -1,
-            ),
-        ];
-        actual_updates.sort();
-        expected_updates.sort();
-        assert_eq!(actual_updates, expected_updates);
     }
 
     #[test]

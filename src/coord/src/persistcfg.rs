@@ -341,7 +341,7 @@ impl PersisterWithConfig {
         // Catalog::deserialize_item.
         let name_prefix = format!("user-source-{}-{}", id, pretty);
         let primary_stream = format!("{}", name_prefix);
-        let timestamp_bindings_stream = format!("{}-timestamp-bindings", name_prefix);
+        let offsets_stream = format!("{}-offsets", name_prefix);
 
         match connector {
             SourceConnector::External {
@@ -350,7 +350,7 @@ impl PersisterWithConfig {
                 ..
             } => Some(SerializedSourcePersistDetails {
                 primary_stream,
-                timestamp_bindings_stream,
+                offsets_stream,
                 envelope_details: crate::catalog::SerializedEnvelopePersistDetails::Upsert,
             }),
             SourceConnector::External {
@@ -359,7 +359,7 @@ impl PersisterWithConfig {
                 ..
             } => Some(SerializedSourcePersistDetails {
                 primary_stream,
-                timestamp_bindings_stream,
+                offsets_stream,
                 envelope_details: crate::catalog::SerializedEnvelopePersistDetails::None,
             }),
             SourceConnector::External {
@@ -433,19 +433,16 @@ impl PersisterWithConfig {
             // shouldn't be an issue right now, though.
             let (primary_stream, primary_since, primary_upper) =
                 stream_desc_from_name(serialized_details.primary_stream.clone(), runtime)?;
-            let (timestamp_bindings_stream, timestamp_bindings_since, timestamp_bindings_upper) =
-                stream_desc_from_name(
-                    serialized_details.timestamp_bindings_stream.clone(),
-                    runtime,
-                )?;
+            let (offsets_stream, offsets_since, offsets_upper) =
+                stream_desc_from_name(serialized_details.offsets_stream.clone(), runtime)?;
 
             // Assert invariants!
             assert_eq!(
-                primary_since, timestamp_bindings_since,
+                primary_since, offsets_since,
                 "the since of all involved streams must be the same"
             );
             assert_eq!(
-                primary_upper, timestamp_bindings_upper,
+                primary_upper, offsets_upper,
                 "the upper of all involved streams must be the same"
             );
 
@@ -453,7 +450,7 @@ impl PersisterWithConfig {
                 since_ts: primary_since,
                 upper_seal_ts: primary_upper,
                 primary_stream,
-                timestamp_bindings_stream,
+                offsets_stream,
                 envelope_desc,
             })
         });

@@ -44,10 +44,10 @@ use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
 use crate::server::LocalInput;
 use crate::server::StorageState;
-use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
+use crate::source::timestamp::SourceTimestamp;
 use crate::source::{
     self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
-    PersistentTimestampBindingsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
+    PersistentSourceOffsetsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
     SourceConfig,
 };
 
@@ -319,14 +319,14 @@ where
 
                 (ok_stream.as_collection(), capability)
             } else {
-                let ((ok_source, ts_bindings, err_source), capability) = match connector {
+                let ((ok_source, source_offsets, err_source), capability) = match connector {
                     ExternalSourceConnector::Kafka(_) => {
                         let ((ok, ts, err), cap) = source::create_source::<_, KafkaSourceReader>(
                             source_config,
                             &connector,
                             source_persist_config
                                 .as_ref()
-                                .map(|config| config.bindings_config.clone()),
+                                .map(|config| config.offsets_config.clone()),
                             storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::Delimited(ok), ts, err), cap)
@@ -337,7 +337,7 @@ where
                             &connector,
                             source_persist_config
                                 .as_ref()
-                                .map(|config| config.bindings_config.clone()),
+                                .map(|config| config.offsets_config.clone()),
                             storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::Delimited(ok), ts, err), cap)
@@ -348,7 +348,7 @@ where
                             &connector,
                             source_persist_config
                                 .as_ref()
-                                .map(|config| config.bindings_config.clone()),
+                                .map(|config| config.offsets_config.clone()),
                             storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::ByteStream(ok), ts, err), cap)
@@ -359,7 +359,7 @@ where
                             &connector,
                             source_persist_config
                                 .as_ref()
-                                .map(|config| config.bindings_config.clone()),
+                                .map(|config| config.offsets_config.clone()),
                             storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::ByteStream(ok), ts, err), cap)
@@ -488,14 +488,13 @@ where
                                     upsert_envelope.clone(),
                                 );
 
-                                // When persistence is enabled we need to seal up both the
-                                // timestamp bindings and the upsert state. Otherwise, just
-                                // pass through.
+                                // When persistence is enabled we need to seal up both the offset
+                                // updates and the upsert state. Otherwise, just pass through.
                                 let (upsert_ok, upsert_err) = if let Some(source_persist_config) =
                                     source_persist_config
                                 {
-                                    let bindings_handle =
-                                        source_persist_config.bindings_config.write_handle.clone();
+                                    let offsets_handle =
+                                        source_persist_config.offsets_config.write_handle.clone();
                                     let upsert_state_handle =
                                         source_persist_config.upsert_config().write_handle.clone();
 
@@ -508,9 +507,9 @@ where
                                     // operators do).
                                     let sealed_upsert = seal_and_await(
                                         &upsert_ok,
-                                        &ts_bindings,
+                                        &source_offsets,
                                         upsert_state_handle,
-                                        bindings_handle,
+                                        offsets_handle,
                                         &src_id,
                                         &source_name,
                                         storage_state,
@@ -532,13 +531,11 @@ where
 
                                 let flattened_stream = flattened_stream.pass_through("decode");
 
-                                // When persistence is enabled we need to persist and seal up
-                                // both the timestamp bindings and the data. Otherwise, just
-                                // pass through.
+                                // When persistence is enabled we need to persist and seal up both
+                                // the offset updates and the data. Otherwise, just pass through.
                                 let (flattened_stream, persist_errs) =
                                     if let Some(source_persist_config) = source_persist_config {
-                                        let bindings_config =
-                                            &source_persist_config.bindings_config;
+                                        let offsets_config = &source_persist_config.offsets_config;
                                         let envelope_config =
                                             source_persist_config.envelope_none_config();
 
@@ -560,9 +557,9 @@ where
                                         // operators do).
                                         let sealed_flattened_stream = seal_and_await(
                                             &flattened_stream,
-                                            &ts_bindings,
+                                            &source_offsets,
                                             envelope_config.write_handle.clone(),
-                                            bindings_config.write_handle.clone(),
+                                            offsets_config.write_handle.clone(),
                                             &src_id,
                                             &source_name,
                                             storage_state,
@@ -700,22 +697,21 @@ where
 /// Note: This is quite tailored to Kafka Upsert sources for now, but we can change/extend before
 /// we add new types of sources/envelopes.
 ///
-/// `ST` is the source timestamp, while `AT` is the timestamp that is assigned based on timestamp
-/// bindings.
+/// `ST` is the source timestamp.
 #[derive(Clone)]
-pub struct PersistentSourceConfig<K: Codec, V: Codec, ST: Codec, AT: Codec> {
-    bindings_config: PersistentTimestampBindingsConfig<ST, AT>, // wrong ordering... AT-ST
+pub struct PersistentSourceConfig<K: Codec, V: Codec, ST: Codec> {
+    offsets_config: PersistentSourceOffsetsConfig<ST>,
     envelope_config: PersistentEnvelopeConfig<K, V>,
 }
 
-impl<K: Codec, V: Codec, ST: Codec, AT: Codec> PersistentSourceConfig<K, V, ST, AT> {
+impl<K: Codec, V: Codec, ST: Codec> PersistentSourceConfig<K, V, ST> {
     /// Creates a new [`PersistentSourceConfig`] from the given parts.
     pub fn new(
-        bindings_config: PersistentTimestampBindingsConfig<ST, AT>,
+        offsets_config: PersistentSourceOffsetsConfig<ST>,
         envelope_config: PersistentEnvelopeConfig<K, V>,
     ) -> Self {
         PersistentSourceConfig {
-            bindings_config,
+            offsets_config,
             envelope_config,
         }
     }
@@ -755,19 +751,12 @@ fn get_persist_config(
     source_id: &SourceInstanceId,
     persist_desc: SourcePersistDesc,
     persist_client: &mut mz_persist::client::RuntimeClient,
-) -> PersistentSourceConfig<
-    Result<Row, DecodeError>,
-    Result<Row, DecodeError>,
-    SourceTimestamp,
-    AssignedTimestamp,
-> {
+) -> PersistentSourceConfig<Result<Row, DecodeError>, Result<Row, DecodeError>, SourceTimestamp> {
     // TODO: Ensure that we only render one materialized source when persistence is enabled. We can
     // use https://github.com/MaterializeInc/materialize/pull/8522, which has most of the plumbing.
 
-    let (bindings_write, bindings_read) = persist_client
-        .create_or_load::<SourceTimestamp, AssignedTimestamp>(
-            &persist_desc.timestamp_bindings_stream,
-        );
+    let (offsets_write, offsets_read) =
+        persist_client.create_or_load::<SourceTimestamp, ()>(&persist_desc.offsets_stream);
 
     match persist_desc.envelope_desc {
         EnvelopePersistDesc::Upsert => {
@@ -780,19 +769,16 @@ fn get_persist_config(
 
             debug!(
                 "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
-                source_id,
-                persist_desc.primary_stream,
-                persist_desc.timestamp_bindings_stream,
-                seal_ts
+                source_id, persist_desc.primary_stream, persist_desc.offsets_stream, seal_ts
             );
 
-            let bindings_config =
-                PersistentTimestampBindingsConfig::new(seal_ts, bindings_read, bindings_write);
+            let offsets_config =
+                PersistentSourceOffsetsConfig::new(seal_ts, offsets_read, offsets_write);
 
             let upsert_config = PersistentUpsertConfig::new(seal_ts, data_read, data_write);
 
             PersistentSourceConfig::new(
-                bindings_config,
+                offsets_config,
                 PersistentEnvelopeConfig::Upsert(upsert_config),
             )
         }
@@ -804,32 +790,29 @@ fn get_persist_config(
 
             debug!(
                 "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
-                source_id,
-                persist_desc.primary_stream,
-                persist_desc.timestamp_bindings_stream,
-                seal_ts,
+                source_id, persist_desc.primary_stream, persist_desc.offsets_stream, seal_ts,
             );
 
-            let bindings_config =
-                PersistentTimestampBindingsConfig::new(seal_ts, bindings_read, bindings_write);
+            let offsets_config =
+                PersistentSourceOffsetsConfig::new(seal_ts, offsets_read, offsets_write);
 
             let none_config = PersistentEnvelopeNoneConfig::new(seal_ts, data_read, data_write);
 
             PersistentSourceConfig::new(
-                bindings_config,
+                offsets_config,
                 PersistentEnvelopeConfig::EnvelopeNone(none_config),
             )
         }
     }
 }
 
-/// Seals both the main stream and the stream of timestamp bindings, allows compaction on
-/// underlying persistent streams, and awaits the seal frontier before passing on updates.
+/// Seals both the main stream and the stream of offset updates, allows compaction on underlying
+/// persistent streams, and awaits the seal frontier before passing on updates.
 fn seal_and_await<G, D1, D2, K1, V1, K2, V2>(
     stream: &Stream<G, (D1, Timestamp, Diff)>,
-    bindings_stream: &Stream<G, (D2, Timestamp, Diff)>,
+    offsets_stream: &Stream<G, (D2, Timestamp, Diff)>,
     write: StreamWriteHandle<K1, V1>,
-    bindings_write: StreamWriteHandle<K2, V2>,
+    offsets_write: StreamWriteHandle<K2, V2>,
     source_id: &GlobalId,
     source_name: &str,
     storage_state: &mut StorageState,
@@ -846,14 +829,14 @@ where
 {
     let mut seal_handle = MultiWriteHandle::new(&write);
     seal_handle
-        .add_stream(&bindings_write)
+        .add_stream(&offsets_write)
         .expect("handles known to be from same persist runtime");
 
     let running = Rc::new(());
     let sealed_stream = stream.seal(
         &source_name,
         Rc::downgrade(&running),
-        vec![bindings_stream.probe()],
+        vec![offsets_stream.probe()],
         seal_handle,
     );
     needed_tokens.push(running);
@@ -875,7 +858,7 @@ where
 
     let mut compaction_handle = MultiWriteHandle::new(&write);
     compaction_handle
-        .add_stream(&bindings_write)
+        .add_stream(&offsets_write)
         .expect("only fails on usage errors");
 
     let source_token = storage_state.persisted_sources.add_source(

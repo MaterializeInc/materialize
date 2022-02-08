@@ -649,8 +649,8 @@ pub mod sources {
             /// internal implementation detail.
             pub primary_stream: String,
 
-            /// Persisted stream of timestamp bindings.
-            pub timestamp_bindings_stream: String,
+            /// Persisted stream of source offsets.
+            pub offsets_stream: String,
 
             /// Any additional details that we need to make the envelope logic stateful.
             pub envelope_desc: EnvelopePersistDesc,
