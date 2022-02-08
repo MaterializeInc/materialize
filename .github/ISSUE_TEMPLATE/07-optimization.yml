@@ -7,55 +7,64 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: "Internal - Proposed Optimization"
+name: "Internal: proposed optimization"
 description: A proposal for a new query optimization. Contributor use only.
-labels: ["A-optimization", "needs-discussion"]
+labels: ["A-optimization", "C-feature", "needs-discussion"]
 body:
   - type: textarea
     attributes:
       label: Elevator pitch
-      description: Each question should be answered comprehensively but using as
-        few sentences as possible.
+      description: |
+        Each question should be answered comprehensively but using as few sentences as possible.
       value: |
-        1. What does the transformation do? Give a representative SQL query.
-        2. Why should we add it?
-        3. When would it be good to have?
-        4. When would it be ineffectual?
-        5. When would be bad to have?
-        6. In the worst case, how would it degrade performance?
+        ### What does the transformation do?
+        <!-- Give a representative SQL query. -->
+
+        ### Why should we add it?
+
+        ### When would it be good to have?
+
+        ### When would it be ineffectual?
+
+        ### When would be bad to have?
+
+        ### In the worst case, how would it degrade performance?
     validations:
       required: true
   - type: textarea
     attributes:
-      label: List real life instances where this transformation would help.
-  - type: textarea
-    attributes:
-      label: Cost Model
+      label: Customer impact
       description: |
-        If both the implementation and cost model are simple, this section can
-        be skipped if the implementation section is filled in.
-
-        Each subsection is meant to be answered with formulae. Take into account
-        memory, CPU, liveness, and skew. Approximations are ok if it is not
-        possible to calculate exact numbers.
-
-        If the transformation is always good to have, you only have to fill out
-        the first subsection.
-      value: |
-        1. What is the benefit of the transformation?
-        2. What is the overhead?
-        3. When would the transformation be worthwhile? Intuitively, this should
-        be when benefit > overhead, but sometimes a benefit with regards to X
-        comes at a cost with regards to Y, and it would be worthwhile to discuss
-        when it is worthwhile to sacrifice Y to gain a benefit in X.
+          List real life instances where this transformation would help.
   - type: textarea
     attributes:
-      label: List any knobs that we may need to tune or expose to the user.
+      label: Cost model
+      description: |
+        If both the implementation and cost model are simple, this section can be skipped if the implementation section is filled in.
+
+        Each subsection is meant to be answered with formulae. Take into account memory, CPU, liveness, and skew. Approximations are ok if it is not possible to calculate exact numbers.
+
+        If the transformation is always good to have, you only have to fill out the first subsection.
+      value: |
+        ### What is the benefit of the transformation?
+
+        ### What is the overhead?
+
+        ### When would the transformation be worthwhile?
+        <!-- Intuitively, this should be when benefit > overhead, but sometimes a benefit with regards to X comes at a cost with regards to Y, and it would be worthwhile to discuss when it is worthwhile to sacrifice Y to gain a benefit in X. -->
+  - type: textarea
+    attributes:
+      label: User-facing changes
+      description: |
+        List any knobs that we may need to be tuned by or exposed to the user.
   - type: textarea
     attributes:
       label: Proposed implementation
       value: |
-        1. Describe the implementation.
-        2. Which queries will do better with the given implementation?
-        3. Which queries will do worse?
-        4. Break the implementation down into stages.
+        ### Describe the implementation.
+
+        ### Which queries will do better with the given implementation?
+
+        ### Which queries will do worse?
+
+        ### Break the implementation down into stages.
