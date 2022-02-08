@@ -334,6 +334,14 @@ impl Command {
 /// Methods that reflect actions that can be performed against a compute instance.
 #[async_trait::async_trait]
 pub trait ComputeClient: Client {
+    async fn create_instance(&mut self, instance: ComputeInstanceId) {
+        self.send(Command::Compute(ComputeCommand::CreateInstance, instance))
+            .await;
+    }
+    async fn drop_instance(&mut self, instance: ComputeInstanceId) {
+        self.send(Command::Compute(ComputeCommand::DropInstance, instance))
+            .await;
+    }
     async fn create_dataflows(
         &mut self,
         instance: ComputeInstanceId,

@@ -733,6 +733,11 @@ impl Coordinator {
             });
         }
 
+        // Create the default cluster so that subsequent default cluster commands succeed.
+        self.dataflow_client
+            .create_instance(DEFAULT_COMPUTE_INSTANCE_ID)
+            .await;
+
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
         loop {
