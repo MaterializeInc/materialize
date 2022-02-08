@@ -186,7 +186,7 @@ def create_role(
 ) -> CreatedRole:
     effect_name = effect.lower()
     eid_name = "-externalid" if external_id else ""
-    role_name = f"test-aws-config-{effect_name}{eid_name}-{SEED}"
+    role_name = f"testdrive-aws-config-{effect_name}{eid_name}-{SEED}"
     policy_name = f"{effect_name}{eid_name}-{SEED}"
 
     assume_role_policy: Dict[str, Any] = {
