@@ -151,8 +151,8 @@ changes that have not yet been documented.
 
 - **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
   of `CREATE SOURCE` and `CREATE SINK` no longer default
-  their ssl paramters to the kafka ones. See
-  [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
+  their SSL parameters to the kafka ones. Existing source definitions have
+  been migrated, however. See [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
   for more info.
 
 {{< comment >}}
