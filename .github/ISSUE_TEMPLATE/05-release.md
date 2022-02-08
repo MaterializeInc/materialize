@@ -109,6 +109,9 @@ of PRs and adds release notes for any features or bugs that were missed.
   job][] for your release has been completed. Find it [here][slts] and link to it, don't
   check this checkmark off until it has succeeded.
 
+- [ ] [A full Nightly run][nightlies] will be automatically triggered as well. Find it
+[here][nightlies] and link to it. Make sure all failures are accounted for or ask in #eng-testing .
+
 - [ ] Wait for the [deploy job][] for the currently-releasing version tag to
   complete. Then launch the load tests using the `bin/scratch` script:
 
@@ -117,6 +120,7 @@ of PRs and adds release notes for any features or bugs that were missed.
   ```
 
 [slts]: https://buildkite.com/materialize/sql-logic-tests
+[nightlies]: https://buildkite.com/materialize/nightlies
 [deploy job]: https://buildkite.com/materialize/deploy
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 

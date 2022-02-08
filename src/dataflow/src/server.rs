@@ -139,6 +139,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 traces: TraceManager::new(trace_metrics, worker_idx),
                 dataflow_tokens: HashMap::new(),
                 tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+                sink_write_frontiers: HashMap::new(),
             },
             storage_state: StorageState {
                 local_inputs: HashMap::new(),
@@ -146,7 +147,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 persisted_sources: PersistedSourceManager::new(),
-                sink_write_frontiers: HashMap::new(),
                 metrics,
                 persist: config.persister.clone(),
             },
@@ -476,7 +476,6 @@ where
 
             // Report frontier information back the coordinator.
             self.report_compute_frontiers();
-            self.report_storage_frontiers();
             self.update_rt_timestamps();
             self.report_timestamp_bindings();
 
@@ -553,54 +552,7 @@ where
             }
         }
 
-        if !progress.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
-        }
-    }
-
-    /// Send progress information to the coordinator.
-    fn report_storage_frontiers(&mut self) {
-        fn add_progress(
-            id: GlobalId,
-            new_frontier: &Antichain<Timestamp>,
-            prev_frontier: &Antichain<Timestamp>,
-            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
-        ) {
-            let mut changes = ChangeBatch::new();
-            for time in prev_frontier.elements().iter() {
-                changes.update(time.clone(), -1);
-            }
-            for time in new_frontier.elements().iter() {
-                changes.update(time.clone(), 1);
-            }
-            changes.compact();
-            if !changes.is_empty() {
-                progress.push((id, changes));
-            }
-        }
-
-        let mut new_frontier = Antichain::new();
-        let mut progress = Vec::new();
-
-        for (id, history) in self.storage_state.ts_histories.iter() {
-            // Read the upper frontier and compare to what we've reported.
-            history.read_upper(&mut new_frontier);
-            let prev_frontier = self
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Source frontier missing!");
-            assert!(<_ as PartialOrder>::less_equal(
-                prev_frontier,
-                &new_frontier
-            ));
-            if prev_frontier != &new_frontier {
-                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                prev_frontier.clone_from(&new_frontier);
-            }
-        }
-
-        // TODO: We're lying here: sinks are not sources ...
-        for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
+        for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
                 .reported_frontiers
@@ -617,7 +569,7 @@ where
         }
 
         if !progress.is_empty() {
-            self.send_storage_response(StorageResponse::Frontiers(progress));
+            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
         }
     }
 
@@ -638,10 +590,6 @@ where
         // If that frontier is different than the durability frontier we've previously reported then we also need to
         // get the new bindings we've produced and send them to the coordinator.
         for (id, history) in self.storage_state.ts_histories.iter() {
-            if !history.requires_persistence() {
-                continue;
-            }
-
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
             let prev_frontier = self
@@ -738,7 +686,7 @@ where
             ComputeCommand::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
-                    self.storage_state.sink_write_frontiers.remove(&id);
+                    self.compute_state.sink_write_frontiers.remove(&id);
                     self.compute_state.dataflow_tokens.remove(&id);
                 }
             }

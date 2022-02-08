@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
-    operators::{Capability, Event},
+    operators::{Capability, CapabilitySet, Event},
 };
 
 use anyhow::anyhow;
@@ -256,7 +256,15 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capabilities: Rc<RefCell<Option<(Capability<Timestamp>, Capability<Timestamp>)>>>,
+    capabilities: Rc<
+        RefCell<
+            Option<(
+                Capability<Timestamp>,
+                Capability<Timestamp>,
+                CapabilitySet<Timestamp>,
+            )>,
+        >,
+    >,
     activator: Activator,
 }
 
@@ -842,11 +850,14 @@ where
 
         move |cap,
               _secondary_cap: &mut Capability<Timestamp>,
+              durability_cap: &mut CapabilitySet<Timestamp>,
               output,
               _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
                 return SourceStatus::Done;
             }
+
+            durability_cap.downgrade(Vec::<Timestamp>::new());
 
             let waker = futures::task::waker_ref(&activator);
             let mut context = Context::from_waker(&waker);
@@ -897,7 +908,7 @@ where
 /// The returned `Stream` of persisted timestamp bindings can be used to track the persistence
 /// frontier and should be used to seal up the backing collection to that frontier. This function
 /// does not do any sealing and it is the responsibility of the caller to eventually do that, for
-/// example using [`conditional_seal`](persist::operators::stream::Seal::conditional_seal).
+/// example using [`seal`](persist::operators::stream::Seal::seal).
 pub(crate) fn create_source<G, S: 'static>(
     config: SourceConfig<G>,
     source_connector: &ExternalSourceConnector,
@@ -1077,6 +1088,16 @@ where
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
 
+        // This source will need to be activated when the durability frontier changes.
+        if let Some(wrapper) = timestamp_histories.as_mut() {
+            let durability_activator = scope.activator_for(&info.address[..]);
+            wrapper
+                .wrapper
+                .borrow_mut()
+                .activators
+                .push(durability_activator);
+        }
+
         let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
         let mut source_metrics = SourceMetrics::new(
             base_metrics,
@@ -1125,7 +1146,7 @@ where
             None
         };
 
-        move |cap, bindings_cap, output, bindings_output| {
+        move |cap, bindings_cap, durability_cap, output, bindings_output| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
                 Some(source_reader) => source_reader,
@@ -1142,6 +1163,9 @@ where
                     return SourceStatus::Done;
                 }
             };
+
+            // Maintain a capability set that tracks the durability frontier.
+            durability_cap.downgrade(timestamp_histories.durability_frontier());
 
             // NOTE: It's **very** important that we get out any necessary
             // retractions/additions to the timestamp bindings before we downgrade beyond the
@@ -1235,6 +1259,8 @@ where
             timestamp_histories.downgrade(cap, &partition_cursors);
             bindings_cap.downgrade(cap.time());
             source_metrics.capability.set(*cap.time());
+            // Downgrade compaction frontier to track the current time.
+            timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation

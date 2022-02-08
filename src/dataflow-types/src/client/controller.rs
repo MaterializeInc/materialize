@@ -9,9 +9,7 @@
 
 //! A client that maintains summaries of the involved objects.
 
-use crate::client::{
-    Client, Command, ComputeCommand, ComputeResponse, Response, StorageCommand, StorageResponse,
-};
+use crate::client::{Client, Command, ComputeCommand, ComputeResponse, Response, StorageCommand};
 use expr::GlobalId;
 use repr::Timestamp;
 use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
@@ -158,11 +156,6 @@ impl<C: Client> Controller<C> {
                 Response::Compute(ComputeResponse::FrontierUppers(updates)) => {
                     for (id, changes) in updates.iter() {
                         self.compute_since_uppers.update_upper_for(*id, changes);
-                    }
-                }
-                Response::Storage(StorageResponse::Frontiers(updates)) => {
-                    for (id, changes) in updates.iter() {
-                        self.storage_since_uppers.update_upper_for(*id, changes);
                     }
                 }
                 _ => {}

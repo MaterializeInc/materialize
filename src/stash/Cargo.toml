@@ -1,0 +1,18 @@
+[package]
+name = "mz-stash"
+description = "Durable metadata storage."
+version = "0.0.0"
+edition = "2021"
+publish = false
+rust-version = "1.58.0"
+
+[dependencies]
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow" }
+rusqlite = { version = "0.26.3", features = ["bundled"] }
+persist-types = { path = "../persist-types" }
+timely-util = { path = "../timely-util" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
+
+[dev-dependencies]
+anyhow = "1.0.53"
+tempfile = "3.3.0"

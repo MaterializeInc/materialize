@@ -475,8 +475,6 @@ pub enum ComputeResponse {
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageResponse {
-    /// A list of identifiers, with prior and new upper frontiers.
-    Frontiers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
     /// Timestamp bindings and prior and new frontiers for those bindings for all
     /// sources
     TimestampBindings(TimestampBindingFeedback),
@@ -658,7 +656,7 @@ pub mod partitioned {
         }
     }
 
-    use timely::progress::{frontier::MutableAntichain, ChangeBatch};
+    use timely::progress::frontier::MutableAntichain;
 
     /// Maintained state for sharded dataflow clients.
     ///
@@ -671,22 +669,6 @@ pub mod partitioned {
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
-        /// Sources that have presented timestamping responses.
-        ///
-        /// This set is currently needed to map the multi-worker progress utterances
-        /// of the timestamping responses into single-worker utterances. When a source
-        /// is first observed in these responses, we increment the `Timestamp::minimum`
-        /// count by `self.parts - 1`, which prepares the recipients for the eventual
-        /// number of `self.parts` retractions of that time.
-        ///
-        /// TODO(mcsherry): This can be improved with help from the source of these
-        /// messages communicating this change when it starts the process, so that
-        /// this type does not need to retain the state indefinitely. We could also
-        /// count down from `self.parts` and clean up at zero, but it seemed hard to
-        /// correctly sniff "first message" without introducing additional composability
-        /// bugs. Check with me when we end up in a state that this grows too large
-        /// to manage and we'll figure it out.
-        source_timestamping: std::collections::HashSet<GlobalId>,
     }
 
     impl PartitionedClientState {
@@ -696,7 +678,6 @@ pub mod partitioned {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
-                source_timestamping: Default::default(),
             }
         }
 
@@ -729,39 +710,38 @@ pub mod partitioned {
         /// Absorbs a response, and produces response that should be emitted.
         pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
             match message {
-                Response::Compute(ComputeResponse::FrontierUppers(list)) => {
-                    let mut list = fold_changes(&mut self.uppers, list);
-
-                    // Only produce a result if there are any changes to report.
-                    if !list.is_empty() {
-                        // Put changes in order of `id` for ease of understanding.
-                        list.sort_by_key(|(id, _)| *id);
-                        Some(Response::Compute(ComputeResponse::FrontierUppers(list)))
-                    } else {
-                        None
+                Response::Compute(ComputeResponse::FrontierUppers(mut list)) => {
+                    for (id, changes) in list.iter_mut() {
+                        if let Some(frontier) = self.uppers.get_mut(id) {
+                            let iter = frontier.update_iter(changes.drain());
+                            changes.extend(iter);
+                        } else {
+                            changes.clear();
+                        }
                     }
-                }
-                // TODO: We could also split `self.uppers` into a `compute_uppers` and
-                // `storage_uppers`, but then we'd also have to change `frontier_tracking` to add
-                // tracking antichains to the right hash map.
-                Response::Storage(StorageResponse::Frontiers(list)) => {
-                    let mut list = fold_changes(&mut self.uppers, list);
 
-                    // Only produce a result if there are any changes to report.
-                    if !list.is_empty() {
-                        // Put changes in order of `id` for ease of understanding.
-                        list.sort_by_key(|(id, _)| *id);
-                        Some(Response::Storage(StorageResponse::Frontiers(list)))
-                    } else {
-                        None
+                    // The following block implements a `list.retain()` of non-empty change batches.
+                    // This is more verbose than `list.retain()` because that method cannot mutate
+                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
+                    let mut cursor = 0;
+                    while let Some((_id, changes)) = list.get_mut(cursor) {
+                        if changes.is_empty() {
+                            list.swap_remove(cursor);
+                        } else {
+                            cursor += 1;
+                        }
                     }
+
+                    Some(Response::Compute(ComputeResponse::FrontierUppers(list)))
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
                     for (id, changes) in feedback.changes.iter_mut() {
-                        if self.source_timestamping.insert(*id) {
-                            use timely::progress::Timestamp;
-                            changes.update(Timestamp::minimum(), (self.parts as i64) - 1);
+                        if let Some(frontier) = self.uppers.get_mut(id) {
+                            let iter = frontier.update_iter(changes.drain());
+                            changes.extend(iter);
+                        } else {
+                            changes.clear();
                         }
                     }
                     Some(Response::Storage(StorageResponse::TimestampBindings(
@@ -806,42 +786,6 @@ pub mod partitioned {
                 }
             }
         }
-    }
-
-    /// Folds changes given in `list` into the matching `MutableAntichain`s in `frontiers`. Only
-    /// returns changes when any of the maintained `MutableAntichain` advances.
-    fn fold_changes(
-        frontiers: &mut HashMap<GlobalId, MutableAntichain<Timestamp>>,
-        mut list: Vec<(GlobalId, ChangeBatch<Timestamp>)>,
-    ) -> Vec<(GlobalId, ChangeBatch<Timestamp>)> {
-        // Fold updates into the maintained antichain, and report
-        // any net changes to the minimal antichain itself.
-        let mut reactions = ChangeBatch::new();
-        for (id, changes) in list.iter_mut() {
-            // We may receive changes to identifiers that are no longer tracked;
-            // do not worry about them in that case (a benign race condition).
-            if let Some(frontier) = frontiers.get_mut(id) {
-                for (time, diff) in frontier.update_iter(changes.drain()) {
-                    reactions.update(time, diff);
-                }
-                std::mem::swap(changes, &mut reactions);
-            } else {
-                changes.clear();
-            }
-        }
-        // The following block implements a `list.retain()` of non-empty change batches.
-        // This is more verbose than `list.retain()` because that method cannot mutate
-        // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-        let mut cursor = 0;
-        while let Some((_id, changes)) = list.get_mut(cursor) {
-            if changes.is_empty() {
-                list.swap_remove(cursor);
-            } else {
-                cursor += 1;
-            }
-        }
-
-        list
     }
 }
 

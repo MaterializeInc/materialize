@@ -13,9 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Internal utility libraries for Materialize.
 //! Utilities for working with Timely
 
 #![warn(missing_docs)]
 
+pub mod antichain_ext;
 pub mod operators_async_ext;

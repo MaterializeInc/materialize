@@ -46,6 +46,10 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=100000
 {"f1": "d${kafka-ingest.iteration}"} {"f2": "d${kafka-ingest.iteration}"}
 
+# Make sure that we read (and persisted) at least one message before activating the failpoint.
+> SELECT COUNT(*) > 0 FROM failpoint;
+true
+
 > SET failpoints = 'fileblob_set_sync=return';
 
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=100000

@@ -150,6 +150,16 @@ impl<T: AstInfo> Query<T> {
         }
     }
 
+    pub fn query(query: Query<T>) -> Query<T> {
+        Query {
+            ctes: vec![],
+            body: SetExpr::Query(Box::new(query)),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        }
+    }
+
     pub fn take(&mut self) -> Query<T> {
         mem::replace(
             self,

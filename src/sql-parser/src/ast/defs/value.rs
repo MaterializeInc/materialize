@@ -143,6 +143,7 @@ pub enum DateTimeField {
     Hour,
     Minute,
     Second,
+    Milliseconds,
 }
 
 impl fmt::Display for DateTimeField {
@@ -154,6 +155,7 @@ impl fmt::Display for DateTimeField {
             DateTimeField::Hour => "HOUR",
             DateTimeField::Minute => "MINUTE",
             DateTimeField::Second => "SECOND",
+            DateTimeField::Milliseconds => "MILLISECONDS",
         })
     }
 }
@@ -169,6 +171,7 @@ impl FromStr for DateTimeField {
             "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
             "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
             "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
+            "MILLISECOND" | "MILLISECONDS" | "MS" => Ok(Self::Milliseconds),
             _ => Err(format!("invalid DateTimeField: {}", s)),
         }
     }

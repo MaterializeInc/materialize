@@ -4267,11 +4267,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_tail(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let name = self.parse_object_name()?;
+        let relation = if self.consume_token(&Token::LParen) {
+            let query = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            TailRelation::Query(query)
+        } else {
+            TailRelation::Name(self.parse_object_name()?)
+        };
         let options = self.parse_opt_with_options()?;
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail(TailStatement {
-            name,
+            relation,
             options,
             as_of,
         }))

@@ -814,12 +814,12 @@ where
     K2: Codec + timely::Data,
     V2: Codec + timely::Data,
 {
-    let sealed_stream = stream.conditional_seal(
-        &source_name,
-        bindings_stream,
-        write.clone(),
-        bindings_write.clone(),
-    );
+    let mut seal_handle = MultiWriteHandle::new(&write);
+    seal_handle
+        .add_stream(&bindings_write)
+        .expect("handles known to be from same persist runtime");
+
+    let sealed_stream = stream.seal(&source_name, vec![bindings_stream.probe()], seal_handle);
 
     // The compaction since of persisted sources is upper-bounded by two frontiers: a) the
     // compaction that the coordinator allows, and b) the seal frontier of the involved persistent

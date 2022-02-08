@@ -187,6 +187,7 @@ class KafkaPartitions(Generator):
         print(
             """> CREATE MATERIALIZED SOURCE s1
             FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-partitions-${testdrive.seed}'
+            WITH (topic_metadata_refresh_interval_ms = 1000)
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
             ENVELOPE NONE;
             """
@@ -655,6 +656,10 @@ class Lateral(Generator):
 
 
 class SelectExpression(Generator):
+    # Stack exhaustion with COUNT=1000 due to unprotected path:
+    # https://github.com/MaterializeInc/materialize/issues/10496
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
@@ -663,9 +668,13 @@ class SelectExpression(Generator):
         value_list = ", ".join("1" for i in cls.all())
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
-        expression = " + ".join(f"{i}" for i in cls.all())
-        print(f"> SELECT {expression} FROM t1;")
+        const_expression = " + ".join(f"{i}" for i in cls.all())
+        print(f"> SELECT {const_expression} FROM t1;")
         print(f"{sum(cls.all())}")
+
+        expression = " + ".join(f"f{i}" for i in cls.all())
+        print(f"> SELECT {expression} FROM t1;")
+        print(f"{cls.COUNT}")
 
 
 class WhereExpression(Generator):
@@ -793,7 +802,7 @@ class Aggregates(Generator):
 
 class AggregateExpression(Generator):
     # Stack exhaustion with COUNT=1000 due to unprotected path:
-    # https://github.com/MaterializeInc/materialize/issues/10348#issuecomment-1025946920
+    # https://github.com/MaterializeInc/materialize/issues/10496
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod

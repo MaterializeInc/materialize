@@ -434,11 +434,12 @@ table_ref ::=
     | '(' join_expr ')'
   ) ('AS'? table_alias ('(' col_alias (',' col_alias)* ')'))?
 tail_stmt ::=
-    'TAIL' object_name
+    'TAIL'
+    ( object_name | '(' select_stmt ')' )
     ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
     ('AS OF' timestamp_expression)?
 time_unit ::=
-  'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND'
+  'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS'
 type_bool ::=
   ( 'TRUE' | 'FALSE' )
 type_date ::=

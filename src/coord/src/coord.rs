@@ -30,8 +30,7 @@
 //! the frontier when being added to [`txn_reads`](Coordinator::txn_reads). The
 //! compaction frontier may change when a transaction ends (if it was the oldest
 //! transaction and the since was advanced after the transaction started) or
-//! when [`update_index_upper()`](Coordinator::update_index_upper) or
-//! [`update_storage_upper`](Coordinator::update_storage_upper) is run (if there
+//! when [`update_upper()`](Coordinator::update_upper) is run (if there
 //! are no in progress transactions before the new since). When it does, it is
 //! added to [`index_since_updates`](Coordinator::index_since_updates) or
 //! [`source_since_updates`](Coordinator::source_since_updates) and will be
@@ -113,15 +112,14 @@ use dataflow_types::client::{ComputeClient, StorageClient};
 use dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
 use dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use dataflow_types::{sinks::SinkAsOf, sources::Timeline};
-use dataflow_types::{
-    sinks::{SinkConnector, TailSinkConnector},
-    sources::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector},
-    DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
+use dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
+use dataflow_types::sources::{
+    ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
+use dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
 use expr::{
-    permutation_for_arrangement, ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr,
-    NullaryFunc, OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, NowFn};
@@ -145,7 +143,7 @@ use sql::plan::{
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, TailPlan,
+    SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
 use sql::plan::{OptimizerConfig, StatementDesc, View};
 use transform::Optimizer;
@@ -872,13 +870,7 @@ impl Coordinator {
             }
             DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
                 for (name, changes) in updates {
-                    self.update_index_upper(&name, changes);
-                }
-                self.maintenance().await;
-            }
-            DataflowResponse::Storage(StorageResponse::Frontiers(updates)) => {
-                for (name, changes) in updates {
-                    self.update_storage_upper(&name, changes);
+                    self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
             }
@@ -898,45 +890,40 @@ impl Coordinator {
                     if let Some(source_state) = self.sources.get_mut(&source_id) {
                         // Apply the updates the dataflow worker sent over, and check if there
                         // were any changes to the source's upper frontier.
-                        let changes: Vec<_> = source_state
-                            .durability
-                            .update_iter(changes.drain())
-                            .collect();
+                        let changes: Vec<_> =
+                            source_state.upper.update_iter(changes.drain()).collect();
 
                         if !changes.is_empty() {
                             // The source's durability frontier changed as a result of the updates sent over
                             // by the dataflow workers. Advance the durability frontier known to the dataflow worker
                             // to indicate that these bindings have been persisted.
                             durability_updates
-                                .push((source_id, source_state.durability.frontier().to_owned()));
+                                .push((source_id, source_state.upper.frontier().to_owned()));
+
+                            // Allow compaction to advance.
+                            if let Some(compaction_window_ms) = source_state.compaction_window_ms {
+                                if !source_state.upper.frontier().is_empty() {
+                                    self.since_handles
+                                        .get_mut(&source_id)
+                                        .unwrap()
+                                        .maybe_advance(source_state.upper.frontier().iter().map(
+                                            |time| {
+                                                compaction_window_ms
+                                                    * (time.saturating_sub(compaction_window_ms)
+                                                        / compaction_window_ms)
+                                            },
+                                        ));
+                                }
+                            }
                         }
 
                         // Let's also check to see if we can compact any of the bindings we've received.
-                        let compaction_ts = if <_ as PartialOrder>::less_equal(
-                            &source_state.since.borrow().frontier(),
-                            &source_state.durability.frontier(),
-                        ) {
-                            // In this case we have persisted ahead of the compaction frontier and can safely compact
-                            // up to it
-                            *source_state
-                                .since
-                                .borrow()
-                                .frontier()
-                                .first()
-                                .expect("known to exist")
-                        } else {
-                            // Otherwise, the compaction frontier is ahead of what we've persisted so far, but we can
-                            // still potentially compact up whatever we have persisted to this point.
-                            // Note that we have to subtract from the durability frontier because it functions as the
-                            // least upper bound of whats been persisted, and we decline to compact up to the empty
-                            // frontier.
-                            source_state
-                                .durability
-                                .frontier()
-                                .first()
-                                .unwrap_or(&0)
-                                .saturating_sub(1)
-                        };
+                        let compaction_ts = *source_state
+                            .since
+                            .borrow()
+                            .frontier()
+                            .first()
+                            .expect("known to exist");
 
                         self.catalog
                             .compact_timestamp_bindings(source_id, compaction_ts)
@@ -1413,8 +1400,8 @@ impl Coordinator {
         frontier_changes
     }
 
-    /// Updates the upper frontier of a named view.
-    fn update_index_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
+    /// Updates the upper frontier of a maintained arrangement or sink.
+    fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
         if let Some(index_state) = self.indexes.get_mut(name) {
             let changes = Self::validate_update_iter(&mut index_state.upper, changes);
 
@@ -1449,40 +1436,9 @@ impl Coordinator {
             }
         } else if self.sources.get_mut(name).is_some() {
             panic!(
-                "expected an update for an index, instead got update for source {}",
+                "expected an update for an index or sink, instead got update for source {}",
                 name
             );
-        } else if self.sink_writes.get_mut(name).is_some() {
-            panic!(
-                "expected an update for an index, instead got update for sink {}",
-                name
-            );
-        }
-    }
-
-    /// Updates the upper frontier of a named source or sink.
-    fn update_storage_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
-        if self.indexes.get_mut(name).is_some() {
-            panic!(
-                "expected an update for a source or a sink, instead got update for index {}",
-                name
-            );
-        } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes = Self::validate_update_iter(&mut source_state.upper, changes);
-
-            if !changes.is_empty() {
-                if let Some(compaction_window_ms) = source_state.compaction_window_ms {
-                    if !source_state.upper.frontier().is_empty() {
-                        self.since_handles.get_mut(name).unwrap().maybe_advance(
-                            source_state.upper.frontier().iter().map(|time| {
-                                compaction_window_ms
-                                    * (time.saturating_sub(compaction_window_ms)
-                                        / compaction_window_ms)
-                            }),
-                        );
-                    }
-                }
-            }
         } else if let Some(sink_state) = self.sink_writes.get_mut(name) {
             // Only one dataflow worker should give updates for sinks
             let changes = Self::validate_update_iter(&mut sink_state.frontier, changes);
@@ -1785,7 +1741,7 @@ impl Coordinator {
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
         let as_of = SinkAsOf {
-            frontier: self.determine_frontier(sink.from),
+            frontier: self.determine_frontier(&[sink.from]),
             strict: !sink.with_snapshot,
         };
         let ops = vec![
@@ -3262,12 +3218,11 @@ impl Coordinator {
         plan: TailPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let TailPlan {
-            id: source_id,
+            from,
             with_snapshot,
             ts,
             copy_to,
             emit_progress,
-            object_columns,
         } = plan;
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
@@ -3277,46 +3232,65 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Tail)?;
         }
 
-        // Determine the frontier of updates to tail *from*.
-        // Updates greater or equal to this frontier will be produced.
-        let frontier = if let Some(ts) = ts {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(
-                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?
-                    .0,
-            )
-        } else {
-            self.determine_frontier(source_id)
+        let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
+            // Determine the frontier of updates to tail *from*.
+            // Updates greater or equal to this frontier will be produced.
+            let frontier = if let Some(ts) = ts {
+                // If a timestamp was explicitly requested, use that.
+                let ts = coord.determine_timestamp(uses, PeekWhen::AtTimestamp(ts))?;
+                Antichain::from_elem(ts.0)
+            } else {
+                coord.determine_frontier(uses)
+            };
+
+            Ok::<_, CoordError>(SinkDesc {
+                from,
+                from_desc,
+                connector: SinkConnector::Tail(TailSinkConnector::default()),
+                envelope: None,
+                as_of: SinkAsOf {
+                    frontier,
+                    strict: !with_snapshot,
+                },
+            })
         };
-        let sink_name = format!(
-            "tail-source-{}",
-            self.catalog
-                .for_session(session)
-                .humanize_id(source_id)
-                .expect("Source id is known to exist in catalog")
-        );
-        let sink_id = self.catalog.allocate_id()?;
-        session.add_drop_sink(sink_id);
+
+        let dataflow = match from {
+            TailFrom::Id(from_id) => {
+                let from = self.catalog.get_by_id(&from_id);
+                let from_desc = from.desc().unwrap().clone();
+                let sink_id = self.catalog.allocate_id()?;
+                let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id])?;
+                let sink_name = format!("tail-{}", sink_id);
+                self.dataflow_builder()
+                    .build_sink_dataflow(sink_name, sink_id, sink_desc)?
+            }
+            TailFrom::Query {
+                expr,
+                desc,
+                depends_on,
+            } => {
+                let id = self.allocate_transient_id()?;
+                let expr = self.prep_relation_expr(expr, ExprPrepStyle::Static)?;
+                let desc = RelationDesc::new(expr.typ(), desc.iter_names());
+                let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
+                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
+                let mut dataflow_builder = self.dataflow_builder();
+                dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
+                dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
+                dataflow
+            }
+        };
+
+        let (sink_id, sink_desc) = &dataflow.sink_exports[0];
+        session.add_drop_sink(*sink_id);
+        let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
-            .insert(sink_id, PendingTail::new(tx, emit_progress, object_columns));
-        let sink_description = dataflow_types::sinks::SinkDesc {
-            from: source_id,
-            from_desc: self.catalog.get_by_id(&source_id).desc().unwrap().clone(),
-            connector: SinkConnector::Tail(TailSinkConnector::default()),
-            envelope: None,
-            as_of: SinkAsOf {
-                frontier,
-                strict: !with_snapshot,
-            },
-        };
-        let df =
-            self.dataflow_builder()
-                .build_sink_dataflow(sink_name, sink_id, sink_description)?;
-        self.ship_dataflow(df).await;
+            .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
+        self.ship_dataflow(dataflow).await;
 
         let resp = ExecuteResponse::Tailing { rx };
-
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
@@ -3482,7 +3456,7 @@ impl Coordinator {
     /// `source_id`.
     ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(&mut self, source_id: GlobalId) -> Antichain<Timestamp> {
+    fn determine_frontier(&mut self, source_ids: &[GlobalId]) -> Antichain<Timestamp> {
         // This function differs from determine_timestamp because sinks/tail don't care
         // about indexes existing or timestamps being complete. If data don't exist
         // yet (upper = 0), it is not a problem for the sink to wait for it. If the
@@ -3495,7 +3469,7 @@ impl Coordinator {
         // nearest_indexes. We don't care about the indexes being incomplete because
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
-        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(&[source_id]);
+        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(source_ids);
         let mut since = self.indexes.least_valid_since(index_ids.iter().copied());
         since.join_assign(
             &self
