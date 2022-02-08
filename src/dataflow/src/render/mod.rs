@@ -217,7 +217,7 @@ pub struct SourceBoundary {
     pub err: Rc<EventLink<repr::Timestamp, (DataflowError, repr::Timestamp, repr::Diff)>>,
     /// A token that should be dropped to terminate the source.
     pub token: Rc<Option<crate::source::SourceToken>>,
-    /// Additional tokens that should be dropped to terminate the suorce.
+    /// Additional tokens that should be dropped to terminate the source.
     pub additional_tokens: Vec<Rc<dyn std::any::Any>>,
 }
 
@@ -244,9 +244,6 @@ pub fn build_storage_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            // let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
-            // let mut tokens = RelevantTokens::default();
-
             let as_of = dataflow.as_of.clone().unwrap();
             let dataflow_id = scope.addr().into_element();
             let debug_name = format!("{}-sources", dataflow.debug_name);
@@ -300,7 +297,7 @@ pub fn build_storage_dataflow<A: Allocate>(
     results
 }
 
-/// Assemble the "compute"  side of a datalfow, i.e. all but the sources.
+/// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
@@ -314,7 +311,6 @@ pub fn build_compute_dataflow<A: Allocate>(
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
-    // let materialized_logging = timely_worker.log_register().get("materialized");
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
