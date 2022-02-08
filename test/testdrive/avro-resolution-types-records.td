@@ -29,4 +29,7 @@ $ kafka-ingest format=avro topic=resolution-records-int2double schema=${double-c
 {"f1": { "f1": 123.234 }}
 
 ! SELECT * FROM resolution_records_int2double
-contains:Schemas don't match: Double, Int
+contains:Writer schema has type `Double`, but reader schema has type `Int` for field `inner.f1`
+
+! SELECT * FROM resolution_records_int2double
+contains:failed to resolve Avro schema (id =

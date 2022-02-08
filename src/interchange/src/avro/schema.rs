@@ -13,7 +13,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Error};
+use anyhow::{anyhow, bail, Context};
 use tracing::warn;
 
 use mz_avro::error::Error as AvroError;
@@ -253,8 +253,8 @@ impl ConfluentAvroResolver {
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<(&'b [u8], &'a Schema)> {
-        let resolved_schema = match &mut self.writer_schemas {
+    ) -> anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)> {
+        let (resolved_schema, schema_id) = match &mut self.writer_schemas {
             Some(cache) => {
                 debug_assert!(
                     self.confluent_wire_format,
@@ -264,10 +264,13 @@ impl ConfluentAvroResolver {
                 // XXX(guswynn): use destructuring assignments when they are stable
                 let (schema_id, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
                 bytes = adjusted_bytes;
-                cache
+                let schema = cache
                     .get(schema_id, &self.reader_schema)
                     .await
-                    .map_err(Error::msg)?
+                    .with_context(|| {
+                        format!("failed to resolve Avro schema (id = {})", schema_id)
+                    })?;
+                (schema, Some(schema_id))
             }
 
             // If we haven't been asked to use a schema registry, we have no way
@@ -279,10 +282,10 @@ impl ConfluentAvroResolver {
                     let (_, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
                     bytes = adjusted_bytes;
                 }
-                &self.reader_schema
+                (&self.reader_schema, None)
             }
         };
-        Ok((bytes, resolved_schema))
+        Ok((bytes, resolved_schema, schema_id))
     }
 }
 

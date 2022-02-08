@@ -215,4 +215,4 @@ garbage
   FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (confluent_wire_format = false)
 
 ! SELECT f2 FROM avro_corrupted_values2
-contains:Decode error: Text: avro deserialization error: Decode error: Decoding error: Expected non-negative integer, got -49
+contains:Decode error: Decoding error: Expected non-negative integer, got -49
