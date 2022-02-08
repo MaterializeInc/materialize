@@ -15,7 +15,7 @@ body:
     attributes:
       label: Elevator pitch
       description: |
-        Each question should be answered comprehensively but using as few sentences as possible.
+        Each question should be answered comprehensively but using as few sentences as possible. This is the only mandatory section needed for the issue to be discussed in a refinement session.
       value: |
         ### What does the transformation do?
         <!-- Give a representative SQL query. -->
@@ -60,6 +60,8 @@ body:
   - type: textarea
     attributes:
       label: Proposed implementation
+      description: |
+        Implementation details can be filled in only after the proposal was approved during a refinement session (in general this decision should be informed by the accompanying cost model).
       value: |
         ### Describe the implementation.
 
