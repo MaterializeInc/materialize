@@ -139,20 +139,11 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
 
-// Adds `ssl_follow_kafka` to CSR connectors that defaulted to Kafka ssl values
+// Copies `ssl_` options to CSR connectors that defaulted to Kafka ssl values
 // from when that was the default
 fn ast_rewrite_ccsr_with_options_to_compiled_0_20_0(
     stmt: &mut sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
-    fn is_option_to_skip(option_name: &str) -> bool {
-        [
-            "ssl_ca_location",
-            "ssl_key_location",
-            "ssl_certificate_location",
-        ]
-        .contains(&option_name)
-    }
-
     struct OptionRemover;
     impl<'ast> VisitMut<'ast, Raw> for OptionRemover {
         fn visit_create_source_statement_mut(
@@ -170,17 +161,23 @@ fn ast_rewrite_ccsr_with_options_to_compiled_0_20_0(
             };
 
             if let Some(with_options) = with_options {
-                if !with_options
-                    .iter()
-                    .any(|opt| is_option_to_skip(opt.name().as_str()))
-                    && !with_options
+                for option_to_consider in [
+                    "ssl_ca_location",
+                    "ssl_key_location",
+                    "ssl_certificate_location",
+                ] {
+                    if !with_options
                         .iter()
-                        .any(|opt| opt.name().as_str() == "ssl_follow_kafka")
-                {
-                    with_options.push(SqlOption::Value {
-                        name: Ident::new("ssl_follow_kafka"),
-                        value: Value::Boolean(true),
-                    });
+                        .any(|opt| option_to_consider == opt.name().as_str())
+                    {
+                        if let Some(found_option) = node
+                            .with_options
+                            .iter()
+                            .find(|opt| option_to_consider == opt.name().as_str())
+                        {
+                            with_options.push(found_option.clone());
+                        }
+                    }
                 }
             }
         }

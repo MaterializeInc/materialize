@@ -45,7 +45,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
 contains:Invalid WITH options: cannot specify both sasl_password and sasl_password_env options at the same time
@@ -62,7 +62,7 @@ contains:Invalid WITH options: cannot specify both sasl_password and sasl_passwo
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
 contains:Invalid WITH options: cannot specify both sasl_password and sasl_password_env options at the same time
@@ -78,7 +78,7 @@ contains:Invalid WITH options: cannot specify both sasl_password and sasl_passwo
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
 contains:Invalid WITH option sasl_password_env='DNE': environment variable not found

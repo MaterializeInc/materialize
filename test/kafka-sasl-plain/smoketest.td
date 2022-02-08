@@ -44,7 +44,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
 
@@ -74,7 +74,7 @@ a
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
 
 $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
@@ -94,7 +94,7 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
 

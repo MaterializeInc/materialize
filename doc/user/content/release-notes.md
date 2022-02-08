@@ -150,8 +150,10 @@ changes that have not yet been documented.
 - Add `SELECT` statement support to [`TAIL`](/sql/tail).
 
 - **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
-  of `CREATE SOURCE` and `CREATE SINK` now reject unknown parameters.
-  (Example: [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)).
+  of `CREATE SOURCE` and `CREATE SINK` no longer default
+  their ssl paramters to the kafka ones. See
+  [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
+  for more info.
 
 {{< comment >}}
 Only add new release notes above this line.

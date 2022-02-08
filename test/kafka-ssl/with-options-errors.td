@@ -44,13 +44,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true,
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
       username = "materialize",
       password = "sekurity"
   )
   ENVELOPE DEBEZIUM
 
-# not we still `ssl_follow_kafka` so that we can ensure the correct error case
 ! CREATE SINK env_pw_snk FROM data
   INTO KAFKA BROKER 'kafka' TOPIC 'snk'
   WITH (
@@ -63,13 +64,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true,
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
       username = "materialize",
       password = "sekurity"
   )
 contains:Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
 
-# not we still `ssl_follow_kafka` so that we can ensure the correct error case
 ! CREATE SINK env_pw_snk FROM data
   INTO KAFKA BROKER 'kafka' TOPIC 'snk'
   WITH (
@@ -82,17 +84,17 @@ contains:Invalid WITH options: cannot specify both ssl_key_password and ssl_key_
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true,
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
       username = "materialize",
       password = "sekurity"
   )
 contains:Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
 
-# not we still `ssl_follow_kafka` so that we can ensure the correct error case
 ! CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
-      ssl_follow_kafka = true,
       security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
       sasl_username = 'materialize',

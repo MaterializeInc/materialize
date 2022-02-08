@@ -81,7 +81,9 @@ a
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_key_location = '/share/secrets/materialized-kafka.key',
+      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
 contains:sslv3 alert certificate unknown

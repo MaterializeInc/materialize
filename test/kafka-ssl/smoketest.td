@@ -44,7 +44,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true,
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
       username = "materialize",
       password = "sekurity"
   )
@@ -75,7 +77,9 @@ a
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true,
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
       username = "materialize",
       password = "sekurity"
   )
@@ -97,7 +101,9 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true,
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
       username = "materialize",
       password = "sekurity"
   )
@@ -119,12 +125,14 @@ $ kafka-verify format=avro sink=materialize.public.env_pw_snk sort-messages=true
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_follow_kafka = true
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
 exact:error publishing kafka schemas for sink: unable to publish value schema to registry in kafka sink: server error 401: Unauthorized
 
-# Ensure that we get an ssl error if we forget to set certs or follow kafka certs
+# Ensure that we get an ssl error if we forget to set certs
 ! CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (

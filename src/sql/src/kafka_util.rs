@@ -464,19 +464,10 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    kafka_options: &BTreeMap<String, String>,
+    _kafka_options: &BTreeMap<String, String>,
     ccsr_options: &mut BTreeMap<String, Value>,
 ) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
-
-    // If provided, prefer SSL options from the schema registry configuration
-    let ssl_follow_kafka = match ccsr_options.remove("ssl_follow_kafka").as_ref() {
-        Some(Value::Boolean(value)) => *value,
-        Some(_) => {
-            bail!("ssl_follow_kafka must be a boolean");
-        }
-        None => false,
-    };
 
     // If provided, prefer SSL options from the schema registry configuration
     if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
@@ -484,9 +475,7 @@ pub fn generate_ccsr_client_config(
         Some(_) => {
             bail!("ssl_ca_location must be a string");
         }
-        None => ssl_follow_kafka
-            .then(|| kafka_options.get("ssl.ca.location"))
-            .flatten(),
+        None => None,
     } {
         let mut ca_buf = Vec::new();
         File::open(ca_path)?.read_to_end(&mut ca_buf)?;
@@ -500,9 +489,7 @@ pub fn generate_ccsr_client_config(
         Some(_) => {
             bail!("ssl_key_location must be a string");
         }
-        None => ssl_follow_kafka
-            .then(|| kafka_options.get("ssl.key.location"))
-            .flatten(),
+        None => None,
     };
     let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
     let cert_path = match &ssl_certificate_location {
@@ -510,9 +497,7 @@ pub fn generate_ccsr_client_config(
         Some(_) => {
             bail!("ssl_certificate_location must be a string");
         }
-        None => ssl_follow_kafka
-            .then(|| kafka_options.get("ssl.certificate.location"))
-            .flatten(),
+        None => None,
     };
     match (key_path, cert_path) {
         (Some(key_path), Some(cert_path)) => {
