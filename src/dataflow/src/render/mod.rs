@@ -102,7 +102,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -209,26 +209,34 @@ pub struct RelevantTokens {
     pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
 }
 
+/// Information about each source that must be communicated between storage and compute layers.
 pub struct SourceBoundary {
-    pub id: GlobalId,
+    /// Captured `row` updates representing a differential collection.
     pub ok: Rc<EventLink<repr::Timestamp, (Row, repr::Timestamp, repr::Diff)>>,
+    /// Captured error updates representing a differential collection.
     pub err: Rc<EventLink<repr::Timestamp, (DataflowError, repr::Timestamp, repr::Diff)>>,
+    /// A token that should be dropped to terminate the source.
     pub token: Rc<Option<crate::source::SourceToken>>,
+    /// Additional tokens that should be dropped to terminate the suorce.
     pub additional_tokens: Vec<Rc<dyn std::any::Any>>,
 }
 
+/// Assemble the "storage" side of a dataflow, i.e. the sources.
+///
+/// This method creates a new dataflow to host the implementations of sources for the `dataflow`
+/// argument, and returns assets for each source that can import the results into a new dataflow.
 pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     dataflow: &DataflowDescription<plan::Plan>,
     now: NowFn,
     source_metrics: &SourceBaseMetrics,
-) -> Vec<SourceBoundary> {
+) -> BTreeMap<GlobalId, SourceBoundary> {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let materialized_logging = timely_worker.log_register().get("materialized");
 
-    let mut results = Vec::with_capacity(dataflow.source_imports.len());
+    let mut results = BTreeMap::new();
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -273,13 +281,15 @@ pub fn build_storage_dataflow<A: Allocate>(
                 let ok_handle = Rc::new(EventLink::new());
                 let err_handle = Rc::new(EventLink::new());
 
-                results.push(SourceBoundary {
-                    id: *src_id,
-                    ok: Rc::<_>::clone(&ok_handle),
-                    err: Rc::<_>::clone(&err_handle),
-                    token: source_token,
-                    additional_tokens,
-                });
+                results.insert(
+                    *src_id,
+                    SourceBoundary {
+                        ok: Rc::<_>::clone(&ok_handle),
+                        err: Rc::<_>::clone(&err_handle),
+                        token: source_token,
+                        additional_tokens,
+                    },
+                );
 
                 ok.inner.capture_into(ok_handle);
                 err.inner.capture_into(err_handle);
@@ -290,11 +300,15 @@ pub fn build_storage_dataflow<A: Allocate>(
     results
 }
 
-/// Build a dataflow from a description.
+/// Assemble the "compute"  side of a datalfow, i.e. all but the sources.
+///
+/// This method imports sources from provided assets, and then builds the remaining
+/// dataflow using "compute-local" assets like shared arrangements, and producing
+/// both arrangements and sinks.
 pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    sources: Vec<SourceBoundary>,
+    sources: BTreeMap<GlobalId, SourceBoundary>,
     dataflow: DataflowDescription<plan::Plan>,
     sink_metrics: &SinkBaseMetrics,
 ) {
@@ -312,21 +326,21 @@ pub fn build_compute_dataflow<A: Allocate>(
             let mut tokens = RelevantTokens::default();
 
             // Import declared sources into the rendering context.
-            for source in sources.into_iter() {
+            for (source_id, source) in sources.into_iter() {
                 // Associate collection bundle with the source identifier.
                 let ok = Some(source.ok).replay_into(region).as_collection();
                 let err = Some(source.err).replay_into(region).as_collection();
                 context.insert_id(
-                    Id::Global(source.id),
+                    Id::Global(source_id),
                     CollectionBundle::from_collections(ok, err),
                 );
 
                 // Associate returned tokens with the source identifier.
-                let prior = tokens.source_tokens.insert(source.id, source.token);
+                let prior = tokens.source_tokens.insert(source_id, source.token);
                 assert!(prior.is_none());
                 tokens
                     .additional_tokens
-                    .entry(source.id)
+                    .entry(source_id)
                     .or_insert_with(Vec::new)
                     .extend(source.additional_tokens);
             }
