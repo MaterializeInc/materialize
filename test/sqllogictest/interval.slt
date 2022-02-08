@@ -797,6 +797,11 @@ SELECT INTERVAL '1002 milliseconds'
 00:00:01.002
 
 query T
+SELECT INTERVAL '1002 milliseconds 1 second'
+----
+00:00:02.002
+
+query T
 SELECT INTERVAL '1 second 42 milliseconds'
 ----
 00:00:01.042
@@ -815,6 +820,11 @@ query T
 SELECT INTERVAL '5000006 microseconds'
 ----
 00:00:05.000006
+
+query T
+SELECT INTERVAL '5000006 microseconds 1 second'
+----
+00:00:06.000006
 
 query T
 SELECT INTERVAL '27 second 24 microseconds'
