@@ -197,21 +197,6 @@ pub struct StorageState {
     pub persist: Option<RuntimeClient>,
 }
 
-/// A container for "tokens" that are relevant to an in-construction dataflow.
-///
-/// Tokens are used by consumers of data to keep their sources of data running.
-/// Once all tokens referencing a source are dropped, the source can shut down,
-/// which will wind down (eventually) the dataflow containing it.
-#[derive(Default)]
-pub struct RelevantTokens {
-    /// The source tokens for all sources that have been built in this context.
-    pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
-    /// Any other tokens that need to be dropped when an object is dropped.
-    pub additional_tokens: HashMap<GlobalId, Vec<Rc<dyn Any>>>,
-    /// Tokens for CDCv2 capture sources that have been built in this context.
-    pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
-}
-
 /// Information about each source that must be communicated between storage and compute layers.
 pub struct SourceBoundary {
     /// Captured `row` updates representing a differential collection.
@@ -222,9 +207,7 @@ pub struct SourceBoundary {
         Rc<EventLink<repr::Timestamp, (DataflowError, repr::Timestamp, repr::Diff)>>,
     >,
     /// A token that should be dropped to terminate the source.
-    pub token: Rc<Option<crate::source::SourceToken>>,
-    /// Additional tokens that should be dropped to terminate the source.
-    pub additional_tokens: Vec<Rc<dyn std::any::Any>>,
+    pub token: Rc<dyn std::any::Any>,
 }
 
 /// Assemble the "storage" side of a dataflow, i.e. the sources.
@@ -267,19 +250,18 @@ pub fn build_storage_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (src_id, source) in &dataflow.source_imports {
-                let ((ok, err), (source_token, additional_tokens)) =
-                    crate::render::sources::import_source(
-                        &debug_name,
-                        dataflow_id,
-                        &as_of,
-                        source.clone(),
-                        storage_state,
-                        region,
-                        materialized_logging.clone(),
-                        src_id.clone(),
-                        now.clone(),
-                        source_metrics,
-                    );
+                let ((ok, err), token) = crate::render::sources::import_source(
+                    &debug_name,
+                    dataflow_id,
+                    &as_of,
+                    source.clone(),
+                    storage_state,
+                    region,
+                    materialized_logging.clone(),
+                    src_id.clone(),
+                    now.clone(),
+                    source_metrics,
+                );
 
                 let ok_activator = RcActivator::new(format!("{debug_name}-ok"), 1);
                 let err_activator = RcActivator::new(format!("{debug_name}-err"), 1);
@@ -294,8 +276,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                     SourceBoundary {
                         ok: ActivatedEventPusher::<_>::clone(&ok_handle),
                         err: ActivatedEventPusher::<_>::clone(&err_handle),
-                        token: source_token,
-                        additional_tokens,
+                        token,
                     },
                 );
 
@@ -330,7 +311,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
             let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
-            let mut tokens = RelevantTokens::default();
+            let mut tokens = BTreeMap::new();
 
             // Import declared sources into the rendering context.
             for (source_id, source) in sources.into_iter() {
@@ -357,13 +338,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                 );
 
                 // Associate returned tokens with the source identifier.
-                let prior = tokens.source_tokens.insert(source_id, source.token);
+                let prior = tokens.insert(source_id, source.token);
                 assert!(prior.is_none());
-                tokens
-                    .additional_tokens
-                    .entry(source_id)
-                    .or_insert_with(Vec::new)
-                    .extend(source.additional_tokens);
             }
 
             // Import declared indexes into the rendering context.
@@ -423,7 +399,7 @@ where
     fn import_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut RelevantTokens,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
@@ -450,15 +426,10 @@ where
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                 ),
             );
-            tokens
-                .additional_tokens
-                .entry(idx_id)
-                .or_insert_with(Vec::new)
-                .push(Rc::new((
-                    ok_button.press_on_drop(),
-                    err_button.press_on_drop(),
-                    token,
-                )));
+            tokens.insert(
+                idx_id,
+                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+            );
         } else {
             panic!(
                 "import of index {} failed while building dataflow {}",
@@ -480,23 +451,18 @@ where
     fn export_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut RelevantTokens,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
         // put together tokens that belong to the export
-        let mut needed_source_tokens = Vec::new();
-        let mut needed_additional_tokens = Vec::new();
+        let mut needed_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(addls) = tokens.additional_tokens.get(&import_id) {
-                needed_additional_tokens.extend_from_slice(addls);
-            }
-            if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(Rc::clone(&source_token));
+            if let Some(token) = tokens.get(&import_id) {
+                needed_tokens.push(Rc::clone(&token));
             }
         }
-        let tokens = Rc::new((needed_source_tokens, needed_additional_tokens));
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(
                 "Arrangement alarmingly absent! id: {:?}",
@@ -507,7 +473,7 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {

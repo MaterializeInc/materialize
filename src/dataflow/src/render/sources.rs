@@ -148,10 +148,7 @@ pub(crate) fn import_source<G>(
     base_metrics: &SourceBaseMetrics,
 ) -> (
     (Collection<G, Row>, Collection<G, DataflowError>),
-    (
-        Rc<Option<crate::source::SourceToken>>,
-        Vec<Rc<dyn std::any::Any>>,
-    ),
+    Rc<dyn std::any::Any>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -164,7 +161,7 @@ where
     }
 
     // Tokens that we should return from the method.
-    let mut additional_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
+    let mut needed_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
 
     // Before proceeding, we may need to remediate sources with non-trivial relational
     // expressions that post-process the bare source. If the expression is trivial, a
@@ -182,7 +179,7 @@ where
             storage_state.local_inputs.insert(src_id, local_input);
 
             // TODO(mcsherry): Local tables are a special non-source we should relocate.
-            ((ok, err), (Rc::new(None), Vec::new()))
+            ((ok, err), Rc::new(()))
         }
 
         SourceConnector::External {
@@ -377,7 +374,7 @@ where
                             schema_registry_config,
                             confluent_wire_format,
                         );
-                        additional_tokens.push(Rc::new(token));
+                        needed_tokens.push(Rc::new(token));
                         (oks, None)
                     } else {
                         let (results, extra_token) = match ok_source {
@@ -401,7 +398,7 @@ where
                             ),
                         };
                         if let Some(tok) = extra_token {
-                            additional_tokens.push(Rc::new(tok));
+                            needed_tokens.push(Rc::new(tok));
                         }
 
                         // render envelopes
@@ -467,7 +464,7 @@ where
                                         &src_id,
                                         &source_name,
                                         storage_state,
-                                        &mut additional_tokens,
+                                        &mut needed_tokens,
                                     );
 
                                     (sealed_upsert, upsert_err)
@@ -518,7 +515,7 @@ where
                                             &src_id,
                                             &source_name,
                                             storage_state,
-                                            &mut additional_tokens,
+                                            &mut needed_tokens,
                                         );
 
                                         // NOTE: Persistence errors don't go through the same
@@ -639,11 +636,10 @@ where
                 .or_insert_with(Vec::new)
                 .push(Rc::downgrade(&source_token));
 
+            needed_tokens.push(source_token);
+
             // Return the source token for capability manipulation, and any additional tokens.
-            (
-                (collection, err_collection),
-                (source_token, additional_tokens),
-            )
+            ((collection, err_collection), Rc::new(needed_tokens))
         }
     }
 }
@@ -799,7 +795,7 @@ fn seal_and_await<G, D1, D2, K1, V1, K2, V2>(
     source_id: &GlobalId,
     source_name: &str,
     storage_state: &mut StorageState,
-    additional_tokens: &mut Vec<Rc<dyn std::any::Any>>,
+    needed_tokens: &mut Vec<Rc<dyn std::any::Any>>,
 ) -> Stream<G, (D1, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -844,7 +840,7 @@ where
         compaction_handle,
     );
 
-    additional_tokens.push(source_token);
+    needed_tokens.push(source_token);
 
     // Don't send data forward to "dataflow" until the frontier
     // tells us that we both persisted and sealed it.
