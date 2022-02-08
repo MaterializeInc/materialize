@@ -646,11 +646,13 @@ impl Client for LocalClient {
 /// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
 pub mod partitioned {
 
+    use std::cmp::Ordering;
     use std::collections::hash_map::Entry;
     use std::collections::HashMap;
 
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
+    use timely::order::PartialOrder;
     use timely::progress::Antichain;
 
     use crate::TailResponse;
@@ -709,57 +711,20 @@ pub mod partitioned {
 
     use timely::progress::frontier::MutableAntichain;
 
-    /// Represents a frontier of zero or one timestamps.
-    /// Essentially the same as `Option<T>`,
-    /// but with the ordering of the variants intentionally
-    /// inverted.
-    #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
-    enum OneDimensionalFrontier<T: Ord> {
-        /// Corresponds to an antichain with one element
-        Finite(T),
-        /// Corresponds to an antichain with zero elements
-        Infinite,
-    }
-
-    impl<T: Ord + Clone> TryFrom<&Antichain<T>> for OneDimensionalFrontier<T> {
-        type Error = ();
-
-        fn try_from(value: &Antichain<T>) -> Result<Self, Self::Error> {
-            match value.elements() {
-                [] => Ok(Self::Infinite),
-                [t] => Ok(Self::Finite(t.clone())),
-                _ => Err(()),
-            }
-        }
-    }
-
-    impl<T: Ord> From<OneDimensionalFrontier<T>> for Antichain<T> {
-        fn from(value: OneDimensionalFrontier<T>) -> Self {
-            match value {
-                OneDimensionalFrontier::Finite(t) => Self::from_elem(t),
-                OneDimensionalFrontier::Infinite => Self::new(),
-            }
-        }
-    }
-
     /// Buffer for partial results for a `TAIL`.
     /// This exists so we can consolidate rows and
     /// sort them by timestamp before passing them to the consumer
     /// (currently, coord.rs).
     struct PendingTail {
-        /// frontiers[i] is `Some(t)` if we may still receieve updates from shard `i`
-        /// for times >= `t`; None otherwise.
-        ///
-        /// We use a `OneDimensionalFrontier` here, instead of an `Antichain`, because
-        /// we guarantee that tail results are delivered in timestamp order,
-        /// which is meaningless for non-totally-ordered timestamps.
-        frontiers: HashMap<usize, OneDimensionalFrontier<Timestamp>>,
+        /// `frontiers[i]` is an antichain representing the times at which we may
+        /// still receieve results from worker `i`.
+        frontiers: HashMap<usize, Antichain<Timestamp>>,
         /// The results (possibly unsorted) which have not yet been delivered.
         buffer: Vec<(Row, Timestamp, Diff)>,
         /// The number of unique shard IDs expected.
         parts: usize,
         /// The last progress message that has been reported to the consumer.
-        reported_frontier: OneDimensionalFrontier<Timestamp>,
+        reported_frontier: Antichain<Timestamp>,
     }
 
     impl PendingTail {
@@ -772,14 +737,14 @@ pub mod partitioned {
         /// in sorted and consolidated representation.
         pub fn consolidate_up_to(
             &mut self,
-            upper: OneDimensionalFrontier<Timestamp>,
+            upper: Antichain<Timestamp>,
         ) -> Vec<(Row, Timestamp, Diff)> {
             self.buffer
                 .sort_unstable_by(|(d1, t1, _r1), (d2, t2, _r2)| (t1, d1).cmp(&(t2, d2)));
             let mut offset = 0;
             let mut index = 1;
             while index < self.buffer.len()
-                && OneDimensionalFrontier::Finite(self.buffer[index].1) < upper
+                && PartialOrder::less_than(&Antichain::from_elem(self.buffer[index].1), &upper)
             {
                 if self.buffer[index].0 == self.buffer[offset].0
                     && self.buffer[index].1 == self.buffer[offset].1
@@ -807,18 +772,18 @@ pub mod partitioned {
         pub fn record_progress(
             &mut self,
             shard_id: usize,
-            progress: &Antichain<Timestamp>,
-        ) -> Option<OneDimensionalFrontier<Timestamp>> {
+            progress: Antichain<Timestamp>,
+        ) -> Option<Antichain<Timestamp>> {
             // In the future, we can probably replace all this logic with the use of a `MutableAntichain`.
             // We would need to have the tail workers report both their old frontier and their new frontier, rather
             // than just the latter. But this will all be subsumed anyway by the proposed refactor to make TAILs
             // behave like PEEKs.
-            let progress: OneDimensionalFrontier<Timestamp> = progress
-                .try_into()
-                .expect("TAIL does not support multi-dimensional timestamps.");
             match self.frontiers.entry(shard_id) {
                 Entry::Occupied(mut oe) => {
-                    assert!(&progress > oe.get(), "Timestamps should advance");
+                    assert!(
+                        PartialOrder::less_than(oe.get(), &progress),
+                        "Timestamps should advance"
+                    );
                     oe.insert(progress);
                 }
                 Entry::Vacant(ve) => {
@@ -827,10 +792,29 @@ pub mod partitioned {
             }
             assert!(self.frontiers.len() <= self.parts);
             if self.frontiers.len() == self.parts {
-                let min_frontier = *self.frontiers.values().min().unwrap();
-                assert!(min_frontier >= self.reported_frontier);
-                if min_frontier > self.reported_frontier {
-                    self.reported_frontier = min_frontier;
+                let min_frontier = self
+                    .frontiers
+                    .values()
+                    .min_by(|f1, f2| {
+                        if PartialOrder::less_than(*f1, *f2) {
+                            Ordering::Less
+                        } else if f1 == f2 {
+                            Ordering::Equal
+                        } else if PartialOrder::less_than(*f2, *f1) {
+                            Ordering::Greater
+                        } else {
+                            panic!("Tail requires totally-ordered timestamps!")
+                        }
+                    })
+                    .unwrap()
+                    .clone();
+                // assert!(self.reported_frontier.less_equal(&min_frontier));
+                assert!(PartialOrder::less_equal(
+                    &self.reported_frontier,
+                    &min_frontier
+                ));
+                if PartialOrder::less_than(&self.reported_frontier, &min_frontier) {
+                    self.reported_frontier = min_frontier.clone();
                     Some(min_frontier)
                 } else {
                     None
@@ -986,7 +970,7 @@ pub mod partitioned {
                             frontiers: HashMap::new(),
                             buffer: Vec::new(),
                             parts: self.parts,
-                            reported_frontier: OneDimensionalFrontier::Finite(0),
+                            reported_frontier: Antichain::from_elem(0),
                         })
                     });
 
@@ -1002,8 +986,8 @@ pub mod partitioned {
 
                     let tail_response = match response {
                         TailResponse::Progress(frontier) => {
-                            if let Some(new_frontier) = entry.record_progress(shard_id, &frontier) {
-                                let data = entry.consolidate_up_to(new_frontier);
+                            if let Some(new_frontier) = entry.record_progress(shard_id, frontier) {
+                                let data = entry.consolidate_up_to(new_frontier.clone());
                                 let progress_response = TailResponse::Progress(new_frontier.into());
                                 if data.is_empty() {
                                     Some(progress_response)
@@ -1031,11 +1015,6 @@ pub mod partitioned {
                     tail_response.map(|response| {
                         Response::Compute(ComputeResponse::TailResponse(id, response))
                     })
-                }
-                message => {
-                    // TimestampBindings and TailResponses are mirrored out,
-                    // as they do not seem to contain worker-specific information.
-                    Some(message)
                 }
             }
         }

@@ -12,9 +12,6 @@ use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::rc::Rc;
 
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::trace::cursor::Cursor;
-use differential_dataflow::trace::BatchReader;
 use differential_dataflow::Collection;
 
 use timely::dataflow::channels::pact::Pipeline;
@@ -112,37 +109,39 @@ fn tail<G>(
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
 
-    sinked_collection.inner.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
-        input.for_each(|_, rows| {
-            let mut results = vec![];
-            for ((k, v), time, diff) in rows.iter() {
-                assert!(k.is_none(), "tail does not support keys");
-                let row = v.as_ref().expect("tail must have values");
-                let should_emit = if as_of.strict {
-                    as_of.frontier.less_than(time)
-                } else {
-                    as_of.frontier.less_equal(time)
-                };
-                if should_emit {
-                    results.push((row.clone(), *time, *diff));
+    sinked_collection
+        .inner
+        .sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
+            input.for_each(|_, rows| {
+                let mut results = vec![];
+                for ((k, v), time, diff) in rows.iter() {
+                    assert!(k.is_none(), "tail does not support keys");
+                    let row = v.as_ref().expect("tail must have values");
+                    let should_emit = if as_of.strict {
+                        as_of.frontier.less_than(time)
+                    } else {
+                        as_of.frontier.less_equal(time)
+                    };
+                    if should_emit {
+                        results.push((row.clone(), *time, *diff));
+                    }
                 }
+
+                // Emit data if configured, otherwise it is an error to have data to send.
+                if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
+                    tail_protocol.send_rows(results);
+                }
+            });
+
+            let progress = update_progress(&mut input_frontier, input.frontier().frontier());
+
+            // Only emit updates if this operator/worker received actual data for emission.
+            if let (Some(tail_protocol), Some(progress)) =
+                (tail_protocol_handle.borrow_mut().deref_mut(), progress)
+            {
+                tail_protocol.send_progress(progress);
             }
-
-            // Emit data if configured, otherwise it is an error to have data to send.
-            if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
-                tail_protocol.send_rows(results);
-            }
-        });
-
-        let progress = update_progress(&mut input_frontier, input.frontier().frontier());
-
-        // Only emit updates if this operator/worker received actual data for emission.
-        if let (Some(tail_protocol), Some(progress)) =
-            (tail_protocol_handle.borrow_mut().deref_mut(), progress)
-        {
-            tail_protocol.send_progress(progress);
-        }
-    })
+        })
 }
 
 /// A type that guides the transmission of rows back to the coordinator.
