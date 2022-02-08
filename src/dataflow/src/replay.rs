@@ -48,7 +48,7 @@ where
         scope: &mut S,
         name: &str,
         period: Duration,
-        mut rc_activator: RcActivator,
+        rc_activator: RcActivator,
     ) -> Stream<S, D> {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());

@@ -288,7 +288,7 @@ where
         }
 
         // Register each logger endpoint.
-        let mut activator = t_activator.clone();
+        let activator = t_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -297,7 +297,7 @@ where
             }),
         );
 
-        let mut activator = r_activator.clone();
+        let activator = r_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely/reachability",
             Logger::new(
@@ -348,7 +348,7 @@ where
             ),
         );
 
-        let mut activator = d_activator.clone();
+        let activator = d_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "differential/arrange",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -357,7 +357,7 @@ where
             }),
         );
 
-        let mut activator = m_activator.clone();
+        let activator = m_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "materialized",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
