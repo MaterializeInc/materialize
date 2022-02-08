@@ -288,7 +288,7 @@ where
         }
 
         // Register each logger endpoint.
-        let mut activator = t_activator.clone();
+        let activator = t_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -297,7 +297,7 @@ where
             }),
         );
 
-        let mut activator = r_activator.clone();
+        let activator = r_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely/reachability",
             Logger::new(
@@ -348,7 +348,7 @@ where
             ),
         );
 
-        let mut activator = d_activator.clone();
+        let activator = d_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "differential/arrange",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -357,7 +357,7 @@ where
             }),
         );
 
-        let mut activator = m_activator.clone();
+        let activator = m_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "materialized",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
@@ -643,13 +643,18 @@ where
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Compute(cmd) => self.handle_compute_command(cmd),
+            Command::Compute(cmd, _instance) => self.handle_compute_command(cmd),
             Command::Storage(cmd) => self.handle_storage_command(cmd),
         }
     }
 
     fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
+            ComputeCommand::CreateInstance | ComputeCommand::DropInstance => {
+                // Can be ignored for the moment.
+                // Should eventually be filtered outside of this method,
+                // as we are already deep in a specific instance.
+            }
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
@@ -671,13 +676,19 @@ where
                         }
                     }
 
-                    render::build_dataflow(
+                    let sources_captured = render::build_storage_dataflow(
                         self.timely_worker,
-                        &mut self.compute_state,
                         &mut self.storage_state,
-                        dataflow,
+                        &dataflow,
                         self.now.clone(),
                         &self.dataflow_source_metrics,
+                    );
+
+                    render::build_compute_dataflow(
+                        self.timely_worker,
+                        &mut self.compute_state,
+                        sources_captured,
+                        dataflow,
                         &self.dataflow_sink_metrics,
                     );
                 }

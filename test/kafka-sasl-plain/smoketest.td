@@ -43,6 +43,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_ca_location = '/share/secrets/ca.crt'
+  )
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM data
@@ -70,6 +73,9 @@ a
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_ca_location = '/share/secrets/ca.crt'
+  )
 
 $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}
@@ -87,6 +93,9 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_ca_location = '/share/secrets/ca.crt'
+  )
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM env_pw_data

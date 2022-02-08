@@ -59,7 +59,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         _metrics: &SinkBaseMetrics,
-    ) -> Option<Box<dyn Any>>
+    ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
     {
@@ -92,7 +92,7 @@ where
         // Inform the coordinator that we have been dropped,
         // and destroy the tail protocol so the sink operator
         // can't send spurious messages while shutting down.
-        Some(Box::new(scopeguard::guard((), move |_| {
+        Some(Rc::new(scopeguard::guard((), move |_| {
             if let Some(tail_protocol_handle) = tail_protocol_weak.upgrade() {
                 std::mem::drop(tail_protocol_handle.borrow_mut().take())
             }

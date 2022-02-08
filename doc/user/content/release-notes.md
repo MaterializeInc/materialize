@@ -121,6 +121,13 @@ changes that have not yet been documented.
 
   This new behavior matches PostgreSQL v14 {{% gh 9853 %}}.
 
+- **Breaking change.** Change the output of [`format_type`](/sql/functions/#system-information-func)
+  to match Postgres for some specific types.
+
+- Add `microsecond`, `month`, `decade`, `century`, `millennium` units
+  to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
+  format {{% gh 10532 %}}.
+
 - Improve millisecond parsing for [`interval`](/sql/types/interval) using the
   PostgreSQL verbose format {{% gh 6420 %}}.
 
@@ -148,6 +155,12 @@ changes that have not yet been documented.
 - Improve the performance of SQL `LIKE` expressions.
 
 - Add `SELECT` statement support to [`TAIL`](/sql/tail).
+
+- **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
+  of `CREATE SOURCE` and `CREATE SINK` no longer default
+  their SSL parameters to the kafka ones. Existing source definitions have
+  been migrated, however. See [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
+  for more info.
 
 {{< comment >}}
 Only add new release notes above this line.

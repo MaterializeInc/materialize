@@ -58,6 +58,10 @@ struct Args {
         default_value = "mzdata"
     )]
     data_directory: PathBuf,
+
+    /// An AWS External ID to be supplied to all AssumeRole operations.
+    #[clap(long, value_name = "ID")]
+    aws_external_id: Option<String>,
 }
 
 #[tokio::main]
@@ -109,6 +113,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         disable_user_indexes: false,
         safe_mode: false,
         build_info: &materialized::BUILD_INFO,
+        aws_external_id: args.aws_external_id,
         metrics_registry: metrics_registry.clone(),
         persister,
         now: SYSTEM_TIME.clone(),

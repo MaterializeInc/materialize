@@ -137,6 +137,9 @@ impl_display!(Value);
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
+    Millennium,
+    Century,
+    Decade,
     Year,
     Month,
     Day,
@@ -144,11 +147,15 @@ pub enum DateTimeField {
     Minute,
     Second,
     Milliseconds,
+    Microseconds,
 }
 
 impl fmt::Display for DateTimeField {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
+            DateTimeField::Millennium => "MILLENNIUM",
+            DateTimeField::Century => "CENTURY",
+            DateTimeField::Decade => "DECADE",
             DateTimeField::Year => "YEAR",
             DateTimeField::Month => "MONTH",
             DateTimeField::Day => "DAY",
@@ -156,6 +163,7 @@ impl fmt::Display for DateTimeField {
             DateTimeField::Minute => "MINUTE",
             DateTimeField::Second => "SECOND",
             DateTimeField::Milliseconds => "MILLISECONDS",
+            DateTimeField::Microseconds => "MICROSECONDS",
         })
     }
 }
@@ -165,13 +173,19 @@ impl FromStr for DateTimeField {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_uppercase().as_ref() {
+            "MILLENNIUM" | "MILLENNIA" | "MIL" | "MILS" => Ok(Self::Millennium),
+            "CENTURY" | "CENTURIES" | "CENT" | "C" => Ok(Self::Century),
+            "DECADE" | "DECADES" | "DEC" | "DECS" => Ok(Self::Decade),
             "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
             "MONTH" | "MONTHS" | "MON" | "MONS" => Ok(Self::Month),
             "DAY" | "DAYS" | "D" => Ok(Self::Day),
             "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
             "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
             "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
-            "MILLISECOND" | "MILLISECONDS" | "MS" => Ok(Self::Milliseconds),
+            "MILLISECOND" | "MILLISECONDS" | "MILLISECON" | "MILLISECONS" | "MSECOND"
+            | "MSECONDS" | "MSEC" | "MSECS" | "MS" => Ok(Self::Milliseconds),
+            "MICROSECOND" | "MICROSECONDS" | "MICROSECON" | "MICROSECONS" | "USECOND"
+            | "USECONDS" | "USEC" | "USECS" | "US" => Ok(Self::Microseconds),
             _ => Err(format!("invalid DateTimeField: {}", s)),
         }
     }

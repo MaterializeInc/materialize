@@ -324,6 +324,13 @@ struct Args {
     )]
     data_directory: PathBuf,
 
+    // === AWS options. ===
+    /// An external ID to be supplied to all AWS AssumeRole operations.
+    ///
+    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[clap(long, value_name = "ID")]
+    aws_external_id: Option<String>,
+
     // === Telemetry options. ===
     /// Disable telemetry reporting.
     #[clap(
@@ -771,6 +778,7 @@ dataflow workers: {workers}",
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
         telemetry,
+        aws_external_id: args.aws_external_id,
         introspection_frequency: args
             .introspection_frequency
             .unwrap_or_else(|| Duration::from_secs(1)),

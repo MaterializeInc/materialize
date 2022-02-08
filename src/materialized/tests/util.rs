@@ -37,6 +37,7 @@ lazy_static! {
 #[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
+    aws_external_id: Option<String>,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     experimental_mode: bool,
@@ -49,6 +50,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             data_directory: None,
+            aws_external_id: None,
             logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
             experimental_mode: false,
@@ -133,6 +135,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         workers: config.workers,
         timely_worker: timely::WorkerConfig::default(),
         data_directory,
+        aws_external_id: config.aws_external_id,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
         experimental_mode: config.experimental_mode,

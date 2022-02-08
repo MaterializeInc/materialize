@@ -120,6 +120,9 @@ impl FromStr for DateTimeUnits {
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
+    Millennium,
+    Century,
+    Decade,
     Year,
     Month,
     Day,
@@ -127,11 +130,15 @@ pub enum DateTimeField {
     Minute,
     Second,
     Milliseconds,
+    Microseconds,
 }
 
 impl fmt::Display for DateTimeField {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
+            DateTimeField::Millennium => "MILLENNIUM",
+            DateTimeField::Century => "CENTURY",
+            DateTimeField::Decade => "DECADE",
             DateTimeField::Year => "YEAR",
             DateTimeField::Month => "MONTH",
             DateTimeField::Day => "DAY",
@@ -139,6 +146,7 @@ impl fmt::Display for DateTimeField {
             DateTimeField::Minute => "MINUTE",
             DateTimeField::Second => "SECOND",
             DateTimeField::Milliseconds => "MILLISECONDS",
+            DateTimeField::Microseconds => "MICROSECONDS",
         })
     }
 }
@@ -157,13 +165,19 @@ impl FromStr for DateTimeField {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_uppercase().as_ref() {
+            "MILLENNIUM" | "MILLENNIUMS" | "MILLENNIA" | "MIL" | "MILS" => Ok(Self::Millennium),
+            "CENTURY" | "CENTURIES" | "CENT" | "C" => Ok(Self::Century),
+            "DECADE" | "DECADES" | "DEC" | "DECS" => Ok(Self::Decade),
             "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
             "MONTH" | "MONTHS" | "MON" | "MONS" => Ok(Self::Month),
             "DAY" | "DAYS" | "D" => Ok(Self::Day),
             "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
             "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
             "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
-            "MILLISECOND" | "MILLISECONDS" | "MS" => Ok(Self::Milliseconds),
+            "MILLISECOND" | "MILLISECONDS" | "MILLISECON" | "MILLISECONS" | "MSECOND"
+            | "MSECONDS" | "MSEC" | "MSECS" | "MS" => Ok(Self::Milliseconds),
+            "MICROSECOND" | "MICROSECONDS" | "MICROSECON" | "MICROSECONS" | "USECOND"
+            | "USECONDS" | "USEC" | "USECS" | "US" => Ok(Self::Microseconds),
             _ => Err(format!("invalid DateTimeField: {}", s)),
         }
     }
@@ -214,6 +228,7 @@ impl DateTimeField {
         use DateTimeField::*;
         match self {
             Milliseconds => 1_000,
+            Microseconds => 1_000_000,
             _other => unreachable!("Do not call with a field larger than or equal to a second"),
         }
     }
@@ -227,7 +242,24 @@ impl DateTimeField {
         use DateTimeField::*;
         match self {
             Milliseconds => 1_000_000,
+            Microseconds => 1_000,
             _ => self.seconds_multiplier() * 1_000_000_000,
+        }
+    }
+
+    /// Returns the number of months in a single unit of `field`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a duration field.
+    pub fn month_multiplier(self) -> i64 {
+        use DateTimeField::*;
+        match self {
+            Millennium => 12 * 1_000,
+            Century => 12 * 100,
+            Decade => 12 * 10,
+            Year => 12,
+            _other => unreachable!("Do not call with a duration field"),
         }
     }
 }
@@ -242,6 +274,7 @@ impl DateTimeField {
 /// assert_eq!(itr.next(), Some(Minute));
 /// assert_eq!(itr.next(), Some(Second));
 /// assert_eq!(itr.next(), Some(Milliseconds));
+/// assert_eq!(itr.next(), Some(Microseconds));
 /// assert_eq!(itr.next(), None);
 /// ```
 #[derive(Debug)]
@@ -253,13 +286,17 @@ impl Iterator for DateTimeFieldIterator {
     fn next(&mut self) -> Option<Self::Item> {
         use DateTimeField::*;
         self.0 = match self.0 {
+            Some(Millennium) => Some(Century),
+            Some(Century) => Some(Decade),
+            Some(Decade) => Some(Year),
             Some(Year) => Some(Month),
             Some(Month) => Some(Day),
             Some(Day) => Some(Hour),
             Some(Hour) => Some(Minute),
             Some(Minute) => Some(Second),
             Some(Second) => Some(Milliseconds),
-            Some(Milliseconds) => None,
+            Some(Milliseconds) => Some(Microseconds),
+            Some(Microseconds) => None,
             None => None,
         };
         self.0.clone()
@@ -270,13 +307,17 @@ impl DoubleEndedIterator for DateTimeFieldIterator {
     fn next_back(&mut self) -> Option<Self::Item> {
         use DateTimeField::*;
         self.0 = match self.0 {
-            Some(Year) => None,
+            Some(Millennium) => None,
+            Some(Century) => Some(Millennium),
+            Some(Decade) => Some(Century),
+            Some(Year) => Some(Decade),
             Some(Month) => Some(Year),
             Some(Day) => Some(Month),
             Some(Hour) => Some(Day),
             Some(Minute) => Some(Hour),
             Some(Second) => Some(Minute),
             Some(Milliseconds) => Some(Second),
+            Some(Microseconds) => Some(Milliseconds),
             None => None,
         };
         self.0.clone()
@@ -388,6 +429,9 @@ impl FromStr for Timezone {
 /// or `INTERVAL` string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParsedDateTime {
+    pub millennium: Option<DateTimeFieldValue>,
+    pub century: Option<DateTimeFieldValue>,
+    pub decade: Option<DateTimeFieldValue>,
     pub year: Option<DateTimeFieldValue>,
     pub month: Option<DateTimeFieldValue>,
     pub day: Option<DateTimeFieldValue>,
@@ -396,12 +440,16 @@ pub struct ParsedDateTime {
     // second.fraction is equivalent to nanoseconds.
     pub second: Option<DateTimeFieldValue>,
     pub millisecond: Option<DateTimeFieldValue>,
+    pub microsecond: Option<DateTimeFieldValue>,
     pub timezone_offset_second: Option<Timezone>,
 }
 
 impl Default for ParsedDateTime {
     fn default() -> Self {
         ParsedDateTime {
+            millennium: None,
+            century: None,
+            decade: None,
             year: None,
             month: None,
             day: None,
@@ -409,6 +457,7 @@ impl Default for ParsedDateTime {
             minute: None,
             second: None,
             millisecond: None,
+            microsecond: None,
             timezone_offset_second: None,
         }
     }
@@ -425,10 +474,10 @@ impl ParsedDateTime {
         let mut seconds = 0i64;
         let mut nanos = 0i64;
 
-        // Add all DateTimeFields, from Year to Seconds.
-        self.add_field(Year, &mut months, &mut seconds, &mut nanos)?;
+        // Add all DateTimeFields, from Millennium to Microseconds.
+        self.add_field(Millennium, &mut months, &mut seconds, &mut nanos)?;
 
-        for field in Year.into_iter().take_while(|f| *f <= Milliseconds) {
+        for field in Millennium.into_iter().take_while(|f| *f <= Microseconds) {
             self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
         }
 
@@ -461,18 +510,15 @@ impl ParsedDateTime {
         nanos: &mut i64,
     ) -> Result<(), String> {
         use DateTimeField::*;
-
-        if let Milliseconds = d {}
-
         match d {
-            Year => {
-                let (y, y_f) = match self.units_of(Year) {
+            Millennium | Century | Decade | Year => {
+                let (y, y_f) = match self.units_of(d) {
                     Some(y) => (y.unit, y.fraction),
                     None => return Ok(()),
                 };
-                // months += y * 12
+                // months += y * month_multiplier(d)
                 *months = y
-                    .checked_mul(12)
+                    .checked_mul(d.month_multiplier())
                     .and_then(|y_m| months.checked_add(y_m))
                     .ok_or_else(|| {
                         format!(
@@ -482,9 +528,9 @@ impl ParsedDateTime {
                         )
                     })?;
 
-                // months += y_f * 12 / 1_000_000_000
+                // months += y_f * month_multiplier(d) / 1_000_000_000
                 *months = y_f
-                    .checked_mul(12)
+                    .checked_mul(d.month_multiplier())
                     .and_then(|y_f_m| months.checked_add(y_f_m / 1_000_000_000))
                     .ok_or_else(|| {
                         format!(
@@ -546,7 +592,7 @@ impl ParsedDateTime {
                     .checked_mul(d.seconds_multiplier())
                     .ok_or_else(|| format!("Intermediate overflow in {} fraction", d))?;
 
-                // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000
+                // seconds += t_f * seconds_multiplier(d) / 1_000_000_000
                 *seconds = seconds.checked_add(t_f_ns / 1_000_000_000).ok_or_else(|| {
                     format!(
                         "Overflows maximum seconds; \
@@ -558,12 +604,13 @@ impl ParsedDateTime {
                 *nanos += t_f_ns % 1_000_000_000;
                 Ok(())
             }
-            Milliseconds => {
+            Milliseconds | Microseconds => {
                 let (t, t_f) = match self.units_of(d) {
                     Some(t) => (t.unit, t.fraction),
                     None => return Ok(()),
                 };
 
+                // seconds += t / seconds_multiplier(d)
                 *seconds = t
                     .checked_div(d.seconds_divider())
                     .and_then(|t_s| seconds.checked_add(t_s))
@@ -575,6 +622,7 @@ impl ParsedDateTime {
                         )
                     })?;
 
+                // nanos += t % seconds_divider(d) * nanos_multiplier(d)
                 *nanos = t
                     .checked_rem(d.seconds_divider())
                     .and_then(|t_s| t_s.checked_mul(d.nanos_multiplier()))
@@ -587,6 +635,7 @@ impl ParsedDateTime {
                         )
                     })?;
 
+                // nanos += t_f / seconds_divider(d) % 1_000_000_000
                 *nanos = t_f
                     .checked_div(d.seconds_divider())
                     .and_then(|t_s| t_s.checked_rem(1_000_000_000))
@@ -842,6 +891,15 @@ impl ParsedDateTime {
 
         if u.is_some() {
             match f {
+                Millennium if self.millennium.is_none() => {
+                    self.millennium = u;
+                }
+                Century if self.century.is_none() => {
+                    self.century = u;
+                }
+                Decade if self.decade.is_none() => {
+                    self.decade = u;
+                }
                 Year if self.year.is_none() => {
                     self.year = u;
                 }
@@ -858,10 +916,12 @@ impl ParsedDateTime {
                     self.minute = u;
                 }
                 Second if self.second.is_none() => {
-                    if u.as_ref().unwrap().fraction != 0 && self.millisecond.is_some() {
+                    if u.as_ref().unwrap().fraction != 0
+                        && (self.millisecond.is_some() || self.microsecond.is_some())
+                    {
                         return Err(format!(
-                            "Cannot set {} field if {} field has a fraction component",
-                            Milliseconds, f
+                            "Cannot set {} or {} field if {} field has a fraction component",
+                            Milliseconds, Microseconds, f
                         ));
                     }
                     self.second = u;
@@ -869,11 +929,20 @@ impl ParsedDateTime {
                 Milliseconds if self.millisecond.is_none() => {
                     if self.seconds_has_fraction() {
                         return Err(format!(
-                            "Cannot set {} field if {} field has a fraction component",
-                            f, Second
+                            "Cannot set {} or {} field if {} field has a fraction component",
+                            f, Microseconds, Second
                         ));
                     }
                     self.millisecond = u;
+                }
+                Microseconds if self.microsecond.is_none() => {
+                    if self.seconds_has_fraction() {
+                        return Err(format!(
+                            "Cannot set {} or {} field if {} field has a fraction component",
+                            Milliseconds, f, Second
+                        ));
+                    }
+                    self.microsecond = u;
                 }
                 _ => return Err(format!("{} field set twice", f)),
             }
@@ -939,14 +1008,14 @@ impl ParsedDateTime {
         use DateTimeField::*;
 
         match d {
-            Year | Month => {
+            Millennium | Century | Decade | Year | Month => {
                 if let Some(month) = self.month {
                     if month.unit < -12 || month.unit > 12 {
                         return Err(format!("MONTH must be [-12, 12], got {}", month.unit));
                     };
                 }
             }
-            Hour | Minute | Second | Milliseconds => {
+            Hour | Minute | Second | Milliseconds | Microseconds => {
                 if let Some(minute) = self.minute {
                     if minute.unit < -59 || minute.unit > 59 {
                         return Err(format!("MINUTE must be [-59, 59], got {}", minute.unit));
@@ -965,6 +1034,12 @@ impl ParsedDateTime {
                     seconds += millisecond.unit / 1_000;
                     nanoseconds += (millisecond.unit % 1_000) * 1_000_000;
                     nanoseconds += (millisecond.fraction / 1_000) % 1_000_000_000;
+                }
+
+                if let Some(microsecond) = self.microsecond {
+                    seconds += microsecond.unit / 1_000_000;
+                    nanoseconds += (microsecond.unit % 1_000_000) * 1_000;
+                    nanoseconds += (microsecond.fraction / 1_000_000) % 1_000_000_000;
                 }
 
                 if seconds < -60 || seconds > 60 {
@@ -993,6 +1068,9 @@ impl ParsedDateTime {
     /// `field`.
     fn units_of(&self, field: DateTimeField) -> Option<DateTimeFieldValue> {
         match field {
+            DateTimeField::Millennium => self.millennium,
+            DateTimeField::Century => self.century,
+            DateTimeField::Decade => self.decade,
             DateTimeField::Year => self.year,
             DateTimeField::Month => self.month,
             DateTimeField::Day => self.day,
@@ -1000,6 +1078,7 @@ impl ParsedDateTime {
             DateTimeField::Minute => self.minute,
             DateTimeField::Second => self.second,
             DateTimeField::Milliseconds => self.millisecond,
+            DateTimeField::Microseconds => self.microsecond,
         }
     }
 }
@@ -1145,7 +1224,7 @@ fn fill_pdt_interval_sql(
                 return Err("HOUR, MINUTE, SECOND field set twice".into());
             }
         }
-        Milliseconds => {
+        Millennium | Century | Decade | Milliseconds | Microseconds => {
             return Err(format!(
                 "Cannot specify {} field for SQL standard-style interval parts",
                 leading_field
@@ -1187,7 +1266,7 @@ fn fill_pdt_interval_sql(
                 pdt.second = Some(DateTimeFieldValue::default());
             }
         }
-        Milliseconds => {
+        Millennium | Century | Decade | Milliseconds | Microseconds => {
             return Err(format!(
                 "Cannot specify {} field for SQL standard-style interval parts",
                 leading_field
@@ -1300,6 +1379,7 @@ fn fill_pdt_from_tokens(
                     DateTimeUnits::Minute => DateTimeField::Minute,
                     DateTimeUnits::Second => DateTimeField::Second,
                     DateTimeUnits::Milliseconds => DateTimeField::Milliseconds,
+                    DateTimeUnits::Microseconds => DateTimeField::Microseconds,
                     _ => return Err(format!("unsupported unit {}", u)),
                 };
                 if unit_buf.is_some() && f != current_field {
@@ -1480,6 +1560,7 @@ fn determine_format_w_datetimefield(
         Some(DateTimeUnit(DateTimeUnits::Minute)) => Ok(Some(PostgreSql(Minute))),
         Some(DateTimeUnit(DateTimeUnits::Second)) => Ok(Some(PostgreSql(Second))),
         Some(DateTimeUnit(DateTimeUnits::Milliseconds)) => Ok(Some(PostgreSql(Milliseconds))),
+        Some(DateTimeUnit(DateTimeUnits::Microseconds)) => Ok(Some(PostgreSql(Microseconds))),
         Some(DateTimeUnit(_)) => Ok(None),
         _ => Err("Cannot determine format of all parts".into()),
     }
@@ -2018,8 +2099,19 @@ mod test {
     fn iterate_datetimefield() {
         use DateTimeField::*;
         assert_eq!(
-            Year.into_iter().take(10).collect::<Vec<_>>(),
-            vec![Month, Day, Hour, Minute, Second, Milliseconds]
+            Millennium.into_iter().take(10).collect::<Vec<_>>(),
+            vec![
+                Century,
+                Decade,
+                Year,
+                Month,
+                Day,
+                Hour,
+                Minute,
+                Second,
+                Milliseconds,
+                Microseconds
+            ]
         )
     }
 
@@ -2362,12 +2454,12 @@ mod test {
         }
     }
     #[test]
-    #[should_panic(expected = "Cannot get smaller DateTimeField than MILLISECONDS")]
+    #[should_panic(expected = "Cannot get smaller DateTimeField than MICROSECONDS")]
     fn test_fill_pdt_from_tokens_panic() {
         use DateTimeField::*;
         let test_cases = [
             // Mismatched syntax
-            ("1 2", "0 0", Milliseconds, 1),
+            ("1 2", "0 0", Microseconds, 1),
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
@@ -2499,6 +2591,46 @@ mod test {
                 },
                 ":::::::::+2.3second",
                 Second,
+            ),
+            (
+                ParsedDateTime {
+                    millisecond: Some(DateTimeFieldValue::new(1, 200_000_000)),
+                    ..Default::default()
+                },
+                "1.2milliseconds",
+                Milliseconds,
+            ),
+            (
+                ParsedDateTime {
+                    microsecond: Some(DateTimeFieldValue::new(2, 300_000_000)),
+                    ..Default::default()
+                },
+                "2.3microseconds",
+                Microseconds,
+            ),
+            (
+                ParsedDateTime {
+                    millennium: Some(DateTimeFieldValue::new(4, 500_000_000)),
+                    ..Default::default()
+                },
+                "4.5millennium",
+                Millennium,
+            ),
+            (
+                ParsedDateTime {
+                    century: Some(DateTimeFieldValue::new(6, 700_000_000)),
+                    ..Default::default()
+                },
+                "6.7century",
+                Century,
+            ),
+            (
+                ParsedDateTime {
+                    decade: Some(DateTimeFieldValue::new(8, 900_000_000)),
+                    ..Default::default()
+                },
+                "8.9decade",
+                Decade,
             ),
         ];
         for test in test_cases.iter() {
@@ -3239,7 +3371,7 @@ mod test {
                     ..Default::default()
                 },
                 "42.9 milliseconds",
-                Milliseconds,
+                Second,
             ),
             (
                 ParsedDateTime {
@@ -3248,7 +3380,7 @@ mod test {
                     ..Default::default()
                 },
                 "5.0 seconds 37.66 milliseconds",
-                Milliseconds,
+                Second,
             ),
             (
                 ParsedDateTime {
@@ -3257,7 +3389,59 @@ mod test {
                     ..Default::default()
                 },
                 "14 days 60 ms",
-                Milliseconds,
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    microsecond: Some(DateTimeFieldValue::new(42, 900_000_000)),
+                    ..Default::default()
+                },
+                "42.9 microseconds",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeFieldValue::new(5, 0)),
+                    microsecond: Some(DateTimeFieldValue::new(37, 660_000_000)),
+                    ..Default::default()
+                },
+                "5.0 seconds 37.66 microseconds",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    millennium: Some(DateTimeFieldValue::new(9, 800_000_000)),
+                    ..Default::default()
+                },
+                "9.8 millenniums",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    century: Some(DateTimeFieldValue::new(7, 600_000_000)),
+                    ..Default::default()
+                },
+                "7.6 centuries",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    decade: Some(DateTimeFieldValue::new(5, 400_000_000)),
+                    ..Default::default()
+                },
+                "5.4 decades",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(1, 200_000_000)),
+                    decade: Some(DateTimeFieldValue::new(4, 300_000_000)),
+                    century: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                    millennium: Some(DateTimeFieldValue::new(8, 700_000_000)),
+                    ..Default::default()
+                },
+                "8.7 mils 5.6 cent 4.3 decs 1.2 y",
+                Second,
             ),
         ];
 
@@ -3377,23 +3561,22 @@ mod test {
             (
                 "1.234 second 5 ms",
                 Second,
-                "Cannot set MILLISECONDS field if SECOND field has a fraction component",
+                "Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component",
+            ),
+            (
+                "1.234 second 5 us",
+                Second,
+                "Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component",
             ),
             (
                 "7 ms 4.321 second",
                 Second,
-                "Cannot set MILLISECONDS field if SECOND field has a fraction component",
+                "Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component",
             ),
             (
-                "1.0us",
+                "7 us 4.321 second",
                 Second,
-                "unsupported unit microseconds",
-            ),
-            (
-                "1.2 us",
-                Second,
-                "Cannot determine format of all parts. Add explicit time components, e.g. \
-                INTERVAL '1 day' or INTERVAL '1' DAY",
+                "Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component",
             ),
         ];
         for test in test_cases.iter() {
@@ -3588,6 +3771,9 @@ mod test {
 fn test_parseddatetime_add_field() {
     use DateTimeField::*;
     let pdt_unit = ParsedDateTime {
+        millennium: Some(DateTimeFieldValue::new(8, 0)),
+        century: Some(DateTimeFieldValue::new(9, 0)),
+        decade: Some(DateTimeFieldValue::new(10, 0)),
         year: Some(DateTimeFieldValue::new(1, 0)),
         month: Some(DateTimeFieldValue::new(2, 0)),
         day: Some(DateTimeFieldValue::new(2, 0)),
@@ -3595,10 +3781,14 @@ fn test_parseddatetime_add_field() {
         minute: Some(DateTimeFieldValue::new(4, 0)),
         second: Some(DateTimeFieldValue::new(5, 0)),
         millisecond: Some(DateTimeFieldValue::new(6, 0)),
+        microsecond: Some(DateTimeFieldValue::new(7, 0)),
         ..Default::default()
     };
 
     let pdt_frac = ParsedDateTime {
+        millennium: Some(DateTimeFieldValue::new(8, 555_555_555)),
+        century: Some(DateTimeFieldValue::new(9, 555_555_555)),
+        decade: Some(DateTimeFieldValue::new(10, 555_555_555)),
         year: Some(DateTimeFieldValue::new(1, 555_555_555)),
         month: Some(DateTimeFieldValue::new(2, 555_555_555)),
         day: Some(DateTimeFieldValue::new(2, 555_555_555)),
@@ -3606,10 +3796,14 @@ fn test_parseddatetime_add_field() {
         minute: Some(DateTimeFieldValue::new(4, 555_555_555)),
         second: Some(DateTimeFieldValue::new(5, 555_555_555)),
         millisecond: Some(DateTimeFieldValue::new(6, 555_555_555)),
+        microsecond: Some(DateTimeFieldValue::new(7, 555_555_555)),
         ..Default::default()
     };
 
     let pdt_frac_neg = ParsedDateTime {
+        millennium: Some(DateTimeFieldValue::new(-8, -555_555_555)),
+        century: Some(DateTimeFieldValue::new(-9, -555_555_555)),
+        decade: Some(DateTimeFieldValue::new(-10, -555_555_555)),
         year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
         month: Some(DateTimeFieldValue::new(-2, -555_555_555)),
         day: Some(DateTimeFieldValue::new(-2, -555_555_555)),
@@ -3617,21 +3811,30 @@ fn test_parseddatetime_add_field() {
         minute: Some(DateTimeFieldValue::new(-4, -555_555_555)),
         second: Some(DateTimeFieldValue::new(-5, -555_555_555)),
         millisecond: Some(DateTimeFieldValue::new(-6, -555_555_555)),
+        microsecond: Some(DateTimeFieldValue::new(-7, -555_555_555)),
         ..Default::default()
     };
 
-    let pdt_ms_rollover = ParsedDateTime {
+    let pdt_s_rollover = ParsedDateTime {
         millisecond: Some(DateTimeFieldValue::new(1002, 666_666_666)),
+        microsecond: Some(DateTimeFieldValue::new(1000003, 777_777_777)),
         ..Default::default()
     };
 
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Millennium, (8 * 12 * 1_000, 0, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Century, (9 * 12 * 100, 0, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Decade, (10 * 12 * 10, 0, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Year, (12, 0, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Month, (2, 0, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Day, (0, 2 * 60 * 60 * 24, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Hour, (0, 3 * 60 * 60, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Minute, (0, 4 * 60, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Second, (0, 5, 0));
-    run_test_parseddatetime_add_field(pdt_unit, Milliseconds, (0, 0, 6 * 1_000_000));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Milliseconds, (0, 0, 6 * 1_000_000));
+    run_test_parseddatetime_add_field(pdt_unit, Microseconds, (0, 0, 7 * 1_000));
+    run_test_parseddatetime_add_field(pdt_frac.clone(), Millennium, (102_666, 0, 0));
+    run_test_parseddatetime_add_field(pdt_frac.clone(), Century, (11466, 0, 0));
+    run_test_parseddatetime_add_field(pdt_frac.clone(), Decade, (1266, 0, 0));
     run_test_parseddatetime_add_field(pdt_frac.clone(), Year, (18, 0, 0));
     run_test_parseddatetime_add_field(
         pdt_frac.clone(),
@@ -3684,11 +3887,19 @@ fn test_parseddatetime_add_field() {
         ),
     );
     run_test_parseddatetime_add_field(
-        pdt_frac,
+        pdt_frac.clone(),
         Milliseconds,
         (
             0, 0, // 00:00:00.006556
             6_555_555,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac,
+        Microseconds,
+        (
+            0, 0, // 00:00:00.000008
+            7_555,
         ),
     );
     run_test_parseddatetime_add_field(pdt_frac_neg.clone(), Year, (-18, 0, 0));
@@ -3743,7 +3954,7 @@ fn test_parseddatetime_add_field() {
         ),
     );
     run_test_parseddatetime_add_field(
-        pdt_frac_neg,
+        pdt_frac_neg.clone(),
         Milliseconds,
         (
             0, 0, // -00:00:00.006556
@@ -3751,11 +3962,27 @@ fn test_parseddatetime_add_field() {
         ),
     );
     run_test_parseddatetime_add_field(
-        pdt_ms_rollover,
+        pdt_frac_neg,
+        Microseconds,
+        (
+            0, 0, // -00:00:00.000008
+            -7_555,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_s_rollover.clone(),
         Milliseconds,
         (
             0, // 00:00:01.002667
             1, 2_666_666,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_s_rollover,
+        Microseconds,
+        (
+            0, // 00:00:01.000004
+            1, 3_777,
         ),
     );
 
@@ -3888,6 +4115,44 @@ fn test_parseddatetime_compute_interval() {
             220_828_255,
         )
         .unwrap(),
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            second: Some(DateTimeFieldValue::new(1, 0)),
+            millisecond: Some(DateTimeFieldValue::new(2_003, 0)),
+            ..Default::default()
+        },
+        // 00:00:03.003
+        Interval::new(0, 3, 3_000_000).unwrap(),
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            second: Some(DateTimeFieldValue::new(1, 0)),
+            microsecond: Some(DateTimeFieldValue::new(2_000_003, 0)),
+            ..Default::default()
+        },
+        // 00:00:03.000003
+        Interval::new(0, 3, 3_000).unwrap(),
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            millisecond: Some(DateTimeFieldValue::new(1, 200_000_000)),
+            microsecond: Some(DateTimeFieldValue::new(3, 400_000_000)),
+            ..Default::default()
+        },
+        // 00:00:00.0012034
+        Interval::new(0, 0, 1_203_400).unwrap(),
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            millennium: Some(DateTimeFieldValue::new(1, 0)),
+            century: Some(DateTimeFieldValue::new(2, 0)),
+            decade: Some(DateTimeFieldValue::new(3, 0)),
+            year: Some(DateTimeFieldValue::new(4, 0)),
+            ..Default::default()
+        },
+        // 1234 years
+        Interval::new(1234 * 12, 0, 0).unwrap(),
     );
 
     fn run_test_parseddatetime_compute_interval(pdt: ParsedDateTime, expected: Interval) {

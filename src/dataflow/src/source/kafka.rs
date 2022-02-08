@@ -61,7 +61,7 @@ pub struct KafkaSourceReader {
     // The last statistics JSON blob received.
     last_stats: Option<Jsonb>,
     /// The last partition we received
-    partition_info: Arc<Mutex<Option<Result<Vec<i32>, anyhow::Error>>>>,
+    partition_info: Arc<Mutex<Option<Vec<i32>>>>,
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -176,9 +176,13 @@ impl KafkaSourceReader {
                 .name("kafka-metadata".to_string())
                 .spawn(move || {
                     while let Some(partition_info) = partition_info.upgrade() {
-                        let info = get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
-                        *partition_info.lock().unwrap() = Some(info);
-                        std::thread::sleep(metadata_refresh_frequency);
+                        match get_kafka_partitions(&consumer, &topic, Duration::from_secs(30)) {
+                            Ok(info) => {
+                                *partition_info.lock().unwrap() = Some(info);
+                                std::thread::sleep(metadata_refresh_frequency);
+                            }
+                            Err(_) => std::thread::sleep(Duration::from_secs(30)),
+                        }
                     }
                 })
                 .unwrap();
@@ -347,7 +351,7 @@ impl KafkaSourceReader {
     ) -> Result<NextMessage<Option<Vec<u8>>, Option<Vec<u8>>>, anyhow::Error> {
         let partition_info = self.partition_info.lock().unwrap().take();
         if let Some(partitions) = partition_info {
-            for pid in partitions? {
+            for pid in partitions {
                 self.add_partition(PartitionId::Kafka(pid));
             }
         }
