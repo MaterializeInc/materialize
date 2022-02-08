@@ -73,50 +73,32 @@ As a _superuser_:
 
 ### Create a source
 
-Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth, and must therefore be explicitly materialized. To create a source in Materialize:
+Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth. To create a source in Materialize:
 
 ```sql
-CREATE MATERIALIZED SOURCE mz_source
+CREATE SOURCE mz_source
 FROM POSTGRES
   CONNECTION 'host=example.com port=5432 user=host dbname=postgres sslmode=require'
   PUBLICATION 'mz_source';
 ```
 
 {{< note >}}
-Materialize performs an initial sync of all tables in the publication before it starts ingesting change events. You should ensure that your source tables fit into memory, and also expect increased disk usage. For more information, see [Restrictions on Postgres sources](/sql/create-source/postgres/).
+Materialize performs an initial sync of all tables in the publication before it starts ingesting change events. You should expect increased disk usage during this phase.
 {{</ note >}}
 
-In practice, the `mz_source` looks like:
-
-```sql
-SHOW COLUMNS FROM mz_source;
-
-   name   | nullable |  type
-----------+----------+---------
- oid      | f        | integer
- row_data | f        | list
-```
-
-Each row of every upstream table is represented as a single row with two columns in the replication stream source:
-
-| Column | Description |
-|--------|-------------|
-| `oid`  | A unique identifier for the tables included in the publication. |
-| `row_data` | A text-encoded, variable length `list`. The number of text elements in a list is always equal to the number of columns in the upstream table. |
-
-The next step is to break down this source into views that reproduce the publication’s original tables and that can be used as a base for your materialized views.
+The next step is to break down this source into views that reproduce the publication’s original tables and can be used as a base for your materialized view.
 
 #### Create replication views
 
-Once you've created the Postgres source, you can create views that filter the replication stream based on the `oid` identifier and convert the text elements in `row_data` to the original data types:
+Once you've created the Postgres source, you can create views that filter the replication stream and take care of converting its elements to the original data types:
 
-_Create views for specific tables included in the Postgres publication:_
+_Create views for specific tables included in the Postgres publication_
 
 ```sql
 CREATE VIEWS FROM SOURCE mz_source (table1, table2);
 ```
 
-_Create views for all tables:_
+_Create views for all tables_
 
 ```sql
 CREATE VIEWS FROM SOURCE mz_source;
