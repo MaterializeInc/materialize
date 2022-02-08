@@ -152,6 +152,12 @@ changes that have not yet been documented.
 
 - Add `SELECT` statement support to [`TAIL`](/sql/tail).
 
+- **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
+  of `CREATE SOURCE` and `CREATE SINK` no longer default
+  their SSL parameters to the kafka ones. Existing source definitions have
+  been migrated, however. See [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
+  for more info.
+
 {{< comment >}}
 Only add new release notes above this line.
 
