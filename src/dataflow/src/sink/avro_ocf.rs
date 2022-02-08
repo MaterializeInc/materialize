@@ -9,6 +9,7 @@
 
 use std::any::Any;
 use std::fs::OpenOptions;
+use std::rc::Rc;
 
 use differential_dataflow::{Collection, Hashable};
 
@@ -50,7 +51,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         _metrics: &SinkBaseMetrics,
-    ) -> Option<Box<dyn Any>>
+    ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
     {

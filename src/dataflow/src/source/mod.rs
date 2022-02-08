@@ -268,13 +268,6 @@ pub struct SourceToken {
     activator: Activator,
 }
 
-impl SourceToken {
-    /// Re-activates the associated timely source operator.
-    pub fn activate(&self) {
-        self.activator.activate();
-    }
-}
-
 impl Drop for SourceToken {
     fn drop(&mut self) {
         *self.capabilities.borrow_mut() = None;
