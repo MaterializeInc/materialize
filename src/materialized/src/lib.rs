@@ -120,6 +120,12 @@ pub struct Config {
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
 
+    // === AWS options. ===
+    /// An [external ID] to be supplied to all AWS AssumeRole operations.
+    ///
+    /// [external id]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
+    pub aws_external_id: Option<String>,
+
     // === Mode switches. ===
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
@@ -279,6 +285,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         disable_user_indexes: config.disable_user_indexes,
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
+        aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
         persister,
         now: SYSTEM_TIME.clone(),

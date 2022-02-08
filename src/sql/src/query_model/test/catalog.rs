@@ -38,6 +38,7 @@ lazy_static! {
         experimental_mode: false,
         safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
+        aws_external_id: None,
         timestamp_frequency: Duration::from_secs(1),
         now: NOW_ZERO.clone(),
         disable_user_indexes: false,

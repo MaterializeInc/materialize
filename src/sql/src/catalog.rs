@@ -176,6 +176,8 @@ pub struct CatalogConfig {
     pub safe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
+    /// An external ID to be supplied to all AWS AssumeRole operations.
+    pub aws_external_id: Option<String>,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
@@ -373,6 +375,7 @@ lazy_static! {
         experimental_mode: true,
         safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
+        aws_external_id: None,
         timestamp_frequency: Duration::from_secs(1),
         now: NOW_ZERO.clone(),
         disable_user_indexes: false,

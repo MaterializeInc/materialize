@@ -1369,42 +1369,113 @@ pub mod sources {
     /// AWS SDK so that we can implement `Serialize` and `Deserialize`.
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct AwsConfig {
-        /// The optional static credentials to use.
-        ///
-        /// If unset, credentials should instead be obtained from the environment.
-        pub credentials: Option<AwsCredentials>,
+        /// AWS Credentials, or where to find them
+        pub credentials: AwsCredentials,
         /// The AWS region to use.
-        pub region: String,
+        ///
+        /// Uses the default region (looking at env vars, config files, etc) if not provided.
+        pub region: Option<String>,
+        /// The AWS role to assume.
+        pub role: Option<AwsAssumeRole>,
         /// The custom AWS endpoint to use, if any.
         pub endpoint: Option<SerdeUri>,
     }
 
-    /// Static AWS credentials for a source or sink.
+    /// AWS credentials for a source or sink.
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AwsCredentials {
-        pub access_key_id: String,
-        pub secret_access_key: String,
-        pub session_token: Option<String>,
+    pub enum AwsCredentials {
+        /// Look for credentials using the [default credentials chain][credchain]
+        ///
+        /// [credchain]: aws_config::default_provider::credentials::DefaultCredentialsChain
+        Default,
+        /// Load credentials using the given named profile
+        Profile { profile_name: String },
+        /// Use the enclosed static credentials
+        Static {
+            access_key_id: String,
+            secret_access_key: String,
+            session_token: Option<String>,
+        },
+    }
+
+    /// A role for Materialize to assume when performing AWS API calls.
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct AwsAssumeRole {
+        /// The Amazon Resource Name of the role to assume.
+        pub arn: String,
+        /// The External ID for this customer Materialize provides during role assumption.
+        ///
+        /// <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+        pub external_id: Option<String>,
     }
 
     impl AwsConfig {
         /// Loads the AWS SDK configuration object from the environment, then
         /// applies the overrides from this object.
         pub async fn load(&self) -> mz_aws_util::config::AwsConfig {
+            use aws_config::default_provider::credentials::DefaultCredentialsChain;
+            use aws_config::default_provider::region::DefaultRegionChain;
+            use aws_config::sts::AssumeRoleProvider;
             use aws_smithy_http::endpoint::Endpoint;
             use aws_types::credentials::SharedCredentialsProvider;
             use aws_types::region::Region;
 
-            let mut loader = aws_config::from_env().region(Region::new(self.region.clone()));
-            if let Some(credentials) = &self.credentials {
-                loader = loader.credentials_provider(SharedCredentialsProvider::new(
-                    aws_types::Credentials::from_keys(
-                        &credentials.access_key_id,
-                        &credentials.secret_access_key,
-                        credentials.session_token.clone(),
-                    ),
-                ));
+            let region = match &self.region {
+                Some(region) => Some(Region::new(region.clone())),
+                _ => {
+                    let mut rc = DefaultRegionChain::builder();
+                    if let AwsCredentials::Profile { profile_name } = &self.credentials {
+                        rc = rc.profile_name(profile_name);
+                    }
+                    // This doesn't work for profiles which do not provide their own region but
+                    // instead specify a source_profile that does have a region.
+                    //
+                    // https://github.com/awslabs/aws-sdk-rust/issues/443
+                    rc.build().region().await
+                }
+            };
+
+            let mut cred_provider = match &self.credentials {
+                AwsCredentials::Default => SharedCredentialsProvider::new(
+                    DefaultCredentialsChain::builder()
+                        .region(region.clone())
+                        .build()
+                        .await,
+                ),
+                AwsCredentials::Profile { profile_name } => SharedCredentialsProvider::new(
+                    DefaultCredentialsChain::builder()
+                        .profile_name(profile_name)
+                        .region(region.clone())
+                        .build()
+                        .await,
+                ),
+                AwsCredentials::Static {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
+                    access_key_id,
+                    secret_access_key,
+                    session_token.clone(),
+                )),
+            };
+
+            if let Some(AwsAssumeRole { arn, external_id }) = &self.role {
+                let mut role = AssumeRoleProvider::builder(arn).session_name("materialized");
+                // This affects which region to perform STS on, not where
+                // anything else happens.
+                if let Some(region) = &region {
+                    role = role.region(region.clone());
+                }
+                if let Some(external_id) = &external_id {
+                    role = role.external_id(external_id);
+                }
+                cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
             }
+
+            let loader = aws_config::from_env()
+                .region(region)
+                .credentials_provider(cred_provider);
             let mut config = mz_aws_util::config::AwsConfig::from_loader(loader).await;
             if let Some(endpoint) = &self.endpoint {
                 config.set_endpoint(Endpoint::immutable(endpoint.0.clone()));
