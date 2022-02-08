@@ -14,6 +14,7 @@
 mod activator;
 mod arrangement;
 mod decode;
+mod event;
 mod metrics;
 mod operator;
 mod render;
