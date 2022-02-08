@@ -611,7 +611,7 @@ NULL
 query T
 SELECT format_type(16, NULL)
 ----
-bool
+boolean
 
 query T
 SELECT format_type(17, NULL)
@@ -621,12 +621,12 @@ bytea
 query T
 SELECT format_type(20, NULL)
 ----
-int8
+bigint
 
 query T
 SELECT format_type(23, NULL)
 ----
-int4
+integer
 
 query T
 SELECT format_type(25, NULL)
@@ -636,12 +636,12 @@ text
 query T
 SELECT format_type(18, NULL)
 ----
-char
+character
 
 query T
 SELECT format_type(1043, NULL)
 ----
-varchar
+character varying
 
 query T
 SELECT format_type(26, NULL)
@@ -651,12 +651,12 @@ oid
 query T
 SELECT format_type(700, NULL)
 ----
-float4
+real
 
 query T
 SELECT format_type(701, NULL)
 ----
-float8
+double precision
 
 query T
 SELECT format_type(1082, NULL)
@@ -676,7 +676,7 @@ timestamp
 query T
 SELECT format_type(1184, NULL)
 ----
-timestamptz
+timestamp with time zone
 
 query T
 SELECT format_type(1186, NULL)
@@ -701,82 +701,102 @@ jsonb
 query T
 SELECT format_type(1000, NULL)
 ----
-_bool
+boolean[]
 
 query T
 SELECT format_type(1001, NULL)
 ----
-_bytea
+bytea[]
+
+query T
+SELECT format_type(1005, NULL)
+----
+smallint[]
 
 query T
 SELECT format_type(1016, NULL)
 ----
-_int8
+bigint[]
 
 query T
 SELECT format_type(1007, NULL)
 ----
-_int4
+integer[]
 
 query T
 SELECT format_type(1009, NULL)
 ----
-_text
+text[]
 
 query T
 SELECT format_type(1028, NULL)
 ----
-_oid
+oid[]
 
 query T
 SELECT format_type(1021, NULL)
 ----
-_float4
+real[]
 
 query T
 SELECT format_type(1022, NULL)
 ----
-_float8
+double precision[]
 
 query T
 SELECT format_type(1182, NULL)
 ----
-_date
+date[]
 
 query T
 SELECT format_type(1183, NULL)
 ----
-_time
+time[]
 
 query T
 SELECT format_type(1115, NULL)
 ----
-_timestamp
+timestamp[]
 
 query T
 SELECT format_type(1185, NULL)
 ----
-_timestamptz
+timestamp with time zone[]
 
 query T
 SELECT format_type(1187, NULL)
 ----
-_interval
+interval[]
 
 query T
 SELECT format_type(1231, NULL)
 ----
-_numeric
+numeric[]
 
 query T
 SELECT format_type(2951, NULL)
 ----
-_uuid
+uuid[]
 
 query T
 SELECT format_type(3807, NULL)
 ----
-_jsonb
+jsonb[]
+
+query T
+SELECT format_type(2210, NULL)
+----
+regclass[]
+
+query T
+SELECT format_type(1008, NULL)
+----
+regproc[]
+
+query T
+SELECT format_type(2211, NULL)
+----
+regtype[]
 
 # 🔬🔬 non-type OID
 
