@@ -91,7 +91,7 @@ impl SourceReader for KafkaSourceReader {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _: AwsExternalId,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        restored_offsets: Vec<(PartitionId, MzOffset)>,
         _: SourceDataEncoding,
         logger: Option<Logger>,
         _: SourceBaseMetrics,
@@ -137,12 +137,10 @@ impl SourceReader for KafkaSourceReader {
                 PartitionId::Kafka(id) => id,
                 _ => panic!("unexpected partition id type"),
             };
-            if let Some(offset) = offset {
-                if let Some(start_offset) = start_offsets.get_mut(&pid) {
-                    *start_offset = std::cmp::max(offset.offset - 1, *start_offset);
-                } else {
-                    start_offsets.insert(pid, offset.offset - 1);
-                }
+            if let Some(start_offset) = start_offsets.get_mut(&pid) {
+                *start_offset = std::cmp::max(offset.offset - 1, *start_offset);
+            } else {
+                start_offsets.insert(pid, offset.offset - 1);
             }
         }
 

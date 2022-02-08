@@ -34,7 +34,6 @@ use timely::dataflow::operators::Capability;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::{ChangeBatch, Timestamp as TimelyTimestamp};
-use tracing::debug;
 
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::PartitionId;
@@ -274,14 +273,6 @@ impl PartitionTimestamps {
 /// use `TimestampBindingRc` instead.
 #[derive(Debug)]
 pub struct TimestampBindingBox {
-    /// List of partitions that we learned about from the coordinator. This is used by source
-    /// operators to learn about new partition assignments, it is purely a conduit for getting
-    /// information from the coordinator to individual source operators.
-    ///
-    /// Note: This is a bit of a hack, in the same way that we used partitions() before to forward
-    /// new partitions from coordinator to source operator. We could factor this out of
-    /// TimestampBinding* into it's own piece that only deals with managing new partitions.
-    known_partitions: HashMap<PartitionId, Option<MzOffset>>,
     /// List of timestamp bindings per independent partition.
     partitions: HashMap<PartitionId, PartitionTimestamps>,
     /// Indicates the lowest timestamp across all partitions that we retain bindings for.
@@ -300,7 +291,6 @@ pub struct TimestampBindingBox {
 impl TimestampBindingBox {
     fn new(timestamp_update_interval: u64, now: NowFn) -> Self {
         Self {
-            known_partitions: HashMap::new(),
             partitions: HashMap::new(),
             compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
@@ -348,27 +338,7 @@ impl TimestampBindingBox {
         }
     }
 
-    fn add_partition(&mut self, partition: PartitionId, restored_offset: Option<MzOffset>) {
-        // Let sources know of the new partition, when calling partitions(). We don't overwrite an
-        // offset if we already have one and just ignore calls that would replace `Some` offset
-        // with a `None`. We need to do this because both restoring from persisted timestamp
-        // bindings and the partition discovery thread running on the coordinator can lead to this
-        // method being called, and the order is indeterminate.
-        self.known_partitions
-            .entry(partition.clone())
-            .and_modify(|existing_offset| {
-                if existing_offset.is_some() {
-                    debug!(
-                        "Already have offset {} for partition {}, ignoring.",
-                        existing_offset.expect("known to exist"),
-                        partition
-                    );
-                } else {
-                    let _ = std::mem::replace(existing_offset, restored_offset);
-                }
-            })
-            .or_insert(restored_offset);
-
+    fn add_partition(&mut self, partition: PartitionId) {
         // Update our internal state to also keep track of the new partition.
         self.partitions
             .entry(partition.clone())
@@ -397,7 +367,7 @@ impl TimestampBindingBox {
 
     fn get_or_propose_binding(&mut self, partition: &PartitionId, offset: MzOffset) -> Timestamp {
         if !self.partitions.contains_key(partition) {
-            self.add_partition(partition.clone(), None);
+            self.add_partition(partition.clone());
         }
         let partition_timestamps = self.partitions.get(partition).expect("known to exist");
         if let Some(time) = partition_timestamps.get_binding(offset) {
@@ -433,13 +403,6 @@ impl TimestampBindingBox {
         if target.elements().is_empty() {
             target.insert(Timestamp::minimum());
         }
-    }
-
-    fn partitions(&self) -> Vec<(PartitionId, Option<MzOffset>)> {
-        self.known_partitions
-            .iter()
-            .map(|(pid, offset)| (pid.clone(), offset.clone()))
-            .collect()
     }
 
     fn update_timestamp(&mut self) {
@@ -520,13 +483,8 @@ impl TimestampBindingRc {
     }
 
     /// Tell timestamping machinery to look out for `partition`
-    ///
-    /// The optional `restored_offset` can be used to give an explicit offset that should be used when
-    /// starting to read from the given partition.
-    pub fn add_partition(&self, partition: PartitionId, restored_offset: Option<MzOffset>) {
-        self.wrapper
-            .borrow_mut()
-            .add_partition(partition, restored_offset);
+    pub fn add_partition(&self, partition: PartitionId) {
+        self.wrapper.borrow_mut().add_partition(partition);
     }
 
     /// Get the timestamp assignment for `(partition, offset)` if it is known.
@@ -562,15 +520,6 @@ impl TimestampBindingRc {
         cursors: &HashMap<PartitionId, MzOffset>,
     ) {
         self.wrapper.borrow().downgrade(cap, cursors)
-    }
-
-    /// Returns the list of partitions this source knows about.
-    ///
-    /// TODO(rkhaitan): this function feels like a hack, both in the API of having
-    /// the source instances ask for the list of known partitions and in allocating
-    /// a vector to answer that question.
-    pub fn partitions(&self) -> Vec<(PartitionId, Option<MzOffset>)> {
-        self.wrapper.borrow().partitions()
     }
 
     /// Instructs RT sources to try and move forward to the next timestamp if
@@ -910,7 +859,7 @@ mod tests {
         let timestamp_histories = TimestampBindingRc::new(1000, (|| 50).into());
         let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
 
-        timestamp_histories.add_partition(PartitionId::Kafka(0), None);
+        timestamp_histories.add_partition(PartitionId::Kafka(0));
 
         timestamp_histories.add_binding(PartitionId::Kafka(0), 42, MzOffset { offset: 4 });
 
@@ -954,7 +903,7 @@ mod tests {
         let timestamp_histories = TimestampBindingRc::new(1000, (|| 50).into());
         let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
 
-        timestamp_histories.add_partition(PartitionId::Kafka(0), None);
+        timestamp_histories.add_partition(PartitionId::Kafka(0));
 
         timestamp_histories.add_binding(PartitionId::Kafka(0), 42, MzOffset { offset: 4 });
 
@@ -986,7 +935,7 @@ mod tests {
         let mut timestamp_histories = TimestampBindingRc::new(1000, (|| 50).into());
         let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
 
-        timestamp_histories.add_partition(PartitionId::Kafka(0), None);
+        timestamp_histories.add_partition(PartitionId::Kafka(0));
 
         timestamp_histories.add_binding(PartitionId::Kafka(0), 42, MzOffset { offset: 4 });
         timestamp_histories.add_binding(PartitionId::Kafka(0), 43, MzOffset { offset: 5 });

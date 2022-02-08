@@ -125,7 +125,7 @@ impl SourceReader for KinesisSourceReader {
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         aws_external_id: AwsExternalId,
-        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        _restored_offsets: Vec<(PartitionId, MzOffset)>,
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
         base_metrics: SourceBaseMetrics,

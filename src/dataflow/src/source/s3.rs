@@ -795,7 +795,7 @@ impl SourceReader for S3SourceReader {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         aws_external_id: AwsExternalId,
-        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        _restored_offsets: Vec<(PartitionId, MzOffset)>,
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
         metrics: SourceBaseMetrics,

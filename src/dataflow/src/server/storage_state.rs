@@ -130,7 +130,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 | ExternalSourceConnector::File(_)
                 | ExternalSourceConnector::Kinesis(_)
                 | ExternalSourceConnector::S3(_) => {
-                    rt_default.add_partition(PartitionId::None, None);
+                    rt_default.add_partition(PartitionId::None);
                     Some(rt_default)
                 }
                 ExternalSourceConnector::Kafka(_) => Some(rt_default),
@@ -160,7 +160,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         timestamp,
                         offset
                     );
-                    data.add_partition(pid.clone(), None);
+                    data.add_partition(pid.clone());
                     data.add_binding(pid, timestamp, offset);
                 } else {
                     trace!(

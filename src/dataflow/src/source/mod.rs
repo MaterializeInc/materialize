@@ -349,7 +349,7 @@ pub(crate) trait SourceReader {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         aws_external_id: AwsExternalId,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        restored_offsets: Vec<(PartitionId, MzOffset)>,
         encoding: SourceDataEncoding,
         logger: Option<Logger>,
         metrics: crate::source::metrics::SourceBaseMetrics,
@@ -940,20 +940,24 @@ where
     // future restore attempt. We also need to do this to make sure that we don't emit updates that
     // are not beyond the seal frontier, because that would cause errors when trying to persist
     // them.
-    let (source_persist, restored_bindings, mut ts_bindings_retractions, persistence_seal_ts) =
-        match persist_config {
-            Some(persist_config) => {
-                let source_persist =
-                    SourceReaderPersistence::new(name.clone(), persist_config.clone());
+    let (
+        source_persist,
+        restored_bindings,
+        restored_offsets,
+        mut ts_bindings_retractions,
+        persistence_seal_ts,
+    ) = match persist_config {
+        Some(persist_config) => {
+            let source_persist = SourceReaderPersistence::new(name.clone(), persist_config.clone());
 
-                let timestamp_histories = timestamp_histories.as_ref().ok_or_else(|| {
-                    SourceError::new(
-                        id,
-                        SourceErrorDetails::Persistence("missing timestamp histories".to_owned()),
-                    )
-                });
+            let timestamp_histories = timestamp_histories.as_ref().ok_or_else(|| {
+                SourceError::new(
+                    id,
+                    SourceErrorDetails::Persistence("missing timestamp histories".to_owned()),
+                )
+            });
 
-                let result = timestamp_histories.and_then(|timestamp_histories| {
+            let result = timestamp_histories.and_then(|timestamp_histories| {
                 let (mut valid_bindings, mut retractions) = source_persist.restore().map_err(|e| {
                     SourceError::new(
                         id,
@@ -982,12 +986,12 @@ where
                         &source_ts.partition)
                 });
 
-                let starting_offsets = source_persist.get_starting_offsets(valid_bindings.iter());
+                let restored_offsets = source_persist.get_starting_offsets(valid_bindings.iter());
 
                 debug!(
                     "In {}, initial (restored) source offsets: {:?}. upper_seal_ts = {}",
                     name,
-                    starting_offsets,
+                    restored_offsets,
                     source_persist.config.upper_seal_ts,
                 );
 
@@ -996,10 +1000,6 @@ where
                     name,
                     valid_bindings, retractions
                 );
-
-                for (pid, offset) in starting_offsets {
-                    timestamp_histories.add_partition(pid, Some(offset));
-                }
 
                 // We need to sort by offset and then timestamp because `add_binding()` will not allow
                 // adding bindings that go "backwards".
@@ -1047,19 +1047,19 @@ where
                     }
                 }
 
-                Ok((Some(source_persist), Some(valid_bindings), Some(retractions), persist_config.upper_seal_ts))
+                Ok((Some(source_persist), Some(valid_bindings), restored_offsets, Some(retractions), persist_config.upper_seal_ts))
             });
 
-                match result {
-                    Ok(result) => result,
-                    Err(e) => {
-                        construction_errs.push(e);
-                        (None, None, None, 0)
-                    }
+            match result {
+                Ok(result) => result,
+                Err(e) => {
+                    construction_errs.push(e);
+                    (None, None, HashMap::new(), None, 0)
                 }
             }
-            None => (None, None, None, 0),
-        };
+        }
+        None => (None, None, HashMap::new(), None, 0),
+    };
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
@@ -1089,14 +1089,9 @@ where
             &worker_id.to_string(),
             logger.clone(),
         );
-        let restored_offsets = timestamp_histories
-            .as_ref()
-            .map(|ts| ts.partitions())
-            .unwrap_or_default();
         let mut partition_cursors: HashMap<_, _> = restored_offsets
             .iter()
-            .cloned()
-            .flat_map(|(pid, offset)| Some((pid, offset?)))
+            .map(|(pid, offset)| (pid.clone(), *offset))
             .collect();
 
         let mut source_reader: Option<S> = if !active {
@@ -1110,7 +1105,7 @@ where
                 scope.sync_activator_for(&info.address[..]),
                 source_connector.clone(),
                 aws_external_id.clone(),
-                restored_offsets,
+                restored_offsets.into_iter().collect::<Vec<_>>(),
                 encoding,
                 logger,
                 base_metrics.clone(),

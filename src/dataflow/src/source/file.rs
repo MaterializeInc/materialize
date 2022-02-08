@@ -74,7 +74,7 @@ impl SourceReader for FileSourceReader {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _: AwsExternalId,
-        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        _restored_offsets: Vec<(PartitionId, MzOffset)>,
         encoding: SourceDataEncoding,
         _: Option<Logger>,
         _: SourceBaseMetrics,
