@@ -38,7 +38,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use materialized::TlsMode;
-use ore::assert_contains;
+use mz_ore::assert_contains;
 
 use crate::util::PostgresErrorExt;
 
@@ -288,7 +288,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
 #[allow(clippy::unit_arg)]
 #[test]
 fn test_tls() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let ca = Ca::new()?;
     let (server_cert, server_key) =

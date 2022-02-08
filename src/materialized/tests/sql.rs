@@ -29,7 +29,7 @@ use postgres::Row;
 use tempfile::NamedTempFile;
 use tracing::info;
 
-use ore::assert_contains;
+use mz_ore::assert_contains;
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
@@ -37,11 +37,11 @@ pub mod util;
 
 #[test]
 fn test_no_block() -> Result<(), anyhow::Error> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    ore::test::timeout(Duration::from_secs(30), || {
+    mz_ore::test::timeout(Duration::from_secs(30), || {
         // Create a listener that will simulate a slow Confluent Schema Registry.
         info!("test_no_block: creating listener");
         let listener = TcpListener::bind("localhost:0")?;
@@ -112,7 +112,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
 #[test]
 fn test_time() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
@@ -151,7 +151,7 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -179,7 +179,7 @@ fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -227,7 +227,7 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -329,7 +329,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 /// data row we will also see one progressed message.
 #[test]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -411,7 +411,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 // turns them into nullable columns. See #6304.
 #[test]
 fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -460,7 +460,7 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
 /// receive data or not.
 #[test]
 fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -543,7 +543,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -632,7 +632,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -691,7 +691,7 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default();
     let server = util::start_server(config)?;
@@ -713,7 +713,7 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 /// and into the user's SQL console.
 #[test]
 fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default();
     let server = util::start_server(config)?;
@@ -764,7 +764,7 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 // does not keep the server alive forever.
 #[test]
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
 
@@ -802,7 +802,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(3);
     let server = util::start_server(config)?;
@@ -900,7 +900,7 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
 // by another connection.
 #[test]
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
     let mut client_a = server.connect(postgres::NoTls)?;
@@ -943,7 +943,7 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 #[test]
 #[ignore]
 fn test_linearizable() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
     let config = util::Config::default();
     config.logical_compaction_window(Duration::from_secs(60));
     let server = util::start_server(util::Config::default())?;

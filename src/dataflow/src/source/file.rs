@@ -17,15 +17,15 @@ use anyhow::{Context, Error};
 use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{EventMask, Inotify, WatchMask};
-use repr::MessagePayload;
+use mz_repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use dataflow_types::sources::{
+use mz_dataflow_types::sources::{
     encoding::AvroOcfEncoding, encoding::DataEncoding, encoding::SourceDataEncoding, Compression,
     ExternalSourceConnector, MzOffset,
 };
-use expr::{PartitionId, SourceInstanceId};
+use mz_expr::{PartitionId, SourceInstanceId};
 use mz_avro::Block;
 use mz_avro::BlockIter;
 use mz_avro::{AvroRead, Schema, Skip};

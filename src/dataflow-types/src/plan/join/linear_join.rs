@@ -14,11 +14,11 @@ use std::collections::HashMap;
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
 use crate::plan::AvailableCollections;
-use expr::MapFilterProject;
+use mz_expr::MapFilterProject;
 
-use expr::join_permutations;
-use expr::permutation_for_arrangement;
-use expr::MirScalarExpr;
+use mz_expr::join_permutations;
+use mz_expr::permutation_for_arrangement;
+use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 
 /// A plan for the execution of a linear join.
@@ -76,7 +76,7 @@ impl LinearJoinPlan {
         source_arrangement: Option<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>)],
-        input_mapper: expr::JoinInputMapper,
+        input_mapper: mz_expr::JoinInputMapper,
         mfp_above: &mut MapFilterProject,
         available: &[AvailableCollections],
     ) -> (Self, Vec<AvailableCollections>) {

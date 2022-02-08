@@ -16,9 +16,9 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 
-use expr::MirRelationExpr;
-use ore::collections::CollectionExt;
-use repr::{RelationDesc, ScalarType};
+use mz_expr::MirRelationExpr;
+use mz_ore::collections::CollectionExt;
+use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,

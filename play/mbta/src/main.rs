@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{self, Duration};
 
-use test_util::kafka::kafka_client::KafkaClient;
+use mz_test_util::kafka::kafka_client::KafkaClient;
 
 /// Converts MBTA streams to Kafka streams to use in Materialize.
 #[derive(clap::Parser)]
@@ -42,7 +42,7 @@ struct Args {
     )]
     topic_name: Option<String>,
     /// Wait time before checking logs for updates.
-    #[clap(long, default_value = "250ms", parse(try_from_str = repr::util::parse_duration), value_name = "DURATION")]
+    #[clap(long, default_value = "250ms", parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION")]
     heartbeat: Duration,
     /// Number of partitions to write to.
     #[clap(short = 'p', long, default_value = "1", value_name = "N")]
@@ -123,7 +123,7 @@ fn delete_previous_entries(
 }
 
 async fn run_stream() -> Result<(), anyhow::Error> {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
 
     let (stream_configs, heartbeat) = if let Some(config_file) = args.config_file {
         // read the config file line by line, skipping comments
@@ -169,7 +169,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
             } else {
                 record[5].to_string()
             };
-            let heartbeat = repr::util::parse_duration(&heartbeat)?;
+            let heartbeat = mz_repr::util::parse_duration(&heartbeat)?;
             if min_heartbeat > heartbeat
                 || (min_heartbeat.as_secs() == 0 && min_heartbeat.subsec_nanos() == 0)
             {

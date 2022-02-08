@@ -19,13 +19,13 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 
-use dataflow_types::sources::{
+use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
     MzOffset,
 };
-use expr::{PartitionId, SourceInstanceId};
-use kafka_util::{client::MzClientContext, KafkaAddrs};
-use repr::adt::jsonb::Jsonb;
+use mz_expr::{PartitionId, SourceInstanceId};
+use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
+use mz_repr::adt::jsonb::Jsonb;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 

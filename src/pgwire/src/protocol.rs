@@ -15,7 +15,7 @@ use std::iter;
 use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use expr::GlobalId;
+use mz_expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use itertools::izip;
 use openssl::nid::Nid;
@@ -25,19 +25,19 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{self, Duration, Instant};
 use tracing::debug;
 
-use coord::session::{
+use mz_coord::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
     TransactionStatus,
 };
-use coord::ExecuteResponse;
-use dataflow_types::PeekResponse;
-use ore::cast::CastFrom;
-use ore::netio::AsyncReady;
-use ore::str::StrExt;
-use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
-use sql::ast::display::AstDisplay;
-use sql::ast::{FetchDirection, Ident, Raw, Statement};
-use sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
+use mz_coord::ExecuteResponse;
+use mz_dataflow_types::PeekResponse;
+use mz_ore::cast::CastFrom;
+use mz_ore::netio::AsyncReady;
+use mz_ore::str::StrExt;
+use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -45,7 +45,7 @@ use crate::message::{
 };
 use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
-use pgcopy::CopyFormatParams;
+use mz_pgcopy::CopyFormatParams;
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -72,7 +72,7 @@ pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
     pub tls_mode: Option<TlsMode>,
     /// A client for the coordinator.
-    pub coord_client: coord::ConnClient,
+    pub coord_client: mz_coord::ConnClient,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The protocol version that the client provided in the startup message.
@@ -213,7 +213,7 @@ enum State {
 
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
-    coord_client: &'a mut coord::SessionClient,
+    coord_client: &'a mut mz_coord::SessionClient,
     metrics: &'a Metrics,
 }
 
@@ -358,7 +358,7 @@ where
         // Maybe send row description.
         if let Some(relation_desc) = &stmt_desc.relation_desc {
             if !stmt_desc.is_copy {
-                let formats = vec![pgrepr::Format::Text; stmt_desc.arity()];
+                let formats = vec![mz_pgrepr::Format::Text; stmt_desc.arity()];
                 self.conn
                     .send(BackendMessage::RowDescription(
                         message::encode_row_description(relation_desc, &formats),
@@ -464,7 +464,7 @@ where
 
         let mut param_types = vec![];
         for oid in param_oids {
-            match pgrepr::Type::from_oid(oid) {
+            match mz_pgrepr::Type::from_oid(oid) {
                 Some(ty) => param_types.push(Some(ty)),
                 None if oid == 0 => param_types.push(None),
                 None => {
@@ -540,9 +540,9 @@ where
         &mut self,
         portal_name: String,
         statement_name: String,
-        param_formats: Vec<pgrepr::Format>,
+        param_formats: Vec<mz_pgrepr::Format>,
         raw_params: Vec<Option<Vec<u8>>>,
-        result_formats: Vec<pgrepr::Format>,
+        result_formats: Vec<mz_pgrepr::Format>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1)).await;
@@ -586,11 +586,11 @@ where
             return self.aborted_txn_error().await;
         }
         let buf = RowArena::new();
-        let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
+        let mut params: Vec<(Datum, mz_repr::ScalarType)> = Vec::new();
         for (raw_param, typ, format) in izip!(raw_params, param_types, param_formats) {
             match raw_param {
-                None => params.push(pgrepr::null_datum(typ)),
-                Some(bytes) => match pgrepr::Value::decode(format, typ, &bytes) {
+                None => params.push(mz_pgrepr::null_datum(typ)),
+                Some(bytes) => match mz_pgrepr::Value::decode(format, typ, &bytes) {
                     Ok(param) => params.push(param.into_datum(&buf, typ)),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
@@ -621,7 +621,7 @@ where
         if let Some(desc) = stmt.desc().relation_desc.clone() {
             for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
                 match (format, &ty.scalar_type) {
-                    (pgrepr::Format::Binary, repr::ScalarType::List { .. }) => {
+                    (mz_pgrepr::Format::Binary, mz_repr::ScalarType::List { .. }) => {
                         return self
                             .error(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -629,7 +629,7 @@ where
                             ))
                             .await;
                     }
-                    (pgrepr::Format::Binary, repr::ScalarType::Map { .. }) => {
+                    (mz_pgrepr::Format::Binary, mz_repr::ScalarType::Map { .. }) => {
                         return self
                             .error(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -780,7 +780,7 @@ where
         // Claim that all results will be output in text format, even
         // though the true result formats are not yet known. A bit
         // weird, but this is the behavior that PostgreSQL specifies.
-        let formats = vec![pgrepr::Format::Text; stmt.desc().arity()];
+        let formats = vec![mz_pgrepr::Format::Text; stmt.desc().arity()];
         self.conn.send(describe_rows(stmt.desc(), &formats)).await?;
         Ok(State::Ready)
     }
@@ -1221,7 +1221,7 @@ where
                 .typ()
                 .column_types
                 .iter()
-                .map(|ty| pgrepr::Type::from(&ty.scalar_type))
+                .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
                 .zip(result_formats)
                 .collect(),
         );
@@ -1298,7 +1298,7 @@ where
                     let drain_rows = cmp::min(want_rows, batch_rows.len());
                     self.conn
                         .send_all(batch_rows.drain(..drain_rows).map(|row| {
-                            BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
+                            BackendMessage::DataRow(mz_pgrepr::values_from_row(row, row_desc.typ()))
                         }))
                         .await?;
                     total_sent_rows += drain_rows;
@@ -1357,10 +1357,10 @@ where
     ) -> Result<State, io::Error> {
         let (encode_fn, encode_format): (
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
-            pgrepr::Format,
+            mz_pgrepr::Format,
         ) = match format {
-            CopyFormat::Text => (pgcopy::encode_copy_row_text, pgrepr::Format::Text),
-            CopyFormat::Binary => (pgcopy::encode_copy_row_binary, pgrepr::Format::Binary),
+            CopyFormat::Text => (mz_pgcopy::encode_copy_row_text, mz_pgrepr::Format::Text),
+            CopyFormat::Binary => (mz_pgcopy::encode_copy_row_binary, mz_pgrepr::Format::Binary),
             _ => {
                 return self
                     .error(ErrorResponse::error(
@@ -1491,10 +1491,10 @@ where
         };
 
         let typ = row_desc.typ();
-        let column_formats = vec![pgrepr::Format::Text; typ.column_types.len()];
+        let column_formats = vec![mz_pgrepr::Format::Text; typ.column_types.len()];
         self.conn
             .send(BackendMessage::CopyInResponse {
-                overall_format: pgrepr::Format::Text,
+                overall_format: mz_pgrepr::Format::Text,
                 column_formats,
             })
             .await?;
@@ -1535,11 +1535,11 @@ where
             .column_types
             .iter()
             .map(|x| &x.scalar_type)
-            .map(pgrepr::Type::from)
-            .collect::<Vec<pgrepr::Type>>();
+            .map(mz_pgrepr::Type::from)
+            .collect::<Vec<mz_pgrepr::Type>>();
 
         if let State::Ready = next_state {
-            let rows = match pgcopy::decode_copy_format(&data, &column_types, params) {
+            let rows = match mz_pgcopy::decode_copy_format(&data, &column_types, params) {
                 Ok(rows) => rows,
                 Err(e) => {
                     return self
@@ -1621,9 +1621,9 @@ where
     }
 }
 
-fn pad_formats(formats: Vec<pgrepr::Format>, n: usize) -> Result<Vec<pgrepr::Format>, String> {
+fn pad_formats(formats: Vec<mz_pgrepr::Format>, n: usize) -> Result<Vec<mz_pgrepr::Format>, String> {
     match (formats.len(), n) {
-        (0, e) => Ok(vec![pgrepr::Format::Text; e]),
+        (0, e) => Ok(vec![mz_pgrepr::Format::Text; e]),
         (1, e) => Ok(iter::repeat(formats[0]).take(e).collect()),
         (a, e) if a == e => Ok(formats),
         (a, e) => Err(format!(
@@ -1633,7 +1633,7 @@ fn pad_formats(formats: Vec<pgrepr::Format>, n: usize) -> Result<Vec<pgrepr::For
     }
 }
 
-fn describe_rows(stmt_desc: &StatementDesc, formats: &[pgrepr::Format]) -> BackendMessage {
+fn describe_rows(stmt_desc: &StatementDesc, formats: &[mz_pgrepr::Format]) -> BackendMessage {
     match &stmt_desc.relation_desc {
         Some(desc) if !stmt_desc.is_copy => {
             BackendMessage::RowDescription(message::encode_row_description(desc, formats))
@@ -1643,7 +1643,7 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[pgrepr::Format]) -> Backe
 }
 
 fn parse_sql(sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
-    sql::parse::parse(sql).map_err(|e| {
+    mz_sql::parse::parse(sql).map_err(|e| {
         // Convert our 0-based byte position to pgwire's 1-based character
         // position.
         let pos = sql[..e.pos].chars().count() + 1;

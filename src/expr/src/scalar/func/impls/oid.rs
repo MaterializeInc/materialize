@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use pgrepr::Type;
-use repr::adt::system::{Oid, RegClass, RegProc, RegType};
+use mz_pgrepr::Type;
+use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
 
 use crate::EvalError;
 

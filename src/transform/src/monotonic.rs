@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 //! Analysis to identify monotonic collections, especially TopK inputs.
-use expr::{GlobalId, Id, LocalId};
-use expr::{MirRelationExpr, RECURSION_LIMIT};
-use ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_expr::{GlobalId, Id, LocalId};
+use mz_expr::{MirRelationExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use std::collections::HashSet;
 
 /// A struct that holds a recursive function that determines if a

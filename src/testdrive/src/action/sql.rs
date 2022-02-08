@@ -22,12 +22,12 @@ use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{FromSql, Type};
 
-use coord::catalog::Catalog;
-use ore::collections::CollectionExt;
-use ore::now::NOW_ZERO;
-use ore::retry::Retry;
-use pgrepr::{Interval, Jsonb, Numeric};
-use sql_parser::ast::{
+use mz_coord::catalog::Catalog;
+use mz_ore::collections::CollectionExt;
+use mz_ore::now::NOW_ZERO;
+use mz_ore::retry::Retry;
+use mz_pgrepr::{Interval, Jsonb, Numeric};
+use mz_sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
     CreateViewStatement, Raw, Statement, ViewDefinition,
 };
@@ -42,7 +42,7 @@ pub struct SqlAction {
 }
 
 pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, anyhow::Error> {
-    let stmts = sql_parser::parser::parse_statements(&cmd.query)
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
@@ -336,7 +336,7 @@ pub fn build_fail_sql(
     cmd: FailSqlCommand,
     context: Context,
 ) -> Result<FailSqlAction, anyhow::Error> {
-    let stmts = sql_parser::parser::parse_statements(&cmd.query)
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
 
     // Allow for statements that could not be parsed.

@@ -66,20 +66,20 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use dataflow_types::client::{ComputeResponse, Response};
+use mz_dataflow_types::client::{ComputeResponse, Response};
 use futures::future::FutureExt;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;
 
-use build_info::DUMMY_BUILD_INFO;
-use coord::session::{EndTransactionAction, Session};
-use coord::{ExecuteResponse, PersistConfig, SessionClient, StartupResponse};
-use dataflow_types::PeekResponse;
-use expr::GlobalId;
-use ore::metrics::MetricsRegistry;
-use ore::now::NowFn;
-use repr::{Datum, Timestamp};
+use mz_build_info::DUMMY_BUILD_INFO;
+use mz_coord::session::{EndTransactionAction, Session};
+use mz_coord::{ExecuteResponse, PersistConfig, SessionClient, StartupResponse};
+use mz_dataflow_types::PeekResponse;
+use mz_expr::GlobalId;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::NowFn;
+use mz_repr::{Datum, Timestamp};
 use timely::progress::change_batch::ChangeBatch;
 
 /// CoordTest works by creating a Coordinator with mechanisms to control when it
@@ -90,13 +90,13 @@ use timely::progress::change_batch::ChangeBatch;
 // The field order matters a lot here so the various threads/tasks are shut
 // down without ever panicing.
 pub struct CoordTest {
-    dataflow_client: InterceptingDataflowClient<dataflow_types::client::LocalClient>,
-    coord_client: coord::Client,
-    _coord_handle: coord::Handle,
-    _dataflow_server: dataflow::Server,
+    dataflow_client: InterceptingDataflowClient<mz_dataflow_types::client::LocalClient>,
+    coord_client: mz_coord::Client,
+    _coord_handle: mz_coord::Handle,
+    _dataflow_server: mz_dataflow::Server,
     // Keep a queue of messages in the order received from dataflow_feedback_rx so
     // we can safely modify or inject things and maintain original message order.
-    queued_feedback: Vec<dataflow_types::client::Response>,
+    queued_feedback: Vec<mz_dataflow_types::client::Response>,
     _data_directory: TempDir,
     temp_dir: TempDir,
     uppers: HashMap<GlobalId, Timestamp>,
@@ -115,7 +115,7 @@ impl CoordTest {
             NowFn::from(move || *timestamp.lock().unwrap())
         };
         let metrics_registry = MetricsRegistry::new();
-        let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
+        let (dataflow_server, dataflow_client) = mz_dataflow::serve(mz_dataflow::Config {
             workers: 1,
             timely_config: timely::Config {
                 communication: timely::CommunicationConfig::Process(1),
@@ -129,14 +129,14 @@ impl CoordTest {
         let dataflow_client = InterceptingDataflowClient::new(dataflow_client);
 
         let data_directory = tempfile::tempdir()?;
-        let storage = coord::catalog::storage::Connection::open(
+        let storage = mz_coord::catalog::storage::Connection::open(
             &data_directory.path().join("catalog"),
             Some(experimental_mode),
         )?;
         let persister = PersistConfig::disabled()
             .init(storage.cluster_id(), DUMMY_BUILD_INFO, &metrics_registry)
             .await?;
-        let (coord_handle, coord_client) = coord::serve(coord::Config {
+        let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
             dataflow_client: Box::new(dataflow_client.clone()),
             storage,
             logging: None,
@@ -288,14 +288,14 @@ impl CoordTest {
         let catalog = self
             .with_sc(|sc| Box::pin(async move { sc.dump_catalog().await.unwrap() }))
             .await;
-        let catalog: BTreeMap<String, coord::catalog::Database> =
+        let catalog: BTreeMap<String, mz_coord::catalog::Database> =
             serde_json::from_str(&catalog).unwrap();
         Catalog(catalog)
     }
 }
 
 #[derive(Debug)]
-struct Catalog(BTreeMap<String, coord::catalog::Database>);
+struct Catalog(BTreeMap<String, mz_coord::catalog::Database>);
 
 impl Catalog {
     fn get(&self, name: &str) -> GlobalId {
@@ -314,7 +314,7 @@ impl Catalog {
 }
 
 async fn sql(sc: &mut SessionClient, query: String) -> anyhow::Result<Vec<ExecuteResponse>> {
-    let stmts = sql_parser::parser::parse_statements(&query)?;
+    let stmts = mz_sql_parser::parser::parse_statements(&query)?;
     let num_stmts = stmts.len();
     let mut results = vec![];
     for stmt in stmts {
@@ -549,8 +549,8 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
 /// the underlying dataflow client, call `try_intercepting_recv`.
 struct InterceptingDataflowClient<C> {
     inner: Arc<TokioMutex<C>>,
-    feedback_tx: mpsc::UnboundedSender<dataflow_types::client::Response>,
-    feedback_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<dataflow_types::client::Response>>>,
+    feedback_tx: mpsc::UnboundedSender<mz_dataflow_types::client::Response>,
+    feedback_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<mz_dataflow_types::client::Response>>>,
 }
 
 impl<C> Clone for InterceptingDataflowClient<C> {
@@ -564,15 +564,15 @@ impl<C> Clone for InterceptingDataflowClient<C> {
 }
 
 #[async_trait]
-impl<C> dataflow_types::client::Client for InterceptingDataflowClient<C>
+impl<C> mz_dataflow_types::client::Client for InterceptingDataflowClient<C>
 where
-    C: dataflow_types::client::Client,
+    C: mz_dataflow_types::client::Client,
 {
-    async fn send(&mut self, cmd: dataflow_types::client::Command) {
+    async fn send(&mut self, cmd: mz_dataflow_types::client::Command) {
         self.inner.lock().await.send(cmd).await
     }
 
-    async fn recv(&mut self) -> Option<dataflow_types::client::Response> {
+    async fn recv(&mut self) -> Option<mz_dataflow_types::client::Response> {
         let mut feedback_rx = self.feedback_rx.lock().await;
         feedback_rx.recv().await
     }
@@ -580,7 +580,7 @@ where
 
 impl<C> InterceptingDataflowClient<C>
 where
-    C: dataflow_types::client::Client,
+    C: mz_dataflow_types::client::Client,
 {
     /// Creates a new intercepting dataflow client that wraps the provided
     /// dataflow client.
@@ -595,12 +595,12 @@ where
 
     /// Receives a response from the underlying dataflow client, if one is
     /// immediately available.
-    async fn intercepting_recv(&mut self) -> Option<dataflow_types::client::Response> {
+    async fn intercepting_recv(&mut self) -> Option<mz_dataflow_types::client::Response> {
         self.inner.lock().await.recv().now_or_never().flatten()
     }
 
     /// Makes the specified response available via the normal `recv` method.
-    fn forward_response(&self, response: dataflow_types::client::Response) {
+    fn forward_response(&self, response: mz_dataflow_types::client::Response) {
         self.feedback_tx.send(response).unwrap()
     }
 }

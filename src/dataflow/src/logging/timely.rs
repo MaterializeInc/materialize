@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
@@ -26,8 +26,8 @@ use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
-use dataflow_types::logging::LoggingConfig;
-use repr::{datum_list_size, datum_size, Datum, DatumVec, Row, Timestamp};
+use mz_dataflow_types::logging::LoggingConfig;
+use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for timely logs.
 ///

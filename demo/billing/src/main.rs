@@ -25,9 +25,9 @@ use anyhow::Result;
 use prost::Message;
 use tokio::time::{self, Duration};
 
-use ore::task;
-use test_util::kafka::kafka_client;
-use test_util::mz_client;
+use mz_ore::task;
+use mz_test_util::kafka::kafka_client;
+use mz_test_util::mz_client;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
 
@@ -45,7 +45,7 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let config: Args = ore::cli::parse_args();
+    let config: Args = mz_ore::cli::parse_args();
     env_logger::init();
 
     let k_config = config.kafka_config();

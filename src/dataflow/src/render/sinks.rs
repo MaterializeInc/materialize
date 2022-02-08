@@ -18,10 +18,10 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::Scope;
 
-use dataflow_types::sinks::*;
-use expr::{permutation_for_arrangement, GlobalId, MapFilterProject};
-use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use repr::{Datum, Diff, Row, Timestamp};
+use mz_dataflow_types::sinks::*;
+use mz_expr::{permutation_for_arrangement, GlobalId, MapFilterProject};
+use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
+use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
 use crate::sink::SinkBaseMetrics;
@@ -55,7 +55,7 @@ where
         //
         // This is basically an inlined version of the old `as_collection`.
         let bundle = self
-            .lookup_id(expr::Id::Global(sink.from))
+            .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
         let collection = if let Some((collection, _err_collection)) = &bundle.collection {
             collection.clone()
@@ -121,7 +121,7 @@ where
         //  consolidate and distribute work but don't write to the sink
 
         let keyed = if let Some(key_indices) = user_key_indices {
-            let mut datum_vec = repr::DatumVec::new();
+            let mut datum_vec = mz_repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
                 // Does it matter?
@@ -132,7 +132,7 @@ where
                 (Some(key), row)
             })
         } else if let Some(relation_key_indices) = relation_key_indices {
-            let mut datum_vec = repr::DatumVec::new();
+            let mut datum_vec = mz_repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
                 // Does it matter?

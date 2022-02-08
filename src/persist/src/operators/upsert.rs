@@ -28,7 +28,7 @@ use crate::operators::split_ok_err;
 use crate::operators::stream::Persist;
 use crate::operators::stream::RetractUnsealed;
 
-use persist_types::Codec;
+use mz_persist_types::Codec;
 
 /// Extension trait for [`Stream`].
 pub trait PersistentUpsert<G, K: Codec, V: Codec, T> {

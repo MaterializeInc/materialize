@@ -18,9 +18,9 @@ use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, R
 use tokio_openssl::SslStream;
 use tracing::trace;
 
-use ore::cast::CastFrom;
-use ore::metrics::MetricsRegistry;
-use ore::netio::AsyncReady;
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
@@ -31,7 +31,7 @@ use crate::protocol;
 #[derive(Debug)]
 pub struct Config<'a> {
     /// A client for the coordinator with which the server will communicate.
-    pub coord_client: coord::Client,
+    pub coord_client: mz_coord::Client,
     /// The TLS configuration for the server.
     ///
     /// If not present, then TLS is not enabled, and clients requests to
@@ -64,7 +64,7 @@ pub enum TlsMode {
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     tls: Option<TlsConfig>,
-    coord_client: coord::Client,
+    coord_client: mz_coord::Client,
     metrics: Metrics,
 }
 

@@ -21,12 +21,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use expr::explain::Indices;
-use expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
-use ore::collections::CollectionExt;
-use ore::id_gen::IdGen;
-use ore::str::{bracketed, separated};
-use repr::{RelationType, ScalarType};
+use mz_expr::explain::Indices;
+use mz_expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
+use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen::IdGen;
+use mz_ore::str::{bracketed, separated};
+use mz_repr::{RelationType, ScalarType};
 
 use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 

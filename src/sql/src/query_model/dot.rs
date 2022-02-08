@@ -16,7 +16,7 @@ use crate::query_model::model::{
 };
 use crate::query_model::Model;
 use itertools::Itertools;
-use ore::str::separated;
+use mz_ore::str::separated;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Write};
 

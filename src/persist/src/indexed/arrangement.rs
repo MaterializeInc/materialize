@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn append_trace_ts_upper_invariant() -> Result<(), Error> {
         let mut blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_trace_ts_upper_invariant"),
@@ -1097,7 +1097,7 @@ mod tests {
     #[test]
     fn append_detect_min_max_times() -> Result<(), Error> {
         let mut blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_ts_lower_invariant"),
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn unsealed_evict() -> Result<(), Error> {
         let mut blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_evict"),
@@ -1207,7 +1207,7 @@ mod tests {
     #[test]
     fn unsealed_snapshot() -> Result<(), Error> {
         let mut blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_snapshot"),
@@ -1262,7 +1262,7 @@ mod tests {
     #[test]
     fn unsealed_batch_trim() -> Result<(), Error> {
         let mut blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_batch_trim"),
@@ -1386,7 +1386,7 @@ mod tests {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
         let metrics = Arc::new(Metrics::default());
         let mut blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
@@ -1542,7 +1542,7 @@ mod tests {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
         let metrics = Arc::new(Metrics::default());
         let mut blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,

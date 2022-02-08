@@ -16,7 +16,7 @@ pub mod reduce;
 pub mod threshold;
 pub mod top_k;
 
-use expr::permutation_for_arrangement;
+use mz_expr::permutation_for_arrangement;
 use join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use reduce::{KeyValPlan, ReducePlan};
 use threshold::ThresholdPlan;
@@ -25,12 +25,12 @@ use top_k::TopKPlan;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::DataflowDescription;
-use expr::{
+use mz_expr::{
     EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, TableFunc,
 };
 
-use repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, Row};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -137,7 +137,7 @@ pub enum Plan {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>,
+        rows: Result<Vec<(Row, mz_repr::Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -388,7 +388,7 @@ impl Plan {
         // to allow the unbounded growth here. We are though somewhat protected by
         // higher levels enforcing their own limits on stack depth (in the parser,
         // transformer/desugarer, and planner).
-        ore::stack::maybe_grow(|| Plan::from_mir_inner(expr, arrangements))
+        mz_ore::stack::maybe_grow(|| Plan::from_mir_inner(expr, arrangements))
     }
 
     fn from_mir_inner(
@@ -421,7 +421,7 @@ impl Plan {
                 let plan = Plan::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
-                            .map(|(row, diff)| (row, repr::Timestamp::minimum(), diff))
+                            .map(|(row, diff)| (row, mz_repr::Timestamp::minimum(), diff))
                             .collect()
                     }),
                 };
@@ -557,7 +557,7 @@ impl Plan {
 
                 // Extract temporal predicates as joins cannot currently absorb them.
                 let (plan, missing) = match implementation {
-                    expr::JoinImplementation::Differential((start, _start_arr), order) => {
+                    mz_expr::JoinImplementation::Differential((start, _start_arr), order) => {
                         let source_arrangement = input_keys[*start].arbitrary_arrangement();
                         let (ljp, missing) = LinearJoinPlan::create_from(
                             *start,
@@ -570,7 +570,7 @@ impl Plan {
                         );
                         (JoinPlan::Linear(ljp), missing)
                     }
-                    expr::JoinImplementation::DeltaQuery(orders) => {
+                    mz_expr::JoinImplementation::DeltaQuery(orders) => {
                         let (djp, missing) = DeltaJoinPlan::create_from(
                             equivalences,
                             &orders[..],
@@ -1144,7 +1144,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
 /// This method produces a `MapFilterProject` instance that first applies any predicates,
 /// and then introduces `Datum::Dummy` literals in columns that are not demanded.
 /// The `RelationType` is required so that we can fill in the correct type of `Datum::Dummy`.
-pub fn linear_to_mfp(linear: crate::LinearOperator, typ: &repr::RelationType) -> MapFilterProject {
+pub fn linear_to_mfp(linear: crate::LinearOperator, typ: &mz_repr::RelationType) -> MapFilterProject {
     let crate::types::LinearOperator {
         predicates,
         projection,

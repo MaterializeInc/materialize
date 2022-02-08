@@ -27,9 +27,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use lazy_static::lazy_static;
 use postgres_types::{Kind, Type};
 
-use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
-use expr::GlobalId;
-use repr::{RelationDesc, ScalarType};
+use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use mz_expr::GlobalId;
+use mz_repr::{RelationDesc, ScalarType};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -127,7 +127,7 @@ pub struct BuiltinFunc {
     pub schema: &'static str,
     pub name: &'static str,
     pub id: GlobalId,
-    pub inner: &'static sql::func::Func,
+    pub inner: &'static mz_sql::func::Func,
 }
 
 pub struct BuiltinRole {
@@ -482,12 +482,12 @@ lazy_static! {
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
         id: GlobalId::System(1998),
-        pgtype: &pgrepr::LIST,
+        pgtype: &mz_pgrepr::LIST,
     };
     pub static ref TYPE_MAP: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
         id: GlobalId::System(1999),
-        pgtype: &pgrepr::MAP,
+        pgtype: &mz_pgrepr::MAP,
     };
 }
 
@@ -1854,10 +1854,10 @@ lazy_static! {
         let mut func_global_id_counter = 2000;
 
         for (schema, funcs) in &[
-            (PG_CATALOG_SCHEMA, &*sql::func::PG_CATALOG_BUILTINS),
-            (INFORMATION_SCHEMA, &*sql::func::INFORMATION_SCHEMA_BUILTINS),
-            (MZ_CATALOG_SCHEMA, &*sql::func::MZ_CATALOG_BUILTINS),
-            (MZ_INTERNAL_SCHEMA, &*sql::func::MZ_INTERNAL_BUILTINS),
+            (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
+            (INFORMATION_SCHEMA, &*mz_sql::func::INFORMATION_SCHEMA_BUILTINS),
+            (MZ_CATALOG_SCHEMA, &*mz_sql::func::MZ_CATALOG_BUILTINS),
+            (MZ_INTERNAL_SCHEMA, &*mz_sql::func::MZ_INTERNAL_BUILTINS),
         ] {
             for (name, func) in funcs.iter() {
                 builtins.push(Builtin::Func(BuiltinFunc {
@@ -1930,7 +1930,7 @@ mod tests {
 
     use tokio_postgres::NoTls;
 
-    use ore::task;
+    use mz_ore::task;
 
     use super::*;
 

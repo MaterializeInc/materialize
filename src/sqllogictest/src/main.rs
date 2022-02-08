@@ -17,8 +17,8 @@ use std::process;
 use chrono::Utc;
 use walkdir::WalkDir;
 
-use sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
-use sqllogictest::util;
+use mz_sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
+use mz_sqllogictest::util;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
 #[derive(clap::Parser)]
@@ -55,10 +55,10 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    ore::panic::set_abort_on_panic();
-    ore::test::init_logging_default("warn");
+    mz_ore::panic::set_abort_on_panic();
+    mz_ore::test::init_logging_default("warn");
 
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
@@ -87,7 +87,7 @@ async fn main() {
     let mut outcomes = Outcomes::default();
     for path in &args.paths {
         if path == "-" {
-            match sqllogictest::runner::run_stdin(&config).await {
+            match mz_sqllogictest::runner::run_stdin(&config).await {
                 Ok(o) => outcomes += o,
                 Err(err) => {
                     writeln!(config.stderr, "error: parsing stdin: {}", err);

@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
+use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 
 pub trait Encode {
     fn get_format_name(&self) -> &str;

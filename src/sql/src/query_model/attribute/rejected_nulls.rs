@@ -163,7 +163,7 @@ impl Attribute for RejectedNulls {
 pub(crate) fn rejected_nulls(expr: &BoxScalarExpr, set: &mut HashSet<ColumnReference>) {
     /// Define an inner function needed in order to pass around the `sign`.
     fn rejected_nulls(expr: &BoxScalarExpr, sign: bool) -> HashSet<ColumnReference> {
-        ore::stack::maybe_grow(|| {
+        mz_ore::stack::maybe_grow(|| {
             if let Some(c) = case_not_isnull(expr) {
                 HashSet::from([c.clone()])
             } else if let Some(expr) = case_not(expr) {
@@ -214,12 +214,12 @@ fn case_not_isnull(expr: &BoxScalarExpr) -> Option<&ColumnReference> {
     use BoxScalarExpr::*;
 
     if let CallUnary {
-        func: expr::UnaryFunc::Not(expr::func::Not),
+        func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
         expr,
     } = expr
     {
         if let CallUnary {
-            func: expr::UnaryFunc::IsNull(expr::func::IsNull),
+            func: mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull),
             expr,
         } = &**expr
         {
@@ -237,7 +237,7 @@ fn case_not(expr: &BoxScalarExpr) -> Option<&BoxScalarExpr> {
     use BoxScalarExpr::*;
 
     if let CallUnary {
-        func: expr::UnaryFunc::Not(expr::func::Not),
+        func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
         expr,
     } = expr
     {
@@ -252,7 +252,7 @@ fn case_or(expr: &BoxScalarExpr) -> Option<(&BoxScalarExpr, &BoxScalarExpr)> {
     use BoxScalarExpr::*;
 
     if let CallBinary {
-        func: expr::BinaryFunc::Or,
+        func: mz_expr::BinaryFunc::Or,
         expr1,
         expr2,
     } = expr
@@ -268,7 +268,7 @@ fn case_and(expr: &BoxScalarExpr) -> Option<(&BoxScalarExpr, &BoxScalarExpr)> {
     use BoxScalarExpr::*;
 
     if let CallBinary {
-        func: expr::BinaryFunc::And,
+        func: mz_expr::BinaryFunc::And,
         expr1,
         expr2,
     } = expr

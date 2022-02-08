@@ -21,14 +21,14 @@ use hyper::{service, Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
-use ore::metrics::MetricsRegistry;
+use mz_ore::metrics::MetricsRegistry;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 use tracing::error;
 
-use coord::session::Session;
-use ore::future::OreFutureExt;
-use ore::netio::SniffedStream;
+use mz_coord::session::Session;
+use mz_ore::future::OreFutureExt;
+use mz_ore::netio::SniffedStream;
 
 use crate::http::metrics::MetricsVariant;
 use crate::Metrics;
@@ -56,10 +56,10 @@ fn sniff_tls(buf: &[u8]) -> bool {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub tls: Option<TlsConfig>,
-    pub coord_client: coord::Client,
+    pub coord_client: mz_coord::Client,
     pub metrics_registry: MetricsRegistry,
     pub global_metrics: Metrics,
-    pub pgwire_metrics: pgwire::Metrics,
+    pub pgwire_metrics: mz_pgwire::Metrics,
 }
 
 #[derive(Debug, Clone)]
@@ -77,10 +77,10 @@ pub enum TlsMode {
 #[derive(Debug)]
 pub struct Server {
     tls: Option<TlsConfig>,
-    coord_client: coord::Client,
+    coord_client: mz_coord::Client,
     metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
-    pgwire_metrics: pgwire::Metrics,
+    pgwire_metrics: mz_pgwire::Metrics,
 }
 
 impl Server {

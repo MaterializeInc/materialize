@@ -14,7 +14,7 @@
 
 #![deny(missing_docs)]
 
-use dataflow_types::client::{partitioned::Partitioned, Client, Command, Response};
+use mz_dataflow_types::client::{partitioned::Partitioned, Client, Command, Response};
 
 /// A convenience type for compatibility.
 pub struct RemoteClient {
@@ -55,7 +55,7 @@ pub mod tcp {
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
-    use dataflow_types::client::{Command, Response};
+    use mz_dataflow_types::client::{Command, Response};
 
     /// A client to a remote dataflow server.
     pub struct TcpClient {
@@ -71,8 +71,8 @@ pub mod tcp {
     }
 
     #[async_trait::async_trait]
-    impl dataflow_types::client::Client for TcpClient {
-        async fn send(&mut self, cmd: dataflow_types::client::Command) {
+    impl mz_dataflow_types::client::Client for TcpClient {
+        async fn send(&mut self, cmd: mz_dataflow_types::client::Command) {
             // TODO: something better than panicking.
             self.connection
                 .send(cmd)
@@ -80,7 +80,7 @@ pub mod tcp {
                 .expect("worker command receiver should not drop first");
         }
 
-        async fn recv(&mut self) -> Option<dataflow_types::client::Response> {
+        async fn recv(&mut self) -> Option<mz_dataflow_types::client::Response> {
             // TODO: something better than panicking.
             self.connection
                 .next()

@@ -11,9 +11,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
-use repr::adt::char::{format_str_pad, Char};
-use repr::{ColumnType, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_repr::adt::char::{format_str_pad, Char};
+use mz_repr::{ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
 

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use honggfuzz::fuzz;
-use sql_parser::parser::parse_statements;
+use mz_sql_parser::parser::parse_statements;
 
 fn main() {
     loop {

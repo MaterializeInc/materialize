@@ -14,10 +14,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use coord::PersistConfig;
+use mz_coord::PersistConfig;
 use lazy_static::lazy_static;
-use ore::metrics::MetricsRegistry;
-use ore::task;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -28,7 +28,7 @@ use tokio::runtime::Runtime;
 use materialized::TlsMode;
 
 lazy_static! {
-    pub static ref KAFKA_ADDRS: kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
+    pub static ref KAFKA_ADDRS: mz_kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
         Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
         _ => "localhost:9092".parse().unwrap(),
     };
@@ -124,7 +124,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         logging: config
             .logging_granularity
-            .map(|granularity| coord::LoggingConfig {
+            .map(|granularity| mz_coord::LoggingConfig {
                 granularity,
                 log_logging: false,
                 retain_readings_for: granularity,
@@ -219,12 +219,12 @@ pub struct MzTimestamp(pub u64);
 
 impl<'a> FromSql<'a> for MzTimestamp {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
-        let n = pgrepr::Numeric::from_sql(ty, raw)?;
+        let n = mz_pgrepr::Numeric::from_sql(ty, raw)?;
         Ok(MzTimestamp(u64::try_from(n.0 .0)?))
     }
 
     fn accepts(ty: &Type) -> bool {
-        pgrepr::Numeric::accepts(ty)
+        mz_pgrepr::Numeric::accepts(ty)
     }
 }
 

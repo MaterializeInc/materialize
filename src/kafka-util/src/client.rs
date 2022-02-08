@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use anyhow::bail;
-use ore::collections::CollectionExt;
+use mz_ore::collections::CollectionExt;
 use rdkafka::client::Client;
 use rdkafka::consumer::ConsumerContext;
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};

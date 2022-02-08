@@ -13,9 +13,9 @@ use chrono::TimeZone;
 use proptest::prelude::*;
 use uuid::Uuid;
 
-use repr::adt::numeric::Numeric as AdtNumeric;
-use repr::adt::{array::ArrayDimension, interval::Interval};
-use repr::{Datum, Row};
+use mz_repr::adt::numeric::Numeric as AdtNumeric;
+use mz_repr::adt::{array::ArrayDimension, interval::Interval};
+use mz_repr::{Datum, Row};
 
 /// A type similar to [`Datum`] that can be proptest-generated.
 #[derive(Debug, PartialEq, Clone)]
@@ -95,7 +95,7 @@ struct PropertizedArray(Row, Vec<PropertizedDatum>);
 fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedArray> {
     prop::collection::vec(
         arb_array_dimension(),
-        1..(repr::adt::array::MAX_ARRAY_DIMENSIONS as usize),
+        1..(mz_repr::adt::array::MAX_ARRAY_DIMENSIONS as usize),
     )
     .prop_flat_map(move |dimensions| {
         let n_elts: usize = dimensions.iter().map(|d| d.length).product();

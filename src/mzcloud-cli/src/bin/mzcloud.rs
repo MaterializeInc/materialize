@@ -438,7 +438,7 @@ async fn get_oauth_token(args: &Args) -> Result<String, reqwest::Error> {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let args = ore::cli::parse_args();
+    let args = mz_ore::cli::parse_args();
 
     let access_token = get_oauth_token(&args).await?;
     let config = Configuration {

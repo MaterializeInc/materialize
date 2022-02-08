@@ -25,12 +25,12 @@ use aws_types::credentials::SharedCredentialsProvider;
 use bytes::{Buf, Bytes};
 use futures_executor::block_on;
 use futures_util::FutureExt;
-use ore::task::RuntimeExt;
+use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
 use uuid::Uuid;
 
 use mz_aws_util::config::AwsConfig;
-use ore::cast::CastFrom;
+use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::storage::{Atomicity, Blob, BlobRead, LockInfo};
@@ -115,7 +115,7 @@ impl S3BlobConfig {
         let bucket = match std::env::var(Self::EXTERNAL_TESTS_S3_BUCKET) {
             Ok(bucket) => bucket,
             Err(_) => {
-                if ore::env::is_var_truthy("CI") {
+                if mz_ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
                 }
                 return Ok(None);
@@ -876,7 +876,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn s3_blob() -> Result<(), Error> {
-        ore::test::init_logging();
+        mz_ore::test::init_logging();
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {

@@ -18,13 +18,13 @@ use std::str;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
-use ore::soft_assert;
-use ore::vec::Vector;
+use mz_ore::soft_assert;
+use mz_ore::vec::Vector;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
-use ore::cast::CastFrom;
+use mz_ore::cast::CastFrom;
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,

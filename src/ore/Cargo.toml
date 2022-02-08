@@ -1,5 +1,5 @@
 [package]
-name = "ore"
+name = "mz-ore"
 description = "Internal utility libraries for Materialize."
 version = "0.0.0"
 license = "Apache-2.0"

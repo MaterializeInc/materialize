@@ -36,7 +36,7 @@ struct FromHir {
     context_stack: Vec<BoxId>,
     /// Track the `BoxId` that represents each HirRelationExpr::Get expression
     /// we have seen so far.
-    gets_seen: HashMap<expr::Id, BoxId>,
+    gets_seen: HashMap<mz_expr::Id, BoxId>,
 }
 
 impl FromHir {
@@ -68,13 +68,13 @@ impl FromHir {
                 if let Some(box_id) = self.gets_seen.get(&id) {
                     return *box_id;
                 }
-                if let expr::Id::Global(id) = id {
+                if let mz_expr::Id::Global(id) = id {
                     let result = self.model.make_box(BoxType::Get(Get {
                         id,
                         unique_keys: typ.keys,
                     }));
                     let mut b = self.model.get_mut_box(result);
-                    self.gets_seen.insert(expr::Id::Global(id), result);
+                    self.gets_seen.insert(mz_expr::Id::Global(id), result);
                     b.columns
                         .extend(typ.column_types.into_iter().enumerate().map(
                             |(position, column_type)| Column {
@@ -98,7 +98,7 @@ impl FromHir {
                 value,
                 body,
             } => {
-                let id = expr::Id::Local(id);
+                let id = mz_expr::Id::Local(id);
                 let value_box = self.generate_internal(*value);
                 let prev_value = self.gets_seen.insert(id.clone(), value_box);
                 let body_box = self.generate_internal(*body);

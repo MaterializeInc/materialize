@@ -11,12 +11,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use expr::{
+use mz_expr::{
     AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
     RECURSION_LIMIT,
 };
-use ore::stack::{CheckedRecursion, RecursionGuard};
-use repr::{Datum, Row};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::{Datum, Row};
 
 use crate::TransformArgs;
 

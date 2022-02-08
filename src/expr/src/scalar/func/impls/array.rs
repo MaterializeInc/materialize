@@ -11,8 +11,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
-use repr::{ColumnType, Datum, RowArena, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 
 use crate::scalar::func::LazyUnaryFunc;
 use crate::{EvalError, MirScalarExpr};

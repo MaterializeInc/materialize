@@ -1,5 +1,5 @@
 [package]
-name = "expr"
+name = "mz-expr"
 description = "The core expression language for Materialize."
 version = "0.0.0"
 edition = "2021"
@@ -23,18 +23,18 @@ fallible-iterator = "0.2.0"
 hex = "0.4.3"
 hmac = "0.12.0"
 itertools = "0.10.3"
-lowertest = { path = "../lowertest"}
+mz-lowertest = { path = "../lowertest"}
 md-5 = "0.10.0"
 num_enum = "0.5.6"
 num = "0.4.0"
 num-iter = "0.1.42"
 ordered-float = { version = "2.10.0", features = ["serde"] }
-ore = { path = "../ore" }
+mz-ore = { path = "../ore" }
 pdqselect = "0.1.1"
-pgrepr = { path = "../pgrepr" }
+mz-pgrepr = { path = "../pgrepr" }
 regex = "1.5.4"
 regex-syntax = "0.6.25"
-repr = { path = "../repr" }
+mz-repr = { path = "../repr" }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 serde_regex = "1.1.0"
@@ -47,6 +47,6 @@ paste = "1"
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 datadriven = "0.6.0"
-expr_test_util = { path = "../expr-test-util"}
-ore = { path = "../ore" }
+mz-expr_test_util = { path = "../expr-test-util"}
+mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.36"

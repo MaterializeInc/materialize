@@ -9,7 +9,7 @@
 
 //! Fuses reduce operators with parent operators if possible.
 use crate::TransformArgs;
-use expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{MirRelationExpr, MirScalarExpr};
 
 /// Fuses reduce operators with parent operators if possible.
 #[derive(Debug)]

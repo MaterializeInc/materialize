@@ -26,9 +26,9 @@ use std::fmt;
 use itertools::Itertools;
 use tracing::warn;
 
-use ore::collections::CollectionExt;
-use ore::option::OptionExt;
-use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::collections::CollectionExt;
+use mz_ore::option::OptionExt;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 
 use crate::ast::*;
 use crate::keywords::*;

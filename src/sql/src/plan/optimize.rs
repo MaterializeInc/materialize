@@ -40,7 +40,7 @@ impl HirRelationExpr {
     /// Perform optimizing algebraic rewrites on this [`HirRelationExpr`] and lower it to a [`expr::MirRelationExpr`].
     ///
     /// The optimization path is fully-determined by the values of the feature flag defined in the [`OptimizerConfig`].
-    pub fn optimize_and_lower(self, config: &OptimizerConfig) -> expr::MirRelationExpr {
+    pub fn optimize_and_lower(self, config: &OptimizerConfig) -> mz_expr::MirRelationExpr {
         if config.qgm_optimizations {
             // create a query graph model from this HirRelationExpr
             let model = Model::from(self);

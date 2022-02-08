@@ -9,8 +9,8 @@
 
 use chrono::{NaiveTime, Timelike};
 
-use repr::adt::interval::Interval;
-use repr::strconv;
+use mz_repr::adt::interval::Interval;
+use mz_repr::strconv;
 
 use crate::EvalError;
 

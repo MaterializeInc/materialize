@@ -9,8 +9,8 @@ rust-version = "1.58.0"
 [dependencies]
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow" }
 rusqlite = { version = "0.26.3", features = ["bundled"] }
-persist-types = { path = "../persist-types" }
-timely-util = { path = "../timely-util" }
+mz-persist-types = { path = "../persist-types" }
+mz-timely-util = { path = "../timely-util" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
 [dev-dependencies]

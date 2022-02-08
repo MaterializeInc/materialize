@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use build_info::BuildInfo;
-use ore::metrics::MetricsRegistry;
+use mz_build_info::BuildInfo;
+use mz_ore::metrics::MetricsRegistry;
 
 use crate::catalog::storage;
 use crate::persistcfg::PersisterWithConfig;
@@ -35,7 +35,7 @@ pub struct Config<'a> {
     /// Timestamp frequency to use for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function to generate wall clock now; can be mocked.
-    pub now: ore::now::NowFn,
+    pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
     /// The registry that catalog uses to report metrics.

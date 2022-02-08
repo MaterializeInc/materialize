@@ -10,12 +10,12 @@
 use std::error::Error;
 use std::fmt;
 
-use dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use expr::EvalError;
-use ore::stack::RecursionLimitError;
-use ore::str::StrExt;
-use repr::NotNullViolation;
-use transform::TransformError;
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_expr::EvalError;
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::StrExt;
+use mz_repr::NotNullViolation;
+use mz_transform::TransformError;
 
 use crate::catalog;
 use crate::session::Var;
@@ -44,7 +44,7 @@ pub enum CoordError {
     /// Unexpected internal state was encountered.
     Internal(String),
     /// At least one input has no complete timestamps yet
-    IncompleteTimestamp(Vec<expr::GlobalId>),
+    IncompleteTimestamp(Vec<mz_expr::GlobalId>),
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
     /// Attempted to build a materialization on a source that does not allow multiple materializations
@@ -70,7 +70,7 @@ pub enum CoordError {
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
     /// A persistence-related error.
-    Persistence(persist::error::Error),
+    Persistence(mz_persist::error::Error),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// The transaction is in read-only mode.
@@ -88,7 +88,7 @@ pub enum CoordError {
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// An error occurred in a SQL catalog operation.
-    SqlCatalog(sql::catalog::CatalogError),
+    SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
     TailOnlyTransaction,
     /// An error occurred in the optimizer.
@@ -379,8 +379,8 @@ impl From<EvalError> for CoordError {
     }
 }
 
-impl From<sql::catalog::CatalogError> for CoordError {
-    fn from(e: sql::catalog::CatalogError) -> CoordError {
+impl From<mz_sql::catalog::CatalogError> for CoordError {
+    fn from(e: mz_sql::catalog::CatalogError) -> CoordError {
         CoordError::SqlCatalog(e)
     }
 }

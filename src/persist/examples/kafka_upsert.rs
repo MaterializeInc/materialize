@@ -16,21 +16,21 @@ use std::time::Duration;
 use std::{cmp, env, process};
 
 use differential_dataflow::Hashable;
-use persist::operators::stream::Persist;
+use mz_persist::operators::stream::Persist;
 use serde::{Deserialize, Serialize};
 
-use ore::metrics::MetricsRegistry;
-use ore::now::{NowFn, SYSTEM_TIME};
-use persist::client::{MultiWriteHandle, RuntimeClient, StreamReadHandle};
-use persist::error::Error as PersistError;
-use persist::file::{FileBlob, FileLog};
-use persist::indexed::Snapshot;
-use persist::operators::stream::{AwaitFrontier, Seal};
-use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
-use persist::runtime::{self, RuntimeConfig};
-use persist::storage::{Blob, LockInfo};
-use persist::Data;
-use persist_types::Codec;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
+use mz_persist::client::{MultiWriteHandle, RuntimeClient, StreamReadHandle};
+use mz_persist::error::Error as PersistError;
+use mz_persist::file::{FileBlob, FileLog};
+use mz_persist::indexed::Snapshot;
+use mz_persist::operators::stream::{AwaitFrontier, Seal};
+use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
+use mz_persist::runtime::{self, RuntimeConfig};
+use mz_persist::storage::{Blob, LockInfo};
+use mz_persist::Data;
+use mz_persist_types::Codec;
 
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator;
@@ -39,7 +39,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 fn main() {
-    ore::test::init_logging_default("trace");
+    mz_ore::test::init_logging_default("trace");
 
     if let Err(err) = run(env::args().collect()) {
         eprintln!("error: {}", err);
@@ -61,7 +61,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
             RuntimeConfig::default(),
             log,
             blob,
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )?
@@ -293,9 +293,9 @@ fn sealed_ts<K: Data, V: Data>(read: &StreamReadHandle<K, V>) -> Result<u64, Box
 /// Cheapo version of our current `SourceReader`. The new source trait from Petros uses an async
 /// `Stream` instead of polling for messages.
 trait Source {
-    type SourceTimestamp: timely::Data + timely::ExchangeData + persist::Data + Ord;
-    type K: timely::Data + timely::ExchangeData + persist::Data + Hash + Codec;
-    type V: timely::Data + timely::ExchangeData + persist::Data + Hash + Codec;
+    type SourceTimestamp: timely::Data + timely::ExchangeData + mz_persist::Data + Ord;
+    type K: timely::Data + timely::ExchangeData + mz_persist::Data + Hash + Codec;
+    type V: timely::Data + timely::ExchangeData + mz_persist::Data + Hash + Codec;
 
     fn new(
         starting_offsets: Vec<Self::SourceTimestamp>,
@@ -438,7 +438,7 @@ struct SourceTimestamp<P, O>(P, O);
 mod kafka_offset_impls {
     use bytes::BufMut;
 
-    use persist_types::Codec;
+    use mz_persist_types::Codec;
 
     use crate::AssignedTimestamp;
     use crate::KafkaOffset;

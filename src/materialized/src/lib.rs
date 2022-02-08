@@ -21,20 +21,20 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use compile_time_run::run_command_str;
-use coord::PersistConfig;
+use mz_coord::PersistConfig;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 
-use build_info::BuildInfo;
-use coord::LoggingConfig;
-use ore::metrics::MetricsRegistry;
-use ore::now::SYSTEM_TIME;
-use ore::option::OptionExt;
-use ore::task;
-use pid_file::PidFile;
+use mz_build_info::BuildInfo;
+use mz_coord::LoggingConfig;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
+use mz_ore::option::OptionExt;
+use mz_ore::task;
+use mz_pid_file::PidFile;
 
 use crate::mux::Mux;
 use crate::server_metrics::Metrics;
@@ -206,11 +206,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 builder.set_private_key_file(&tls_config.key, SslFiletype::PEM)?;
                 builder.build().into_context()
             };
-            let pgwire_tls = pgwire::TlsConfig {
+            let pgwire_tls = mz_pgwire::TlsConfig {
                 context: context.clone(),
                 mode: match tls_config.mode {
-                    TlsMode::Require | TlsMode::VerifyCa { .. } => pgwire::TlsMode::Require,
-                    TlsMode::VerifyFull { .. } => pgwire::TlsMode::VerifyUser,
+                    TlsMode::Require | TlsMode::VerifyCa { .. } => mz_pgwire::TlsMode::Require,
+                    TlsMode::VerifyFull { .. } => mz_pgwire::TlsMode::VerifyUser,
                 },
             };
             let http_tls = http::TlsConfig {
@@ -228,7 +228,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let pid_file =
         PidFile::open(config.data_directory.join("materialized.pid")).map_err(|e| match e {
             // Enhance error with some materialized-specific details.
-            pid_file::Error::AlreadyRunning { pid } => anyhow!(
+            mz_pid_file::Error::AlreadyRunning { pid } => anyhow!(
                 "another materialized process (PID {}) is running with the same data directory\n\
                 data directory: {}\n",
                 pid.display_or("<unknown>"),
@@ -244,7 +244,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let local_addr = listener.local_addr()?;
 
     // Load the coordinator catalog from disk.
-    let coord_storage = coord::catalog::storage::Connection::open(
+    let coord_storage = mz_coord::catalog::storage::Connection::open(
         &config.data_directory.join("catalog"),
         Some(config.experimental_mode),
     )?;
@@ -262,7 +262,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .await?;
 
     // Initialize dataflow server.
-    let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
+    let (dataflow_server, dataflow_client) = mz_dataflow::serve(mz_dataflow::Config {
         workers,
         timely_config: timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -275,7 +275,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     })?;
 
     // Initialize coordinator.
-    let (coord_handle, coord_client) = coord::serve(coord::Config {
+    let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: Box::new(dataflow_client),
         logging: config.logging,
         storage: coord_storage,
@@ -316,7 +316,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
     task::spawn(|| "pgwire_server", {
-        let pgwire_server = pgwire::Server::new(pgwire::Config {
+        let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
             metrics_registry: &metrics_registry,
@@ -369,8 +369,8 @@ pub struct Server {
     _pid_file: PidFile,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
-    _coord_handle: coord::Handle,
-    _dataflow_server: dataflow::Server,
+    _coord_handle: mz_coord::Handle,
+    _dataflow_server: mz_dataflow::Server,
 }
 
 impl Server {

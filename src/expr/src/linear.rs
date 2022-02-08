@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row};
+use mz_repr::{Datum, Row};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -1238,8 +1238,8 @@ pub mod plan {
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc,
     };
-    use repr::adt::numeric::Numeric;
-    use repr::{Datum, Diff, Row, RowArena, ScalarType};
+    use mz_repr::adt::numeric::Numeric;
+    use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1511,10 +1511,10 @@ pub mod plan {
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
-            time: repr::Timestamp,
+            time: mz_repr::Timestamp,
             diff: Diff,
             row_builder: &mut Row,
-        ) -> impl Iterator<Item = Result<(Row, repr::Timestamp, Diff), (E, repr::Timestamp, Diff)>>
+        ) -> impl Iterator<Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>>
         {
             match self.mfp.evaluate_inner(datums, &arena) {
                 Err(e) => {

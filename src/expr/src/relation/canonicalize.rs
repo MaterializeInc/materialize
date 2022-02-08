@@ -11,7 +11,7 @@
 //! into canonical form.
 
 use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
-use repr::{Datum, RelationType, ScalarType};
+use mz_repr::{Datum, RelationType, ScalarType};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 

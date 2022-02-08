@@ -19,8 +19,8 @@ use differential_dataflow::{
 };
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
-use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, Diff, RelationDesc, RelationType, Row, ScalarType};
+use mz_ore::collections::CollectionExt;
+use mz_repr::{ColumnType, Datum, Diff, RelationDesc, RelationType, Row, ScalarType};
 use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
 
 /// Given a stream of batches, produce a stream of (vectors of) DiffPairs, in timestamp order.

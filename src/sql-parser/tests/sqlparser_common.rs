@@ -22,13 +22,13 @@ use std::error::Error;
 
 use unicode_width::UnicodeWidthStr;
 
-use ore::collections::CollectionExt;
-use ore::fmt::FormatBuffer;
-use sql_parser::ast::display::AstDisplay;
-use sql_parser::ast::visit::Visit;
-use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawName};
-use sql_parser::parser::{self, ParserError};
+use mz_ore::collections::CollectionExt;
+use mz_ore::fmt::FormatBuffer;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::visit::Visit;
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawName};
+use mz_sql_parser::parser::{self, ParserError};
 
 #[test]
 fn datadriven() {

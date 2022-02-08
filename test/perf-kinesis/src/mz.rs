@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::Context;
 use tokio_postgres::Client;
 
-use test_util::mz_client;
+use mz_test_util::mz_client;
 
 pub async fn create_source_and_views(
     client: &Client,

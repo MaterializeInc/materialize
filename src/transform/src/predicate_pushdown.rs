@@ -78,10 +78,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use itertools::Itertools;
-use ore::stack::{CheckedRecursion, RecursionGuard};
-use repr::{Datum, ScalarType};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::{Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -183,7 +183,7 @@ impl PredicatePushdown {
                             //    to see which ones can become individual elements of
                             //    `inputs`.
 
-                            let input_mapper = expr::JoinInputMapper::new(inputs);
+                            let input_mapper = mz_expr::JoinInputMapper::new(inputs);
 
                             // Predicates not translated into join variable
                             // constraints. We will attempt to push them at all
@@ -191,8 +191,8 @@ impl PredicatePushdown {
                             let mut pred_not_translated = Vec::new();
 
                             for mut predicate in predicates.drain(..) {
-                                use expr::BinaryFunc;
-                                use expr::UnaryFunc;
+                                use mz_expr::BinaryFunc;
+                                use mz_expr::UnaryFunc;
                                 if let MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq,
                                     expr1,
@@ -247,7 +247,7 @@ impl PredicatePushdown {
                                 pred_not_translated.push(predicate)
                             }
 
-                            expr::canonicalize::canonicalize_equivalences(
+                            mz_expr::canonicalize::canonicalize_equivalences(
                                 equivalences,
                                 &[input_type],
                             );
@@ -479,7 +479,7 @@ impl PredicatePushdown {
                             // Apply the predicates in `list` to value. Canonicalize
                             // `list` so that plans are always deterministic.
                             let mut list = list.into_iter().collect::<Vec<_>>();
-                            expr::canonicalize::canonicalize_predicates(&mut list, &value.typ());
+                            mz_expr::canonicalize::canonicalize_predicates(&mut list, &value.typ());
                             **value = value.take_dangerous().filter(list);
                         }
                     }
@@ -498,9 +498,9 @@ impl PredicatePushdown {
                     //   2) equivalences of the form `expr1 = expr2`, where both
                     //      expressions come from the same single input.
                     let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                    expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+                    mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
 
-                    let input_mapper = expr::JoinInputMapper::new_from_input_types(&input_types);
+                    let input_mapper = mz_expr::JoinInputMapper::new_from_input_types(&input_types);
                     // Predicates to push at each input, and to lift out the join.
                     let mut push_downs = vec![Vec::new(); inputs.len()];
 
@@ -532,12 +532,12 @@ impl PredicatePushdown {
                                 for constant in runtime_constants.iter() {
                                     let pred = if constant.is_literal_null() {
                                         MirScalarExpr::CallUnary {
-                                            func: expr::UnaryFunc::IsNull(func::IsNull),
+                                            func: mz_expr::UnaryFunc::IsNull(func::IsNull),
                                             expr: Box::new(expr.clone()),
                                         }
                                     } else {
                                         MirScalarExpr::CallBinary {
-                                            func: expr::BinaryFunc::Eq,
+                                            func: mz_expr::BinaryFunc::Eq,
                                             expr1: Box::new(expr.clone()),
                                             expr2: Box::new(constant.clone()),
                                         }
@@ -653,8 +653,8 @@ impl PredicatePushdown {
                                         let expr1 = pair.pop().unwrap();
                                         let expr2 = pair.pop().unwrap();
 
-                                        use expr::BinaryFunc;
-                                        use expr::UnaryFunc;
+                                        use mz_expr::BinaryFunc;
+                                        use mz_expr::UnaryFunc;
                                         push_downs[input].push(MirScalarExpr::CallBinary {
                                             func: BinaryFunc::Or,
                                             expr1: Box::new(MirScalarExpr::CallBinary {
@@ -700,7 +700,7 @@ impl PredicatePushdown {
                         };
                     }
 
-                    expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+                    mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
 
                     let new_inputs = inputs
                         .drain(..)
@@ -814,14 +814,14 @@ impl PredicatePushdown {
     /// extract `expr1` and `expr2`.
     fn extract_equal_or_both_null(
         s: &mut MirScalarExpr,
-        relation_type: &repr::RelationType,
+        relation_type: &mz_repr::RelationType,
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         // Or, And, and Eq are all commutative functions. For each of these
         // functions, order expr1 and expr2 so you only need to check
         // `condition1(expr1) && condition2(expr2)`, and you do
         // not need to also check for `condition2(expr1) && condition1(expr2)`.
-        use expr::BinaryFunc;
-        use expr::UnaryFunc;
+        use mz_expr::BinaryFunc;
+        use mz_expr::UnaryFunc;
         if let MirScalarExpr::CallBinary {
             func: BinaryFunc::Or,
             expr1,
@@ -855,7 +855,7 @@ impl PredicatePushdown {
     /// Reduces the given expression and returns its AND-ed terms.
     fn extract_reduced_conjunction_terms(
         mut s: MirScalarExpr,
-        relation_type: &repr::RelationType,
+        relation_type: &mz_repr::RelationType,
     ) -> Vec<MirScalarExpr> {
         s.reduce(relation_type);
 
@@ -864,7 +864,7 @@ impl PredicatePushdown {
 
         while let Some(expr) = pending.pop() {
             if let MirScalarExpr::CallBinary {
-                func: expr::BinaryFunc::And,
+                func: mz_expr::BinaryFunc::And,
                 expr1,
                 expr2,
             } = expr

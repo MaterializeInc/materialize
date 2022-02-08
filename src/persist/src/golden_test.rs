@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use ore::metrics::MetricsRegistry;
-use ore::test::init_logging;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::test::init_logging;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tokio::runtime::Runtime as AsyncRuntime;
@@ -154,7 +154,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
         RuntimeConfig::for_tests(),
         ErrorLog,
         blob,
-        build_info::DUMMY_BUILD_INFO,
+        mz_build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
         Some(async_runtime),
     )?;
@@ -178,7 +178,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
                 RuntimeConfig::for_tests(),
                 ErrorLog,
                 blob,
-                build_info::DUMMY_BUILD_INFO,
+                mz_build_info::DUMMY_BUILD_INFO,
                 &MetricsRegistry::new(),
                 None,
             )

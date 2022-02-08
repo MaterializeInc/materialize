@@ -15,7 +15,7 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
+use mz_lowertest::MzReflect;
 
 /// A hashable, comparable, and serializable regular expression type.
 ///

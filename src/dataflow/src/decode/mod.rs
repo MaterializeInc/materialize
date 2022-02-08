@@ -14,25 +14,25 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use expr::PartitionId;
+use mz_expr::PartitionId;
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use repr::MessagePayload;
+use mz_repr::MessagePayload;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{
+use mz_dataflow_types::{
     sources::{
         encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
         DebeziumMode, IncludedColumnSource, SourceEnvelope,
     },
     DecodeError, LinearOperator,
 };
-use interchange::avro::ConfluentAvroResolver;
-use repr::Datum;
-use repr::{Diff, Row, Timestamp};
+use mz_interchange::avro::ConfluentAvroResolver;
+use mz_repr::Datum;
+use mz_repr::{Diff, Row, Timestamp};
 use tracing::error;
 
 use self::avro::AvroDecoderState;
@@ -48,7 +48,7 @@ mod protobuf;
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
     schema: &str,
-    registry: Option<ccsr::ClientConfig>,
+    registry: Option<mz_ccsr::ClientConfig>,
     confluent_wire_format: bool,
 ) -> (Collection<G, Row, Diff>, Box<dyn Any>) {
     // We will have already checked validity of the schema by now, so this can't fail.
@@ -80,7 +80,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                         let d = GeneralDeserializer {
                             schema: schema.top_node(),
                         };
-                        let dec = interchange::avro::cdc_v2::Decoder;
+                        let dec = mz_interchange::avro::cdc_v2::Decoder;
                         let message = match d.deserialize(&mut data, dec) {
                             Ok(ok) => ok,
                             Err(e) => {

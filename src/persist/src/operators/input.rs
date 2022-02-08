@@ -9,7 +9,7 @@
 
 //! A Timely Dataflow operator that synchronously persists stream input.
 
-use persist_types::Codec;
+use mz_persist_types::Codec;
 use timely::dataflow::channels::pushers::buffer::AutoflushSession;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::unordered_input::UnorderedHandle;

@@ -34,18 +34,18 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
-use lowertest::MzReflect;
+use mz_lowertest::MzReflect;
 use num_traits::Float as NumFloat;
-use ore::display::DisplayExt;
-use ore::result::ResultExt;
+use mz_ore::display::DisplayExt;
+use mz_ore::result::ResultExt;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ore::fmt::FormatBuffer;
-use ore::lex::LexBuf;
-use ore::str::StrExt;
+use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
+use mz_ore::str::StrExt;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};

@@ -45,7 +45,7 @@
 //! ```
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
@@ -75,7 +75,7 @@ impl Filter {
                 *input = Box::new(inner.take_dangerous());
             }
 
-            expr::canonicalize::canonicalize_predicates(predicates, &input.typ());
+            mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ());
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {

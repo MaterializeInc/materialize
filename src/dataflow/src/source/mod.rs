@@ -9,13 +9,13 @@
 
 //! Types related to the creation of dataflow sources.
 
-use dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
+use mz_dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_avro::types::Value;
-use persist::client::{StreamReadHandle, StreamWriteHandle};
-use persist::indexed::Snapshot;
-use persist::operators::stream::Persist;
-use persist_types::Codec;
-use repr::MessagePayload;
+use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
+use mz_persist::indexed::Snapshot;
+use mz_persist::operators::stream::Persist;
+use mz_persist_types::Codec;
+use mz_repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
@@ -34,19 +34,19 @@ use timely::dataflow::{
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use dataflow_types::{
+use mz_dataflow_types::{
     sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset},
     SourceError,
 };
-use expr::{GlobalId, PartitionId, SourceInstanceId};
-use ore::cast::CastFrom;
-use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use ore::now::NowFn;
-use ore::task;
+use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::now::NowFn;
+use mz_ore::task;
 use prometheus::core::{AtomicI64, AtomicU64};
 use tracing::error;
 
-use repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::{operator, OutputHandle};
 use timely::dataflow::{Scope, Stream};
@@ -1340,7 +1340,7 @@ impl SourceReaderPersistence {
             Vec<(SourceTimestamp, AssignedTimestamp)>,
             Vec<((SourceTimestamp, AssignedTimestamp), Diff)>,
         ),
-        persist::error::Error,
+        mz_persist::error::Error,
     > {
         // Materialized version of bindings updates that are not beyond the common seal timestamp.
         let mut valid_bindings: HashMap<_, isize> = HashMap::new();

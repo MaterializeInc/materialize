@@ -14,9 +14,9 @@
 //! pushdown can be applied across views once we understand the context
 //! in which the views will be executed.
 
-use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
-use ore::id_gen::IdGen;
+use mz_dataflow_types::{DataflowDesc, LinearOperator};
+use mz_expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use mz_ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::{monotonic::MonotonicFlag, Optimizer, TransformError};
@@ -288,7 +288,7 @@ where
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
-    let mut predicates = HashMap::<Id, HashSet<expr::MirScalarExpr>>::new();
+    let mut predicates = HashMap::<Id, HashSet<mz_expr::MirScalarExpr>>::new();
 
     // Propagate predicate information from outputs to inputs.
     optimize_dataflow_filters_inner(
@@ -327,7 +327,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
 /// TODO: make this private once we allow multiple exports per dataflow.
 pub fn optimize_dataflow_filters_inner<'a, I>(
     view_iter: I,
-    predicates: &mut HashMap<Id, HashSet<expr::MirScalarExpr>>,
+    predicates: &mut HashMap<Id, HashSet<mz_expr::MirScalarExpr>>,
 ) -> Result<(), TransformError>
 where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
@@ -348,8 +348,8 @@ where
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     let mut monotonic = std::collections::HashSet::new();
     for (source_id, source) in dataflow.source_imports.iter_mut() {
-        if let dataflow_types::sources::SourceConnector::External {
-            envelope: dataflow_types::sources::SourceEnvelope::None(_),
+        if let mz_dataflow_types::sources::SourceConnector::External {
+            envelope: mz_dataflow_types::sources::SourceEnvelope::None(_),
             ..
         } = source.description.connector
         {

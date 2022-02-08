@@ -15,7 +15,7 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::EventLink;
@@ -28,7 +28,7 @@ use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
-use repr::{Datum, DatumVec, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -42,7 +42,7 @@ use repr::{Datum, DatumVec, Row, Timestamp};
 /// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    config: &dataflow_types::logging::LoggingConfig,
+    config: &mz_dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, KeysValsHandle> {

@@ -46,8 +46,8 @@ use std::iter;
 
 use anyhow::bail;
 
-use ore::iter::IteratorExt;
-use repr::ColumnName;
+use mz_ore::iter::IteratorExt;
+use mz_repr::ColumnName;
 
 use crate::ast::Expr;
 use crate::names::PartialName;
@@ -395,7 +395,7 @@ impl Scope {
 
     /// Look to see if there is an already-calculated instance of this expr.
     /// Failing to find one is not an error, so this just returns Option
-    pub fn resolve_expr<'a>(&'a self, expr: &sql_parser::ast::Expr<Aug>) -> Option<ColumnRef> {
+    pub fn resolve_expr<'a>(&'a self, expr: &mz_sql_parser::ast::Expr<Aug>) -> Option<ColumnRef> {
         self.items
             .iter()
             .enumerate()

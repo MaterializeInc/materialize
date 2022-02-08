@@ -16,12 +16,12 @@ use derivative::Derivative;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
-use dataflow_types::PeekResponse;
-use expr::GlobalId;
-use ore::str::StrExt;
-use repr::Row;
-use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
-use sql::plan::ExecuteTimeout;
+use mz_dataflow_types::PeekResponse;
+use mz_expr::GlobalId;
+use mz_ore::str::StrExt;
+use mz_repr::Row;
+use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
+use mz_sql::plan::ExecuteTimeout;
 use tokio::sync::watch;
 
 use crate::error::CoordError;
@@ -38,7 +38,7 @@ pub enum Command {
     Declare {
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<mz_pgrepr::Type>>,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
     },
@@ -46,7 +46,7 @@ pub enum Command {
     Describe {
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<mz_pgrepr::Type>>,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
     },
@@ -169,13 +169,13 @@ pub enum ExecuteResponse {
     /// The requested cursor was closed.
     ClosedCursor,
     CopyTo {
-        format: sql::plan::CopyFormat,
+        format: mz_sql::plan::CopyFormat,
         resp: Box<ExecuteResponse>,
     },
     CopyFrom {
         id: GlobalId,
         columns: Vec<usize>,
-        params: sql::plan::CopyParams,
+        params: mz_sql::plan::CopyParams,
     },
     /// The requested database was created.
     CreatedDatabase {

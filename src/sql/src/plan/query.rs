@@ -29,15 +29,15 @@ use std::mem;
 
 use uuid::Uuid;
 
-use expr::{func as expr_func, LocalId};
+use mz_expr::{func as expr_func, LocalId};
 use itertools::Itertools;
-use ore::collections::CollectionExt;
-use ore::stack::{CheckedRecursion, RecursionGuard};
-use ore::str::StrExt;
-use sql_parser::ast::display::{AstDisplay, AstFormatter};
-use sql_parser::ast::fold::Fold;
-use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::str::StrExt;
+use mz_sql_parser::ast::display::{AstDisplay, AstFormatter};
+use mz_sql_parser::ast::fold::Fold;
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement,
@@ -45,9 +45,9 @@ use sql_parser::ast::{
     UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
-use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::numeric;
-use repr::{
+use mz_expr::{GlobalId, Id, RowSetFinishing};
+use mz_repr::adt::numeric;
+use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
     Timestamp,
 };
@@ -527,8 +527,8 @@ pub fn plan_insert_query(
         PlanError::Unstructured(format!(
             "column {} is of type {} but expression is of type {}",
             desc.get_name(e.column).as_str().quoted(),
-            pgrepr::Type::from(&e.target_type).name(),
-            pgrepr::Type::from(&e.source_type).name(),
+            mz_pgrepr::Type::from(&e.target_type).name(),
+            mz_pgrepr::Type::from(&e.source_type).name(),
         ))
     })?;
 
@@ -622,7 +622,7 @@ pub fn plan_copy_from_rows(
     catalog: &dyn SessionCatalog,
     id: GlobalId,
     columns: Vec<usize>,
-    rows: Vec<repr::Row>,
+    rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
     let table = catalog.get_item_by_id(&id);
     let desc = table.desc()?;
@@ -1083,11 +1083,11 @@ pub fn plan_params<'a>(
         };
         let ex = plan_expr(ecx, &expr)?.type_as_any(ecx)?;
         let st = ecx.scalar_type(&ex);
-        if pgrepr::Type::from(&st) != *ty {
+        if mz_pgrepr::Type::from(&st) != *ty {
             sql_bail!(
                 "mismatched parameter type: expected {}, got {}",
                 ty.name(),
-                pgrepr::Type::from(&st).name()
+                mz_pgrepr::Type::from(&st).name()
             );
         }
         let ex = ex.lower_uncorrelated()?;
@@ -1102,7 +1102,7 @@ pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
     exprs: Vec<Expr<Raw>>,
-) -> Result<(Vec<::expr::MirScalarExpr>, Vec<GlobalId>), PlanError> {
+) -> Result<(Vec<mz_expr::MirScalarExpr>, Vec<GlobalId>), PlanError> {
     let scope = Scope::from_source(None, on_desc.iter_names());
     let mut qcx = QueryContext::root(scx, QueryLifetime::Static);
 
@@ -1525,7 +1525,7 @@ fn plan_values(
         }
     }
     let out = HirRelationExpr::CallTable {
-        func: expr::TableFunc::Wrap {
+        func: mz_expr::TableFunc::Wrap {
             width: ncols,
             types: col_types,
         },
@@ -2635,7 +2635,7 @@ fn invent_column_name(
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                 _ => {
                     let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
-                    let pgrepr_type = pgrepr::Type::from(&ty);
+                    let pgrepr_type = mz_pgrepr::Type::from(&ty);
                     let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
                     Some((entry.name().item.clone().into(), NameQuality::Low))
                 }
@@ -3843,7 +3843,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
             if let Some(has_exists_column) = has_exists_column {
                 Ok(HirScalarExpr::If {
                     cond: Box::new(HirScalarExpr::CallUnary {
-                        func: UnaryFunc::IsNull(expr::func::IsNull),
+                        func: UnaryFunc::IsNull(mz_expr::func::IsNull),
                         expr: Box::new(HirScalarExpr::Column(has_exists_column)),
                     }),
                     then: Box::new(HirScalarExpr::literal_null(ecx.scalar_type(&expr))),
@@ -4011,7 +4011,7 @@ fn plan_function<'a>(
 pub fn resolve_func(
     ecx: &ExprContext,
     name: &UnresolvedObjectName,
-    args: &sql_parser::ast::FunctionArgs<Aug>,
+    args: &mz_sql_parser::ast::FunctionArgs<Aug>,
 ) -> Result<&'static Func, PlanError> {
     if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
         if let Ok(f) = i.func() {
@@ -4022,8 +4022,8 @@ pub fn resolve_func(
     // Couldn't resolve function with this name, so generate verbose error
     // message.
     let cexprs = match args {
-        sql_parser::ast::FunctionArgs::Star => vec![],
-        sql_parser::ast::FunctionArgs::Args { args, order_by } => {
+        mz_sql_parser::ast::FunctionArgs::Star => vec![],
+        mz_sql_parser::ast::FunctionArgs::Args { args, order_by } => {
             if !order_by.is_empty() {
                 sql_bail!(
                     "ORDER BY specified, but {} is not an aggregate function",
@@ -4144,8 +4144,8 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
             let mut i = strconv::parse_interval_w_disambiguator(
                 &iv.value,
                 match leading_precision {
-                    repr::adt::datetime::DateTimeField::Hour
-                    | repr::adt::datetime::DateTimeField::Minute => Some(leading_precision),
+                    mz_repr::adt::datetime::DateTimeField::Hour
+                    | mz_repr::adt::datetime::DateTimeField::Minute => Some(leading_precision),
                     _ => None,
                 },
                 parser_datetimefield_to_adt(iv.precision_low),
@@ -4172,21 +4172,21 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
 // Implement these as two identical enums without From/Into impls so that they
 // have no cross-package dependencies, leaving that work up to this crate.
 fn parser_datetimefield_to_adt(
-    dtf: sql_parser::ast::DateTimeField,
-) -> repr::adt::datetime::DateTimeField {
-    use sql_parser::ast::DateTimeField::*;
+    dtf: mz_sql_parser::ast::DateTimeField,
+) -> mz_repr::adt::datetime::DateTimeField {
+    use mz_sql_parser::ast::DateTimeField::*;
     match dtf {
-        Millennium => repr::adt::datetime::DateTimeField::Millennium,
-        Century => repr::adt::datetime::DateTimeField::Century,
-        Decade => repr::adt::datetime::DateTimeField::Decade,
-        Year => repr::adt::datetime::DateTimeField::Year,
-        Month => repr::adt::datetime::DateTimeField::Month,
-        Day => repr::adt::datetime::DateTimeField::Day,
-        Hour => repr::adt::datetime::DateTimeField::Hour,
-        Minute => repr::adt::datetime::DateTimeField::Minute,
-        Second => repr::adt::datetime::DateTimeField::Second,
-        Milliseconds => repr::adt::datetime::DateTimeField::Milliseconds,
-        Microseconds => repr::adt::datetime::DateTimeField::Microseconds,
+        Millennium => mz_repr::adt::datetime::DateTimeField::Millennium,
+        Century => mz_repr::adt::datetime::DateTimeField::Century,
+        Decade => mz_repr::adt::datetime::DateTimeField::Decade,
+        Year => mz_repr::adt::datetime::DateTimeField::Year,
+        Month => mz_repr::adt::datetime::DateTimeField::Month,
+        Day => mz_repr::adt::datetime::DateTimeField::Day,
+        Hour => mz_repr::adt::datetime::DateTimeField::Hour,
+        Minute => mz_repr::adt::datetime::DateTimeField::Minute,
+        Second => mz_repr::adt::datetime::DateTimeField::Second,
+        Milliseconds => mz_repr::adt::datetime::DateTimeField::Milliseconds,
+        Microseconds => mz_repr::adt::datetime::DateTimeField::Microseconds,
     }
 }
 
@@ -4250,11 +4250,11 @@ pub fn scalar_type_from_sql(
                         ScalarType::Numeric { scale }
                     }
                     ScalarType::Char { .. } => {
-                        let length = repr::adt::char::extract_typ_mod(&typ_mod)?;
+                        let length = mz_repr::adt::char::extract_typ_mod(&typ_mod)?;
                         ScalarType::Char { length }
                     }
                     ScalarType::VarChar { .. } => {
-                        let length = repr::adt::varchar::extract_typ_mod(&typ_mod)?;
+                        let length = mz_repr::adt::varchar::extract_typ_mod(&typ_mod)?;
                         ScalarType::VarChar { length }
                     }
                     t => {
@@ -4273,39 +4273,39 @@ pub fn scalar_type_from_sql(
     })
 }
 
-pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, PlanError> {
+pub fn scalar_type_from_pg(ty: &mz_pgrepr::Type) -> Result<ScalarType, PlanError> {
     match ty {
-        pgrepr::Type::Bool => Ok(ScalarType::Bool),
-        pgrepr::Type::Int2 => Ok(ScalarType::Int16),
-        pgrepr::Type::Int4 => Ok(ScalarType::Int32),
-        pgrepr::Type::Int8 => Ok(ScalarType::Int64),
-        pgrepr::Type::Float4 => Ok(ScalarType::Float32),
-        pgrepr::Type::Float8 => Ok(ScalarType::Float64),
-        pgrepr::Type::Numeric => Ok(ScalarType::Numeric { scale: None }),
-        pgrepr::Type::Date => Ok(ScalarType::Date),
-        pgrepr::Type::Time => Ok(ScalarType::Time),
-        pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
-        pgrepr::Type::TimestampTz => Ok(ScalarType::TimestampTz),
-        pgrepr::Type::Interval => Ok(ScalarType::Interval),
-        pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
-        pgrepr::Type::Text => Ok(ScalarType::String),
-        pgrepr::Type::Char => Ok(ScalarType::Char { length: None }),
-        pgrepr::Type::VarChar => Ok(ScalarType::VarChar { length: None }),
-        pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
-        pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
-        pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),
-        pgrepr::Type::List(l) => Ok(ScalarType::List {
+        mz_pgrepr::Type::Bool => Ok(ScalarType::Bool),
+        mz_pgrepr::Type::Int2 => Ok(ScalarType::Int16),
+        mz_pgrepr::Type::Int4 => Ok(ScalarType::Int32),
+        mz_pgrepr::Type::Int8 => Ok(ScalarType::Int64),
+        mz_pgrepr::Type::Float4 => Ok(ScalarType::Float32),
+        mz_pgrepr::Type::Float8 => Ok(ScalarType::Float64),
+        mz_pgrepr::Type::Numeric => Ok(ScalarType::Numeric { scale: None }),
+        mz_pgrepr::Type::Date => Ok(ScalarType::Date),
+        mz_pgrepr::Type::Time => Ok(ScalarType::Time),
+        mz_pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
+        mz_pgrepr::Type::TimestampTz => Ok(ScalarType::TimestampTz),
+        mz_pgrepr::Type::Interval => Ok(ScalarType::Interval),
+        mz_pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
+        mz_pgrepr::Type::Text => Ok(ScalarType::String),
+        mz_pgrepr::Type::Char => Ok(ScalarType::Char { length: None }),
+        mz_pgrepr::Type::VarChar => Ok(ScalarType::VarChar { length: None }),
+        mz_pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
+        mz_pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
+        mz_pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),
+        mz_pgrepr::Type::List(l) => Ok(ScalarType::List {
             element_type: Box::new(scalar_type_from_pg(l)?),
             custom_oid: None,
         }),
-        pgrepr::Type::Record(_) => {
+        mz_pgrepr::Type::Record(_) => {
             sql_bail!("internal error: can't convert from pg record to materialize record")
         }
-        pgrepr::Type::Oid => Ok(ScalarType::Oid),
-        pgrepr::Type::RegClass => Ok(ScalarType::RegClass),
-        pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
-        pgrepr::Type::RegType => Ok(ScalarType::RegType),
-        pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
+        mz_pgrepr::Type::Oid => Ok(ScalarType::Oid),
+        mz_pgrepr::Type::RegClass => Ok(ScalarType::RegClass),
+        mz_pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
+        mz_pgrepr::Type::RegType => Ok(ScalarType::RegType),
+        mz_pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),

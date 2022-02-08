@@ -27,7 +27,7 @@ use serde_json::Value as JsonValue;
 // Re-export components from the various other Avro libraries, so that other
 // testdrive modules can import just this one.
 
-pub use interchange::avro::parse_schema;
+pub use mz_interchange::avro::parse_schema;
 pub use mz_avro::schema::{Schema, SchemaKind, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 pub use mz_avro::types::{AvroMap, DecimalValue, ToAvro, Value};
 pub use mz_avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};

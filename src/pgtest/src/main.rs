@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+
 /// Verifies the correctness of a PostgreSQL-like server.
 #[derive(clap::Parser)]
 struct Args {
@@ -21,8 +22,8 @@ struct Args {
 }
 
 fn main() {
-    let args: Args = ore::cli::parse_args();
-    pgtest::walk(
+    let args: Args = mz_ore::cli::parse_args();
+    mz_pgtest::walk(
         &args.addr,
         &args.user,
         std::time::Duration::from_secs(5),

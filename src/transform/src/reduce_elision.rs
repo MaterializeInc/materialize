@@ -14,7 +14,7 @@
 //! can be simplified to a map operation.
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 use itertools::Itertools;
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
@@ -45,7 +45,7 @@ impl ReduceElision {
             let input_type = input.typ();
             if input_type.keys.iter().any(|keys| {
                 keys.iter()
-                    .all(|k| group_key.contains(&expr::MirScalarExpr::Column(*k)))
+                    .all(|k| group_key.contains(&mz_expr::MirScalarExpr::Column(*k)))
             }) {
                 let map_scalars = aggregates
                     .iter()

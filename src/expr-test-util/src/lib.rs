@@ -13,15 +13,15 @@ use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 use serde_json::Value;
 
-use expr::explain::ViewExplanation;
-use expr::{
+use mz_expr::explain::ViewExplanation;
+use mz_expr::{
     DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr,
 };
-use lowertest::*;
-use ore::result::ResultExt;
-use ore::str::separated;
-use repr::{ColumnType, RelationType, Row, ScalarType};
-use repr_test_util::*;
+use mz_lowertest::*;
+use mz_ore::result::ResultExt;
+use mz_ore::str::separated;
+use mz_repr::{ColumnType, RelationType, Row, ScalarType};
+use mz_repr_test_util::*;
 
 lazy_static! {
     pub static ref RTI: ReflectedTypeInfo = {

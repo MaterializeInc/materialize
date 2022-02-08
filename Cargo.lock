@@ -269,15 +269,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "avro-derive"
-version = "0.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "aws-arn"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,33 +649,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "billing-demo"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "bytes",
- "chrono",
- "clap",
- "csv",
- "env_logger",
- "futures",
- "futures-channel",
- "hex",
- "ore",
- "postgres-types",
- "prost",
- "prost-build",
- "prost-types",
- "rand",
- "rand_distr",
- "test-util",
- "tokio",
- "tokio-postgres",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -761,13 +725,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "build-info"
-version = "0.0.0"
-dependencies = [
- "semver",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -817,26 +774,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22a9137b95ea06864e018375b72adfb7db6e6f68cfc8df5a04d00288050485ee"
 dependencies = [
  "jobserver",
-]
-
-[[package]]
-name = "ccsr"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "futures",
- "hyper",
- "lazy_static",
- "mz-http-proxy",
- "native-tls",
- "openssl",
- "ore",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "url",
 ]
 
 [[package]]
@@ -1027,84 +964,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "coord"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "backtrace",
- "bincode",
- "build-info",
- "byteorder",
- "ccsr",
- "chrono",
- "crossbeam-channel",
- "datadriven",
- "dataflow-types",
- "dec",
- "derivative",
- "differential-dataflow",
- "expr",
- "fail",
- "futures",
- "interchange",
- "itertools",
- "kafka-util",
- "lazy_static",
- "log",
- "mz-aws-util",
- "ore",
- "persist",
- "pgrepr",
- "postgres-types",
- "postgres-util",
- "prometheus",
- "protobuf-native",
- "rand",
- "rdkafka",
- "regex",
- "repr",
- "rusqlite",
- "semver",
- "serde",
- "serde_json",
- "sql",
- "sql-parser",
- "tempfile",
- "timely",
- "tokio",
- "tokio-postgres",
- "tokio-stream",
- "tracing",
- "transform",
- "uncased",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "coordtest"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "build-info",
- "clap",
- "coord",
- "datadriven",
- "dataflow",
- "dataflow-types",
- "expr",
- "futures",
- "ore",
- "repr",
- "serde_json",
- "sql-parser",
- "tempfile",
- "timely",
- "tokio",
 ]
 
 [[package]]
@@ -1387,138 +1246,6 @@ checksum = "5c496e3277b660041bd6a2c0618593e99c3ba450b30d5f8d89035f78c87b4106"
 dependencies = [
  "anyhow",
  "futures",
-]
-
-[[package]]
-name = "dataflow"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-compression",
- "async-trait",
- "aws-sdk-kinesis",
- "aws-sdk-s3",
- "aws-sdk-sqs",
- "bincode",
- "byteorder",
- "bytes",
- "ccsr",
- "chrono",
- "crossbeam-channel",
- "csv-core",
- "dataflow-types",
- "dec",
- "differential-dataflow",
- "dogsdogsdogs",
- "enum-iterator",
- "expr",
- "flate2",
- "futures",
- "globset",
- "inotify",
- "interchange",
- "itertools",
- "kafka-util",
- "lazy_static",
- "log",
- "mz-avro",
- "mz-aws-util",
- "ore",
- "pdqselect",
- "persist",
- "persist-types",
- "pgcopy",
- "postgres-protocol",
- "postgres-util",
- "prometheus",
- "prost",
- "prost-build",
- "pubnub-hyper",
- "rand",
- "rdkafka",
- "regex",
- "repr",
- "scopeguard",
- "serde",
- "serde_json",
- "tempfile",
- "timely",
- "timely-util",
- "tokio",
- "tokio-postgres",
- "tokio-util",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "dataflow-bin"
-version = "0.0.0"
-dependencies = [
- "clap",
- "ore",
- "timely",
-]
-
-[[package]]
-name = "dataflow-types"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aws-config",
- "aws-smithy-http",
- "aws-types",
- "bytes",
- "ccsr",
- "chrono",
- "crossbeam-channel",
- "differential-dataflow",
- "enum-iterator",
- "enum-kinds",
- "expr",
- "futures",
- "globset",
- "http",
- "http-serde",
- "interchange",
- "kafka-util",
- "mz-aws-util",
- "num_enum",
- "ore",
- "persist",
- "persist-types",
- "rdkafka",
- "regex",
- "repr",
- "serde",
- "serde_json",
- "serde_regex",
- "timely",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "dataflowd"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "dataflow",
- "dataflow-types",
- "futures",
- "ore",
- "timely",
- "tokio",
- "tokio-serde",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1843,64 +1570,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e09bfe3000e5aaf2904d2c90e8f38de83dff06731c666d588d382f19da6606a9"
 
 [[package]]
-name = "expr"
-version = "0.0.0"
-dependencies = [
- "aho-corasick",
- "anyhow",
- "chrono",
- "criterion",
- "csv",
- "datadriven",
- "dec",
- "derivative",
- "encoding",
- "enum-iterator",
- "expr_test_util",
- "fallible-iterator",
- "hex",
- "hmac",
- "itertools",
- "lowertest",
- "md-5",
- "num",
- "num-iter",
- "num_enum",
- "ordered-float",
- "ore",
- "paste",
- "pdqselect",
- "pgrepr",
- "proc-macro2",
- "regex",
- "regex-syntax",
- "repr",
- "serde",
- "serde_json",
- "serde_regex",
- "sha-1",
- "sha2",
- "uncased",
- "uuid",
-]
-
-[[package]]
-name = "expr_test_util"
-version = "0.0.0"
-dependencies = [
- "datadriven",
- "expr",
- "lazy_static",
- "lowertest",
- "ore",
- "proc-macro2",
- "repr",
- "repr_test_util",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "fail"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2217,15 +1886,6 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
-]
-
-[[package]]
-name = "fuzz"
-version = "0.0.1"
-dependencies = [
- "honggfuzz",
- "repr",
- "sql-parser",
 ]
 
 [[package]]
@@ -2669,44 +2329,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "interchange"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "avro-derive",
- "base64",
- "byteorder",
- "ccsr",
- "chrono",
- "criterion",
- "dec",
- "differential-dataflow",
- "futures",
- "hex",
- "itertools",
- "lazy_static",
- "mz-avro",
- "num-traits",
- "ordered-float",
- "ore",
- "prost",
- "prost-build",
- "prost-reflect",
- "regex",
- "repr",
- "serde",
- "serde_json",
- "sha2",
- "smallvec",
- "tempfile",
- "timely",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2756,39 +2378,6 @@ name = "json"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "078e285eafdfb6c4b434e0d31e8cfcb5115b651496faca5749b88fafd4f23bfd"
-
-[[package]]
-name = "json-flattened-view-gen"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ore",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "kafka-util"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "ccsr",
- "chrono",
- "clap",
- "crossbeam",
- "futures",
- "mz-avro",
- "num_cpus",
- "ore",
- "rand",
- "rdkafka",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "url",
-]
 
 [[package]]
 name = "krb5-src"
@@ -2972,29 +2561,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lowertest"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "datadriven",
- "lazy_static",
- "lowertest-derive",
- "ore",
- "proc-macro2",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "lowertest-derive"
-version = "0.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "lru"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3035,7 +2601,6 @@ dependencies = [
  "async-trait",
  "atty",
  "backtrace",
- "build-info",
  "bytes",
  "cc",
  "cfg-if",
@@ -3043,13 +2608,8 @@ dependencies = [
  "clap",
  "compile-time-run",
  "console-subscriber",
- "coord",
- "coordtest",
  "crossbeam-channel",
  "datadriven",
- "dataflow",
- "dataflow-types",
- "dataflowd",
  "differential-dataflow",
  "fail",
  "fallible-iterator",
@@ -3061,32 +2621,39 @@ dependencies = [
  "hyper-openssl",
  "include_dir",
  "itertools",
- "kafka-util",
  "krb5-src",
  "lazy_static",
  "libc",
+ "mz-build-info",
+ "mz-coord",
+ "mz-coordtest",
+ "mz-dataflow",
+ "mz-dataflow-types",
+ "mz-dataflowd",
  "mz-http-proxy",
+ "mz-kafka-util",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-pgtest",
+ "mz-pgwire",
+ "mz-pid-file",
  "mz-process-collector",
+ "mz-prof",
+ "mz-repr",
+ "mz-sql",
  "nix",
  "num_cpus",
  "openssl",
  "openssl-sys",
- "ore",
  "os_info",
- "pgrepr",
- "pgtest",
- "pgwire",
- "pid-file",
  "postgres",
  "postgres-openssl",
  "postgres-protocol",
  "postgres_array",
  "predicates",
- "prof",
  "prometheus",
  "rand",
  "rdkafka-sys",
- "repr",
  "reqwest",
  "rlimit",
  "semver",
@@ -3094,7 +2661,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "shell-words",
- "sql",
  "sysctl",
  "sysinfo",
  "tar",
@@ -3110,24 +2676,6 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
-]
-
-[[package]]
-name = "mbta-to-mtrlz"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "byteorder",
- "clap",
- "futures",
- "json",
- "ordered-float",
- "ore",
- "rdkafka",
- "repr",
- "serde_json",
- "test-util",
- "tokio",
 ]
 
 [[package]]
@@ -3171,22 +2719,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "metabase"
-version = "0.0.0"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "metabase-smoketest"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "itertools",
- "metabase",
- "ore",
+ "mz-metabase",
+ "mz-ore",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -3358,6 +2897,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-avro-derive"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "mz-aws-util"
 version = "0.0.0"
 dependencies = [
@@ -3371,6 +2919,337 @@ dependencies = [
  "aws-types",
  "mz-http-proxy",
  "openssl-sys",
+]
+
+[[package]]
+name = "mz-billing-demo"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "clap",
+ "csv",
+ "env_logger",
+ "futures",
+ "futures-channel",
+ "hex",
+ "mz-ore",
+ "mz-test-util",
+ "postgres-types",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "rand",
+ "rand_distr",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "mz-build-info"
+version = "0.0.0"
+dependencies = [
+ "semver",
+]
+
+[[package]]
+name = "mz-ccsr"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "hyper",
+ "lazy_static",
+ "mz-http-proxy",
+ "mz-ore",
+ "native-tls",
+ "openssl",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "mz-coord"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "backtrace",
+ "bincode",
+ "byteorder",
+ "chrono",
+ "crossbeam-channel",
+ "datadriven",
+ "dec",
+ "derivative",
+ "differential-dataflow",
+ "fail",
+ "futures",
+ "itertools",
+ "lazy_static",
+ "log",
+ "mz-aws-util",
+ "mz-build-info",
+ "mz-ccsr",
+ "mz-dataflow-types",
+ "mz-expr",
+ "mz-interchange",
+ "mz-kafka-util",
+ "mz-ore",
+ "mz-persist",
+ "mz-pgrepr",
+ "mz-postgres-util",
+ "mz-repr",
+ "mz-sql",
+ "mz-sql-parser",
+ "mz-transform",
+ "postgres-types",
+ "prometheus",
+ "protobuf-native",
+ "rand",
+ "rdkafka",
+ "regex",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "timely",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tracing",
+ "uncased",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "mz-coordtest"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "datadriven",
+ "futures",
+ "mz-build-info",
+ "mz-coord",
+ "mz-dataflow",
+ "mz-dataflow-types",
+ "mz-expr",
+ "mz-ore",
+ "mz-repr",
+ "mz-sql-parser",
+ "serde_json",
+ "tempfile",
+ "timely",
+ "tokio",
+]
+
+[[package]]
+name = "mz-dataflow"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "async-trait",
+ "aws-sdk-kinesis",
+ "aws-sdk-s3",
+ "aws-sdk-sqs",
+ "bincode",
+ "byteorder",
+ "bytes",
+ "chrono",
+ "crossbeam-channel",
+ "csv-core",
+ "dec",
+ "differential-dataflow",
+ "dogsdogsdogs",
+ "enum-iterator",
+ "flate2",
+ "futures",
+ "globset",
+ "inotify",
+ "itertools",
+ "lazy_static",
+ "log",
+ "mz-avro",
+ "mz-aws-util",
+ "mz-ccsr",
+ "mz-dataflow-types",
+ "mz-expr",
+ "mz-interchange",
+ "mz-kafka-util",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-types",
+ "mz-pgcopy",
+ "mz-postgres-util",
+ "mz-repr",
+ "mz-timely-util",
+ "pdqselect",
+ "postgres-protocol",
+ "prometheus",
+ "prost",
+ "prost-build",
+ "pubnub-hyper",
+ "rand",
+ "rdkafka",
+ "regex",
+ "scopeguard",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "timely",
+ "tokio",
+ "tokio-postgres",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "mz-dataflow-bin"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "mz-ore",
+ "timely",
+]
+
+[[package]]
+name = "mz-dataflow-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-config",
+ "aws-smithy-http",
+ "aws-types",
+ "bytes",
+ "chrono",
+ "crossbeam-channel",
+ "differential-dataflow",
+ "enum-iterator",
+ "enum-kinds",
+ "futures",
+ "globset",
+ "http",
+ "http-serde",
+ "mz-aws-util",
+ "mz-ccsr",
+ "mz-expr",
+ "mz-interchange",
+ "mz-kafka-util",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-types",
+ "mz-repr",
+ "num_enum",
+ "rdkafka",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_regex",
+ "timely",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "mz-dataflowd"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "futures",
+ "mz-dataflow",
+ "mz-dataflow-types",
+ "mz-ore",
+ "timely",
+ "tokio",
+ "tokio-serde",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "mz-expr"
+version = "0.0.0"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "chrono",
+ "criterion",
+ "csv",
+ "datadriven",
+ "dec",
+ "derivative",
+ "encoding",
+ "enum-iterator",
+ "fallible-iterator",
+ "hex",
+ "hmac",
+ "itertools",
+ "md-5",
+ "mz-expr_test_util",
+ "mz-lowertest",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-repr",
+ "num",
+ "num-iter",
+ "num_enum",
+ "ordered-float",
+ "paste",
+ "pdqselect",
+ "proc-macro2",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "serde_regex",
+ "sha-1",
+ "sha2",
+ "uncased",
+ "uuid",
+]
+
+[[package]]
+name = "mz-expr_test_util"
+version = "0.0.0"
+dependencies = [
+ "datadriven",
+ "lazy_static",
+ "mz-expr",
+ "mz-lowertest",
+ "mz-ore",
+ "mz-repr",
+ "mz-repr_test_util",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mz-fuzz"
+version = "0.0.1"
+dependencies = [
+ "honggfuzz",
+ "mz-repr",
+ "mz-sql-parser",
 ]
 
 [[package]]
@@ -3388,14 +3267,513 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-interchange"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "byteorder",
+ "chrono",
+ "criterion",
+ "dec",
+ "differential-dataflow",
+ "futures",
+ "hex",
+ "itertools",
+ "lazy_static",
+ "mz-avro",
+ "mz-avro-derive",
+ "mz-ccsr",
+ "mz-ore",
+ "mz-repr",
+ "num-traits",
+ "ordered-float",
+ "prost",
+ "prost-build",
+ "prost-reflect",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "smallvec",
+ "tempfile",
+ "timely",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "mz-json-flattened-view-gen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mz-ore",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mz-kafka-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "crossbeam",
+ "futures",
+ "mz-avro",
+ "mz-ccsr",
+ "mz-ore",
+ "num_cpus",
+ "rand",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "mz-lowertest"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "datadriven",
+ "lazy_static",
+ "mz-lowertest-derive",
+ "mz-ore",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mz-lowertest-derive"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "mz-mbta-to-mtrlz"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "clap",
+ "futures",
+ "json",
+ "mz-ore",
+ "mz-repr",
+ "mz-test-util",
+ "ordered-float",
+ "rdkafka",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "mz-metabase"
+version = "0.0.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mz-mzcloud-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mz-ore",
+ "mzcloud",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zip",
+]
+
+[[package]]
+name = "mz-ore"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "clap",
+ "crossbeam-utils",
+ "ctor",
+ "either",
+ "futures",
+ "lazy_static",
+ "openssl",
+ "pin-project",
+ "prometheus",
+ "smallvec",
+ "stacker",
+ "tokio",
+ "tokio-openssl",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "mz-perf-kinesis"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-sdk-kinesis",
+ "bytes",
+ "chrono",
+ "clap",
+ "env_logger",
+ "futures",
+ "futures-channel",
+ "mz-aws-util",
+ "mz-ore",
+ "mz-test-util",
+ "rand",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+]
+
+[[package]]
+name = "mz-persist"
+version = "0.0.0"
+dependencies = [
+ "arrow2",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-types",
+ "base64",
+ "bincode",
+ "bytes",
+ "criterion",
+ "crossbeam-channel",
+ "differential-dataflow",
+ "fail",
+ "futures-executor",
+ "futures-util",
+ "lazy_static",
+ "md-5",
+ "mz-aws-util",
+ "mz-build-info",
+ "mz-ore",
+ "mz-persist-types",
+ "parquet2",
+ "prost",
+ "prost-build",
+ "rand",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "mz-persist-types"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
+name = "mz-pgcopy"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "csv",
+ "mz-pgrepr",
+ "mz-repr",
+ "mz-sql",
+]
+
+[[package]]
+name = "mz-pgrepr"
+version = "0.0.0"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "chrono",
+ "dec",
+ "lazy_static",
+ "mz-ore",
+ "mz-repr",
+ "postgres-types",
+ "uuid",
+]
+
+[[package]]
+name = "mz-pgtest"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "datadriven",
+ "fallible-iterator",
+ "mz-ore",
+ "postgres-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mz-pgwire"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "chrono",
+ "csv",
+ "futures",
+ "itertools",
+ "lazy_static",
+ "mz-coord",
+ "mz-dataflow-types",
+ "mz-expr",
+ "mz-ore",
+ "mz-pgcopy",
+ "mz-pgrepr",
+ "mz-repr",
+ "mz-sql",
+ "openssl",
+ "ordered-float",
+ "postgres",
+ "tokio",
+ "tokio-openssl",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "mz-pid-file"
+version = "0.0.0"
+dependencies = [
+ "cc",
+ "libc",
+ "mz-ore",
+ "tempfile",
+]
+
+[[package]]
+name = "mz-postgres-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-repr",
+ "mz-sql-parser",
+ "openssl",
+ "postgres-openssl",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "mz-process-collector"
 version = "0.0.0"
 dependencies = [
  "lazy_static",
  "libc",
- "ore",
+ "mz-ore",
  "procfs",
  "prometheus",
+]
+
+[[package]]
+name = "mz-prof"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "backtrace",
+ "lazy_static",
+ "pprof",
+ "serde",
+ "tempfile",
+ "tikv-jemalloc-ctl",
+ "tokio",
+]
+
+[[package]]
+name = "mz-repr"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "bytes",
+ "chrono",
+ "chrono-tz",
+ "criterion",
+ "dec",
+ "enum-kinds",
+ "fast-float",
+ "hex",
+ "itertools",
+ "lazy_static",
+ "mz-lowertest",
+ "mz-ore",
+ "mz-persist-types",
+ "num-traits",
+ "num_enum",
+ "ordered-float",
+ "proptest",
+ "prost",
+ "prost-build",
+ "rand",
+ "regex",
+ "ryu",
+ "serde",
+ "serde_json",
+ "serde_regex",
+ "smallvec",
+ "uuid",
+]
+
+[[package]]
+name = "mz-repr_test_util"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "datadriven",
+ "lazy_static",
+ "mz-lowertest",
+ "mz-ore",
+ "mz-repr",
+ "proc-macro2",
+]
+
+[[package]]
+name = "mz-s3-datagen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-sdk-s3",
+ "bytefmt",
+ "clap",
+ "futures",
+ "indicatif",
+ "mz-aws-util",
+ "mz-ore",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "mz-sql"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-arn",
+ "chrono",
+ "csv",
+ "datadriven",
+ "dec",
+ "enum-kinds",
+ "futures",
+ "globset",
+ "itertools",
+ "lazy_static",
+ "mz-avro",
+ "mz-aws-util",
+ "mz-build-info",
+ "mz-ccsr",
+ "mz-dataflow-types",
+ "mz-expr",
+ "mz-expr_test_util",
+ "mz-interchange",
+ "mz-kafka-util",
+ "mz-lowertest",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-postgres-util",
+ "mz-repr",
+ "mz-sql-parser",
+ "postgres-protocol",
+ "postgres-types",
+ "prost-build",
+ "protobuf-native",
+ "rdkafka",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "typemap_rev",
+ "uncased",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "mz-sql-parser"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "datadriven",
+ "enum-kinds",
+ "hex",
+ "itertools",
+ "lazy_static",
+ "mz-ore",
+ "mz-walkabout",
+ "phf",
+ "phf_codegen",
+ "tracing",
+ "uncased",
+ "unicode-width",
+]
+
+[[package]]
+name = "mz-sqllogictest"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "fallible-iterator",
+ "futures",
+ "lazy_static",
+ "materialized",
+ "md-5",
+ "mz-coord",
+ "mz-expr",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-repr",
+ "mz-sql",
+ "postgres-protocol",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "timely",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]
@@ -3404,11 +3782,132 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "differential-dataflow",
- "persist-types",
+ "mz-persist-types",
+ "mz-timely-util",
  "rusqlite",
  "tempfile",
  "timely",
- "timely-util",
+]
+
+[[package]]
+name = "mz-test-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "mz-kafka-util",
+ "mz-ore",
+ "rand",
+ "rdkafka",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+]
+
+[[package]]
+name = "mz-testdrive"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "async-compression",
+ "async-trait",
+ "atty",
+ "aws-config",
+ "aws-sdk-kinesis",
+ "aws-sdk-s3",
+ "aws-sdk-sqs",
+ "aws-smithy-http",
+ "aws-types",
+ "byteorder",
+ "bytes",
+ "chrono",
+ "clap",
+ "flate2",
+ "futures",
+ "globset",
+ "http",
+ "itertools",
+ "krb5-src",
+ "lazy_static",
+ "maplit",
+ "md-5",
+ "mysql_async",
+ "mz-avro",
+ "mz-aws-util",
+ "mz-ccsr",
+ "mz-coord",
+ "mz-interchange",
+ "mz-kafka-util",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-repr",
+ "mz-sql",
+ "mz-sql-parser",
+ "postgres_array",
+ "predicates",
+ "prost",
+ "prost-build",
+ "prost-reflect",
+ "protobuf-src",
+ "rand",
+ "rdkafka",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "termcolor",
+ "tiberius",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tokio-util",
+ "url",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "mz-timely-util"
+version = "0.0.0"
+dependencies = [
+ "futures-util",
+ "timely",
+ "tokio",
+]
+
+[[package]]
+name = "mz-transform"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "datadriven",
+ "differential-dataflow",
+ "itertools",
+ "mz-dataflow-types",
+ "mz-expr",
+ "mz-expr_test_util",
+ "mz-lowertest",
+ "mz-ore",
+ "mz-repr",
+ "proc-macro2",
+ "serde_json",
+]
+
+[[package]]
+name = "mz-walkabout"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "datadriven",
+ "fstrings",
+ "itertools",
+ "mz-ore",
+ "quote",
+ "syn",
+ "tempfile",
 ]
 
 [[package]]
@@ -3421,22 +3920,6 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "url",
-]
-
-[[package]]
-name = "mzcloud-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "mzcloud",
- "ore",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "zip",
 ]
 
 [[package]]
@@ -3699,30 +4182,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ore"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "chrono",
- "clap",
- "crossbeam-utils",
- "ctor",
- "either",
- "futures",
- "lazy_static",
- "openssl",
- "pin-project",
- "prometheus",
- "smallvec",
- "stacker",
- "tokio",
- "tokio-openssl",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "os_info"
 version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3854,72 +4313,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
 
 [[package]]
-name = "perf-kinesis"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "aws-sdk-kinesis",
- "bytes",
- "chrono",
- "clap",
- "env_logger",
- "futures",
- "futures-channel",
- "mz-aws-util",
- "ore",
- "rand",
- "test-util",
- "tokio",
- "tokio-postgres",
- "tracing",
-]
-
-[[package]]
-name = "persist"
-version = "0.0.0"
-dependencies = [
- "arrow2",
- "async-trait",
- "aws-config",
- "aws-sdk-s3",
- "aws-types",
- "base64",
- "bincode",
- "build-info",
- "bytes",
- "criterion",
- "crossbeam-channel",
- "differential-dataflow",
- "fail",
- "futures-executor",
- "futures-util",
- "lazy_static",
- "md-5",
- "mz-aws-util",
- "ore",
- "parquet2",
- "persist-types",
- "prost",
- "prost-build",
- "rand",
- "semver",
- "serde",
- "serde_json",
- "tempfile",
- "timely",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "persist-types"
-version = "0.0.0"
-dependencies = [
- "bytes",
-]
-
-[[package]]
 name = "petgraph"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3927,78 +4320,6 @@ checksum = "4a13a2fa9d0b63e5f22328828741e523766fff0ee9e779316902290dff3f824f"
 dependencies = [
  "fixedbitset",
  "indexmap",
-]
-
-[[package]]
-name = "pgcopy"
-version = "0.0.0"
-dependencies = [
- "bytes",
- "csv",
- "pgrepr",
- "repr",
- "sql",
-]
-
-[[package]]
-name = "pgrepr"
-version = "0.0.0"
-dependencies = [
- "byteorder",
- "bytes",
- "chrono",
- "dec",
- "lazy_static",
- "ore",
- "postgres-types",
- "repr",
- "uuid",
-]
-
-[[package]]
-name = "pgtest"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "bytes",
- "clap",
- "datadriven",
- "fallible-iterator",
- "ore",
- "postgres-protocol",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "pgwire"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "byteorder",
- "bytes",
- "chrono",
- "coord",
- "csv",
- "dataflow-types",
- "expr",
- "futures",
- "itertools",
- "lazy_static",
- "openssl",
- "ordered-float",
- "ore",
- "pgcopy",
- "pgrepr",
- "postgres",
- "repr",
- "sql",
- "tokio",
- "tokio-openssl",
- "tokio-stream",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -4038,16 +4359,6 @@ checksum = "b6796ad771acdc0123d2a88dc428b5e38ef24456743ddb1744ed628f9815c096"
 dependencies = [
  "siphasher",
  "uncased",
-]
-
-[[package]]
-name = "pid-file"
-version = "0.0.0"
-dependencies = [
- "cc",
- "libc",
- "ore",
- "tempfile",
 ]
 
 [[package]]
@@ -4170,20 +4481,6 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
-]
-
-[[package]]
-name = "postgres-util"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "openssl",
- "ore",
- "postgres-openssl",
- "repr",
- "sql-parser",
- "tokio",
- "tokio-postgres",
 ]
 
 [[package]]
@@ -4331,20 +4628,6 @@ dependencies = [
  "hex",
  "lazy_static",
  "libc",
-]
-
-[[package]]
-name = "prof"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "backtrace",
- "lazy_static",
- "pprof",
- "serde",
- "tempfile",
- "tikv-jemalloc-ctl",
- "tokio",
 ]
 
 [[package]]
@@ -4705,54 +4988,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "repr"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "byteorder",
- "bytes",
- "chrono",
- "chrono-tz",
- "criterion",
- "dec",
- "enum-kinds",
- "fast-float",
- "hex",
- "itertools",
- "lazy_static",
- "lowertest",
- "num-traits",
- "num_enum",
- "ordered-float",
- "ore",
- "persist-types",
- "proptest",
- "prost",
- "prost-build",
- "rand",
- "regex",
- "ryu",
- "serde",
- "serde_json",
- "serde_regex",
- "smallvec",
- "uuid",
-]
-
-[[package]]
-name = "repr_test_util"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "datadriven",
- "lazy_static",
- "lowertest",
- "ore",
- "proc-macro2",
- "repr",
-]
-
-[[package]]
 name = "reqwest"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4865,23 +5100,6 @@ name = "ryu"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73b4b750c782965c211b42f022f59af1fbceabdd026623714f104152f1ec149f"
-
-[[package]]
-name = "s3-datagen"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "aws-sdk-s3",
- "bytefmt",
- "clap",
- "futures",
- "indicatif",
- "mz-aws-util",
- "ore",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "same-file"
@@ -5154,103 +5372,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
-name = "sql"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "aws-arn",
- "build-info",
- "ccsr",
- "chrono",
- "csv",
- "datadriven",
- "dataflow-types",
- "dec",
- "enum-kinds",
- "expr",
- "expr_test_util",
- "futures",
- "globset",
- "interchange",
- "itertools",
- "kafka-util",
- "lazy_static",
- "lowertest",
- "mz-avro",
- "mz-aws-util",
- "ore",
- "pgrepr",
- "postgres-protocol",
- "postgres-types",
- "postgres-util",
- "prost-build",
- "protobuf-native",
- "rdkafka",
- "regex",
- "repr",
- "reqwest",
- "serde",
- "serde_json",
- "sql-parser",
- "tempfile",
- "tokio",
- "tokio-postgres",
- "tracing",
- "typemap_rev",
- "uncased",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "sql-parser"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "datadriven",
- "enum-kinds",
- "hex",
- "itertools",
- "lazy_static",
- "ore",
- "phf",
- "phf_codegen",
- "tracing",
- "uncased",
- "unicode-width",
- "walkabout",
-]
-
-[[package]]
-name = "sqllogictest"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "coord",
- "expr",
- "fallible-iterator",
- "futures",
- "lazy_static",
- "materialized",
- "md-5",
- "ore",
- "pgrepr",
- "postgres-protocol",
- "regex",
- "repr",
- "serde_json",
- "sql",
- "tempfile",
- "timely",
- "tokio",
- "tokio-postgres",
- "uuid",
- "walkdir",
-]
-
-[[package]]
 name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5441,86 +5562,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "test-util"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "kafka-util",
- "ore",
- "rand",
- "rdkafka",
- "tokio",
- "tokio-postgres",
- "tracing",
-]
-
-[[package]]
-name = "testdrive"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "async-compression",
- "async-trait",
- "atty",
- "aws-config",
- "aws-sdk-kinesis",
- "aws-sdk-s3",
- "aws-sdk-sqs",
- "aws-smithy-http",
- "aws-types",
- "byteorder",
- "bytes",
- "ccsr",
- "chrono",
- "clap",
- "coord",
- "flate2",
- "futures",
- "globset",
- "http",
- "interchange",
- "itertools",
- "kafka-util",
- "krb5-src",
- "lazy_static",
- "maplit",
- "md-5",
- "mysql_async",
- "mz-avro",
- "mz-aws-util",
- "ore",
- "pgrepr",
- "postgres_array",
- "predicates",
- "prost",
- "prost-build",
- "prost-reflect",
- "protobuf-src",
- "rand",
- "rdkafka",
- "regex",
- "repr",
- "reqwest",
- "serde",
- "serde_json",
- "similar",
- "sql",
- "sql-parser",
- "tempfile",
- "termcolor",
- "tiberius",
- "tokio",
- "tokio-postgres",
- "tokio-stream",
- "tokio-util",
- "url",
- "uuid",
- "walkdir",
-]
-
-[[package]]
 name = "textwrap"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5642,15 +5683,6 @@ dependencies = [
  "timely_communication",
  "timely_container",
  "timely_logging",
-]
-
-[[package]]
-name = "timely-util"
-version = "0.0.0"
-dependencies = [
- "futures-util",
- "timely",
- "tokio",
 ]
 
 [[package]]
@@ -5982,24 +6014,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "transform"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "datadriven",
- "dataflow-types",
- "differential-dataflow",
- "expr",
- "expr_test_util",
- "itertools",
- "lowertest",
- "ore",
- "proc-macro2",
- "repr",
- "serde_json",
-]
-
-[[package]]
 name = "treeline"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6151,20 +6165,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f200f5b12eb75f8c1ed65abd4b2db8a6e1b138a20de009dacee265a2498f3f6"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "walkabout"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "datadriven",
- "fstrings",
- "itertools",
- "ore",
- "quote",
- "syn",
- "tempfile",
 ]
 
 [[package]]

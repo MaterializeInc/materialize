@@ -9,9 +9,9 @@
 
 use futures::executor::block_on;
 
-use dataflow_types::DecodeError;
-use interchange::avro::Decoder;
-use repr::Row;
+use mz_dataflow_types::DecodeError;
+use mz_interchange::avro::Decoder;
+use mz_repr::Row;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {
@@ -23,7 +23,7 @@ impl AvroDecoderState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         value_schema: &str,
-        schema_registry_config: Option<ccsr::ClientConfig>,
+        schema_registry_config: Option<mz_ccsr::ClientConfig>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {

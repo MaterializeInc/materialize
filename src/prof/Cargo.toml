@@ -1,5 +1,5 @@
 [package]
-name = "prof"
+name = "mz-prof"
 description = "CPU and memory profiling tools."
 version = "0.0.0"
 edition = "2021"

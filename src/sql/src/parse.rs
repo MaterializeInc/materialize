@@ -9,4 +9,4 @@
 
 //! SQL parsing.
 
-pub use sql_parser::parser::parse_statements as parse;
+pub use mz_sql_parser::parser::parse_statements as parse;

@@ -22,7 +22,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use mz_aws_util::config::AwsConfig;
-use ore::cast::CastFrom;
+use mz_ore::cast::CastFrom;
 
 /// Generate meaningless data in S3 to test download speeds
 #[derive(Parser)]
@@ -69,7 +69,7 @@ async fn main() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
     let env_filter =
         EnvFilter::try_from_env("MZ_LOG_FILTER").or_else(|_| EnvFilter::try_new("info"))?;
     tracing_subscriber::registry()

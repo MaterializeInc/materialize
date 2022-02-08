@@ -15,7 +15,7 @@ use itertools::Itertools;
 use crate::MirRelationExpr;
 use crate::MirScalarExpr;
 
-use repr::RelationType;
+use mz_repr::RelationType;
 
 /// Any column in a join expression exists in two contexts:
 /// 1) It has a position relative to the result of the join (global)
@@ -352,7 +352,7 @@ impl JoinInputMapper {
 mod tests {
     use super::*;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
-    use repr::{Datum, ScalarType};
+    use mz_repr::{Datum, ScalarType};
 
     #[test]
     fn try_map_to_input_with_bound_expr_test() {

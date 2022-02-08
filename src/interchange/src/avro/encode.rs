@@ -14,9 +14,9 @@ use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_avro::types::AvroMap;
-use repr::adt::jsonb::JsonbRef;
-use repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
+use mz_repr::adt::jsonb::JsonbRef;
+use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
@@ -352,7 +352,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     Value::String(datum.unwrap_str().to_owned())
                 }
                 ScalarType::Char { length } => {
-                    let s = repr::adt::char::format_str_pad(datum.unwrap_str(), *length);
+                    let s = mz_repr::adt::char::format_str_pad(datum.unwrap_str(), *length);
                     Value::String(s)
                 }
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),

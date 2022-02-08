@@ -21,30 +21,30 @@ use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::Collection;
-use expr::MirScalarExpr;
+use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use dataflow_types::DataflowError;
+use mz_dataflow_types::DataflowError;
 
-use dataflow_types::plan::reduce::{
+use mz_dataflow_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
 
 use dec::OrderedDecimal;
-use expr::{AggregateExpr, AggregateFunc};
-use ore::cast::CastFrom;
-use ore::soft_assert_or_log;
-use repr::adt::numeric::{self, Numeric, NumericAgg};
-use repr::{Datum, DatumList, Row, RowArena};
+use mz_expr::{AggregateExpr, AggregateFunc};
+use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_or_log;
+use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
+use mz_repr::{Datum, DatumList, Row, RowArena};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
 use crate::render::context::CollectionBundle;
 use crate::render::ArrangementFlavor;
-use repr::DatumVec;
+use mz_repr::DatumVec;
 
 use crate::arrangement::manager::RowSpine;
 
@@ -218,7 +218,7 @@ where
             let demand_map_len = demand_map.len();
             key_plan.permute(demand_map.clone(), demand_map_len);
             val_plan.permute(demand_map, demand_map_len);
-            let skips = dataflow_types::plan::reduce::convert_indexes_to_skips(demand);
+            let skips = mz_dataflow_types::plan::reduce::convert_indexes_to_skips(demand);
             move |row_parts, time, diff| {
                 let temp_storage = RowArena::new();
 
@@ -1365,9 +1365,9 @@ pub mod monoids {
     use differential_dataflow::difference::Semigroup;
     use serde::{Deserialize, Serialize};
 
-    use expr::AggregateFunc;
-    use ore::soft_panic_or_log;
-    use repr::{Datum, Row};
+    use mz_expr::AggregateFunc;
+    use mz_ore::soft_panic_or_log;
+    use mz_repr::{Datum, Row};
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]

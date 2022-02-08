@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use crate::source::metrics::SourceBaseMetrics;
-use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use prometheus::core::AtomicU64;
 
 pub(super) struct PgSourceMetrics {

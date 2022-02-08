@@ -11,7 +11,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio::process::Command;
 
-use ore::option::OptionExt;
+use mz_ore::option::OptionExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

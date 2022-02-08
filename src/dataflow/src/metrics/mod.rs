@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use expr::GlobalId;
-use ore::metrics::MetricsRegistry;
-use ore::{
+use mz_expr::GlobalId;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::{
     metric,
     metrics::{raw::UIntCounterVec, raw::UIntGaugeVec, UIntGauge},
 };

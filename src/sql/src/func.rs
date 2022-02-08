@@ -17,10 +17,10 @@ use std::fmt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
-use expr::func;
-use ore::collections::CollectionExt;
-use pgrepr::oid;
-use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
+use mz_expr::func;
+use mz_ore::collections::CollectionExt;
+use mz_pgrepr::oid;
+use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 
 use crate::ast::{SelectStatement, Statement};
 use crate::names::PartialName;
@@ -271,7 +271,7 @@ pub fn sql_impl(
     expr: &'static str,
 ) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> {
     let expr =
-        sql_parser::parser::parse_expr(expr).expect("static function definition failed to parse");
+        mz_sql_parser::parser::parse_expr(expr).expect("static function definition failed to parse");
     move |qcx, types| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
@@ -345,7 +345,7 @@ fn sql_impl_table_func_inner(
     sql: &'static str,
     experimental: Option<&'static str>,
 ) -> Operation<TableFuncPlan> {
-    let query = match sql_parser::parser::parse_statements(sql)
+    let query = match mz_sql_parser::parser::parse_statements(sql)
         .expect("static function definition failed to parse")
         .expect_element("static function definition must have exactly one statement")
     {
@@ -898,16 +898,16 @@ impl ParamType {
                     custom_oid.unwrap()
                 }
                 t => {
-                    let t: pgrepr::Type = t.into();
+                    let t: mz_pgrepr::Type = t.into();
                     t.oid()
                 }
             },
             ParamType::Any => postgres_types::Type::ANY.oid(),
             ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
             ParamType::ArrayElementAny => postgres_types::Type::ANYELEMENT.oid(),
-            ParamType::ListAny => pgrepr::LIST.oid(),
+            ParamType::ListAny => mz_pgrepr::LIST.oid(),
             ParamType::ListElementAny => postgres_types::Type::ANYELEMENT.oid(),
-            ParamType::MapAny => pgrepr::MAP.oid(),
+            ParamType::MapAny => mz_pgrepr::MAP.oid(),
             ParamType::NonVecAny => postgres_types::Type::ANYNONARRAY.oid(),
             ParamType::RecordAny => postgres_types::Type::RECORD.oid(),
         }
@@ -2599,7 +2599,7 @@ lazy_static! {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                     let regex = match regex.into_literal_string() {
                         None => sql_bail!("regex_extract requires a string literal as its first argument"),
-                        Some(regex) => expr::AnalyzedRegex::new(&regex).map_err(|e| PlanError::Unstructured(format!("analyzing regex: {}", e)))?,
+                        Some(regex) => mz_expr::AnalyzedRegex::new(&regex).map_err(|e| PlanError::Unstructured(format!("analyzing regex: {}", e)))?,
                     };
                     let column_names = regex
                         .capture_groups_iter()

@@ -17,16 +17,16 @@ use crate::query_model::model::{
     QuantifierId, QuantifierSet, QuantifierType,
 };
 use itertools::Itertools;
-use ore::collections::CollectionExt;
-use ore::id_gen::IdGen;
-use repr::{Datum, RelationType, ScalarType};
+use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen::IdGen;
+use mz_repr::{Datum, RelationType, ScalarType};
 use std::collections::HashMap;
 
-impl From<Model> for expr::MirRelationExpr {
-    fn from(model: Model) -> expr::MirRelationExpr {
+impl From<Model> for mz_expr::MirRelationExpr {
+    fn from(model: Model) -> mz_expr::MirRelationExpr {
         let mut lowerer = Lowerer::new(&model);
         let mut id_gen = IdGen::default();
-        expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+        mz_expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
             .let_in(&mut id_gen, |id_gen, get_outer| {
                 lowerer.apply(model.top_box, get_outer, &ColumnMap::new(), id_gen)
             })
@@ -53,11 +53,11 @@ impl<'a> Lowerer<'a> {
     fn apply(
         &mut self,
         box_id: BoxId,
-        get_outer: expr::MirRelationExpr,
+        get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
         id_gen: &mut IdGen,
-    ) -> expr::MirRelationExpr {
-        use expr::MirRelationExpr as SR;
+    ) -> mz_expr::MirRelationExpr {
+        use mz_expr::MirRelationExpr as SR;
         let the_box = self.model.get_box(box_id);
 
         let input = match &the_box.box_type {
@@ -79,7 +79,7 @@ impl<'a> Lowerer<'a> {
                 )
                 .with_keys(unique_keys.clone());
                 get_outer.product(SR::Get {
-                    id: expr::Id::Global(*id),
+                    id: mz_expr::Id::Global(*id),
                     typ,
                 })
             }
@@ -164,7 +164,7 @@ impl<'a> Lowerer<'a> {
                             distinct,
                         } = &c.expr
                         {
-                            Some(expr::AggregateExpr {
+                            Some(mz_expr::AggregateExpr {
                                 func: func.clone(),
                                 expr: Self::lower_expression(expr, &column_map),
                                 distinct: *distinct,
@@ -236,12 +236,12 @@ impl<'a> Lowerer<'a> {
     /// at the moment.
     fn lower_join(
         &mut self,
-        get_outer: expr::MirRelationExpr,
+        get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
         quantifiers: &QuantifierSet,
         id_gen: &mut IdGen,
-    ) -> (expr::MirRelationExpr, ColumnMap) {
-        if let expr::MirRelationExpr::Get { .. } = &get_outer {
+    ) -> (mz_expr::MirRelationExpr, ColumnMap) {
+        if let mz_expr::MirRelationExpr::Get { .. } = &get_outer {
         } else {
             panic!(
                 "get_outer: expected a MirRelationExpr::Get, found {:?}",
@@ -289,10 +289,10 @@ impl<'a> Lowerer<'a> {
     fn lower_quantifier(
         &mut self,
         quantifier_id: QuantifierId,
-        get_outer: expr::MirRelationExpr,
+        get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
         id_gen: &mut IdGen,
-    ) -> expr::MirRelationExpr {
+    ) -> mz_expr::MirRelationExpr {
         let quantifier = self.model.get_quantifier(quantifier_id);
         let input_box = quantifier.input_box;
         let mut input = self.apply(input_box, get_outer.clone(), outer_column_map, id_gen);
@@ -313,22 +313,22 @@ impl<'a> Lowerer<'a> {
                     // Count for each `get_outer` prefix.
                     let counts = get_select.clone().reduce(
                         (0..outer_arity).collect::<Vec<_>>(),
-                        vec![expr::AggregateExpr {
-                            func: expr::AggregateFunc::Count,
-                            expr: expr::MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
+                        vec![mz_expr::AggregateExpr {
+                            func: mz_expr::AggregateFunc::Count,
+                            expr: mz_expr::MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
                             distinct: false,
                         }],
                         None,
                     );
                     // Errors should result from counts > 1.
                     let errors = counts
-                        .filter(vec![expr::MirScalarExpr::Column(outer_arity).call_binary(
-                            expr::MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                            expr::BinaryFunc::Gt,
+                        .filter(vec![mz_expr::MirScalarExpr::Column(outer_arity).call_binary(
+                            mz_expr::MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                            mz_expr::BinaryFunc::Gt,
                         )])
                         .project((0..outer_arity).collect::<Vec<_>>())
-                        .map(vec![expr::MirScalarExpr::literal(
-                            Err(expr::EvalError::MultipleRowsFromSubquery),
+                        .map(vec![mz_expr::MirScalarExpr::literal(
+                            Err(mz_expr::EvalError::MultipleRowsFromSubquery),
                             col_type.clone().scalar_type,
                         )]);
                     // Return `get_select` and any errors added in.
@@ -349,10 +349,10 @@ impl<'a> Lowerer<'a> {
     /// TODO(asenac) Given the lack of support for decorrelation at the moment, this
     /// method is always called with `prefix_length` 0, and hence, it remains untested.
     fn join_on_prefix(
-        join_inputs: Vec<expr::MirRelationExpr>,
+        join_inputs: Vec<mz_expr::MirRelationExpr>,
         prefix_length: usize,
-    ) -> expr::MirRelationExpr {
-        let input_mapper = expr::JoinInputMapper::new(&join_inputs);
+    ) -> mz_expr::MirRelationExpr {
+        let input_mapper = mz_expr::JoinInputMapper::new(&join_inputs);
         // Join on the outer columns
         let equivalences = (0..prefix_length)
             .map(|col| {
@@ -360,7 +360,7 @@ impl<'a> Lowerer<'a> {
                     .iter()
                     .enumerate()
                     .map(|(input, _)| {
-                        expr::MirScalarExpr::Column(input_mapper.map_column_to_global(col, input))
+                        mz_expr::MirScalarExpr::Column(input_mapper.map_column_to_global(col, input))
                     })
                     .collect_vec()
             })
@@ -379,37 +379,37 @@ impl<'a> Lowerer<'a> {
                     .flatten(),
             )
             .collect_vec();
-        expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection)
+        mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection)
     }
 
     /// Lowers a scalar expression, resolving the column references using
     /// the supplied column map.
-    fn lower_expression(expr: &BoxScalarExpr, column_map: &ColumnMap) -> expr::MirScalarExpr {
+    fn lower_expression(expr: &BoxScalarExpr, column_map: &ColumnMap) -> mz_expr::MirScalarExpr {
         match expr {
             BoxScalarExpr::ColumnReference(c) => {
-                expr::MirScalarExpr::Column(*column_map.get(c).unwrap())
+                mz_expr::MirScalarExpr::Column(*column_map.get(c).unwrap())
             }
             BoxScalarExpr::Literal(row, column_type) => {
-                expr::MirScalarExpr::Literal(Ok(row.clone()), column_type.clone())
+                mz_expr::MirScalarExpr::Literal(Ok(row.clone()), column_type.clone())
             }
-            BoxScalarExpr::CallNullary(func) => expr::MirScalarExpr::CallNullary(func.clone()),
-            BoxScalarExpr::CallUnary { func, expr } => expr::MirScalarExpr::CallUnary {
+            BoxScalarExpr::CallNullary(func) => mz_expr::MirScalarExpr::CallNullary(func.clone()),
+            BoxScalarExpr::CallUnary { func, expr } => mz_expr::MirScalarExpr::CallUnary {
                 func: func.clone(),
                 expr: Box::new(Self::lower_expression(&*expr, column_map)),
             },
-            BoxScalarExpr::CallBinary { func, expr1, expr2 } => expr::MirScalarExpr::CallBinary {
+            BoxScalarExpr::CallBinary { func, expr1, expr2 } => mz_expr::MirScalarExpr::CallBinary {
                 func: func.clone(),
                 expr1: Box::new(Self::lower_expression(expr1, column_map)),
                 expr2: Box::new(Self::lower_expression(expr2, column_map)),
             },
-            BoxScalarExpr::CallVariadic { func, exprs } => expr::MirScalarExpr::CallVariadic {
+            BoxScalarExpr::CallVariadic { func, exprs } => mz_expr::MirScalarExpr::CallVariadic {
                 func: func.clone(),
                 exprs: exprs
                     .into_iter()
                     .map(|expr| Self::lower_expression(expr, column_map))
                     .collect::<Vec<_>>(),
             },
-            BoxScalarExpr::If { cond, then, els } => expr::MirScalarExpr::If {
+            BoxScalarExpr::If { cond, then, els } => mz_expr::MirScalarExpr::If {
                 cond: Box::new(Self::lower_expression(cond, column_map)),
                 then: Box::new(Self::lower_expression(then, column_map)),
                 els: Box::new(Self::lower_expression(els, column_map)),

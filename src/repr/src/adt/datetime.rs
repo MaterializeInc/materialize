@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
 
-use lowertest::MzReflect;
+use mz_lowertest::MzReflect;
 
 /// Units of measurements associated with dates and times.
 ///

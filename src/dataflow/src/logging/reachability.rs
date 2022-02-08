@@ -12,7 +12,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
@@ -24,9 +24,9 @@ use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
-use dataflow_types::logging::LoggingConfig;
-use ore::iter::IteratorExt;
-use repr::{Datum, Row, RowArena, Timestamp};
+use mz_dataflow_types::logging::LoggingConfig;
+use mz_ore::iter::IteratorExt;
+use mz_repr::{Datum, Row, RowArena, Timestamp};
 
 /// Constructs the logging dataflow for reachability logs.
 ///

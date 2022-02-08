@@ -14,8 +14,8 @@
 //! vectors to the registry once, and then generate concrete instantiations of them for the
 //! appropriate source.
 
-use ore::metric;
-use ore::metrics::{
+use mz_ore::metric;
+use mz_ore::metrics::{
     IntCounterVec, IntGaugeVec, MetricsRegistry, UIntCounter, UIntCounterVec, UIntGaugeVec,
 };
 

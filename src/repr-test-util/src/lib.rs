@@ -15,12 +15,12 @@ use chrono::NaiveDateTime;
 use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 
-use lowertest::{
+use mz_lowertest::{
     deserialize_optional, GenericTestDeserializeContext, MzReflect, ReflectedTypeInfo,
 };
-use ore::str::StrExt;
-use repr::adt::numeric::Numeric;
-use repr::{ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_ore::str::StrExt;
+use mz_repr::adt::numeric::Numeric;
+use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 
 lazy_static! {
     pub static ref RTI: ReflectedTypeInfo = {
@@ -79,7 +79,7 @@ where
                 ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
                 ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
                 ScalarType::String => Ok(Datum::from(
-                    temp_storage.push_string(lowertest::unquote(litval)),
+                    temp_storage.push_string(mz_lowertest::unquote(litval)),
                 )),
                 ScalarType::Timestamp => {
                     let datetime = if litval.contains('.') {

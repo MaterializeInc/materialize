@@ -21,9 +21,9 @@ use uuid::Uuid;
 use materialized::http;
 use materialized::mux::Mux;
 use materialized::server_metrics::Metrics;
-use ore::metrics::MetricsRegistry;
-use ore::now::SYSTEM_TIME;
-use ore::task;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task;
 
 /// Independent coordinator server for Materialize.
 #[derive(clap::Parser)]
@@ -66,7 +66,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run(ore::cli::parse_args()).await {
+    if let Err(err) = run(mz_ore::cli::parse_args()).await {
         eprintln!("coordd: {:#}", err);
         process::exit(1);
     }
@@ -84,15 +84,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.dataflowd_addr
     );
 
-    let dataflow_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+    let dataflow_client = mz_dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
 
     let experimental_mode = false;
     let mut metrics_registry = MetricsRegistry::new();
-    let coord_storage = coord::catalog::storage::Connection::open(
+    let coord_storage = mz_coord::catalog::storage::Connection::open(
         &args.data_directory.join("catalog"),
         Some(experimental_mode),
     )?;
-    let persister = coord::PersistConfig::disabled()
+    let persister = mz_coord::PersistConfig::disabled()
         .init(
             // TODO(benesch): if we were enabling persistence, we'd want to use
             // a stable reentrance ID here. Using a random UUID essentially
@@ -103,7 +103,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             &metrics_registry,
         )
         .await?;
-    let (coord_handle, coord_client) = coord::serve(coord::Config {
+    let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: Box::new(dataflow_client),
         logging: None,
         storage: coord_storage,
@@ -129,7 +129,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let listener = TcpListener::bind(&args.listen_addr).await?;
 
     task::spawn(|| "pgwire_server", {
-        let pgwire_server = pgwire::Server::new(pgwire::Config {
+        let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: None,
             coord_client: coord_client.clone(),
             metrics_registry: &metrics_registry,

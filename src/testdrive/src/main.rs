@@ -26,7 +26,7 @@ use url::Url;
 use walkdir::WalkDir;
 
 use mz_aws_util::config::AwsConfig;
-use ore::path::PathExt;
+use mz_ore::path::PathExt;
 
 use testdrive::Config;
 
@@ -99,11 +99,11 @@ struct Args {
 
     // === Testdrive options. ===
     /// Default timeout in seconds.
-    #[clap(long, parse(try_from_str = repr::util::parse_duration), default_value = "10s")]
+    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "10s")]
     default_timeout: Duration,
 
     /// Initial backoff interval. Set to 0 to retry immediately on failure
-    #[clap(long, parse(try_from_str = repr::util::parse_duration), default_value = "50ms")]
+    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "50ms")]
     initial_backoff: Duration,
 
     /// Backoff factor when retrying. Set to 1 to retry at a steady pace
@@ -153,7 +153,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
 
     let (aws_config, aws_account) = match args.aws_region {
         Some(region) => {

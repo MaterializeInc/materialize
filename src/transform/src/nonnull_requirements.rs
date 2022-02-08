@@ -25,9 +25,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use itertools::{Either, Itertools};
-use ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -71,10 +71,10 @@ impl NonNullRequirements {
             match relation {
                 MirRelationExpr::Constant { rows, .. } => {
                     if let Ok(rows) = rows {
-                        let mut datum_vec = repr::DatumVec::new();
+                        let mut datum_vec = mz_repr::DatumVec::new();
                         rows.retain(|(row, _)| {
                             let datums = datum_vec.borrow_with(&row);
-                            columns.iter().all(|c| datums[*c] != repr::Datum::Null)
+                            columns.iter().all(|c| datums[*c] != mz_repr::Datum::Null)
                         })
                     }
                     Ok(())
@@ -223,7 +223,7 @@ impl NonNullRequirements {
                         ): (Vec<HashSet<usize>>, Vec<HashSet<usize>>) =
                             aggregates.iter().enumerate().partition_map(|(pos, aggr)| {
                                 let mut ignores_nulls_on_columns = HashSet::new();
-                                if let repr::Datum::Null = aggr.func.identity_datum() {
+                                if let mz_repr::Datum::Null = aggr.func.identity_datum() {
                                     aggr.expr
                                         .non_null_requirements(&mut ignores_nulls_on_columns);
                                 }

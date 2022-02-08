@@ -14,8 +14,8 @@ use std::vec;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
-use ore::str::StrExt;
+use mz_lowertest::MzReflect;
+use mz_ore::str::StrExt;
 
 use crate::{Datum, ScalarType};
 

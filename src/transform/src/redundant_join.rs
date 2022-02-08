@@ -24,9 +24,9 @@
 
 use std::collections::HashMap;
 
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use itertools::Itertools;
-use ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
 
@@ -177,7 +177,7 @@ impl RedundantJoin {
                             }
                         }
 
-                        expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+                        mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
 
                         // Build a projection that leaves the binding expressions in the same
                         // position as the columns of the removed join input they are replacing.
@@ -199,7 +199,7 @@ impl RedundantJoin {
                         }
 
                         // Unset implementation, as irrevocably hosed by this transformation.
-                        *implementation = expr::JoinImplementation::Unimplemented;
+                        *implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         *relation = relation.take_dangerous().map(bindings).project(projection);
                         // The projection will gum up provenance reasoning anyhow, so don't work hard.

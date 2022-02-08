@@ -15,7 +15,7 @@ use std::{cmp, fmt};
 
 use arrow2::buffer::{Buffer, MutableBuffer};
 use arrow2::types::Index;
-use ore::cast::CastFrom;
+use mz_ore::cast::CastFrom;
 
 pub mod arrow;
 pub mod parquet;

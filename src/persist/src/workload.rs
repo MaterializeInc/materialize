@@ -14,7 +14,7 @@ use std::env::{self, VarError};
 use std::io::Write;
 use std::mem::size_of;
 
-use ore::cast::CastFrom;
+use mz_ore::cast::CastFrom;
 
 use crate::client::StreamWriteHandle;
 use crate::error::Error;

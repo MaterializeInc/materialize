@@ -14,12 +14,12 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use ore::str::separated;
-use repr::*;
+use mz_ore::str::separated;
+use mz_repr::*;
 
 use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 use crate::query_model::model::{QuantifierId, QuantifierSet};
-use expr::AggregateFunc;
+use mz_expr::AggregateFunc;
 
 /// Representation for scalar expressions within a query graph model.
 ///
@@ -85,7 +85,7 @@ pub(crate) struct ColumnReference {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct BaseColumn {
     pub position: usize,
-    pub column_type: repr::ColumnType,
+    pub column_type: mz_repr::ColumnType,
 }
 
 impl fmt::Display for BoxScalarExpr {

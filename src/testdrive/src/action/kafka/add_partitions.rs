@@ -15,9 +15,9 @@ use async_trait::async_trait;
 use rdkafka::admin::NewPartitions;
 use rdkafka::producer::Producer;
 
-use ore::collections::CollectionExt;
-use ore::retry::Retry;
-use ore::str::StrExt;
+use mz_ore::collections::CollectionExt;
+use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

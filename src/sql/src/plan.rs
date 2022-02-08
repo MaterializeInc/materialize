@@ -33,10 +33,10 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use ::expr::{GlobalId, MirRelationExpr, RowSetFinishing};
-use dataflow_types::{sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector};
-use ore::now::{self, NOW_ZERO};
-use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
+use mz_expr::{GlobalId, MirRelationExpr, RowSetFinishing};
+use mz_dataflow_types::{sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector};
+use mz_ore::now::{self, NOW_ZERO};
+use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::ast::{
     ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement,
@@ -283,15 +283,15 @@ pub struct SendDiffsPlan {
 #[derive(Debug)]
 pub struct InsertPlan {
     pub id: GlobalId,
-    pub values: ::expr::MirRelationExpr,
+    pub values: mz_expr::MirRelationExpr,
 }
 
 #[derive(Debug)]
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
-    pub selection: ::expr::MirRelationExpr,
+    pub selection: mz_expr::MirRelationExpr,
     pub finishing: RowSetFinishing,
-    pub assignments: HashMap<usize, ::expr::MirScalarExpr>,
+    pub assignments: HashMap<usize, mz_expr::MirScalarExpr>,
     pub kind: MutationKind,
 }
 
@@ -375,7 +375,7 @@ pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
     pub desc: RelationDesc,
-    pub expr: ::expr::MirRelationExpr,
+    pub expr: mz_expr::MirRelationExpr,
 }
 
 #[derive(Clone, Debug)]
@@ -390,7 +390,7 @@ pub struct Sink {
 #[derive(Clone, Debug)]
 pub struct View {
     pub create_sql: String,
-    pub expr: ::expr::MirRelationExpr,
+    pub expr: mz_expr::MirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
     pub depends_on: Vec<GlobalId>,
@@ -400,7 +400,7 @@ pub struct View {
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
-    pub keys: Vec<::expr::MirScalarExpr>,
+    pub keys: Vec<mz_expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
 }
 

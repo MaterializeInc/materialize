@@ -20,9 +20,9 @@ use prometheus::proto::MetricType;
 use tokio::time::{self, Duration};
 use tokio_stream::wrappers::IntervalStream;
 
-use ore::metrics::MetricsRegistry;
-use ore::now::{self, SYSTEM_TIME};
-use repr::{Datum, Diff, Row};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{self, SYSTEM_TIME};
+use mz_repr::{Datum, Diff, Row};
 
 use crate::catalog::builtin::{
     BuiltinTable, MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS,

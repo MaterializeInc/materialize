@@ -1,5 +1,5 @@
 [package]
-name = "mbta-to-mtrlz"
+name = "mz-mbta-to-mtrlz"
 description = "Converts MBTA streams to Kafka streams to use in Materialize"
 version = "0.0.0"
 edition = "2021"
@@ -13,9 +13,9 @@ clap = { version = "3.0.14", features = ["derive"] }
 futures = "0.3.21"
 json = "0.12.4"
 ordered-float = { version = "2.10.0", features = ["serde"] }
-ore = { path = "../../src/ore" }
+mz-ore = { path = "../../src/ore" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-repr = { path = "../../src/repr" }
+mz-repr = { path = "../../src/repr" }
 serde_json = "1.0.78"
-test-util = { path = "../../test/test-util" }
+mz-test-util = { path = "../../test/test-util" }
 tokio = "1.16.1"

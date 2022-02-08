@@ -11,8 +11,8 @@ use std::fmt;
 
 use backtrace::Backtrace;
 
-use ore::str::StrExt;
-use sql::catalog::CatalogError as SqlCatalogError;
+use mz_ore::str::StrExt;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 
 #[derive(Debug)]
 pub struct Error {
@@ -48,7 +48,7 @@ pub enum ErrorKind {
         depender_name: String,
     },
     Storage(rusqlite::Error),
-    Persistence(persist::error::Error),
+    Persistence(mz_persist::error::Error),
     AmbiguousRename {
         depender: String,
         dependee: String,
@@ -109,8 +109,8 @@ impl From<SqlCatalogError> for Error {
     }
 }
 
-impl From<persist::error::Error> for Error {
-    fn from(e: persist::error::Error) -> Error {
+impl From<mz_persist::error::Error> for Error {
+    fn from(e: mz_persist::error::Error) -> Error {
         Error::new(ErrorKind::Persistence(e))
     }
 }

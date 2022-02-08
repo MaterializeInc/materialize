@@ -14,8 +14,8 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio_postgres::NoTls;
 
-use ore::retry::Retry;
-use ore::task;
+use mz_ore::retry::Retry;
+use mz_ore::task;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

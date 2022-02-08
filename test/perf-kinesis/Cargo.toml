@@ -1,5 +1,5 @@
 [package]
-name = "perf-kinesis"
+name = "mz-perf-kinesis"
 description = "Tool to test Materialize's performance with AWS Kinesis."
 version = "0.0.0"
 edition = "2021"
@@ -17,8 +17,8 @@ futures = "0.3.21"
 futures-channel = "0.3.16"
 tracing = "0.1.29"
 mz-aws-util = { path = "../../src/aws-util", features = ["kinesis"] }
-ore = { path = "../../src/ore", features = ["task"] }
+mz-ore = { path = "../../src/ore", features = ["task"] }
 rand = "0.8.4"
-test-util = { path = "../test-util" }
+mz-test-util = { path = "../test-util" }
 tokio = "1.16.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

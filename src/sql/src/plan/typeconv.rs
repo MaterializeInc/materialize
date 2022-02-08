@@ -16,9 +16,9 @@ use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 
-use expr::func;
-use expr::VariadicFunc;
-use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
+use mz_expr::func;
+use mz_expr::VariadicFunc;
+use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
 use super::error::PlanError;
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
@@ -732,7 +732,7 @@ pub fn plan_hypothetical_cast(
     ccx: CastContext,
     from: &ScalarType,
     to: &ScalarType,
-) -> Option<::expr::MirScalarExpr> {
+) -> Option<mz_expr::MirScalarExpr> {
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
     let mut scx = ecx.qcx.scx.clone();

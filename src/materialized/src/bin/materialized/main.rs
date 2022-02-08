@@ -39,14 +39,14 @@ use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
 use clap::{AppSettings, Parser};
-use coord::{PersistConfig, PersistFileStorage, PersistStorage};
+use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use ore::cgroup::{detect_memory_limit, MemoryLimit};
-use ore::metric;
-use ore::metrics::ThirdPartyMetric;
-use ore::metrics::{raw::IntCounterVec, MetricsRegistry};
+use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::metric;
+use mz_ore::metrics::ThirdPartyMetric;
+use mz_ore::metrics::{raw::IntCounterVec, MetricsRegistry};
 use sysinfo::{ProcessorExt, SystemExt};
 
 use self::tracing::MetricsRecorderLayer;
@@ -60,7 +60,7 @@ type OptionalDuration = Option<Duration>;
 fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
     match s {
         "off" => Ok(None),
-        _ => Ok(Some(repr::util::parse_duration(s)?)),
+        _ => Ok(Some(mz_repr::util::parse_duration(s)?)),
     }
 }
 
@@ -168,7 +168,7 @@ struct Args {
     #[clap(long, hide = true)]
     debug_introspection: bool,
     /// Retain prometheus metrics for this amount of time.
-    #[clap(short, long, hide = true, parse(try_from_str = repr::util::parse_duration), default_value = "5min")]
+    #[clap(short, long, hide = true, parse(try_from_str = mz_repr::util::parse_duration), default_value = "5min")]
     retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
@@ -187,7 +187,7 @@ struct Args {
     #[clap(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
     /// Default frequency with which to advance timestamps
-    #[clap(long, env = "MZ_TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
+    #[clap(long, env = "MZ_TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
     /// Default frequency with which to scrape prometheus metrics
     #[clap(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hide = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
@@ -343,7 +343,7 @@ struct Args {
     #[clap(long, env = "MZ_TELEMETRY_DOMAIN", hide = true)]
     telemetry_domain: Option<String>,
     /// The interval at which to report telemetry data.
-    #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = repr::util::parse_duration), hide = true)]
+    #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
     telemetry_interval: Option<Duration>,
 
     #[cfg(feature = "tokio-console")]
@@ -431,7 +431,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_scraping_interval = args.metrics_scraping_interval;
     let logging = args
         .introspection_frequency
-        .map(|granularity| coord::LoggingConfig {
+        .map(|granularity| mz_coord::LoggingConfig {
             granularity,
             log_logging,
             retain_readings_for,

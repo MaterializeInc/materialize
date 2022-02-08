@@ -60,11 +60,11 @@
 //! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
-use expr::permutation_for_arrangement;
-use expr::AggregateExpr;
-use expr::AggregateFunc;
-use expr::MirScalarExpr;
-use ore::soft_assert_or_log;
+use mz_expr::permutation_for_arrangement;
+use mz_expr::AggregateExpr;
+use mz_expr::AggregateFunc;
+use mz_expr::MirScalarExpr;
+use mz_ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -438,7 +438,7 @@ impl ReducePlan {
             ReducePlan::DistinctNegated => AvailableCollections::new_raw(),
             _ => {
                 let key = (0..key_arity)
-                    .map(expr::MirScalarExpr::Column)
+                    .map(mz_expr::MirScalarExpr::Column)
                     .collect::<Vec<_>>();
                 let (permutation, thinning) = permutation_for_arrangement(&key, arity);
                 AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
@@ -451,9 +451,9 @@ impl ReducePlan {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
-    pub key_plan: expr::SafeMfpPlan,
+    pub key_plan: mz_expr::SafeMfpPlan,
     /// Extracts the columns used to feed the aggregations.
-    pub val_plan: expr::SafeMfpPlan,
+    pub val_plan: mz_expr::SafeMfpPlan,
 }
 
 impl KeyValPlan {
@@ -465,7 +465,7 @@ impl KeyValPlan {
         input_permutation_and_new_arity: Option<(HashMap<usize, usize>, usize)>,
     ) -> Self {
         // Form an operator for evaluating key expressions.
-        let mut key_mfp = expr::MapFilterProject::new(input_arity)
+        let mut key_mfp = mz_expr::MapFilterProject::new(input_arity)
             .map(group_key.iter().cloned())
             .project(input_arity..(input_arity + group_key.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity.clone() {
@@ -473,7 +473,7 @@ impl KeyValPlan {
         }
 
         // Form an operator for evaluating value expressions.
-        let mut val_mfp = expr::MapFilterProject::new(input_arity)
+        let mut val_mfp = mz_expr::MapFilterProject::new(input_arity)
             .map(aggregates.iter().map(|a| a.expr.clone()))
             .project(input_arity..(input_arity + aggregates.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity {
