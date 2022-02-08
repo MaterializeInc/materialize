@@ -10,6 +10,49 @@ To view the release checklist, create a new issue using the release template:
 
   <https://github.com/MaterializeInc/materialize/issues/new?template=release.md&title=release:+v0.#.#>
 
+## Release schedule
+
+See the [Versions: schedule](https://materialize.com/docs/versions/#schedule)
+section of our docs.
+
+The release process kicks off every week on Wednesday morning, where "morning"
+is determined by the timezone of that week's release manager. The release
+commit, however, is not dependent on when the release process starts: it is
+always chosen to be the *last* commit on `main` at 12:01am EST (00:01 EST) on
+Wednesday. If there were outstanding release blockers at 12:01am EST, either the
+fixes need to be backported on top of that commit or the release needs to be
+skipped.
+
+This predictability ensures that teams that need to carefully manage migrations
+of on-disk state know at the moment that they press "merge" on a PR whether that
+PR is slated for inclusion in the next release or not. These migrations often
+make rollbacks impossible, so batching PRs that prevent rollbacks in the same
+release decreases the operational burden on the cloud team by decreasing the
+number of releases in which rollbacks are impossible.
+
+The release manager has license to skip the release if the fixes for release
+blockers are even remotely difficult to backport. One of the reasons we release
+every week is to decrease the cost of skipping a release. It's much easier to
+decide to skip a release when the next release is a week away, rather than a
+month away.
+
+Why Wednesday mornings?
+
+  * Wednesday is never disrupted by a long weekend.
+  * Any breakage that occurs over the weekend has two working days to settle.
+    If Monday is a holiday, there is still one working day for breakage to
+    settle.
+  * The release manager has two working days to ship the release. The release
+    bleeds into Skunkworks Friday only if something goes wrong.
+  * The somewhat-unavoidable rush to squeeze features into a release occurs on
+    Tuesday afternoon rather than Thursday or Friday afternoon.
+  * 05:00 UTC is before working hours begin in Europe and the US, so release
+    managers can start the release Wednesday "morning" in whatever timezone
+    they're in.
+
+**Note:** Whether this is the correct policy is undergoing debate. It is,
+however, the policy that is currently in effect.
+
 ## Basic git workflow
 
 The Materialize release process is based on an "always release main" philosophy, while
