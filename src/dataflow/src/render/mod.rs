@@ -160,6 +160,9 @@ pub struct ComputeState {
     /// The entries are pairs of sink identifier (to identify the tail instance)
     /// and the response itself.
     pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+    /// Frontier of sink writes (all subsequent writes will be at times at or
+    /// equal to this frontier)
+    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
 }
 
 /// Worker-local state related to the ingress or egress of collections of data.
@@ -183,9 +186,6 @@ pub struct StorageState {
     pub persisted_sources: PersistedSourceManager,
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
-    /// Frontier of sink writes (all subsequent writes will be at times at or
-    /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
 }
@@ -307,7 +307,6 @@ pub fn build_dataflow<A: Allocate>(
             for (sink_id, imports, sink) in sinks {
                 context.export_sink(
                     compute_state,
-                    storage_state,
                     &mut tokens,
                     imports,
                     sink_id,

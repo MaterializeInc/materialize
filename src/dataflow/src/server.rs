@@ -139,6 +139,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 traces: TraceManager::new(trace_metrics, worker_idx),
                 dataflow_tokens: HashMap::new(),
                 tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+                sink_write_frontiers: HashMap::new(),
             },
             storage_state: StorageState {
                 local_inputs: HashMap::new(),
@@ -146,7 +147,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 persisted_sources: PersistedSourceManager::new(),
-                sink_write_frontiers: HashMap::new(),
                 metrics,
                 persist: config.persister.clone(),
             },
@@ -552,7 +552,7 @@ where
             }
         }
 
-        for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
+        for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
                 .reported_frontiers
@@ -686,7 +686,7 @@ where
             ComputeCommand::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
-                    self.storage_state.sink_write_frontiers.remove(&id);
+                    self.compute_state.sink_write_frontiers.remove(&id);
                     self.compute_state.dataflow_tokens.remove(&id);
                 }
             }
