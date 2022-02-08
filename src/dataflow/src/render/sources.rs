@@ -69,7 +69,7 @@ pub(crate) fn import_table<G>(
     persisted_name: Option<String>,
 ) -> (
     LocalInput,
-    crate::render::CollectionBundle<G, Row, Timestamp>,
+    (Collection<G, Row>, Collection<G, DataflowError>),
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -124,10 +124,7 @@ where
         })
         .as_collection();
 
-    let collection_bundle =
-        crate::render::CollectionBundle::from_collections(ok_collection, err_collection);
-
-    (local_input, collection_bundle)
+    (local_input, (ok_collection, err_collection))
 }
 
 /// Constructs a `CollectionBundle` and tokens from source arguments.
@@ -150,7 +147,7 @@ pub(crate) fn import_source<G>(
     now: NowFn,
     base_metrics: &SourceBaseMetrics,
 ) -> (
-    crate::render::CollectionBundle<G, Row, Timestamp>,
+    (Collection<G, Row>, Collection<G, DataflowError>),
     (
         Rc<Option<crate::source::SourceToken>>,
         Vec<Rc<dyn std::any::Any>>,
@@ -180,12 +177,12 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
-            let (local_input, collection_bundle) =
+            let (local_input, (ok, err)) =
                 import_table(as_of_frontier, storage_state, scope, persisted_name);
             storage_state.local_inputs.insert(src_id, local_input);
 
             // TODO(mcsherry): Local tables are a special non-source we should relocate.
-            (collection_bundle, (Rc::new(None), Vec::new()))
+            ((ok, err), (Rc::new(None), Vec::new()))
         }
 
         SourceConnector::External {
@@ -632,10 +629,6 @@ where
             use differential_dataflow::operators::consolidate::ConsolidateStream;
             collection = collection.consolidate_stream();
 
-            // Introduce the stream by name, as an unarranged collection.
-            let collection_bundle =
-                crate::render::CollectionBundle::from_collections(collection, err_collection);
-
             let source_token = Rc::new(capability);
 
             // We also need to keep track of this mapping globally to activate sources
@@ -647,7 +640,10 @@ where
                 .push(Rc::downgrade(&source_token));
 
             // Return the source token for capability manipulation, and any additional tokens.
-            (collection_bundle, (source_token, additional_tokens))
+            (
+                (collection, err_collection),
+                (source_token, additional_tokens),
+            )
         }
     }
 }
