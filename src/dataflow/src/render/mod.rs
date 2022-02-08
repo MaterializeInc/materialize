@@ -128,7 +128,7 @@ use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::event::ActivatedEventLink;
+use crate::event::ActivatedEventPusher;
 use crate::metrics::Metrics;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
@@ -215,9 +215,10 @@ pub struct RelevantTokens {
 /// Information about each source that must be communicated between storage and compute layers.
 pub struct SourceBoundary {
     /// Captured `row` updates representing a differential collection.
-    pub ok: ActivatedEventLink<Rc<EventLink<repr::Timestamp, (Row, repr::Timestamp, repr::Diff)>>>,
+    pub ok:
+        ActivatedEventPusher<Rc<EventLink<repr::Timestamp, (Row, repr::Timestamp, repr::Diff)>>>,
     /// Captured error updates representing a differential collection.
-    pub err: ActivatedEventLink<
+    pub err: ActivatedEventPusher<
         Rc<EventLink<repr::Timestamp, (DataflowError, repr::Timestamp, repr::Diff)>>,
     >,
     /// A token that should be dropped to terminate the source.
@@ -284,15 +285,15 @@ pub fn build_storage_dataflow<A: Allocate>(
                 let err_activator = RcActivator::new(format!("{debug_name}-err"), 1);
 
                 let ok_handle =
-                    ActivatedEventLink::new(Rc::new(EventLink::new()), ok_activator.clone());
+                    ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator.clone());
                 let err_handle =
-                    ActivatedEventLink::new(Rc::new(EventLink::new()), err_activator.clone());
+                    ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator.clone());
 
                 results.insert(
                     *src_id,
                     SourceBoundary {
-                        ok: ActivatedEventLink::<_>::clone(&ok_handle),
-                        err: ActivatedEventLink::<_>::clone(&err_handle),
+                        ok: ActivatedEventPusher::<_>::clone(&ok_handle),
+                        err: ActivatedEventPusher::<_>::clone(&err_handle),
                         token: source_token,
                         additional_tokens,
                     },
@@ -334,20 +335,20 @@ pub fn build_compute_dataflow<A: Allocate>(
             // Import declared sources into the rendering context.
             for (source_id, source) in sources.into_iter() {
                 // Associate collection bundle with the source identifier.
-                let ok = Some(source.ok.clone())
+                let ok = Some(source.ok.inner)
                     .mz_replay(
                         region,
                         &format!("{name}-{source_id}"),
                         Duration::MAX,
-                        source.ok.activator().clone(),
+                        source.ok.activator,
                     )
                     .as_collection();
-                let err = Some(source.err)
+                let err = Some(source.err.inner)
                     .mz_replay(
                         region,
                         &format!("{name}-{source_id}-err"),
                         Duration::MAX,
-                        source.ok.activator().clone(),
+                        source.err.activator,
                     )
                     .as_collection();
                 context.insert_id(

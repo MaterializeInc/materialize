@@ -9,42 +9,30 @@
 
 //! Traits and types for describing captured timely dataflow streams.
 //!
-//! This is roughly based on [timely::dataflow::operators::event].
+//! This is roughly based on [timely::dataflow::operators::capture::event].
 
 use crate::activator::RcActivator;
-use std::borrow::Borrow;
-use timely::dataflow::operators::capture::event::EventIteratorCore;
 use timely::dataflow::operators::capture::{EventCore, EventPusherCore};
 
-/// An event link wrapper that activates targets on push.
+/// An event pusher wrapper that activates targets on push.
 #[derive(Clone, Debug)]
-pub struct ActivatedEventLink<E> {
-    inner: E,
-    activators: RcActivator,
+pub struct ActivatedEventPusher<E> {
+    pub inner: E,
+    pub activator: RcActivator,
 }
 
-impl<E> ActivatedEventLink<E> {
+impl<E> ActivatedEventPusher<E> {
     /// Create a new activated event link wrapper.
     ///
     /// * inner: A wrapped event pusher/iterator.
-    pub fn new(inner: E, activators: RcActivator) -> Self {
-        Self { inner, activators }
-    }
-
-    pub fn activator(&self) -> &RcActivator {
-        self.activators.borrow()
+    pub fn new(inner: E, activator: RcActivator) -> Self {
+        Self { inner, activator }
     }
 }
 
-impl<T, D, E: EventPusherCore<T, D>> EventPusherCore<T, D> for ActivatedEventLink<E> {
+impl<T, D, E: EventPusherCore<T, D>> EventPusherCore<T, D> for ActivatedEventPusher<E> {
     fn push(&mut self, event: EventCore<T, D>) {
         self.inner.push(event);
-        self.activators.activate();
-    }
-}
-
-impl<T, D, E: EventIteratorCore<T, D>> EventIteratorCore<T, D> for ActivatedEventLink<E> {
-    fn next(&mut self) -> Option<&EventCore<T, D>> {
-        self.inner.next()
+        self.activator.activate();
     }
 }
