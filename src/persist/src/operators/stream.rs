@@ -14,6 +14,7 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Weak;
 use std::sync::Arc;
 use std::task::Context;
 
@@ -185,6 +186,12 @@ pub trait Seal<G: Scope<Timestamp = u64>, D: TimelyData> {
     /// combined input frontier advances advances. The combined input frontier is derived by
     /// combining the frontier of the input with the optional [`ProbeHandles`](ProbeHandle).
     ///
+    /// This operator will stop reacting to changes in the input frontier when the given `running`
+    /// token is dropped. This should be used to signal a shutdown of the dataflow that we are
+    /// contained in. After shutdown, any changes in the input frontier might be as the result of
+    /// upstream operators shutting down. They don't necessarily signal real advancement in the
+    /// data that is potentially being persisted upstream.
+    ///
     /// This does not wait for the seal to succeed before passing through the data. We do, however,
     /// wait for the seal to be successful before allowing the frontier to advance. In other words,
     /// this operator is holding on to capabilities as long as seals corresponding to their
@@ -192,6 +199,7 @@ pub trait Seal<G: Scope<Timestamp = u64>, D: TimelyData> {
     fn seal(
         &self,
         name: &str,
+        running: Weak<()>,
         additional_frontiers: Vec<ProbeHandle<u64>>,
         write: MultiWriteHandle,
     ) -> Stream<G, (D, u64, i64)>;
@@ -205,6 +213,7 @@ where
     fn seal(
         &self,
         name: &str,
+        running: Weak<()>,
         additional_frontiers: Vec<ProbeHandle<u64>>,
         write: MultiWriteHandle,
     ) -> Stream<G, (D, u64, i64)> {
@@ -250,6 +259,16 @@ where
             };
 
             move |frontiers| {
+                let running = running.upgrade();
+
+                if running.is_none() {
+                    // Release any capabilities we're holding and clean out the pending futures.
+                    cap_set.downgrade(Antichain::<u64>::new());
+                    pending_futures.clear();
+
+                    return false;
+                }
+
                 let mut data_output = data_output.activate();
 
                 // Pass through all data.
@@ -512,6 +531,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use futures_executor::block_on;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::input::Handle;
@@ -611,11 +632,16 @@ mod tests {
         let p = registry.runtime_no_reentrance()?;
 
         timely::execute_directly(move |worker| {
+            let running = Rc::new(());
+
             let (mut input, probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("1");
                 let write = MultiWriteHandle::new(&write);
                 let mut input = Handle::new();
-                let ok_stream = input.to_stream(scope).seal("test", vec![], write);
+                let ok_stream =
+                    input
+                        .to_stream(scope)
+                        .seal("test", Rc::downgrade(&running), vec![], write);
                 let probe = ok_stream.probe();
                 (input, probe)
             });
@@ -633,6 +659,59 @@ mod tests {
         Ok(())
     }
 
+    // Verify, that we only advance the seal frontier as long as the token we're given is "live".
+    // Once the token is taken away (which signals shutdown of the dataflow that we're contained
+    // in), we should no longer react to the input frontier changing by advancing the persist seal
+    // frontier.
+    #[test]
+    fn seal_obeys_running_token() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+
+        let p = registry.runtime_no_reentrance()?;
+
+        timely::execute_directly(move |worker| {
+            let running = Rc::new(());
+
+            let (mut input, probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("1");
+                let write = MultiWriteHandle::new(&write);
+                let mut input = Handle::new();
+                let ok_stream =
+                    input
+                        .to_stream(scope)
+                        .seal("test", Rc::downgrade(&running), vec![], write);
+                let probe = ok_stream.probe();
+                (input, probe)
+            });
+
+            input.send((((), ()), 1, 1));
+
+            input.advance_to(2);
+            while probe.less_than(&2) {
+                worker.step();
+            }
+
+            // Drop the token.
+            drop(running);
+
+            input.advance_to(3);
+            while probe.less_than(&3) {
+                worker.step();
+            }
+
+            input.advance_to(4);
+            while probe.less_than(&4) {
+                worker.step();
+            }
+        });
+
+        let p = registry.runtime_no_reentrance()?;
+        let (_write, read) = p.create_or_load::<(), ()>("1");
+        assert_eq!(read.snapshot()?.get_seal(), Antichain::from_elem(2));
+
+        Ok(())
+    }
+
     #[test]
     fn seal_frontier_advance_only_on_success() -> Result<(), Error> {
         mz_ore::test::init_logging();
@@ -641,13 +720,15 @@ mod tests {
         let p = registry.runtime_unreliable(unreliable.clone())?;
 
         timely::execute_directly(move |worker| {
+            let running = Rc::new(());
+
             let (mut input, seal_probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("primary");
                 let write = MultiWriteHandle::new(&write);
                 let mut input = Handle::new();
                 let stream = input.to_stream(scope);
 
-                let sealed_stream = stream.seal("test", vec![], write);
+                let sealed_stream = stream.seal("test", Rc::downgrade(&running), vec![], write);
 
                 let seal_probe = sealed_stream.probe();
 
@@ -694,6 +775,8 @@ mod tests {
         let p = registry.runtime_unreliable(unreliable.clone())?;
 
         timely::execute_directly(move |worker| {
+            let running = Rc::new(());
+
             let (mut input, mut placeholder, probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("primary");
                 let write = MultiWriteHandle::new(&write);
@@ -704,7 +787,7 @@ mod tests {
                 let mut placeholder = Handle::new();
                 let placeholder_stream = placeholder.to_stream(scope);
 
-                let sealed_stream = stream.seal("test", vec![], write);
+                let sealed_stream = stream.seal("test", Rc::downgrade(&running), vec![], write);
 
                 let stream = placeholder_stream.concat(&sealed_stream);
                 let probe = stream.probe();
@@ -816,6 +899,8 @@ mod tests {
 
         let mut p_clone = p.clone();
         timely::execute_directly(move |worker| {
+            let running = Rc::new(());
+
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
                 let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
                 let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
@@ -829,8 +914,12 @@ mod tests {
                     .add_stream(&condition_write)
                     .expect("client known from same runtime");
 
-                let sealed_stream =
-                    primary_stream.seal("test", vec![condition_stream.probe()], multi_write);
+                let sealed_stream = primary_stream.seal(
+                    "test",
+                    Rc::downgrade(&running),
+                    vec![condition_stream.probe()],
+                    multi_write,
+                );
 
                 let seal_probe = sealed_stream.probe();
 
@@ -948,6 +1037,8 @@ mod tests {
         let p = registry.runtime_no_reentrance()?;
 
         let guards = timely::execute(Config::process(3), move |worker| {
+            let running = Rc::new(());
+
             let (mut input, seal_probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("primary");
                 let mut input: Handle<u64, ((), u64, i64)> = Handle::new();
@@ -955,7 +1046,8 @@ mod tests {
 
                 let multi_write = MultiWriteHandle::new(&write);
 
-                let sealed_stream = stream.seal("test", vec![], multi_write);
+                let sealed_stream =
+                    stream.seal("test", Rc::downgrade(&running), vec![], multi_write);
 
                 let seal_probe = sealed_stream.probe();
 

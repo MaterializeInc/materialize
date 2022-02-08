@@ -849,7 +849,14 @@ where
         .add_stream(&bindings_write)
         .expect("handles known to be from same persist runtime");
 
-    let sealed_stream = stream.seal(&source_name, vec![bindings_stream.probe()], seal_handle);
+    let running = Rc::new(());
+    let sealed_stream = stream.seal(
+        &source_name,
+        Rc::downgrade(&running),
+        vec![bindings_stream.probe()],
+        seal_handle,
+    );
+    needed_tokens.push(running);
 
     // The compaction since of persisted sources is upper-bounded by two frontiers: a) the
     // compaction that the coordinator allows, and b) the seal frontier of the involved persistent

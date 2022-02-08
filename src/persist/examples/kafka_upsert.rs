@@ -12,6 +12,7 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 use std::{cmp, env, process};
 
@@ -70,10 +71,13 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
     let worker_guards = timely::execute_from_args(args.into_iter(), move |worker| {
         let persist = persist.clone();
 
+        let running = Rc::new(());
+
         worker.dataflow(|scope| {
             let (ok_stream, err_stream) = construct_persistent_upsert_source::<_, KafkaSource>(
                 scope,
                 persist,
+                running,
                 "persistent_kafka_1",
             )
             .unwrap_or_else(|err| {
@@ -97,6 +101,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
 fn construct_persistent_upsert_source<G, S>(
     scope: &mut G,
     persist: RuntimeClient,
+    running: Rc<()>,
     name_base: &str,
 ) -> Result<
     (
@@ -161,6 +166,7 @@ where
 
     let upsert_oks = upsert_oks.seal(
         "timestamp_bindings|upsert_state",
+        Rc::downgrade(&running),
         vec![bindings_persist_oks.probe()],
         seal_handle,
     );
