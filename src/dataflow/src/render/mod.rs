@@ -108,9 +108,13 @@ use std::rc::Weak;
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
+use timely::dataflow::operators::capture::EventLink;
+use timely::dataflow::operators::capture::Replay;
 use timely::dataflow::operators::to_stream::ToStream;
+use timely::dataflow::operators::Capture;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
@@ -205,19 +209,26 @@ pub struct RelevantTokens {
     pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
 }
 
-/// Build a dataflow from a description.
-pub fn build_dataflow<A: Allocate>(
+pub struct SourceBoundary {
+    pub id: GlobalId,
+    pub ok: Rc<EventLink<repr::Timestamp, (Row, repr::Timestamp, repr::Diff)>>,
+    pub err: Rc<EventLink<repr::Timestamp, (DataflowError, repr::Timestamp, repr::Diff)>>,
+    pub token: Rc<Option<crate::source::SourceToken>>,
+    pub additional_tokens: Vec<Rc<dyn std::any::Any>>,
+}
+
+pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
-    compute_state: &mut ComputeState,
     storage_state: &mut StorageState,
-    dataflow: DataflowDescription<plan::Plan>,
+    dataflow: &DataflowDescription<plan::Plan>,
     now: NowFn,
     source_metrics: &SourceBaseMetrics,
-    sink_metrics: &SinkBaseMetrics,
-) {
+) -> Vec<SourceBoundary> {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let materialized_logging = timely_worker.log_register().get("materialized");
+
+    let mut results = Vec::with_capacity(dataflow.source_imports.len());
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -225,8 +236,12 @@ pub fn build_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
-            let mut tokens = RelevantTokens::default();
+            // let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
+            // let mut tokens = RelevantTokens::default();
+
+            let as_of = dataflow.as_of.clone().unwrap();
+            let dataflow_id = scope.addr().into_element();
+            let debug_name = format!("{}-sources", dataflow.debug_name);
 
             assert!(
                 !dataflow
@@ -241,11 +256,11 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (src_id, source) in &dataflow.source_imports {
-                let (collection_bundle, (source_token, additional_tokens)) =
+                let ((ok, err), (source_token, additional_tokens)) =
                     crate::render::sources::import_source(
-                        &context.debug_name,
-                        context.dataflow_id,
-                        &context.as_of_frontier,
+                        &debug_name,
+                        dataflow_id,
+                        &as_of,
                         source.clone(),
                         storage_state,
                         region,
@@ -255,17 +270,65 @@ pub fn build_dataflow<A: Allocate>(
                         source_metrics,
                     );
 
+                let ok_handle = Rc::new(EventLink::new());
+                let err_handle = Rc::new(EventLink::new());
+
+                results.push(SourceBoundary {
+                    id: *src_id,
+                    ok: Rc::<_>::clone(&ok_handle),
+                    err: Rc::<_>::clone(&err_handle),
+                    token: source_token,
+                    additional_tokens,
+                });
+
+                ok.inner.capture_into(ok_handle);
+                err.inner.capture_into(err_handle);
+            }
+        })
+    });
+
+    results
+}
+
+/// Build a dataflow from a description.
+pub fn build_compute_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    compute_state: &mut ComputeState,
+    sources: Vec<SourceBoundary>,
+    dataflow: DataflowDescription<plan::Plan>,
+    sink_metrics: &SinkBaseMetrics,
+) {
+    let worker_logging = timely_worker.log_register().get("timely");
+    let name = format!("Dataflow: {}", &dataflow.debug_name);
+    // let materialized_logging = timely_worker.log_register().get("materialized");
+
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // The scope.clone() occurs to allow import in the region.
+        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // so that other similar uses (e.g. with iterative scopes) do not require weird
+        // alternate type signatures.
+        scope.clone().region_named(&name, |region| {
+            let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
+            let mut tokens = RelevantTokens::default();
+
+            // Import declared sources into the rendering context.
+            for source in sources.into_iter() {
                 // Associate collection bundle with the source identifier.
-                context.insert_id(Id::Global(*src_id), collection_bundle);
+                let ok = Some(source.ok).replay_into(region).as_collection();
+                let err = Some(source.err).replay_into(region).as_collection();
+                context.insert_id(
+                    Id::Global(source.id),
+                    CollectionBundle::from_collections(ok, err),
+                );
 
                 // Associate returned tokens with the source identifier.
-                let prior = tokens.source_tokens.insert(*src_id, source_token);
+                let prior = tokens.source_tokens.insert(source.id, source.token);
                 assert!(prior.is_none());
                 tokens
                     .additional_tokens
-                    .entry(*src_id)
+                    .entry(source.id)
                     .or_insert_with(Vec::new)
-                    .extend(additional_tokens);
+                    .extend(source.additional_tokens);
             }
 
             // Import declared indexes into the rendering context.
