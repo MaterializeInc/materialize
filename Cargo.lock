@@ -3508,6 +3508,7 @@ dependencies = [
 name = "mz-pgrepr"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "byteorder",
  "bytes",
  "chrono",

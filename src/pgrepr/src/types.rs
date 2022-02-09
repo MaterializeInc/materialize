@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use crate::oid;
+use anyhow::bail;
 use lazy_static::lazy_static;
-use mz_repr::ScalarType;
+use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use repr::ScalarType;
 
 /// The type of a [`Value`](crate::Value).
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -44,7 +46,7 @@ pub enum Type {
         value_type: Box<Type>,
     },
     /// An arbitrary precision number.
-    Numeric,
+    Numeric { max_scale: u16, max_precision: u16 },
     /// An object identifier.
     Oid,
     /// A sequence of heterogeneous values.
@@ -52,9 +54,9 @@ pub enum Type {
     /// A variable-length string.
     Text,
     /// A fixed-length string.
-    Char,
+    Char { length: Option<usize> },
     /// A variable-length string with an optional limit.
-    VarChar,
+    VarChar { max_length: Option<usize> },
     /// A time of day without a day.
     Time,
     /// A date and time, without a timezone.
@@ -109,11 +111,16 @@ impl Type {
             postgres_types::Type::INT8 => Some(Type::Int8),
             postgres_types::Type::INTERVAL => Some(Type::Interval),
             postgres_types::Type::JSONB => Some(Type::Jsonb),
-            postgres_types::Type::NUMERIC => Some(Type::Numeric),
+            postgres_types::Type::NUMERIC => Some(Type::Numeric {
+                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+                max_scale: 0 as u16,
+            }),
             postgres_types::Type::OID => Some(Type::Oid),
             postgres_types::Type::TEXT => Some(Type::Text),
-            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => Some(Type::Char),
-            postgres_types::Type::VARCHAR => Some(Type::VarChar),
+            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => {
+                Some(Type::Char { length: None })
+            }
+            postgres_types::Type::VARCHAR => Some(Type::VarChar { max_length: None }),
             postgres_types::Type::TIME => Some(Type::Time),
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
             postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
@@ -123,7 +130,9 @@ impl Type {
             postgres_types::Type::REGTYPE => Some(Type::RegType),
             postgres_types::Type::BOOL_ARRAY => Some(Type::Array(Box::new(Type::Bool))),
             postgres_types::Type::BYTEA_ARRAY => Some(Type::Array(Box::new(Type::Bytea))),
-            postgres_types::Type::BPCHAR_ARRAY => Some(Type::Array(Box::new(Type::Char))),
+            postgres_types::Type::BPCHAR_ARRAY => {
+                Some(Type::Array(Box::new(Type::Char { length: None })))
+            }
             postgres_types::Type::DATE_ARRAY => Some(Type::Array(Box::new(Type::Date))),
             postgres_types::Type::FLOAT4_ARRAY => Some(Type::Array(Box::new(Type::Float4))),
             postgres_types::Type::FLOAT8_ARRAY => Some(Type::Array(Box::new(Type::Float8))),
@@ -132,7 +141,10 @@ impl Type {
             postgres_types::Type::INT8_ARRAY => Some(Type::Array(Box::new(Type::Int8))),
             postgres_types::Type::INTERVAL_ARRAY => Some(Type::Array(Box::new(Type::Interval))),
             postgres_types::Type::JSONB_ARRAY => Some(Type::Array(Box::new(Type::Jsonb))),
-            postgres_types::Type::NUMERIC_ARRAY => Some(Type::Array(Box::new(Type::Numeric))),
+            postgres_types::Type::NUMERIC_ARRAY => Some(Type::Array(Box::new(Type::Numeric {
+                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+                max_scale: 0 as u16,
+            }))),
             postgres_types::Type::OID_ARRAY => Some(Type::Array(Box::new(Type::Oid))),
             postgres_types::Type::TEXT_ARRAY => Some(Type::Array(Box::new(Type::Text))),
             postgres_types::Type::TIME_ARRAY => Some(Type::Array(Box::new(Type::Time))),
@@ -141,7 +153,9 @@ impl Type {
                 Some(Type::Array(Box::new(Type::TimestampTz)))
             }
             postgres_types::Type::UUID_ARRAY => Some(Type::Array(Box::new(Type::Uuid))),
-            postgres_types::Type::VARCHAR_ARRAY => Some(Type::Array(Box::new(Type::VarChar))),
+            postgres_types::Type::VARCHAR_ARRAY => {
+                Some(Type::Array(Box::new(Type::VarChar { max_length: None })))
+            }
             postgres_types::Type::REGCLASS_ARRAY => Some(Type::Array(Box::new(Type::RegClass))),
             postgres_types::Type::REGPROC_ARRAY => Some(Type::Array(Box::new(Type::RegProc))),
             postgres_types::Type::REGTYPE_ARRAY => Some(Type::Array(Box::new(Type::RegType))),
@@ -149,6 +163,79 @@ impl Type {
         }
     }
 
+    pub fn from_oids(oid: u32, typ_mod: u64) -> Result<Type, anyhow::Error> {
+        let ty = match postgres_types::Type::from_oid(oid) {
+            Some(t) => t,
+            None => bail!("unknown OID: {oid}"),
+        };
+        Ok(match ty {
+            postgres_types::Type::BOOL => Type::Bool,
+            postgres_types::Type::BYTEA => Type::Bytea,
+            postgres_types::Type::DATE => Type::Date,
+            postgres_types::Type::FLOAT4 => Type::Float4,
+            postgres_types::Type::FLOAT8 => Type::Float8,
+            postgres_types::Type::INT2 => Type::Int2,
+            postgres_types::Type::INT4 => Type::Int4,
+            postgres_types::Type::INT8 => Type::Int8,
+            postgres_types::Type::INTERVAL => Type::Interval,
+            postgres_types::Type::JSONB => Type::Jsonb,
+            postgres_types::Type::NUMERIC => Type::Numeric {
+                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+                max_scale: match repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
+                    Some(s) => s as u16,
+                    None => 0 as u16,
+                },
+            },
+            postgres_types::Type::OID => Type::Oid,
+            postgres_types::Type::TEXT => Type::Text,
+            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => Type::Char {
+                length: repr::adt::char::extract_typ_mod(&[typ_mod])?,
+            },
+            postgres_types::Type::VARCHAR => Type::VarChar {
+                max_length: repr::adt::varchar::extract_typ_mod(&[typ_mod])?,
+            },
+            postgres_types::Type::TIME => Type::Time,
+            postgres_types::Type::TIMESTAMP => Type::Timestamp,
+            postgres_types::Type::TIMESTAMPTZ => Type::TimestampTz,
+            postgres_types::Type::UUID => Type::Uuid,
+            postgres_types::Type::REGCLASS => Type::RegClass,
+            postgres_types::Type::REGPROC => Type::RegProc,
+            postgres_types::Type::REGTYPE => Type::RegType,
+            postgres_types::Type::BOOL_ARRAY => Type::Array(Box::new(Type::Bool)),
+            postgres_types::Type::BYTEA_ARRAY => Type::Array(Box::new(Type::Bytea)),
+            postgres_types::Type::BPCHAR_ARRAY => Type::Array(Box::new(Type::Char {
+                length: repr::adt::char::extract_typ_mod(&[typ_mod])?,
+            })),
+            postgres_types::Type::DATE_ARRAY => Type::Array(Box::new(Type::Date)),
+            postgres_types::Type::FLOAT4_ARRAY => Type::Array(Box::new(Type::Float4)),
+            postgres_types::Type::FLOAT8_ARRAY => Type::Array(Box::new(Type::Float8)),
+            postgres_types::Type::INT2_ARRAY => Type::Array(Box::new(Type::Int2)),
+            postgres_types::Type::INT4_ARRAY => Type::Array(Box::new(Type::Int4)),
+            postgres_types::Type::INT8_ARRAY => Type::Array(Box::new(Type::Int8)),
+            postgres_types::Type::INTERVAL_ARRAY => Type::Array(Box::new(Type::Interval)),
+            postgres_types::Type::JSONB_ARRAY => Type::Array(Box::new(Type::Jsonb)),
+            postgres_types::Type::NUMERIC_ARRAY => Type::Array(Box::new(Type::Numeric {
+                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+                max_scale: match repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
+                    Some(s) => s as u16,
+                    None => 0 as u16,
+                },
+            })),
+            postgres_types::Type::OID_ARRAY => Type::Array(Box::new(Type::Oid)),
+            postgres_types::Type::TEXT_ARRAY => Type::Array(Box::new(Type::Text)),
+            postgres_types::Type::TIME_ARRAY => Type::Array(Box::new(Type::Time)),
+            postgres_types::Type::TIMESTAMP_ARRAY => Type::Array(Box::new(Type::Timestamp)),
+            postgres_types::Type::TIMESTAMPTZ_ARRAY => Type::Array(Box::new(Type::TimestampTz)),
+            postgres_types::Type::UUID_ARRAY => Type::Array(Box::new(Type::Uuid)),
+            postgres_types::Type::VARCHAR_ARRAY => Type::Array(Box::new(Type::VarChar {
+                max_length: repr::adt::varchar::extract_typ_mod(&[typ_mod])?,
+            })),
+            postgres_types::Type::REGCLASS_ARRAY => Type::Array(Box::new(Type::RegClass)),
+            postgres_types::Type::REGPROC_ARRAY => Type::Array(Box::new(Type::RegProc)),
+            postgres_types::Type::REGTYPE_ARRAY => Type::Array(Box::new(Type::RegType)),
+            _ => bail!("Unknown OID: {oid}"),
+        })
+    }
     pub(crate) fn inner(&self) -> &'static postgres_types::Type {
         match self {
             Type::Array(t) => match &**t {
@@ -165,12 +252,12 @@ impl Type {
                 Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
                 Type::List(_) => unreachable!(),
                 Type::Map { .. } => unreachable!(),
-                Type::Numeric => &postgres_types::Type::NUMERIC_ARRAY,
+                Type::Numeric { .. } => &postgres_types::Type::NUMERIC_ARRAY,
                 Type::Oid => &postgres_types::Type::OID_ARRAY,
                 Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
                 Type::Text => &postgres_types::Type::TEXT_ARRAY,
-                Type::Char => &postgres_types::Type::BPCHAR_ARRAY,
-                Type::VarChar => &postgres_types::Type::VARCHAR_ARRAY,
+                Type::Char { .. } => &postgres_types::Type::BPCHAR_ARRAY,
+                Type::VarChar { .. } => &postgres_types::Type::VARCHAR_ARRAY,
                 Type::Time => &postgres_types::Type::TIME_ARRAY,
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
@@ -191,12 +278,12 @@ impl Type {
             Type::Jsonb => &postgres_types::Type::JSONB,
             Type::List(_) => &LIST,
             Type::Map { .. } => &MAP,
-            Type::Numeric => &postgres_types::Type::NUMERIC,
+            Type::Numeric { .. } => &postgres_types::Type::NUMERIC,
             Type::Oid => &postgres_types::Type::OID,
             Type::Record(_) => &postgres_types::Type::RECORD,
             Type::Text => &postgres_types::Type::TEXT,
-            Type::Char => &postgres_types::Type::BPCHAR,
-            Type::VarChar => &postgres_types::Type::VARCHAR,
+            Type::Char { .. } => &postgres_types::Type::BPCHAR,
+            Type::VarChar { .. } => &postgres_types::Type::VARCHAR,
             Type::Time => &postgres_types::Type::TIME,
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
@@ -272,12 +359,12 @@ impl Type {
             Type::Jsonb => -1,
             Type::List(_) => -1,
             Type::Map { .. } => -1,
-            Type::Numeric => -1,
+            Type::Numeric { .. } => -1,
             Type::Oid => 4,
             Type::Record(_) => -1,
             Type::Text => -1,
-            Type::Char => -1,
-            Type::VarChar => -1,
+            Type::Char { .. } => -1,
+            Type::VarChar { .. } => -1,
             Type::Time => 4,
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
@@ -314,7 +401,7 @@ impl Type {
                 value_type: Box::new(value_type.to_scalar_type_lossy()),
                 custom_oid: None,
             },
-            Type::Numeric => ScalarType::Numeric { scale: None },
+            Type::Numeric { .. } => ScalarType::Numeric { scale: None },
             Type::Oid => ScalarType::Oid,
             Type::Record(_) => ScalarType::Record {
                 fields: vec![],
@@ -323,8 +410,8 @@ impl Type {
             },
             Type::Text => ScalarType::String,
             Type::Time => ScalarType::Time,
-            Type::Char => ScalarType::Char { length: None },
-            Type::VarChar => ScalarType::VarChar { length: None },
+            Type::Char { .. } => ScalarType::Char { length: None },
+            Type::VarChar { .. } => ScalarType::VarChar { length: None },
             Type::Timestamp => ScalarType::Timestamp,
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
@@ -332,6 +419,70 @@ impl Type {
             Type::RegProc => ScalarType::RegProc,
             Type::RegType => ScalarType::RegType,
         }
+    }
+}
+
+impl TryFrom<&Type> for ScalarType {
+    type Error = anyhow::Error;
+    fn try_from(typ: &Type) -> Result<ScalarType, anyhow::Error> {
+        Ok(match typ {
+            Type::Array(t) => ScalarType::Array(Box::new(TryFrom::try_from(&**t)?)),
+            Type::Bool => ScalarType::Bool,
+            Type::Bytea => ScalarType::Bytes,
+            Type::Date => ScalarType::Date,
+            Type::Float4 => ScalarType::Float32,
+            Type::Float8 => ScalarType::Float64,
+            Type::Int2 => ScalarType::Int16,
+            Type::Int4 => ScalarType::Int32,
+            Type::Int8 => ScalarType::Int64,
+            Type::Interval => ScalarType::Interval,
+            Type::Jsonb => ScalarType::Jsonb,
+            Type::List(t) => ScalarType::List {
+                element_type: Box::new(TryFrom::try_from(&**t)?),
+                custom_oid: Some(t.oid()),
+            },
+            Type::Map { value_type } => ScalarType::Map {
+                value_type: Box::new(TryFrom::try_from(&**value_type)?),
+                custom_oid: Some(value_type.oid()),
+            },
+            Type::Numeric {
+                max_scale,
+                max_precision,
+            } => {
+                if max_precision > &(NUMERIC_DATUM_MAX_PRECISION as u16) {
+                    bail!("requested max_precision: {max_precision} exeeds Materialize limit: {NUMERIC_DATUM_MAX_PRECISION}")
+                }
+
+                ScalarType::Numeric {
+                    scale: {
+                        match u8::try_from(*max_scale) {
+                            Ok(scale) => Some(scale),
+                            Err(e) => bail!(
+                                "requested max_scale: {max_scale} too wide for materialize: {e}"
+                            ),
+                        }
+                    },
+                }
+            }
+            Type::Oid => ScalarType::Oid,
+            Type::Record(_) => ScalarType::Record {
+                fields: vec![],
+                custom_oid: None,
+                custom_name: None,
+            },
+            Type::Text => ScalarType::String,
+            Type::Time => ScalarType::Time,
+            Type::Char { length } => ScalarType::Char { length: *length },
+            Type::VarChar { max_length } => ScalarType::VarChar {
+                length: *max_length,
+            },
+            Type::Timestamp => ScalarType::Timestamp,
+            Type::TimestampTz => ScalarType::TimestampTz,
+            Type::Uuid => ScalarType::Uuid,
+            Type::RegClass => ScalarType::RegClass,
+            Type::RegProc => ScalarType::RegProc,
+            Type::RegType => ScalarType::RegType,
+        })
     }
 }
 
@@ -363,13 +514,21 @@ impl From<&ScalarType> for Type {
                     .collect(),
             ),
             ScalarType::String => Type::Text,
-            ScalarType::Char { .. } => Type::Char,
-            ScalarType::VarChar { .. } => Type::VarChar,
+            ScalarType::Char { length } => Type::Char { length: *length },
+            ScalarType::VarChar { length } => Type::VarChar {
+                max_length: *length,
+            },
             ScalarType::Time => Type::Time,
             ScalarType::Timestamp => Type::Timestamp,
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
-            ScalarType::Numeric { .. } => Type::Numeric,
+            ScalarType::Numeric { scale } => Type::Numeric {
+                max_scale: match *scale {
+                    Some(scale) => scale as u16,
+                    None => 0,
+                },
+                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+            },
             ScalarType::RegClass => Type::RegClass,
             ScalarType::RegProc => Type::RegProc,
             ScalarType::RegType => Type::RegType,
