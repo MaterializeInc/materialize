@@ -235,13 +235,16 @@ impl CoordTest {
         let mut to_queue = vec![];
         for mut msg in self.queued_feedback.drain(..) {
             // Filter out requested ids.
-            if let Response::Compute(ComputeResponse::FrontierUppers(uppers)) = &mut msg {
+            if let Response::Compute(ComputeResponse::FrontierUppers(uppers), instance) = &mut msg {
                 // Requeue excluded uppers so future wait-sql directives don't always have to
                 // specify the same exclude list forever.
                 let mut requeue = uppers.clone();
                 requeue.retain(|(id, _data)| exclude_uppers.contains(id));
                 if !requeue.is_empty() {
-                    to_queue.push(Response::Compute(ComputeResponse::FrontierUppers(requeue)));
+                    to_queue.push(Response::Compute(
+                        ComputeResponse::FrontierUppers(requeue),
+                        *instance,
+                    ));
                 }
                 uppers.retain(|(id, _data)| !exclude_uppers.contains(id));
             }
@@ -272,7 +275,7 @@ impl CoordTest {
         let mut to_send = vec![];
         let mut to_queue = vec![];
         for msg in self.queued_feedback.drain(..) {
-            if let Response::Compute(ComputeResponse::PeekResponse(..)) = msg {
+            if let Response::Compute(ComputeResponse::PeekResponse(..), _instance) = msg {
                 to_send.push(msg);
             } else {
                 to_queue.push(msg);
@@ -504,6 +507,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                     }
                     ct.dataflow_client.forward_response(Response::Compute(
                         ComputeResponse::FrontierUppers(updates),
+                        mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID,
                     ));
                     "".into()
                 }

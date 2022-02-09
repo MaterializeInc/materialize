@@ -851,7 +851,10 @@ impl Coordinator {
 
     async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            DataflowResponse::Compute(ComputeResponse::PeekResponse(conn_id, response)) => {
+            DataflowResponse::Compute(
+                ComputeResponse::PeekResponse(conn_id, response),
+                _instance,
+            ) => {
                 // We expect exactly one peek response, which we forward.
                 self.pending_peeks
                     .remove(&conn_id)
@@ -859,7 +862,10 @@ impl Coordinator {
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
-            DataflowResponse::Compute(ComputeResponse::TailResponse(sink_id, response)) => {
+            DataflowResponse::Compute(
+                ComputeResponse::TailResponse(sink_id, response),
+                _instance,
+            ) => {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -870,7 +876,7 @@ impl Coordinator {
                     }
                 }
             }
-            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
+            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates), _instance) => {
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }

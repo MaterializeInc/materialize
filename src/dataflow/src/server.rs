@@ -33,8 +33,8 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{
-    Command, ComputeCommand, ComputeResponse, LocalClient, Response, StorageCommand,
-    StorageResponse, TimestampBindingFeedback,
+    Command, ComputeCommand, ComputeInstanceId, ComputeResponse, LocalClient, Response,
+    StorageCommand, StorageResponse, TimestampBindingFeedback, DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{
@@ -569,7 +569,10 @@ where
         }
 
         if !progress.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
+            self.send_compute_response(
+                ComputeResponse::FrontierUppers(progress),
+                DEFAULT_COMPUTE_INSTANCE_ID,
+            );
         }
     }
 
@@ -643,7 +646,10 @@ where
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Compute(cmd, _instance) => self.handle_compute_command(cmd),
+            Command::Compute(cmd, instance) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
+                self.handle_compute_command(cmd)
+            }
             Command::Storage(cmd) => self.handle_storage_command(cmd),
         }
     }
@@ -960,7 +966,10 @@ where
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.send_compute_response(ComputeResponse::PeekResponse(peek.conn_id, response));
+        self.send_compute_response(
+            ComputeResponse::PeekResponse(peek.conn_id, response),
+            DEFAULT_COMPUTE_INSTANCE_ID,
+        );
 
         // Log responding to the peek request.
         if let Some(logger) = self.materialized_logger.as_mut() {
@@ -972,15 +981,18 @@ where
     fn process_tails(&mut self) {
         let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.send_compute_response(ComputeResponse::TailResponse(sink_id, response));
+            self.send_compute_response(
+                ComputeResponse::TailResponse(sink_id, response),
+                DEFAULT_COMPUTE_INSTANCE_ID,
+            );
         }
     }
 
     /// Send a response to the coordinator.
-    fn send_compute_response(&self, response: ComputeResponse) {
+    fn send_compute_response(&self, response: ComputeResponse, instance: ComputeInstanceId) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(Response::Compute(response));
+        let _ = self.response_tx.send(Response::Compute(response, instance));
     }
 
     /// Send a response to the coordinator.

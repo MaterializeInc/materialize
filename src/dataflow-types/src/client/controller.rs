@@ -25,8 +25,6 @@ pub struct Controller<C> {
     ///
     /// A `None` variant means that the source was dropped before it was first created.
     source_descriptions: std::collections::BTreeMap<GlobalId, Option<crate::sources::SourceDesc>>,
-    /// Track the compute instance associated with a non-source identifier.
-    compute_instance: BTreeMap<GlobalId, ComputeInstanceId>,
     /// Tracks `since` and `upper` frontiers for indexes and sinks.
     compute_since_uppers: BTreeMap<ComputeInstanceId, SinceUpperMap>,
     /// Tracks `since` and `upper` frontiers for sources and tables.
@@ -87,17 +85,15 @@ impl<C: Client> Controller<C> {
                 }
             }
             Command::Compute(ComputeCommand::CreateInstance, instance) => {
-                self.compute_since_uppers
+                let prior = self
+                    .compute_since_uppers
                     .insert(*instance, Default::default());
+                assert!(prior.is_none(), "Creating already present compute instance");
             }
             Command::Compute(ComputeCommand::DropInstance, instance) => {
-                let installed = self
-                    .compute_since_uppers
+                self.compute_since_uppers
                     .remove(instance)
                     .expect("Dropping absent compute instance");
-                for id in installed.since_uppers.keys() {
-                    self.compute_instance.remove(id);
-                }
             }
             Command::Compute(ComputeCommand::EnableLogging(logging_config), instance) => {
                 let since_uppers = self
@@ -150,12 +146,10 @@ impl<C: Client> Controller<C> {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
                         since_uppers.insert(*sink_id, (as_of.clone(), Antichain::from_elem(0)));
-                        self.compute_instance.insert(*sink_id, *instance);
                     }
                     for (index_id, _, _) in dataflow.index_exports.iter() {
                         // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
                         since_uppers.insert(*index_id, (as_of.clone(), Antichain::from_elem(0)));
-                        self.compute_instance.insert(*index_id, *instance);
                     }
                 }
             }
@@ -185,9 +179,8 @@ impl<C: Client> Controller<C> {
 
         if let Some(response) = response.as_ref() {
             match response {
-                Response::Compute(ComputeResponse::FrontierUppers(updates)) => {
+                Response::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
                     for (id, changes) in updates.iter() {
-                        let instance = self.compute_instance[id];
                         self.compute_since_uppers
                             .get_mut(&instance)
                             .expect("internal reference to non-existant instance")
@@ -208,7 +201,6 @@ impl<C> Controller<C> {
         Self {
             client,
             source_descriptions: Default::default(),
-            compute_instance: Default::default(),
             compute_since_uppers: Default::default(),
             storage_since_uppers: Default::default(),
         }

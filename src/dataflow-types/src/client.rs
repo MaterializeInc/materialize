@@ -40,7 +40,7 @@ pub enum Command {
 }
 
 /// An abstraction allowing us to name difference compute instances.
-type ComputeInstanceId = usize;
+pub type ComputeInstanceId = usize;
 /// A default value whose use we can track down and remove later.
 pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
 
@@ -501,7 +501,7 @@ pub struct TimestampBindingFeedback {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     /// A compute response.
-    Compute(ComputeResponse),
+    Compute(ComputeResponse, ComputeInstanceId),
     /// A storage response.
     Storage(StorageResponse),
 }
@@ -755,7 +755,7 @@ pub mod partitioned {
         /// Absorbs a response, and produces response that should be emitted.
         pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
             match message {
-                Response::Compute(ComputeResponse::FrontierUppers(mut list)) => {
+                Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
                     for (id, changes) in list.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(id) {
                             let iter = frontier.update_iter(changes.drain());
@@ -777,7 +777,10 @@ pub mod partitioned {
                         }
                     }
 
-                    Some(Response::Compute(ComputeResponse::FrontierUppers(list)))
+                    Some(Response::Compute(
+                        ComputeResponse::FrontierUppers(list),
+                        instance,
+                    ))
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
@@ -793,7 +796,10 @@ pub mod partitioned {
                         feedback,
                     )))
                 }
-                Response::Compute(ComputeResponse::PeekResponse(connection, response)) => {
+                Response::Compute(
+                    ComputeResponse::PeekResponse(connection, response),
+                    instance,
+                ) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -817,9 +823,10 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&connection);
-                        Some(Response::Compute(ComputeResponse::PeekResponse(
-                            connection, response,
-                        )))
+                        Some(Response::Compute(
+                            ComputeResponse::PeekResponse(connection, response),
+                            instance,
+                        ))
                     } else {
                         None
                     }
