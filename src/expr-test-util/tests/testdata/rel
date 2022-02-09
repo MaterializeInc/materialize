@@ -213,10 +213,10 @@ build format=types
 # constant_err
 build format=types
 (constant_err
-  (invalid_dimension 10 100)
+  (invalid_layer 10 100)
   [int64 int32 int64])
 ----
 %0 =
-| Constant Err("invalid dimension: 100; must use value within [1, 10]")
+| Constant Err("invalid layer: 100; must use value within [1, 10]")
 | | types = (Int64?, Int32?, Int64?)
 | | keys = ()

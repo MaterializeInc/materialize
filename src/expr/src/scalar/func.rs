@@ -2252,7 +2252,7 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
-    ListLengthMax { max_dim: usize },
+    ListLengthMax { max_layer: usize },
     ArrayContains,
     ArrayLength,
     ArrayLower,
@@ -2502,7 +2502,7 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
-            BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
+            BinaryFunc::ListLengthMax { max_layer } => eager!(list_length_max, *max_layer),
             BinaryFunc::ArrayLength => Ok(eager!(array_length)),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
             BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
@@ -5456,16 +5456,20 @@ fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Datum<'a>, EvalError> {
-    fn max_len_on_dim<'a>(d: Datum<'a>, on_dim: i64) -> Option<i64> {
+fn list_length_max<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    max_layer: usize,
+) -> Result<Datum<'a>, EvalError> {
+    fn max_len_on_layer<'a>(d: Datum<'a>, on_layer: i64) -> Option<i64> {
         match d {
             Datum::List(i) => {
                 let mut i = i.iter();
-                if on_dim > 1 {
+                if on_layer > 1 {
                     let mut max_len = None;
                     while let Some(Datum::List(i)) = i.next() {
                         max_len =
-                            std::cmp::max(max_len_on_dim(Datum::List(i), on_dim - 1), max_len);
+                            std::cmp::max(max_len_on_layer(Datum::List(i), on_layer - 1), max_len);
                     }
                     max_len
                 } else {
@@ -5479,10 +5483,10 @@ fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Dat
 
     let b = b.unwrap_int64();
 
-    if b as usize > max_dim || b < 1 {
-        Err(EvalError::InvalidDimension { max_dim, val: b })
+    if b as usize > max_layer || b < 1 {
+        Err(EvalError::InvalidLayer { max_layer, val: b })
     } else {
-        Ok(match max_len_on_dim(a, b) {
+        Ok(match max_len_on_layer(a, b) {
             Some(l) => Datum::from(l),
             None => Datum::Null,
         })
@@ -5864,7 +5868,7 @@ impl VariadicFunc {
             }
             ListIndex => input_types[0]
                 .scalar_type
-                .unwrap_list_nth_dimension_type(input_types.len() - 1)
+                .unwrap_list_nth_layer_type(input_types.len() - 1)
                 .clone()
                 .nullable(true),
             ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(true),

@@ -2557,12 +2557,12 @@ lazy_static! {
             "list_cat" => Scalar {
                 vec![ListAny, ListAny] => BinaryFunc::ListListConcat => ListAny, oid::FUNC_LIST_CAT_OID;
             },
-            "list_ndims" => Scalar {
+            "list_n_layers" => Scalar {
                 vec![ListAny] => Operation::unary(|ecx, e| {
-                    ecx.require_experimental_mode("list_ndims")?;
-                    let d = ecx.scalar_type(&e).unwrap_list_n_dims();
+                    ecx.require_experimental_mode("list_n_layers")?;
+                    let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                     Ok(HirScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
-                }) => Int32, oid::FUNC_LIST_NDIMS_OID;
+                }) => Int32, oid::FUNC_LIST_N_LAYERS_OID;
             },
             "list_length" => Scalar {
                 vec![ListAny] => UnaryFunc::ListLength => Int32, oid::FUNC_LIST_LENGTH_OID;
@@ -2570,8 +2570,8 @@ lazy_static! {
             "list_length_max" => Scalar {
                 vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
                     ecx.require_experimental_mode("list_length_max")?;
-                    let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
-                    Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
+                    let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
+                    Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
                 }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
             },
             "list_prepend" => Scalar {

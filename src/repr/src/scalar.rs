@@ -1374,46 +1374,49 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns the [`ScalarType`] of elements in the nth dimension a
+    /// Returns the [`ScalarType`] of elements in the nth layer a
     /// [`ScalarType::List`].
     ///
     /// For example, in an `int list list`, the:
-    /// - 0th dimension is `int list list`
-    /// - 1st dimension is `int list`
-    /// - 2nd dimension is `int`
+    /// - 0th layer is `int list list`
+    /// - 1st layer is `int list`
+    /// - 2nd layer is `int`
     ///
     /// # Panics
     ///
-    /// Panics if the nth-1 dimension is anything other than a
+    /// Panics if the nth-1 layer is anything other than a
     /// [`ScalarType::List`].
-    pub fn unwrap_list_nth_dimension_type(&self, dim: usize) -> &ScalarType {
-        if dim == 0 {
+    pub fn unwrap_list_nth_layer_type(&self, layer: usize) -> &ScalarType {
+        if layer == 0 {
             return self;
         }
         match self {
             ScalarType::List { element_type, .. } => {
-                element_type.unwrap_list_nth_dimension_type(dim - 1)
+                element_type.unwrap_list_nth_layer_type(layer - 1)
             }
-            _ => panic!("ScalarType::unwrap_list_element_type called on {:?}", self),
+            _ => panic!(
+                "ScalarType::unwrap_list_nth_layer_type called on {:?}",
+                self
+            ),
         }
     }
 
-    /// Returns number of dimensions/axes (also known as "rank") on a
+    /// Returns number of layers (akin to array dimensions) on a
     /// [`ScalarType::List`].
     ///
     /// # Panics
     ///
     /// Panics if called on anything other than a [`ScalarType::List`].
-    pub fn unwrap_list_n_dims(&self) -> usize {
+    pub fn unwrap_list_n_layers(&self) -> usize {
         let mut descender = self.unwrap_list_element_type();
-        let mut dims = 1;
+        let mut layers = 1;
 
         while let ScalarType::List { element_type, .. } = descender {
-            dims += 1;
+            layers += 1;
             descender = element_type;
         }
 
-        dims
+        layers
     }
 
     /// Returns `self` with any embedded values set to a value appropriate for a

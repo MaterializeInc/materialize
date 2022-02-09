@@ -103,7 +103,7 @@
     - signature: 'list_cat(l1: listany, l2: listany) -> L'
       description: Concatenates `l1` and `l2`.
 
-    - signature: 'list_ndims(l: listany) -> int'
+    - signature: 'list_n_layers(l: listany) -> int'
       description: '[Experimental](/cli/#experimental-mode)––Returns the number of dimensions on `l`.'
 
     - signature: 'list_length(l: listany) -> int'

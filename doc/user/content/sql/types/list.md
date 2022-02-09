@@ -235,8 +235,8 @@ language taking slices of an array, rather than PostgreSQL's slicing, which
 descends into each layer.
 
 ```sql
- SELECT LIST[1,2,3,4,5][2:][2:3] AS successive;
- ```
+SELECT LIST[1,2,3,4,5][2:][2:3] AS successive;
+```
 ```nofmt
  successive
 ------------

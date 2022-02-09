@@ -3022,8 +3022,8 @@ fn plan_subscript(
         ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
         ScalarType::List { element_type, .. } => {
             let elem_type_name = ecx.humanize_scalar_type(&element_type);
-            let ndims = ty.unwrap_list_n_dims();
-            plan_subscript_list(ecx, expr, positions, ndims, &elem_type_name)
+            let n_layers = ty.unwrap_list_n_layers();
+            plan_subscript_list(ecx, expr, positions, n_layers, &elem_type_name)
         }
         ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
     }
