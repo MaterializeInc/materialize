@@ -28,17 +28,17 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use bytes::BufMut;
-use persist_types::Codec;
+use mz_persist_types::Codec;
 use prost::Message;
 use timely::dataflow::operators::Capability;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::{ChangeBatch, Timestamp as TimelyTimestamp};
 
-use dataflow_types::sources::MzOffset;
-use expr::PartitionId;
-use ore::now::NowFn;
-use repr::Timestamp;
+use mz_dataflow_types::sources::MzOffset;
+use mz_expr::PartitionId;
+use mz_ore::now::NowFn;
+use mz_repr::Timestamp;
 
 use crate::source::gen::source::{
     proto_source_timestamp, ProtoAssignedTimestamp, ProtoSourceTimestamp,
@@ -786,7 +786,7 @@ impl TimestampBindingUpdater {
         timestamp_histories: &TimestampBindingRc,
     ) -> impl Iterator<Item = ((SourceTimestamp, AssignedTimestamp), i64)> {
         // We either have a binding or we don't. There can never be other multiplicities.
-        ore::soft_assert!(self
+        mz_ore::soft_assert!(self
             .current_bindings
             .iter()
             .all(|(_binding, diff)| *diff == 1 || *diff == 0));
@@ -836,7 +836,7 @@ impl TimestampBindingUpdater {
             .extend(bindings_change.iter().cloned());
 
         // We either have a binding or we don't. There can never be other multiplicities.
-        ore::soft_assert!(self
+        mz_ore::soft_assert!(self
             .current_bindings
             .iter()
             .all(|(_binding, diff)| *diff == 1 || *diff == 0));
@@ -847,9 +847,9 @@ impl TimestampBindingUpdater {
 
 #[cfg(test)]
 mod tests {
-    use dataflow_types::sources::MzOffset;
-    use expr::PartitionId;
-    use persist_types::Codec;
+    use mz_dataflow_types::sources::MzOffset;
+    use mz_expr::PartitionId;
+    use mz_persist_types::Codec;
 
     use super::*;
 

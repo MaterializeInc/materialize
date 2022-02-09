@@ -40,7 +40,7 @@ struct Args {
 }
 
 fn main() {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
 
     let listener =
         TcpListener::bind((&*args.listen_addr, args.port)).expect("binding tcp listener");

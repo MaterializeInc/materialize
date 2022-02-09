@@ -10,7 +10,7 @@
 use tempfile::NamedTempFile;
 
 use mz_stash::Stash;
-use timely_util::antichain_ext::Max1Antichain;
+use mz_timely_util::antichain_ext::Max1Antichain;
 
 #[test]
 fn test_stash() -> Result<(), anyhow::Error> {

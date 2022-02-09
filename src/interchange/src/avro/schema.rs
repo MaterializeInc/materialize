@@ -18,9 +18,9 @@ use tracing::warn;
 
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-use ore::retry::Retry;
-use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use mz_ore::retry::Retry;
+use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 
 use super::is_null;
 
@@ -237,7 +237,7 @@ pub struct ConfluentAvroResolver {
 impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
-        config: Option<ccsr::ClientConfig>,
+        config: Option<mz_ccsr::ClientConfig>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
@@ -304,11 +304,11 @@ impl fmt::Debug for ConfluentAvroResolver {
 #[derive(Debug)]
 struct SchemaCache {
     cache: HashMap<i32, Result<Schema, AvroError>>,
-    ccsr_client: ccsr::Client,
+    ccsr_client: mz_ccsr::Client,
 }
 
 impl SchemaCache {
-    fn new(schema_registry: ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
+    fn new(schema_registry: mz_ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: HashMap::new(),
             ccsr_client: schema_registry.build()?,

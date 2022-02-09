@@ -1,5 +1,5 @@
 [package]
-name = "pgrepr"
+name = "mz-pgrepr"
 description = "Representation of and serialization for PostgreSQL data types."
 version = "0.0.0"
 edition = "2021"
@@ -12,7 +12,7 @@ bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 dec = "0.4.8"
 lazy_static = "1.4.0"
-ore = { path = "../ore" }
+mz-ore = { path = "../ore" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
-repr = { path = "../repr" }
+mz-repr = { path = "../repr" }
 uuid = "0.8.2"

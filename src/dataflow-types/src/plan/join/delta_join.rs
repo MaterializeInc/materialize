@@ -22,11 +22,11 @@ use std::collections::HashMap;
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
 use crate::plan::AvailableCollections;
-use expr::join_permutations;
-use expr::permutation_for_arrangement;
-use expr::JoinInputMapper;
-use expr::MapFilterProject;
-use expr::MirScalarExpr;
+use mz_expr::join_permutations;
+use mz_expr::permutation_for_arrangement;
+use mz_expr::JoinInputMapper;
+use mz_expr::MapFilterProject;
+use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 
 /// A delta query is implemented by a set of paths, one for each input.

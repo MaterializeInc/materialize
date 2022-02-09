@@ -12,10 +12,10 @@
 //! If the `Filter` operator is empty, removes it.
 //!
 //! ```rust
-//! use expr::{MirRelationExpr, MirScalarExpr};
-//! use repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use mz_expr::{MirRelationExpr, MirScalarExpr};
+//! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
-//! use transform::fusion::filter::Filter;
+//! use mz_transform::fusion::filter::Filter;
 //!
 //! let input = MirRelationExpr::constant(vec![], RelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
@@ -33,7 +33,7 @@
 //!     .filter(vec![predicate2.clone()]);
 //!
 //! // .transform() will deduplicate any predicates
-//! use transform::{Transform, TransformArgs};
+//! use mz_transform::{Transform, TransformArgs};
 //! Filter.transform(&mut expr, TransformArgs {
 //!   id_gen: &mut Default::default(),
 //!   indexes: &std::collections::HashMap::new(),
@@ -45,7 +45,7 @@
 //! ```
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
@@ -75,7 +75,7 @@ impl Filter {
                 *input = Box::new(inner.take_dangerous());
             }
 
-            expr::canonicalize::canonicalize_predicates(predicates, &input.typ());
+            mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ());
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {

@@ -19,11 +19,11 @@ use std::collections::BTreeMap;
 use anyhow::{bail, Context};
 use itertools::Itertools;
 
-use dataflow_types::sources::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
-use repr::ColumnName;
-use sql_parser::ast::display::AstDisplay;
-use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{
+use mz_dataflow_types::sources::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
+use mz_repr::ColumnName;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
     IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, TableFunction,
@@ -402,10 +402,10 @@ macro_rules! with_option_type {
     ($name:ident, Interval) => {
         match $name {
             Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                ::repr::strconv::parse_interval(&value)?
+                mz_repr::strconv::parse_interval(&value)?
             }
             Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                ::repr::strconv::parse_interval(&interval.value)?
+                mz_repr::strconv::parse_interval(&interval.value)?
             }
             _ => ::anyhow::bail!("expected Interval"),
         }
@@ -559,7 +559,7 @@ pub fn aws_config(
 mod tests {
     use std::error::Error;
 
-    use ore::collections::CollectionExt;
+    use mz_ore::collections::CollectionExt;
 
     use super::*;
     use crate::catalog::DummyCatalog;
@@ -568,7 +568,7 @@ mod tests {
     fn normalized_create() -> Result<(), Box<dyn Error>> {
         let scx = &StatementContext::new(None, &DummyCatalog);
 
-        let parsed = sql_parser::parser::parse_statements(
+        let parsed = mz_sql_parser::parser::parse_statements(
             "create materialized view foo as select 1 as bar",
         )?
         .into_element();

@@ -12,8 +12,8 @@ use std::time::Duration;
 use anyhow::{bail, Context as _};
 use async_trait::async_trait;
 
-use ccsr::{SchemaReference, SchemaType};
-use ore::retry::Retry;
+use mz_ccsr::{SchemaReference, SchemaType};
+use mz_ore::retry::Retry;
 
 use crate::action::{Action, Context, State};
 use crate::parser::BuiltinCommand;

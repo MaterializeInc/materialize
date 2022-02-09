@@ -1,5 +1,5 @@
 [package]
-name = "kafka-util"
+name = "mz-kafka-util"
 description = "Utilities for working with Kafka."
 version = "0.0.0"
 edition = "2021"
@@ -8,14 +8,14 @@ rust-version = "1.58.0"
 
 [dependencies]
 anyhow = "1.0.52"
-ccsr = { path = "../ccsr" }
+mz-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.0.14", features = ["derive"] }
 crossbeam = "0.8.1"
 futures = "0.3.21"
 mz-avro = { path = "../avro" }
 num_cpus = "1.13.1"
-ore = { path = "../ore", features = ["network"] }
+mz-ore = { path = "../ore", features = ["network"] }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 serde = { version = "1.0.136", features = ["derive"] }

@@ -17,7 +17,7 @@ use rdkafka::config::ClientConfig;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 
-use kafka_util::client::MzClientContext;
+use mz_kafka_util::client::MzClientContext;
 
 pub struct KafkaClient {
     producer: FutureProducer<MzClientContext>,
@@ -67,7 +67,7 @@ impl KafkaClient {
             topic = topic.set(key, val);
         }
 
-        kafka_util::admin::ensure_topic(&client, &admin_opts, &topic)
+        mz_kafka_util::admin::ensure_topic(&client, &admin_opts, &topic)
             .await
             .context(format!("creating Kafka topic: {}", topic_name))?;
 

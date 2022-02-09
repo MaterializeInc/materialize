@@ -14,16 +14,16 @@ use std::str;
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use mz_repr::ColumnType;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
-use repr::ColumnType;
 use uuid::Uuid;
 
-use ore::fmt::FormatBuffer;
-use repr::adt::array::ArrayDimension;
-use repr::adt::jsonb::JsonbRef;
-use repr::adt::numeric::{self as adt_numeric};
-use repr::strconv::{self, Nestable};
-use repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
+use mz_ore::fmt::FormatBuffer;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::jsonb::JsonbRef;
+use mz_repr::adt::numeric::{self as adt_numeric};
+use mz_repr::strconv::{self, Nestable};
+use mz_repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{Format, Interval, Jsonb, Numeric, Type};
 
@@ -310,7 +310,7 @@ impl Value {
             }),
             Value::Text(s) | Value::VarChar(s) => strconv::format_string(buf, s),
             Value::Char { inner, length } => {
-                strconv::format_string(buf, &repr::adt::char::format_str_pad(&inner, *length))
+                strconv::format_string(buf, &mz_repr::adt::char::format_str_pad(&inner, *length))
             }
             Value::Time(t) => strconv::format_time(buf, *t),
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
@@ -407,7 +407,7 @@ impl Value {
             }
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Char { inner, length } => {
-                repr::adt::char::format_str_pad(&inner, *length).to_sql(&PgType::BPCHAR, buf)
+                mz_repr::adt::char::format_str_pad(&inner, *length).to_sql(&PgType::BPCHAR, buf)
             }
             Value::VarChar(s) => s.to_sql(&PgType::VARCHAR, buf),
             Value::Time(t) => t.to_sql(&PgType::TIME, buf),

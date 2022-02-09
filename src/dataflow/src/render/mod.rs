@@ -119,13 +119,13 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::activator::RcActivator;
-use dataflow_types::*;
-use expr::{GlobalId, Id};
 use itertools::Itertools;
-use ore::collections::CollectionExt as _;
-use ore::now::NowFn;
-use persist::client::RuntimeClient;
-use repr::{Row, Timestamp};
+use mz_dataflow_types::*;
+use mz_expr::{GlobalId, Id};
+use mz_ore::collections::CollectionExt as _;
+use mz_ore::now::NowFn;
+use mz_persist::client::RuntimeClient;
+use mz_repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::event::ActivatedEventPusher;
@@ -182,7 +182,7 @@ pub struct StorageState {
     /// dropped, as this is used to check for rebinding of previous identifiers.
     /// Once we have a better mechanism to avoid that, for example that identifiers
     /// must strictly increase, we can clean up descriptions when sources are dropped.
-    pub source_descriptions: HashMap<GlobalId, dataflow_types::sources::SourceDesc>,
+    pub source_descriptions: HashMap<GlobalId, mz_dataflow_types::sources::SourceDesc>,
     /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
@@ -200,11 +200,12 @@ pub struct StorageState {
 /// Information about each source that must be communicated between storage and compute layers.
 pub struct SourceBoundary {
     /// Captured `row` updates representing a differential collection.
-    pub ok:
-        ActivatedEventPusher<Rc<EventLink<repr::Timestamp, (Row, repr::Timestamp, repr::Diff)>>>,
+    pub ok: ActivatedEventPusher<
+        Rc<EventLink<mz_repr::Timestamp, (Row, mz_repr::Timestamp, mz_repr::Diff)>>,
+    >,
     /// Captured error updates representing a differential collection.
     pub err: ActivatedEventPusher<
-        Rc<EventLink<repr::Timestamp, (DataflowError, repr::Timestamp, repr::Diff)>>,
+        Rc<EventLink<mz_repr::Timestamp, (DataflowError, mz_repr::Timestamp, mz_repr::Diff)>>,
     >,
     /// A token that should be dropped to terminate the source.
     pub token: Rc<dyn std::any::Any>,
@@ -606,10 +607,10 @@ where
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
                 match plan {
-                    dataflow_types::plan::join::JoinPlan::Linear(linear_plan) => {
+                    mz_dataflow_types::plan::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan, scope)
                     }
-                    dataflow_types::plan::join::JoinPlan::Delta(delta_plan) => {
+                    mz_dataflow_types::plan::join::JoinPlan::Delta(delta_plan) => {
                         self.render_delta_join(inputs, delta_plan, scope)
                     }
                 }

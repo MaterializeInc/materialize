@@ -19,13 +19,13 @@ use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
-use ore::cast::CastFrom;
-use repr::adt::array::ArrayDimension;
-use repr::adt::interval::Interval;
-use repr::adt::numeric;
-use repr::adt::regex::Regex as ReprRegex;
-use repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::numeric;
+use mz_repr::adt::regex::Regex as ReprRegex;
+use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::relation::{compare_columns, ColumnOrder};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
@@ -525,8 +525,8 @@ where
         })
         .collect();
 
-    let mut left_datum_vec = repr::DatumVec::new();
-    let mut right_datum_vec = repr::DatumVec::new();
+    let mut left_datum_vec = mz_repr::DatumVec::new();
+    let mut right_datum_vec = mz_repr::DatumVec::new();
     let mut sort_by = |left: &(_, Row), right: &(_, Row)| {
         let left = &left.1;
         let right = &right.1;
@@ -847,7 +847,7 @@ fn jsonb_each<'a>(
     // First produce a map, so that a common iterator can be returned.
     let map = match a {
         Datum::Map(dict) => dict,
-        _ => repr::DatumMap::empty(),
+        _ => mz_repr::DatumMap::empty(),
     };
 
     map.iter().map(move |(k, mut v)| {
@@ -861,7 +861,7 @@ fn jsonb_each<'a>(
 fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     let map = match a {
         Datum::Map(dict) => dict,
-        _ => repr::DatumMap::empty(),
+        _ => mz_repr::DatumMap::empty(),
     };
 
     map.iter()
@@ -875,7 +875,7 @@ fn jsonb_array_elements<'a>(
 ) -> impl Iterator<Item = (Row, Diff)> + 'a {
     let list = match a {
         Datum::List(list) => list,
-        _ => repr::DatumList::empty(),
+        _ => mz_repr::DatumList::empty(),
     };
     list.iter().map(move |mut e| {
         if stringify {

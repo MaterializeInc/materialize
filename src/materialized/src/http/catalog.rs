@@ -13,7 +13,7 @@ use hyper::{header, Body, Request, Response};
 
 pub async fn handle_internal_catalog(
     _: Request<Body>,
-    coord_client: &mut coord::SessionClient,
+    coord_client: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     let dump = coord_client.dump_catalog().await?;
     Ok(Response::builder()

@@ -43,7 +43,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::ptr;
 
-use ore::option::OptionExt;
+use mz_ore::option::OptionExt;
 
 #[allow(non_camel_case_types)]
 #[repr(C)]

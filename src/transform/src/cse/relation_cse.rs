@@ -16,8 +16,8 @@
 
 use std::collections::HashMap;
 
-use expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
-use ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
 

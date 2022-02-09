@@ -17,7 +17,7 @@ use crate::http::util;
 
 pub async fn handle_sql(
     req: Request<Body>,
-    coord_client: &mut coord::SessionClient,
+    coord_client: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     let res = async {
         let body = hyper::body::to_bytes(req).await?;

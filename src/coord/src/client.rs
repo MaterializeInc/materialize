@@ -14,12 +14,12 @@ use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use dataflow_types::PeekResponse;
-use expr::GlobalId;
-use ore::collections::CollectionExt;
-use ore::thread::JoinOnDropHandle;
-use repr::{Datum, Row};
-use sql::ast::{Raw, Statement};
+use mz_dataflow_types::PeekResponse;
+use mz_expr::GlobalId;
+use mz_ore::collections::CollectionExt;
+use mz_ore::thread::JoinOnDropHandle;
+use mz_repr::{Datum, Row};
+use mz_sql::ast::{Raw, Statement};
 
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
@@ -273,7 +273,7 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<mz_pgrepr::Type>>,
     ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Describe {
             name,
@@ -290,7 +290,7 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<mz_pgrepr::Type>>,
     ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Declare {
             name,
@@ -436,7 +436,7 @@ impl SessionClient {
             }
         }
 
-        let stmts = sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
+        let stmts = mz_sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
         self.start_transaction(None).await?;
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
@@ -470,7 +470,7 @@ impl SessionClient {
                 Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
                 None => vec![],
             };
-            let mut datum_vec = repr::DatumVec::new();
+            let mut datum_vec = mz_repr::DatumVec::new();
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
                 sql_rows.push(datums.iter().map(datum_to_json).collect());

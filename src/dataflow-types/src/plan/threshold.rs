@@ -25,7 +25,7 @@
 
 use std::collections::HashMap;
 
-use expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use serde::{Deserialize, Serialize};
 
 use super::AvailableCollections;
@@ -86,7 +86,7 @@ impl ThresholdPlan {
         // Arrange the input by all columns in order.
         let mut all_columns = Vec::new();
         for column in 0..arity {
-            all_columns.push(expr::MirScalarExpr::Column(column));
+            all_columns.push(mz_expr::MirScalarExpr::Column(column));
         }
         let (permutation, thinning) = permutation_for_arrangement(&all_columns, arity);
         let ensure_arrangement = (all_columns, permutation, thinning);

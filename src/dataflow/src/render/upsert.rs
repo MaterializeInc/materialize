@@ -19,11 +19,13 @@ use timely::dataflow::operators::{Concat, Map, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use dataflow_types::{DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails};
-use expr::{EvalError, MirScalarExpr};
-use ore::result::ResultExt;
-use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
-use repr::{Datum, Diff, Row, RowArena, Timestamp};
+use mz_dataflow_types::{
+    DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails,
+};
+use mz_expr::{EvalError, MirScalarExpr};
+use mz_ore::result::ResultExt;
+use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
+use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use tracing::error;
 
 use crate::operator::StreamExt;
@@ -58,7 +60,7 @@ pub(crate) fn upsert<G>(
     >,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (dataflow_types::DataflowError, Timestamp, Diff)>,
+    Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -135,7 +137,7 @@ where
             .collect::<Vec<_>>();
     }
     let temporal_plan = if !temporal.is_empty() {
-        let temporal_mfp = expr::MapFilterProject::new(source_arity).filter(temporal);
+        let temporal_mfp = mz_expr::MapFilterProject::new(source_arity).filter(temporal);
         Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
     } else {
         None
@@ -164,7 +166,7 @@ where
             //
             // This also means that we cannot push MFPs into the upsert operatot, as that would
             // mean persisting EvalErrors, which, also icky.
-            let mut row_packer = repr::Row::default();
+            let mut row_packer = mz_repr::Row::default();
             let stream = stream.flat_map(move |decode_result| {
                 if decode_result.key.is_none() {
                     // This is the same behaviour as regular upsert. It's not pretty, though.
@@ -185,7 +187,7 @@ where
                 Some((decode_result.key.unwrap(), value, offset))
             });
 
-            let mut row_packer = repr::Row::default();
+            let mut row_packer = mz_repr::Row::default();
 
             let (upsert_output, upsert_persist_errs) =
                 stream.persistent_upsert(source_name, as_of_frontier, upsert_persist_config);
@@ -239,10 +241,10 @@ where
     // If we have temporal predicates do the thing they have to do.
     if let Some(plan) = temporal_plan {
         let (oks2, errs2) = oks.flat_map_fallible("UpsertTemporalOperators", {
-            let mut datum_vec = repr::DatumVec::new();
+            let mut datum_vec = mz_repr::DatumVec::new();
             let mut row_builder = Row::default();
             move |(row, time, diff)| {
-                let arena = repr::RowArena::new();
+                let arena = mz_repr::RowArena::new();
                 let mut datums_local = datum_vec.borrow_with(&row);
                 plan.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
             }
@@ -267,7 +269,7 @@ fn evaluate(
     datums: &[Datum],
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
-    row_packer: &mut repr::Row,
+    row_packer: &mut mz_repr::Row,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
@@ -315,7 +317,7 @@ where
             let mut current_values = HashMap::new();
 
             let mut vector = Vec::new();
-            let mut row_packer = repr::Row::default();
+            let mut row_packer = mz_repr::Row::default();
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.

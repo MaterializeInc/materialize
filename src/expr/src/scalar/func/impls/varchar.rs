@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use repr::adt::varchar::VarChar;
+use mz_repr::adt::varchar::VarChar;
 
 // This function simply allows the expression of changing a's type from varchar to string
 sqlfunc!(

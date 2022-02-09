@@ -9,9 +9,9 @@
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
-use repr::adt::datetime::DateTimeField;
-use repr::adt::interval::Interval;
-use repr::strconv;
+use mz_repr::adt::datetime::DateTimeField;
+use mz_repr::adt::interval::Interval;
+use mz_repr::strconv;
 
 #[test]
 fn test_parse_date() {

@@ -23,7 +23,7 @@ pub struct SleepAction {
 
 pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow::Error> {
     let arg = cmd.args.string("duration")?;
-    let duration = repr::util::parse_duration(&arg).context("parsing duration")?;
+    let duration = mz_repr::util::parse_duration(&arg).context("parsing duration")?;
     Ok(SleepAction {
         duration,
         random: true,
@@ -32,7 +32,7 @@ pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow
 
 pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow::Error> {
     let arg = cmd.args.string("duration")?;
-    let duration = repr::util::parse_duration(&arg).context("parsing duration")?;
+    let duration = mz_repr::util::parse_duration(&arg).context("parsing duration")?;
     Ok(SleepAction {
         duration,
         random: false,

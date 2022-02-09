@@ -16,9 +16,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use build_info::BuildInfo;
-use ore::metrics::MetricsRegistry;
-use ore::task::RuntimeExt;
+use mz_build_info::BuildInfo;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::RuntimeExt;
 use tokio::runtime::Runtime as AsyncRuntime;
 use tokio::time;
 

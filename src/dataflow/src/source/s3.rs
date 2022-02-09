@@ -46,14 +46,14 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-use dataflow_types::sources::{
+use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, AwsConfig, Compression, ExternalSourceConnector, MzOffset,
     S3KeySource,
 };
-use expr::{PartitionId, SourceInstanceId};
-use ore::retry::{Retry, RetryReader};
-use ore::task;
-use repr::MessagePayload;
+use mz_expr::{PartitionId, SourceInstanceId};
+use mz_ore::retry::{Retry, RetryReader};
+use mz_ore::task;
+use mz_repr::MessagePayload;
 
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};

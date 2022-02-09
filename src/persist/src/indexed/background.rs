@@ -18,7 +18,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::runtime::Runtime as AsyncRuntime;
 
-use ore::task::RuntimeExt;
+use mz_ore::task::RuntimeExt;
 
 use crate::error::Error;
 use crate::indexed::arrangement::Arrangement;
@@ -217,7 +217,7 @@ mod tests {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
         let metrics = Arc::new(Metrics::default());
         let blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
@@ -304,7 +304,7 @@ mod tests {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
         let metrics = Arc::new(Metrics::default());
         let blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,

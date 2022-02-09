@@ -10,7 +10,7 @@
 //! Remove TopK operators with both an offset of zero and no limit.
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Remove TopK operators with both an offset of zero and no limit.
 #[derive(Debug)]

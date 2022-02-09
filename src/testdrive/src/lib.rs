@@ -18,7 +18,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
 
-use ore::display::DisplayExt;
+use mz_ore::display::DisplayExt;
 
 use self::error::{ErrorLocation, PosError};
 use self::parser::LineReader;

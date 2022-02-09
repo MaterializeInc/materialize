@@ -16,9 +16,9 @@ use std::collections::BTreeMap;
 
 use anyhow::bail;
 
-use expr::GlobalId;
-use ore::collections::CollectionExt;
-use repr::{ColumnType, RelationDesc, ScalarType};
+use mz_expr::GlobalId;
+use mz_ore::collections::CollectionExt;
+use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
 use crate::catalog::{
@@ -43,7 +43,7 @@ pub struct StatementDesc {
     /// produces rows.
     pub relation_desc: Option<RelationDesc>,
     /// The determined types of the parameters in the statement, if any.
-    pub param_types: Vec<pgrepr::Type>,
+    pub param_types: Vec<mz_pgrepr::Type>,
     /// Whether the statement is a `COPY` statement.
     pub is_copy: bool,
 }
@@ -67,11 +67,11 @@ impl StatementDesc {
     }
 
     fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
-        self.param_types = param_types.iter().map(pgrepr::Type::from).collect();
+        self.param_types = param_types.iter().map(mz_pgrepr::Type::from).collect();
         self
     }
 
-    fn with_pgrepr_params(mut self, param_types: Vec<pgrepr::Type>) -> Self {
+    fn with_pgrepr_params(mut self, param_types: Vec<mz_pgrepr::Type>) -> Self {
         self.param_types = param_types;
         self
     }
@@ -89,7 +89,7 @@ pub fn describe(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
-    param_types_in: &[Option<pgrepr::Type>],
+    param_types_in: &[Option<mz_pgrepr::Type>],
 ) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
@@ -252,7 +252,7 @@ pub fn plan_copy_from(
     catalog: &dyn SessionCatalog,
     id: GlobalId,
     columns: Vec<usize>,
-    rows: Vec<repr::Row>,
+    rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, anyhow::Error> {
     Ok(query::plan_copy_from_rows(pcx, catalog, id, columns, rows)?)
 }

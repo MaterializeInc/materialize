@@ -1,5 +1,5 @@
 [package]
-name = "dataflow-types"
+name = "mz-dataflow-types"
 description = "Types for the dataflow crate."
 version = "0.0.0"
 edition = "2021"
@@ -13,28 +13,28 @@ aws-config = { version = "0.6.0", default-features = false, features = ["native-
 aws-types = { version = "0.6.0", features = ["hardcoded-credentials"] }
 aws-smithy-http = "0.36.0"
 bytes = "1.1.0"
-ccsr = { path = "../ccsr" }
+mz-ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.2"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-expr = { path = "../expr" }
+mz-expr = { path = "../expr" }
 futures = "0.3.21"
 globset = { version = "0.4.8", features = ["serde1"] }
-interchange = { path = "../interchange" }
-persist-types = { path = "../persist-types" }
-kafka-util = { path = "../kafka-util" }
+mz-interchange = { path = "../interchange" }
+mz-persist-types = { path = "../persist-types" }
+mz-kafka-util = { path = "../kafka-util" }
 http = "0.2.6"
 http-serde = "1.1.0"
 tracing = "0.1.29"
 num_enum = "0.5.6"
 mz-aws-util = { path = "../aws-util" }
-ore = { path = "../ore" }
-persist = { path = "../persist" }
+mz-ore = { path = "../ore" }
+mz-persist = { path = "../persist" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
-repr = { path = "../repr" }
+mz-repr = { path = "../repr" }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_regex = "1.1.0"
 serde_json = "1.0.78"

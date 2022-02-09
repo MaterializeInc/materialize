@@ -15,22 +15,22 @@
 use std::collections::HashSet;
 use timely::dataflow::Scope;
 
-use dataflow_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
-use dataflow_types::plan::join::JoinClosure;
-use dataflow_types::DataflowError;
+use mz_dataflow_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
+use mz_dataflow_types::plan::join::JoinClosure;
+use mz_dataflow_types::DataflowError;
 
-use expr::MirScalarExpr;
-use repr::{Diff, Row, RowArena};
+use mz_expr::MirScalarExpr;
+use mz_repr::{Diff, Row, RowArena};
 use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
 use crate::render::context::CollectionBundle;
-use repr::DatumVec;
+use mz_repr::DatumVec;
 
-impl<G> Context<G, Row, repr::Timestamp>
+impl<G> Context<G, Row, mz_repr::Timestamp>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
     ///
@@ -320,7 +320,7 @@ fn build_halfjoin<G, Tr, CF>(
     Collection<G, DataflowError>,
 )
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
@@ -398,7 +398,7 @@ fn build_update_stream<G, Tr>(
     initial_closure: JoinClosure,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,

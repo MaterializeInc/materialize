@@ -11,7 +11,7 @@ use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
 use prost::Message;
 
-use interchange::protobuf::{DecodedDescriptors, Decoder};
+use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 
 use gen::benchmark::{Connector, Record, Value};
 

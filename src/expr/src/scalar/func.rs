@@ -28,18 +28,18 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
-use lowertest::MzReflect;
-use ore::collections::CollectionExt;
-use ore::fmt::FormatBuffer;
-use ore::str::StrExt;
-use pgrepr::Type;
-use repr::adt::array::ArrayDimension;
-use repr::adt::datetime::{DateTimeUnits, Timezone};
-use repr::adt::interval::Interval;
-use repr::adt::jsonb::JsonbRef;
-use repr::adt::numeric::{self, DecimalLike, Numeric};
-use repr::adt::regex::Regex;
-use repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_ore::collections::CollectionExt;
+use mz_ore::fmt::FormatBuffer;
+use mz_ore::str::StrExt;
+use mz_pgrepr::Type;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::jsonb::JsonbRef;
+use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
+use mz_repr::adt::regex::Regex;
+use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
@@ -5085,7 +5085,7 @@ where
         String | VarChar { .. } => strconv::format_string(buf, d.unwrap_str()),
         Char { length } => strconv::format_string(
             buf,
-            &repr::adt::char::format_str_pad(d.unwrap_str(), *length),
+            &mz_repr::adt::char::format_str_pad(d.unwrap_str(), *length),
         ),
         Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
         Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
@@ -5963,7 +5963,7 @@ mod test {
         // care about input and output nullabilities.
         let dummy_col_nullable_type = ScalarType::Bool.nullable(true);
         let dummy_col_nonnullable_type = ScalarType::Bool.nullable(false);
-        let mut rti = lowertest::ReflectedTypeInfo::default();
+        let mut rti = mz_lowertest::ReflectedTypeInfo::default();
         UnaryFunc::add_to_reflected_type_info(&mut rti);
         for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
             println!("f_types {:?}", f_types);

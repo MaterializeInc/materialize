@@ -20,7 +20,7 @@
 //!
 //! ```no_run
 //! # async {
-//! use ccsr::ClientConfig;
+//! use mz_ccsr::ClientConfig;
 //!
 //! let url = "http://localhost:8080".parse()?;
 //! let client = ClientConfig::new(url).build()?;

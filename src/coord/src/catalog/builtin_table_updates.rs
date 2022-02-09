@@ -9,14 +9,14 @@
 
 use std::os::unix::ffi::OsStringExt;
 
-use dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
-use expr::{GlobalId, MirScalarExpr};
-use ore::collections::CollectionExt;
-use repr::adt::array::ArrayDimension;
-use repr::{Datum, Diff, Row};
-use sql::ast::{CreateIndexStatement, Statement};
-use sql::names::DatabaseSpecifier;
-use sql_parser::ast::display::AstDisplay;
+use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
+use mz_expr::{GlobalId, MirScalarExpr};
+use mz_ore::collections::CollectionExt;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::{Datum, Diff, Row};
+use mz_sql::ast::{CreateIndexStatement, Statement};
+use mz_sql::names::DatabaseSpecifier;
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_FUNCTIONS,
@@ -126,7 +126,7 @@ impl CatalogState {
                     .as_ref()
                     .map(|d| Datum::String(d))
                     .unwrap_or(Datum::Null);
-                let pgtype = pgrepr::Type::from(&column_type.scalar_type);
+                let pgtype = mz_pgrepr::Type::from(&column_type.scalar_type);
                 updates.push(BuiltinTableUpdate {
                     id: MZ_COLUMNS.id,
                     row: Row::pack_slice(&[
@@ -289,7 +289,7 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
 
-        let key_sqls = match sql::parse::parse(&index.create_sql)
+        let key_sqls = match mz_sql::parse::parse(&index.create_sql)
             .expect("create_sql cannot be invalid")
             .into_element()
         {

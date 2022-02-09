@@ -31,8 +31,8 @@ use anyhow::Context;
 use rand::Rng;
 
 use mz_aws_util::config::AwsConfig;
-use ore::task;
-use test_util::mz_client;
+use mz_ore::task;
+use mz_test_util::mz_client;
 
 mod kinesis;
 mod mz;
@@ -47,7 +47,7 @@ async fn main() {
 
 async fn run() -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
     env_logger::init();
 
     // Initialize and log test variables.

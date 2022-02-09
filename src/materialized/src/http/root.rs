@@ -28,7 +28,7 @@ struct HomeTemplate<'a> {
 
 pub fn handle_home(
     _: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
     future::ok(util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
@@ -39,7 +39,7 @@ pub fn handle_home(
 
 pub fn handle_static(
     req: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     if req.method() == Method::GET {
         let path = req.uri().path();

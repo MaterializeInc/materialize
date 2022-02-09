@@ -21,7 +21,7 @@
 //! [following the prometheus instructions]:
 //!
 //! ```
-//! # use ore::metrics::MetricsRegistry;
+//! # use mz_ore::metrics::MetricsRegistry;
 //! # fn handle_scrapes() {}
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let registry = MetricsRegistry::new();
@@ -47,7 +47,7 @@
 //! [prom-process]: https://prometheus.io/docs/instrumenting/writing_clientlibs/#process-metrics
 //! [following the prometheus instructions]: https://docs.rs/prometheus/0.10.0/prometheus/#basic-example
 
-use ore::metrics::MetricsRegistry;
+use mz_ore::metrics::MetricsRegistry;
 
 #[cfg(target_os = "linux")]
 mod process_collector;

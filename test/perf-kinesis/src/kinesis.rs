@@ -16,8 +16,8 @@ use anyhow::{anyhow, Context};
 use aws_sdk_kinesis::model::{PutRecordsRequestEntry, StreamStatus};
 use aws_sdk_kinesis::{Blob, SdkError};
 
-use ore::retry::Retry;
-use test_util::generator;
+use mz_ore::retry::Retry;
+use mz_test_util::generator;
 
 const DUMMY_PARTITION_KEY: &str = "dummy";
 

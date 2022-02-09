@@ -24,9 +24,9 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
-use ore::stack::{CheckedRecursion, RecursionGuard};
-use repr::Row;
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::Row;
 
 use crate::TransformArgs;
 
@@ -430,7 +430,7 @@ impl LiteralLifting {
                     }
 
                     if input_literals.iter().any(|l| !l.is_empty()) {
-                        *implementation = expr::JoinImplementation::Unimplemented;
+                        *implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         // We should be able to install any literals in the
                         // equivalence relations, and then lift all literals
@@ -519,8 +519,8 @@ impl LiteralLifting {
                         }
                     }
 
-                    let eval_constant_aggr = |aggr: &expr::AggregateExpr| {
-                        let temp = repr::RowArena::new();
+                    let eval_constant_aggr = |aggr: &mz_expr::AggregateExpr| {
+                        let temp = mz_repr::RowArena::new();
                         let mut eval = aggr.expr.eval(&[], &temp);
                         if let Ok(param) = eval {
                             eval = Ok(aggr.func.eval(Some(param), &temp));
@@ -530,7 +530,7 @@ impl LiteralLifting {
                             // This type information should be available in the `a.expr` literal,
                             // but extracting it with pattern matching seems awkward.
                             aggr.func
-                                .output_type(aggr.expr.typ(&repr::RelationType::empty()))
+                                .output_type(aggr.expr.typ(&mz_repr::RelationType::empty()))
                                 .scalar_type,
                         )
                     };

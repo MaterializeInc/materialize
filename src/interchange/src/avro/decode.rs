@@ -21,10 +21,10 @@ use mz_avro::{
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
-use ore::result::ResultExt;
-use repr::adt::jsonb::JsonbPacker;
-use repr::adt::numeric;
-use repr::{Datum, Row};
+use mz_ore::result::ResultExt;
+use mz_repr::adt::jsonb::JsonbPacker;
+use mz_repr::adt::numeric;
+use mz_repr::{Datum, Row};
 
 use crate::avro::ConfluentAvroResolver;
 
@@ -46,7 +46,7 @@ impl Decoder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader_schema: &str,
-        schema_registry: Option<ccsr::ClientConfig>,
+        schema_registry: Option<mz_ccsr::ClientConfig>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {

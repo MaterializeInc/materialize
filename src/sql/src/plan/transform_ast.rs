@@ -15,9 +15,9 @@
 
 use uuid::Uuid;
 
-use ore::stack::{CheckedRecursion, RecursionGuard};
-use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Raw, Select, SelectItem,
     TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };

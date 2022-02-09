@@ -21,7 +21,7 @@ struct MemoryTemplate<'a> {
 
 pub fn handle_memory(
     _: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     Ok(util::template_response(MemoryTemplate {
         version: BUILD_INFO.version,
@@ -36,7 +36,7 @@ struct HierarchicalMemoryTemplate<'a> {
 
 pub fn handle_hierarchical_memory(
     _: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     Ok(util::template_response(HierarchicalMemoryTemplate {
         version: BUILD_INFO.version,

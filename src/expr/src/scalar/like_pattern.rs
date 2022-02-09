@@ -14,7 +14,7 @@ use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
-use lowertest::MzReflect;
+use mz_lowertest::MzReflect;
 
 // This implementation supports a couple of different methods of matching
 // text against a SQL LIKE pattern.
@@ -283,7 +283,7 @@ fn build_subpatterns(pattern: &str, escape: char) -> Result<Vec<Subpattern>, Eva
 #[cfg(test)]
 mod test {
     use super::*;
-    use ore::str::StrExt;
+    use mz_ore::str::StrExt;
 
     #[test]
     fn test_like() {

@@ -34,8 +34,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use expr::{MapFilterProject, MirScalarExpr};
-use repr::{Datum, Row, RowArena};
+use mz_expr::{MapFilterProject, MirScalarExpr};
+use mz_repr::{Datum, Row, RowArena};
 
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
@@ -58,7 +58,7 @@ pub enum JoinPlan {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    before: expr::SafeMfpPlan,
+    before: mz_expr::SafeMfpPlan,
 }
 
 impl JoinClosure {
@@ -69,7 +69,7 @@ impl JoinClosure {
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
         row: &'a mut Row,
-    ) -> Result<Option<Row>, expr::EvalError> {
+    ) -> Result<Option<Row>, mz_expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
             let val = exprs[0].eval(&datums[..], &temp_storage)?;
@@ -258,7 +258,7 @@ impl JoinBuildState {
             column_map.insert(column, column_map.len());
         }
         let mut equivalences = equivalences.to_vec();
-        expr::canonicalize::canonicalize_equivalence_classes(&mut equivalences);
+        mz_expr::canonicalize::canonicalize_equivalence_classes(&mut equivalences);
         Self {
             column_map,
             equivalences,

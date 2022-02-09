@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Macros needed by the `lowertest` crate.
+//! Macros needed by the `mz_lowertest` crate.
 //!
 //! TODO: eliminate macros in favor of using `walkabout`?
 
@@ -29,7 +29,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
     //    /// to `enum_dict` if it is an enum and to `struct_dict` if it is a
     //    /// struct.
     //    fn add_to_reflected_type_info(
-    //        rti: &mut lowertest::ReflectedTypeInfo
+    //        rti: &mut mz_lowertest::ReflectedTypeInfo
     //    )
     //    {
     //       // if the object is an enum
@@ -94,9 +94,9 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
         .collect::<Vec<_>>();
 
     let gen = quote! {
-      impl lowertest::MzReflect for #object_name {
+      impl mz_lowertest::MzReflect for #object_name {
         fn add_to_reflected_type_info(
-            rti: &mut lowertest::ReflectedTypeInfo
+            rti: &mut mz_lowertest::ReflectedTypeInfo
         )
         {
            #add_object_info

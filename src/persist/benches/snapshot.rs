@@ -15,18 +15,18 @@ use criterion::measurement::WallTime;
 use criterion::{black_box, Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use tokio::runtime::Runtime as AsyncRuntime;
 
-use ore::metrics::MetricsRegistry;
+use mz_ore::metrics::MetricsRegistry;
 
-use persist::client::{RuntimeClient, StreamReadHandle};
-use persist::error::{Error, ErrorLog};
-use persist::file::FileBlob;
-use persist::indexed::Snapshot;
-use persist::mem::MemRegistry;
-use persist::runtime::{self, RuntimeConfig};
-use persist::s3::{S3Blob, S3BlobConfig};
-use persist::storage::{Atomicity, Blob, BlobRead, LockInfo};
-use persist::workload::{self, DataGenerator};
-use persist_types::Codec;
+use mz_persist::client::{RuntimeClient, StreamReadHandle};
+use mz_persist::error::{Error, ErrorLog};
+use mz_persist::file::FileBlob;
+use mz_persist::indexed::Snapshot;
+use mz_persist::mem::MemRegistry;
+use mz_persist::runtime::{self, RuntimeConfig};
+use mz_persist::s3::{S3Blob, S3BlobConfig};
+use mz_persist::storage::{Atomicity, Blob, BlobRead, LockInfo};
+use mz_persist::workload::{self, DataGenerator};
+use mz_persist_types::Codec;
 use uuid::Uuid;
 
 pub fn bench_blob_get(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
@@ -144,7 +144,7 @@ pub fn bench_file(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
             RuntimeConfig::default(),
             ErrorLog,
             FileBlob::open_exclusive(blob_dir.into(), lock_info)?,
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )

@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
-use ore::str::{bracketed, separated, StrExt};
-use repr::RelationType;
+use mz_ore::str::{bracketed, separated, StrExt};
+use mz_repr::RelationType;
 
 use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr};
 

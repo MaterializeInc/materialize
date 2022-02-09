@@ -11,7 +11,7 @@ use anyhow::Result;
 use tokio::time::{self, Duration};
 use tokio_postgres::{error::SqlState, Client, Error, NoTls, Row};
 
-use ore::task;
+use mz_ore::task;
 
 /// Create and return a new PostgreSQL client, spawning off the connection
 /// object along the way.

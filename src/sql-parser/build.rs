@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use uncased::UncasedStr;
 
-use ore::codegen::CodegenBuf;
+use mz_ore::codegen::CodegenBuf;
 
 const AST_DEFS_MOD: &str = "src/ast/defs.rs";
 const KEYWORDS_LIST: &str = "src/keywords.txt";
@@ -84,10 +84,10 @@ fn main() -> Result<()> {
 
     // Generate AST visitors.
     {
-        let ir = walkabout::load(AST_DEFS_MOD)?;
-        let fold = walkabout::gen_fold(&ir);
-        let visit = walkabout::gen_visit(&ir);
-        let visit_mut = walkabout::gen_visit_mut(&ir);
+        let ir = mz_walkabout::load(AST_DEFS_MOD)?;
+        let fold = mz_walkabout::gen_fold(&ir);
+        let visit = mz_walkabout::gen_visit(&ir);
+        let visit_mut = mz_walkabout::gen_visit_mut(&ir);
         fs::write(out_dir.join("fold.rs"), fold)?;
         fs::write(out_dir.join("visit.rs"), visit)?;
         fs::write(out_dir.join("visit_mut.rs"), visit_mut)?;

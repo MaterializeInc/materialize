@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::mem;
 
 use crate::TransformArgs;
-use expr::{Id, MirRelationExpr, RECURSION_LIMIT};
-use ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_expr::{Id, MirRelationExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Hoist projections through operators.
 #[derive(Debug)]
@@ -54,7 +54,7 @@ impl ProjectionLifting {
         &self,
         relation: &mut MirRelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut HashMap<Id, (repr::RelationType, Vec<usize>)>,
+        gets: &mut HashMap<Id, (mz_repr::RelationType, Vec<usize>)>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             match relation {
@@ -199,7 +199,7 @@ impl ProjectionLifting {
                             }
                         }
 
-                        *implementation = expr::JoinImplementation::Unimplemented;
+                        *implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         *relation = relation.take_dangerous().project(projection);
                     }

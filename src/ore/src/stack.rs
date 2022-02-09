@@ -145,7 +145,7 @@ where
 /// #     Var { name: String },
 /// #     Add { left: Box<Expr>, right: Box<Expr> },
 /// # }
-/// use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+/// use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 ///
 /// struct Evaluator {
 ///     vars: HashMap<String, i64>,

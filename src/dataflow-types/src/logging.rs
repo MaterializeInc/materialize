@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use expr::GlobalId;
-use repr::{RelationDesc, ScalarType};
+use mz_expr::GlobalId;
+use mz_repr::{RelationDesc, ScalarType};
 
 /// Logging configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

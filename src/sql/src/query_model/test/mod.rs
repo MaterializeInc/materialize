@@ -12,7 +12,7 @@ pub(crate) mod util;
 
 use crate::plan::query::QueryLifetime;
 use crate::plan::StatementContext;
-use expr_test_util::generate_explanation;
+use mz_expr_test_util::generate_explanation;
 
 use crate::query_model;
 use catalog::TestCatalog;
@@ -25,7 +25,7 @@ fn test_hir_generator() {
         f.run(move |s| -> String {
             let build_stmt = |stmt, dot_graph, lower| -> String {
                 let scx = &StatementContext::new(None, &catalog);
-                if let sql_parser::ast::Statement::Select(query) = stmt {
+                if let mz_sql_parser::ast::Statement::Select(query) = stmt {
                     let planned_query = match crate::plan::query::plan_root_query(
                         scx,
                         query.query,
@@ -58,7 +58,7 @@ fn test_hir_generator() {
             };
 
             let execute_command = |dot_graph, lower| -> String {
-                let stmts = match sql_parser::parser::parse_statements(&s.input) {
+                let stmts = match mz_sql_parser::parser::parse_statements(&s.input) {
                     Ok(stmts) => stmts,
                     Err(e) => return format!("unable to parse SQL: {}: {}", s.input, e),
                 };

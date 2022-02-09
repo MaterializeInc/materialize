@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use build_info::BuildInfo;
 use futures_executor::block_on;
-use ore::cast::CastFrom;
-use persist_types::Codec;
+use mz_build_info::BuildInfo;
+use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec;
 use semver::Version;
 use tokio::runtime::Runtime as AsyncRuntime;
 
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn build_version() -> Result<(), Error> {
         let mut cache = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::new(AsyncRuntime::new()?),
             MemRegistry::new().blob_no_reentrance()?,

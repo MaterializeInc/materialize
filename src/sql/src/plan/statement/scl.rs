@@ -15,8 +15,8 @@
 use anyhow::bail;
 use uncased::UncasedStr;
 
-use repr::adt::interval::Interval;
-use repr::{RelationDesc, ScalarType};
+use mz_repr::adt::interval::Interval;
+use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,

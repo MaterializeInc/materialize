@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::trace::Description;
-use ore::cast::CastFrom;
+use mz_ore::cast::CastFrom;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -1512,7 +1512,7 @@ mod tests {
         let blob = registry.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
         let blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::clone(&metrics),
             Arc::clone(&async_runtime),
             blob,

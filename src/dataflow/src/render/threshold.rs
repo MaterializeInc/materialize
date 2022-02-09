@@ -15,16 +15,16 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Consolidate;
-use expr::MirScalarExpr;
+use mz_expr::MirScalarExpr;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use repr::{Diff, Row};
+use mz_repr::{Diff, Row};
 
 use crate::arrangement::manager::RowSpine;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use dataflow_types::plan::threshold::{
+use mz_dataflow_types::plan::threshold::{
     BasicThresholdPlan, RetractionsThresholdPlan, ThresholdPlan,
 };
 

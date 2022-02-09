@@ -33,8 +33,8 @@ mod tests {
     use ordered_float::OrderedFloat;
 
     use mz_avro::types::{DecimalValue, Value};
-    use repr::adt::numeric;
-    use repr::{Datum, RelationDesc, ScalarType};
+    use mz_repr::adt::numeric;
+    use mz_repr::{Datum, RelationDesc, ScalarType};
 
     use super::*;
 

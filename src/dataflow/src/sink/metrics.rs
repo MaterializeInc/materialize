@@ -9,7 +9,7 @@
 
 //! Metrics that sinks report.
 
-use ore::{
+use mz_ore::{
     metric,
     metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec},
 };

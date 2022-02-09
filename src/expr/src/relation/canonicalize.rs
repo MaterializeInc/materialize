@@ -11,7 +11,7 @@
 //! into canonical form.
 
 use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
-use repr::{Datum, RelationType, ScalarType};
+use mz_repr::{Datum, RelationType, ScalarType};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -111,8 +111,8 @@ pub fn canonicalize_equivalences(
 /// * ensures the same expression appears in only one equivalence class.
 /// * ensures the equivalence classes are sorted and dedupped.
 /// ```rust
-/// use expr::MirScalarExpr;
-/// use expr::canonicalize::canonicalize_equivalence_classes;
+/// use mz_expr::MirScalarExpr;
+/// use mz_expr::canonicalize::canonicalize_equivalence_classes;
 ///
 /// let mut equivalences = vec![
 ///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use fail::fail_point;
 
-use ore::cast::CastFrom;
+use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};

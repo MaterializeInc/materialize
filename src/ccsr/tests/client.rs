@@ -9,15 +9,15 @@
 
 use std::env;
 
-use ccsr::SchemaReference;
 use hyper::server::conn::AddrIncoming;
 use hyper::service;
 use hyper::Server;
 use hyper::StatusCode;
 use hyper::{Body, Response};
 use lazy_static::lazy_static;
+use mz_ccsr::SchemaReference;
 
-use ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
+use mz_ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
 
 lazy_static! {
     pub static ref SCHEMA_REGISTRY_URL: reqwest::Url = match env::var("SCHEMA_REGISTRY_URL") {
@@ -28,7 +28,7 @@ lazy_static! {
 
 #[tokio::test]
 async fn test_client() -> Result<(), anyhow::Error> {
-    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
+    let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     let existing_subjects = client.list_subjects().await?;
     for s in existing_subjects {
@@ -134,7 +134,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
 
 #[tokio::test]
 async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
-    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
+    let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     let existing_subjects = client.list_subjects().await?;
     for s in existing_subjects {
@@ -240,7 +240,7 @@ async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
 #[tokio::test]
 async fn test_client_errors() -> Result<(), anyhow::Error> {
     let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
-    match ccsr::ClientConfig::new(invalid_schema_registry_url).build() {
+    match mz_ccsr::ClientConfig::new(invalid_schema_registry_url).build() {
         Err(e) => assert_eq!(
             "cannot construct a CCSR client with a cannot-be-a-base URL",
             e.to_string(),
@@ -248,7 +248,7 @@ async fn test_client_errors() -> Result<(), anyhow::Error> {
         res => panic!("Expected error, got {:?}", res),
     }
 
-    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
+    let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     // Get-by-id-specific errors.
     match client.get_schema_by_id(i32::max_value()).await {
@@ -384,7 +384,7 @@ fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, a
                         .body(Body::from(body))
                 }))
             }));
-        ore::task::spawn(|| "start_server", async {
+        mz_ore::task::spawn(|| "start_server", async {
             match server.await {
                 Ok(()) => (),
                 Err(err) => eprintln!("server error: {}", err),
@@ -394,7 +394,7 @@ fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, a
     };
 
     let url: reqwest::Url = format!("http://{}", addr).parse().unwrap();
-    ccsr::ClientConfig::new(url).build()
+    mz_ccsr::ClientConfig::new(url).build()
 }
 
 fn assert_raw_schemas_eq(schema1: &str, schema2: &str) {

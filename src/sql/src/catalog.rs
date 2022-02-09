@@ -16,14 +16,14 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
-use dataflow_types::sources::SourceConnector;
 use lazy_static::lazy_static;
+use mz_dataflow_types::sources::SourceConnector;
 
-use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
-use ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use repr::{RelationDesc, ScalarType};
-use sql_parser::ast::{Expr, Raw};
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
+use mz_repr::{RelationDesc, ScalarType};
+use mz_sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
 use crate::func::Func;

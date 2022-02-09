@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::row::DatumList;
 use std::cmp::Ordering;
 
-use lowertest::MzReflect;
+use mz_lowertest::MzReflect;
 
 /// The maximum number of dimensions permitted in an array.
 pub const MAX_ARRAY_DIMENSIONS: u8 = 6;

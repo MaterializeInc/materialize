@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use persist::workload::DataGenerator;
+use mz_persist::workload::DataGenerator;
 
 mod end_to_end;
 mod snapshot;
@@ -18,7 +18,7 @@ pub fn bench_persist(c: &mut Criterion) {
     // Override the default of "info" here because the s3 library is chatty on
     // info while initializing. It's good info to have in mz logs, but ends
     // being as spammy in these benchmarks.
-    ore::test::init_logging_default("warn");
+    mz_ore::test::init_logging_default("warn");
     let data = DataGenerator::default();
 
     end_to_end::bench_load(&data, &mut c.benchmark_group("end_to_end/load"));

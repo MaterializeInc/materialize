@@ -13,11 +13,11 @@ use std::convert::TryFrom;
 use itertools::Itertools;
 use postgres::error::SqlState;
 
-use coord::session::TransactionStatus as CoordTransactionStatus;
-use coord::{CoordError, StartupMessage};
-use pgcopy::CopyErrorNotSupportedResponse;
-use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use repr::{ColumnName, NotNullViolation, RelationDesc, ScalarType};
+use mz_coord::session::TransactionStatus as CoordTransactionStatus;
+use mz_coord::{CoordError, StartupMessage};
+use mz_pgcopy::CopyErrorNotSupportedResponse;
+use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use mz_repr::{ColumnName, NotNullViolation, RelationDesc, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -135,12 +135,12 @@ pub enum FrontendMessage {
         /// prepared statement.
         statement_name: String,
         /// The formats used to encode the parameters in `raw_parameters`.
-        param_formats: Vec<pgrepr::Format>,
+        param_formats: Vec<mz_pgrepr::Format>,
         /// The value of each parameter, encoded using the formats described
         /// by `parameter_formats`.
         raw_params: Vec<Option<Vec<u8>>>,
         /// The desired formats for the columns in the result set.
-        result_formats: Vec<pgrepr::Format>,
+        result_formats: Vec<mz_pgrepr::Format>,
     },
 
     /// Execute a bound portal.
@@ -222,13 +222,13 @@ pub enum BackendMessage {
     EmptyQueryResponse,
     ReadyForQuery(TransactionStatus),
     RowDescription(Vec<FieldDescription>),
-    DataRow(Vec<Option<pgrepr::Value>>),
+    DataRow(Vec<Option<mz_pgrepr::Value>>),
     ParameterStatus(&'static str, String),
     BackendKeyData {
         conn_id: u32,
         secret_key: u32,
     },
-    ParameterDescription(Vec<pgrepr::Type>),
+    ParameterDescription(Vec<mz_pgrepr::Type>),
     PortalSuspended,
     NoData,
     ParseComplete,
@@ -236,12 +236,12 @@ pub enum BackendMessage {
     CloseComplete,
     ErrorResponse(ErrorResponse),
     CopyInResponse {
-        overall_format: pgrepr::Format,
-        column_formats: Vec<pgrepr::Format>,
+        overall_format: mz_pgrepr::Format,
+        column_formats: Vec<mz_pgrepr::Format>,
     },
     CopyOutResponse {
-        overall_format: pgrepr::Format,
-        column_formats: Vec<pgrepr::Format>,
+        overall_format: mz_pgrepr::Format,
+        column_formats: Vec<mz_pgrepr::Format>,
     },
     CopyData(Vec<u8>),
     CopyDone,
@@ -453,17 +453,17 @@ pub struct FieldDescription {
     pub type_len: i16,
     // https://github.com/cockroachdb/cockroach/blob/3e8553e249a842e206aa9f4f8be416b896201f10/pkg/sql/pgwire/conn.go#L1115-L1123
     pub type_mod: i32,
-    pub format: pgrepr::Format,
+    pub format: mz_pgrepr::Format,
 }
 
 pub fn encode_row_description(
     desc: &RelationDesc,
-    formats: &[pgrepr::Format],
+    formats: &[mz_pgrepr::Format],
 ) -> Vec<FieldDescription> {
     desc.iter()
         .zip_eq(formats)
         .map(|((name, typ), format)| {
-            let pg_type = pgrepr::Type::from(&typ.scalar_type);
+            let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
             FieldDescription {
                 name: name.clone(),
                 table_id: 0,

@@ -9,7 +9,7 @@
 
 use std::marker::PhantomData;
 
-use ore::metrics::ThirdPartyMetric;
+use mz_ore::metrics::ThirdPartyMetric;
 use prometheus::IntCounterVec;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
@@ -50,9 +50,9 @@ mod test {
     use std::collections::HashMap;
 
     use super::MetricsRecorderLayer;
-    use ore::metric;
-    use ore::metrics::raw::IntCounterVec;
-    use ore::metrics::{MetricsRegistry, ThirdPartyMetric};
+    use mz_ore::metric;
+    use mz_ore::metrics::raw::IntCounterVec;
+    use mz_ore::metrics::{MetricsRegistry, ThirdPartyMetric};
     use tracing::{error, info, warn};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;

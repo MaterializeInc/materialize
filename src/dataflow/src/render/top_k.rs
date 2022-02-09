@@ -21,16 +21,18 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use dataflow_types::plan::top_k::{BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan};
-use repr::{Diff, Row};
+use mz_dataflow_types::plan::top_k::{
+    BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
+};
+use mz_repr::{Diff, Row};
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, Row, repr::Timestamp>
+impl<G> Context<G, Row, mz_repr::Timestamp>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     pub fn render_topk(
         &mut self,
@@ -88,7 +90,7 @@ where
         fn build_topk<G>(
             collection: Collection<G, Row, Diff>,
             group_key: Vec<usize>,
-            order_key: Vec<expr::ColumnOrder>,
+            order_key: Vec<mz_expr::ColumnOrder>,
             offset: usize,
             limit: Option<usize>,
             arity: usize,
@@ -97,14 +99,14 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
-            let mut datum_vec = repr::DatumVec::new();
+            let mut datum_vec = mz_repr::DatumVec::new();
             let mut collection = collection.map({
                 move |row| {
                     let row_hash = row.hashed();
                     let group_row = {
                         let datums = datum_vec.borrow_with(&row);
                         let iterator = group_key.iter().map(|i| datums[*i]);
-                        let total_size = repr::datums_size(iterator.clone());
+                        let total_size = mz_repr::datums_size(iterator.clone());
                         let mut group_row = Row::with_capacity(total_size);
                         group_row.extend(iterator);
                         group_row
@@ -154,7 +156,7 @@ where
         // a larger number of arrangements when this optimization does nothing beneficial.
         fn build_topk_stage<G>(
             collection: Collection<G, ((Row, u64), Row), Diff>,
-            order_key: Vec<expr::ColumnOrder>,
+            order_key: Vec<mz_expr::ColumnOrder>,
             modulus: u64,
             offset: usize,
             limit: Option<usize>,
@@ -201,7 +203,9 @@ where
                             indexes.sort_by(|left, right| {
                                 let left = &buffer[left * width..][..width];
                                 let right = &buffer[right * width..][..width];
-                                expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                                mz_expr::compare_columns(&order_key, left, right, || {
+                                    left.cmp(right)
+                                })
                             });
                         }
 
@@ -239,7 +243,7 @@ where
         fn render_top1_monotonic<G>(
             collection: Collection<G, Row, Diff>,
             group_key: Vec<usize>,
-            order_key: Vec<expr::ColumnOrder>,
+            order_key: Vec<mz_expr::ColumnOrder>,
         ) -> Collection<G, Row, Diff>
         where
             G: Scope,
@@ -251,12 +255,12 @@ where
             use timely::dataflow::operators::Map;
 
             let collection = collection.map({
-                let mut datum_vec = repr::DatumVec::new();
+                let mut datum_vec = mz_repr::DatumVec::new();
                 move |row| {
                     let group_key = {
                         let datums = datum_vec.borrow_with(&row);
                         let iterator = group_key.iter().map(|i| datums[*i]);
-                        let total_size = repr::datums_size(iterator.clone());
+                        let total_size = mz_repr::datums_size(iterator.clone());
                         let mut group_key = Row::with_capacity(total_size);
                         group_key.extend(iterator);
                         group_key
@@ -308,8 +312,8 @@ pub mod monoids {
     use differential_dataflow::difference::Semigroup;
     use serde::{Deserialize, Serialize};
 
-    use expr::ColumnOrder;
-    use repr::Row;
+    use mz_expr::ColumnOrder;
+    use mz_repr::Row;
 
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
@@ -326,7 +330,7 @@ pub mod monoids {
             // have to store the decoded Datums in the same struct as the Row, which gets tricky.
             let left: Vec<_> = self.row.unpack();
             let right: Vec<_> = other.row.unpack();
-            expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
+            mz_expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
         }
     }
     impl PartialOrd for Top1Monoid {

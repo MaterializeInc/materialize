@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 
-use expr::GlobalId;
+use mz_expr::GlobalId;
 
 use crate::coord::antichain::AntichainToken;
 

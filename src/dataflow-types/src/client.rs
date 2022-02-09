@@ -24,8 +24,8 @@ use crate::{
     sources::MzOffset, sources::SourceConnector, DataflowDescription, PeekResponse, TailResponse,
     Update,
 };
-use expr::{GlobalId, PartitionId, RowSetFinishing};
-use repr::{Row, Timestamp};
+use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
+use mz_repr::{Row, Timestamp};
 
 pub mod controller;
 pub use controller::Controller;
@@ -96,7 +96,7 @@ pub enum ComputeCommand {
         /// Actions to apply to the result set before returning them.
         finishing: RowSetFinishing,
         /// Linear operation to apply in-line on each result.
-        map_filter_project: expr::SafeMfpPlan,
+        map_filter_project: mz_expr::SafeMfpPlan,
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek {
@@ -379,7 +379,7 @@ pub trait ComputeClient: Client {
         conn_id: u32,
         timestamp: Timestamp,
         finishing: RowSetFinishing,
-        map_filter_project: expr::SafeMfpPlan,
+        map_filter_project: mz_expr::SafeMfpPlan,
     ) {
         self.send(Command::Compute(
             ComputeCommand::Peek {
@@ -649,8 +649,8 @@ pub mod partitioned {
 
     use std::collections::HashMap;
 
-    use expr::GlobalId;
-    use repr::Timestamp;
+    use mz_expr::GlobalId;
+    use mz_repr::Timestamp;
 
     use super::{Client, ComputeResponse, StorageResponse};
     use super::{Command, PeekResponse, Response};

@@ -1,5 +1,5 @@
 [package]
-name = "avro-derive"
+name = "mz-avro-derive"
 version = "0.0.0"
 authors = ["Brennan Vincent <brennan@umanwizard.com>"]
 license = "Apache-2.0"

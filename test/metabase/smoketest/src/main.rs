@@ -14,12 +14,12 @@ use itertools::Itertools;
 use tokio::net::TcpStream;
 use tokio_postgres::NoTls;
 
-use metabase::{
+use mz_metabase::{
     DatabaseMetadata, LoginRequest, SetupDatabase, SetupDatabaseDetails, SetupPrefs, SetupRequest,
     SetupUser, Table, TableField,
 };
-use ore::retry::Retry;
-use ore::task;
+use mz_ore::retry::Retry;
+use mz_ore::task;
 
 const DUMMY_EMAIL: &str = "ci@materialize.io";
 const DUMMY_PASSWORD: &str = "dummydummy1";
@@ -48,9 +48,9 @@ async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error>
     Ok(client)
 }
 
-async fn connect_metabase() -> Result<metabase::Client, anyhow::Error> {
-    let mut client =
-        metabase::Client::new("http://metabase:3000").context("failed creating metabase client")?;
+async fn connect_metabase() -> Result<mz_metabase::Client, anyhow::Error> {
+    let mut client = mz_metabase::Client::new("http://metabase:3000")
+        .context("failed creating metabase client")?;
     let setup_token = Retry::default()
         .max_duration(Duration::from_secs(30))
         .retry_async(|_| async {
@@ -103,7 +103,7 @@ async fn connect_metabase() -> Result<metabase::Client, anyhow::Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let pgclient = connect_materialized().await?;
     pgclient

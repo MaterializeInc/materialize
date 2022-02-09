@@ -17,12 +17,12 @@
 //!     the [`LinearOperator`] and then the `projection`.
 //!   * Intermediate views in the dataflow come next.
 //!     The format is "View <name> (<id>):" followed by the output of
-//!     [`expr::explain::ViewExplanation`].
+//!     [`mz_expr::explain::ViewExplanation`].
 //!   * Last is the view or query being explained. The format is "Query:"
-//!     followed by the output of [`expr::explain::ViewExplanation`].
+//!     followed by the output of [`mz_expr::explain::ViewExplanation`].
 //!   * If there are no sources with some [`LinearOperator`] and no intermediate
 //!     views, then the format is identical to the format of
-//!     [`expr::explain::ViewExplanation`].
+//!     [`mz_expr::explain::ViewExplanation`].
 //!
 //! It's important to avoid trailing whitespace everywhere, as plans may be
 //! printed in contexts where trailing whitespace is unacceptable, like
@@ -32,10 +32,10 @@ use std::fmt;
 
 use crate::{DataflowDescription, LinearOperator};
 
-use expr::explain::{Indices, ViewExplanation};
-use expr::{ExprHumanizer, GlobalId, OptimizedMirRelationExpr, RowSetFinishing};
-use ore::result::ResultExt;
-use ore::str::{bracketed, separated};
+use mz_expr::explain::{Indices, ViewExplanation};
+use mz_expr::{ExprHumanizer, GlobalId, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_ore::result::ResultExt;
+use mz_ore::str::{bracketed, separated};
 
 pub trait ViewFormatter<ViewExpr> {
     fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result;

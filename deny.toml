@@ -104,8 +104,8 @@ wrappers = [
 
 
     # TODO(guswynn): switch to `tracing:enabled!` when its released
-    "dataflow",
-    "coord",
+    "mz-dataflow",
+    "mz-coord",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more

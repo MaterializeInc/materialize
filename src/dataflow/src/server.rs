@@ -32,20 +32,20 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use dataflow_types::client::{
+use mz_dataflow_types::client::{
     Command, ComputeCommand, ComputeResponse, LocalClient, Response, StorageCommand,
     StorageResponse, TimestampBindingFeedback,
 };
-use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{
+use mz_dataflow_types::logging::LoggingConfig;
+use mz_dataflow_types::{
     sources::{ExternalSourceConnector, SourceConnector},
     DataflowError, PeekResponse,
 };
-use expr::{GlobalId, PartitionId, RowSetFinishing};
-use ore::metrics::MetricsRegistry;
-use ore::now::NowFn;
-use ore::result::ResultExt;
-use repr::{DatumVec, Diff, Row, RowArena, Timestamp};
+use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::NowFn;
+use mz_ore::result::ResultExt;
+use mz_repr::{DatumVec, Diff, Row, RowArena, Timestamp};
 
 use self::metrics::{ServerMetrics, WorkerMetrics};
 use crate::activator::RcActivator;
@@ -79,7 +79,7 @@ pub struct Config {
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
     /// A handle to a persistence runtime, if persistence is enabled.
-    pub persister: Option<persist::client::RuntimeClient>,
+    pub persister: Option<mz_persist::client::RuntimeClient>,
 }
 
 /// A handle to a running dataflow server.
@@ -1013,7 +1013,7 @@ struct PendingPeek {
     /// limit.
     finishing: RowSetFinishing,
     /// Linear operators to apply in-line to all results.
-    map_filter_project: expr::SafeMfpPlan,
+    map_filter_project: mz_expr::SafeMfpPlan,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
 }
@@ -1167,7 +1167,7 @@ impl PendingPeek {
                                 results.sort_by(|left, right| {
                                     let left_datums = l_datum_vec.borrow_with(left);
                                     let right_datums = r_datum_vec.borrow_with(right);
-                                    expr::compare_columns(
+                                    mz_expr::compare_columns(
                                         &self.finishing.order_by,
                                         &left_datums,
                                         &right_datums,

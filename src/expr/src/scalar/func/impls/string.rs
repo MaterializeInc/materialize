@@ -14,13 +14,13 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use lowertest::MzReflect;
-use ore::result::ResultExt;
-use repr::adt::char::{format_str_trim, Char};
-use repr::adt::interval::Interval;
-use repr::adt::numeric::{self, Numeric};
-use repr::adt::varchar::VarChar;
-use repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_ore::result::ResultExt;
+use mz_repr::adt::char::{format_str_trim, Char};
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::numeric::{self, Numeric};
+use mz_repr::adt::varchar::VarChar;
+use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
 use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
@@ -396,13 +396,14 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
     type Output = Result<VarChar<String>, EvalError>;
 
     fn call(&self, a: &'a str) -> Result<VarChar<String>, EvalError> {
-        let s = repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
-            assert!(self.fail_on_len);
-            EvalError::StringValueTooLong {
-                target_type: "character varying".to_string(),
-                length: self.length.unwrap(),
-            }
-        })?;
+        let s =
+            mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
+                assert!(self.fail_on_len);
+                EvalError::StringValueTooLong {
+                    target_type: "character varying".to_string(),
+                    length: self.length.unwrap(),
+                }
+            })?;
 
         Ok(VarChar(s))
     }

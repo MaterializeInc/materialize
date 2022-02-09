@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::{sources::encoding::ProtobufEncoding, DecodeError};
-use interchange::protobuf::{DecodedDescriptors, Decoder};
-use repr::Row;
+use mz_dataflow_types::{sources::encoding::ProtobufEncoding, DecodeError};
+use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
+use mz_repr::Row;
 
 #[derive(Debug)]
 pub struct ProtobufDecoderState {

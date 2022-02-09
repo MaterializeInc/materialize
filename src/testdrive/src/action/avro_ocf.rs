@@ -16,7 +16,7 @@ use std::path::{self, PathBuf};
 use anyhow::{bail, Context as _};
 use async_trait::async_trait;
 
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 
 use crate::action::{Action, Context, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};

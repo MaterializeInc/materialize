@@ -15,10 +15,10 @@
 
 use anyhow::bail;
 
-use expr::Id;
-use ore::collections::CollectionExt;
-use repr::{Datum, RelationDesc, Row, ScalarType};
-use sql_parser::ast::display::AstDisplay;
+use mz_expr::Id;
+use mz_ore::collections::CollectionExt;
+use mz_repr::{Datum, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{

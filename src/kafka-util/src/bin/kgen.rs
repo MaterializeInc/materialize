@@ -33,8 +33,8 @@ use url::Url;
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
-use ore::cast::CastFrom;
-use ore::retry::Retry;
+use mz_ore::cast::CastFrom;
+use mz_ore::retry::Retry;
 
 trait Generator<R>: FnMut(&mut ThreadRng) -> R + Send + Sync {
     fn clone_box(&self) -> Box<dyn Generator<R>>;
@@ -584,7 +584,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
 
     let value_gen = match args.value_format {
         ValueFormat::Bytes => {
@@ -612,12 +612,12 @@ async fn main() -> anyhow::Result<()> {
                 bail!("cannot specify --max-message-size without --values=bytes");
             }
             let value_schema = args.avro_value_schema.as_ref().unwrap();
-            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url.clone()).build()?;
+            let ccsr = mz_ccsr::ClientConfig::new(args.schema_registry_url.clone()).build()?;
             let schema_id = ccsr
                 .publish_schema(
                     &format!("{}-value", args.topic),
                     &value_schema.to_string(),
-                    ccsr::SchemaType::Avro,
+                    mz_ccsr::SchemaType::Avro,
                     &[],
                 )
                 .await?;
@@ -642,12 +642,12 @@ async fn main() -> anyhow::Result<()> {
                 bail!("cannot specify --key-max without --keys=bytes");
             }
             let key_schema = args.avro_key_schema.as_ref().unwrap();
-            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url).build()?;
+            let ccsr = mz_ccsr::ClientConfig::new(args.schema_registry_url).build()?;
             let key_schema_id = ccsr
                 .publish_schema(
                     &format!("{}-key", args.topic),
                     &key_schema.to_string(),
-                    ccsr::SchemaType::Avro,
+                    mz_ccsr::SchemaType::Avro,
                     &[],
                 )
                 .await?;
@@ -694,10 +694,10 @@ async fn main() -> anyhow::Result<()> {
             let topic = &args.topic;
             let mut key_gen = key_gen.clone();
             let mut value_gen = value_gen.clone();
-            let producer: ThreadedProducer<kafka_util::client::MzClientContext> =
+            let producer: ThreadedProducer<mz_kafka_util::client::MzClientContext> =
                 ClientConfig::new()
                     .set("bootstrap.servers", args.bootstrap_server.to_string())
-                    .create_with_context(kafka_util::client::MzClientContext)
+                    .create_with_context(mz_kafka_util::client::MzClientContext)
                     .unwrap();
             let mut key_buf = vec![];
             let mut value_buf = vec![];

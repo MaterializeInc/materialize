@@ -72,7 +72,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 use std::{env, thread};
 
-use ore::test::init_logging;
+use mz_ore::test::init_logging;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use timely::progress::Antichain;

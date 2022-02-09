@@ -20,14 +20,14 @@
 
 use tempfile::NamedTempFile;
 
-use coord::catalog::{Catalog, CatalogItem, Table};
-use coord::session::Session;
-use expr::GlobalId;
-use ore::now::NOW_ZERO;
-use repr::RelationDesc;
-use sql::ast::{Expr, Statement};
-use sql::names::{DatabaseSpecifier, FullName};
-use sql::plan::{resolve_names, PlanContext, QueryContext, QueryLifetime, StatementContext};
+use mz_coord::catalog::{Catalog, CatalogItem, Table};
+use mz_coord::session::Session;
+use mz_expr::GlobalId;
+use mz_ore::now::NOW_ZERO;
+use mz_repr::RelationDesc;
+use mz_sql::ast::{Expr, Statement};
+use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::plan::{resolve_names, PlanContext, QueryContext, QueryLifetime, StatementContext};
 
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.
@@ -68,7 +68,7 @@ async fn datadriven() {
                     let sess = Session::dummy();
                     let catalog = catalog.for_session(&sess);
 
-                    let parsed = sql::parse::parse(&test_case.input).unwrap();
+                    let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
                     let pcx = &PlanContext::zero();
                     let scx = StatementContext::new(Some(pcx), &catalog);
                     let mut qcx =

@@ -12,8 +12,8 @@
 
 use uncased::UncasedStr;
 
-use ore::fmt::FormatBuffer;
-use repr::strconv;
+use mz_ore::fmt::FormatBuffer;
+use mz_repr::strconv;
 
 use crate::EvalError;
 

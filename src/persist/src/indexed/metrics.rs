@@ -9,8 +9,8 @@
 
 //! Persistence related monitoring metrics.
 
-use ore::metric;
-use ore::metrics::{Counter, MetricsRegistry, ThirdPartyMetric, UIntCounter, UIntGauge};
+use mz_ore::metric;
+use mz_ore::metrics::{Counter, MetricsRegistry, ThirdPartyMetric, UIntCounter, UIntGauge};
 
 /// Persistence related monitoring metrics for blob storage.
 #[derive(Clone, Debug)]

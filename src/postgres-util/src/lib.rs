@@ -18,11 +18,11 @@ use tokio_postgres::config::{ReplicationMode, SslMode};
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{Client, Config};
 
-use ore::task;
-use repr::adt;
-use sql_parser::ast::display::{AstDisplay, AstFormatter};
-use sql_parser::ast::Ident;
-use sql_parser::impl_display;
+use mz_ore::task;
+use mz_repr::adt;
+use mz_sql_parser::ast::display::{AstDisplay, AstFormatter};
+use mz_sql_parser::ast::Ident;
+use mz_sql_parser::impl_display;
 
 pub struct PgNumericMod {
     precision: u16,

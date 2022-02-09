@@ -98,8 +98,8 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
 use itertools::Itertools;
+use mz_repr::adt::interval::Interval;
 use rand::Rng;
-use repr::adt::interval::Interval;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
@@ -107,36 +107,36 @@ use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use build_info::BuildInfo;
-use dataflow_types::client::{ComputeClient, StorageClient, DEFAULT_COMPUTE_INSTANCE_ID};
-use dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
-use dataflow_types::client::{Response as DataflowResponse, StorageResponse};
-use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
-use dataflow_types::sources::{
+use mz_build_info::BuildInfo;
+use mz_dataflow_types::client::{ComputeClient, StorageClient, DEFAULT_COMPUTE_INSTANCE_ID};
+use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
+use mz_dataflow_types::client::{Response as DataflowResponse, StorageResponse};
+use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
+use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
-use dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
-use expr::{
+use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
+use mz_expr::{
     permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use ore::metrics::MetricsRegistry;
-use ore::now::{to_datetime, NowFn};
-use ore::retry::Retry;
-use ore::soft_assert_eq;
-use ore::task;
-use ore::thread::JoinHandleExt;
-use repr::adt::numeric;
-use repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
-use sql::ast::display::AstDisplay;
-use sql::ast::{
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::retry::Retry;
+use mz_ore::soft_assert_eq;
+use mz_ore::task;
+use mz_ore::thread::JoinHandleExt;
+use mz_repr::adt::numeric;
+use mz_repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
-use sql::catalog::{CatalogError, SessionCatalog as _};
-use sql::names::{DatabaseSpecifier, FullName};
-use sql::plan::{
+use mz_sql::catalog::{CatalogError, SessionCatalog as _};
+use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
@@ -145,8 +145,8 @@ use sql::plan::{
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
     SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
-use sql::plan::{OptimizerConfig, StatementDesc, View};
-use transform::Optimizer;
+use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
+use mz_transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use self::prometheus::Scraper;
@@ -178,7 +178,7 @@ mod prometheus;
 #[derive(Debug)]
 pub enum Message {
     Command(Command),
-    Worker(dataflow_types::client::Response),
+    Worker(mz_dataflow_types::client::Response),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
     ScrapeMetrics,
@@ -204,7 +204,7 @@ pub struct StatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<sql::ast::Statement<Raw>, CoordError>,
+    pub result: Result<mz_sql::ast::Statement<Raw>, CoordError>,
     pub params: Params,
 }
 
@@ -247,7 +247,7 @@ pub struct LoggingConfig {
 
 /// Configures a coordinator.
 pub struct Config {
-    pub dataflow_client: Box<dyn dataflow_types::client::Client>,
+    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client>,
     pub logging: Option<LoggingConfig>,
     pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
@@ -265,7 +265,8 @@ pub struct Config {
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
-    dataflow_client: dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
+    dataflow_client:
+        mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -1247,7 +1248,7 @@ impl Coordinator {
 
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
                         let catalog = self.catalog.for_session(&session);
-                        let purify_fut = sql::pure::purify(&catalog, stmt);
+                        let purify_fut = mz_sql::pure::purify(&catalog, stmt);
                         let conn_id = session.conn_id();
                         task::spawn(|| format!("purify:{conn_id}"), async move {
                             let result = purify_fut.await.map_err(|e| e.into());
@@ -1586,11 +1587,12 @@ impl Coordinator {
     async fn handle_statement(
         &mut self,
         session: &mut Session,
-        stmt: sql::ast::Statement<Raw>,
-        params: &sql::plan::Params,
-    ) -> Result<sql::plan::Plan, CoordError> {
+        stmt: mz_sql::ast::Statement<Raw>,
+        params: &mz_sql::plan::Params,
+    ) -> Result<mz_sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
-        let plan = sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
+        let plan =
+            mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
         Ok(plan)
     }
 
@@ -1599,11 +1601,11 @@ impl Coordinator {
         session: &mut Session,
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<mz_pgrepr::Type>>,
     ) -> Result<(), CoordError> {
         let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
-        let result_formats = vec![pgrepr::Format::Text; desc.arity()];
+        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
         session.set_portal(name, desc, Some(stmt), params, result_formats)?;
         Ok(())
     }
@@ -1613,7 +1615,7 @@ impl Coordinator {
         session: &mut Session,
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<mz_pgrepr::Type>>,
     ) -> Result<(), CoordError> {
         let desc = self.describe(session, stmt.clone(), param_types)?;
         session.set_prepared_statement(
@@ -1627,7 +1629,7 @@ impl Coordinator {
         &self,
         session: &Session,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<mz_pgrepr::Type>>,
     ) -> Result<StatementDesc, CoordError> {
         if let Some(stmt) = stmt {
             describe(&self.catalog, stmt, &param_types, session)
@@ -1766,7 +1768,7 @@ impl Coordinator {
         ];
         let df = self
             .catalog_transact(ops, |mut builder| {
-                let sink_description = dataflow_types::sinks::SinkDesc {
+                let sink_description = mz_dataflow_types::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: builder
                         .catalog
@@ -2452,7 +2454,7 @@ impl Coordinator {
                     .build_sink_dataflow(
                         "dummy".into(),
                         id,
-                        dataflow_types::sinks::SinkDesc {
+                        mz_dataflow_types::sinks::SinkDesc {
                             from: sink.from,
                             from_desc: builder
                                 .catalog
@@ -3193,7 +3195,7 @@ impl Coordinator {
         );
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
 
         // Finalization optimizes the dataflow as much as possible.
         let dataflow_plan = self.finalize_dataflow(dataflow);
@@ -3568,7 +3570,7 @@ impl Coordinator {
                     &optimized_plan,
                     &mut dataflow,
                 )?;
-                transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
+                mz_transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
                 timings.optimization = Some(start.elapsed());
                 Ok(dataflow)
             };
@@ -3576,7 +3578,7 @@ impl Coordinator {
         let mut explanation_string = match stage {
             ExplainStage::RawPlan => {
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = sql::plan::Explanation::new(&raw_plan, &catalog);
+                let mut explanation = mz_sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -3587,12 +3589,12 @@ impl Coordinator {
             }
             ExplainStage::QueryGraph => {
                 // TODO add type information to the output graph
-                let model = sql::query_model::Model::from(raw_plan);
+                let model = mz_sql::query_model::Model::from(raw_plan);
                 model.as_dot("")?
             }
             ExplainStage::OptimizedQueryGraph => {
                 // TODO add type information to the output graph
-                let mut model = sql::query_model::Model::from(raw_plan);
+                let mut model = mz_sql::query_model::Model::from(raw_plan);
                 model.optimize();
                 model.as_dot("")?
             }
@@ -3603,9 +3605,9 @@ impl Coordinator {
                 ));
                 let catalog = self.catalog.for_session(session);
                 let formatter =
-                    dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
+                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
-                    dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
+                    mz_dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -3617,9 +3619,10 @@ impl Coordinator {
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter =
-                    dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
-                let mut explanation =
-                    dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog, &formatter);
+                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
+                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
+                    &dataflow, &catalog, &formatter,
+                );
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -3629,13 +3632,13 @@ impl Coordinator {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
-                let dataflow_plan = dataflow_types::Plan::finalize_dataflow(dataflow)
+                let dataflow_plan = mz_dataflow_types::Plan::finalize_dataflow(dataflow)
                     .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = dataflow_types::Explanation::new_from_dataflow(
+                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
                     &dataflow_plan,
                     &catalog,
-                    &dataflow_types::JsonViewFormatter {},
+                    &mz_dataflow_types::JsonViewFormatter {},
                 );
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
@@ -3824,7 +3827,7 @@ impl Coordinator {
         rows: Vec<Row>,
     ) -> Result<ExecuteResponse, CoordError> {
         let catalog = self.catalog.for_session(session);
-        let values = sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
+        let values = mz_sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
 
         let constants = self
             .prep_relation_expr(values.lower(), ExprPrepStyle::Write)?
@@ -3911,7 +3914,7 @@ impl Coordinator {
                         |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
                             // Use 2x row len incase there's some assignments.
                             let mut diffs = Vec::with_capacity(rows.len() * 2);
-                            let mut datum_vec = repr::DatumVec::new();
+                            let mut datum_vec = mz_repr::DatumVec::new();
                             for row in rows {
                                 if !assignments.is_empty() {
                                     assert!(
@@ -4144,7 +4147,7 @@ impl Coordinator {
                         // Try to drop the replication slots, but give up after a while.
                         let _ = Retry::default()
                             .retry_async(|_state| {
-                                postgres_util::drop_replication_slots(&conn, &slot_names)
+                                mz_postgres_util::drop_replication_slots(&conn, &slot_names)
                             })
                             .await;
                     }
@@ -4272,8 +4275,8 @@ impl Coordinator {
             let mut opt_expr = self.view_optimizer.optimize(expr)?;
             opt_expr.0.try_visit_mut_post(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
-                if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
-                    let mfp = expr::MapFilterProject::new(input.arity())
+                if let mz_expr::MirRelationExpr::Filter { input, predicates } = &*e {
+                    let mfp = mz_expr::MapFilterProject::new(input.arity())
                         .filter(predicates.iter().cloned());
                     match mfp.into_plan() {
                         Err(e) => coord_bail!("{:?}", e),
@@ -4287,7 +4290,8 @@ impl Coordinator {
         } else {
             expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
 
-            if let (ExprPrepStyle::Write, expr::MirRelationExpr::Constant { .. }) = (&style, &expr)
+            if let (ExprPrepStyle::Write, mz_expr::MirRelationExpr::Constant { .. }) =
+                (&style, &expr)
             {
                 // We don't perform any optimizations on an expression that is already
                 // a constant for writes, as we want to maximize bulk-insert throughput.
@@ -4364,7 +4368,7 @@ impl Coordinator {
     fn finalize_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
-    ) -> dataflow_types::DataflowDescription<dataflow_types::Plan> {
+    ) -> mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -4425,7 +4429,7 @@ impl Coordinator {
             dataflow.set_as_of(since);
         }
 
-        dataflow_types::Plan::finalize_dataflow(dataflow)
+        mz_dataflow_types::Plan::finalize_dataflow(dataflow)
             .expect("Dataflow planning failed; unrecoverable error")
     }
 
@@ -4615,7 +4619,7 @@ pub async fn serve(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
-                dataflow_client: dataflow_types::client::Controller::new(dataflow_client),
+                dataflow_client: mz_dataflow_types::client::Controller::new(dataflow_client),
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 persister,
@@ -4733,11 +4737,11 @@ pub fn index_sql(
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
-    use sql::ast::{Expr, Value};
+    use mz_sql::ast::{Expr, Value};
 
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
-        on_name: sql::normalize::unresolve(view_name),
+        on_name: mz_sql::normalize::unresolve(view_name),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
@@ -4773,7 +4777,7 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 pub fn describe(
     catalog: &Catalog,
     stmt: Statement<Raw>,
-    param_types: &[Option<pgrepr::Type>],
+    param_types: &[Option<mz_pgrepr::Type>],
     session: &Session,
 ) -> Result<StatementDesc, CoordError> {
     match stmt {
@@ -4787,7 +4791,7 @@ pub fn describe(
         }
         _ => {
             let catalog = &catalog.for_session(session);
-            Ok(sql::plan::describe(
+            Ok(mz_sql::plan::describe(
                 &session.pcx(),
                 catalog,
                 stmt,
@@ -4835,8 +4839,8 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
             // isn't an obvious alternative; asking librdkafka about its =
             // defaults requires constructing a librdkafka client, and at that
             // point it's already too late.
-            let mut with_options = sql::normalize::options(with_options);
-            let with_options = sql::kafka_util::extract_config(&mut with_options)?;
+            let mut with_options = mz_sql::normalize::options(with_options);
+            let with_options = mz_sql::kafka_util::extract_config(&mut with_options)?;
             let security_protocol = with_options
                 .get("security.protocol")
                 .map(|v| v.as_str())
@@ -4866,16 +4870,16 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use dataflow_types::client::{ComputeClient, DEFAULT_COMPUTE_INSTANCE_ID};
+    use mz_dataflow_types::client::{ComputeClient, DEFAULT_COMPUTE_INSTANCE_ID};
     use std::collections::HashMap;
 
     use crate::CoordError;
-    use expr::{EvalError, GlobalId, Id, MirScalarExpr};
-    use repr::{Diff, Row};
+    use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
+    use mz_repr::{Diff, Row};
 
     #[derive(Debug)]
     pub struct PeekDataflowPlan {
-        desc: dataflow_types::DataflowDescription<dataflow_types::Plan>,
+        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
         id: GlobalId,
         key: Vec<MirScalarExpr>,
         permutation: HashMap<usize, usize>,
@@ -4886,9 +4890,9 @@ pub mod fast_path_peek {
     #[derive(Debug)]
     pub enum Plan {
         /// The view evaluates to a constant result that can be returned.
-        Constant(Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>),
+        Constant(Result<Vec<(Row, mz_repr::Timestamp, Diff)>, EvalError>),
         /// The view can be read out of an existing arrangement.
-        PeekExisting(GlobalId, Option<Row>, expr::SafeMfpPlan),
+        PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
         /// The view must be installed as a dataflow and then read.
         PeekDataflow(PeekDataflowPlan),
     }
@@ -4899,7 +4903,7 @@ pub mod fast_path_peek {
     /// we can avoid building a dataflow (and either just return the results, or peek
     /// out of the arrangement, respectively).
     pub fn create_plan(
-        dataflow_plan: dataflow_types::DataflowDescription<dataflow_types::Plan>,
+        dataflow_plan: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
         view_id: GlobalId,
         index_id: GlobalId,
         index_key: Vec<MirScalarExpr>,
@@ -4916,11 +4920,11 @@ pub mod fast_path_peek {
         {
             match &dataflow_plan.objects_to_build[0].view {
                 // In the case of a constant, we can return the result now.
-                dataflow_types::Plan::Constant { rows } => {
+                mz_dataflow_types::Plan::Constant { rows } => {
                     return Ok(Plan::Constant(rows.clone()));
                 }
                 // In the case of a bare `Get`, we may be able to directly index an arrangement.
-                dataflow_types::Plan::Get {
+                mz_dataflow_types::Plan::Get {
                     id,
                     keys: _,
                     mfp,
@@ -4974,8 +4978,8 @@ pub mod fast_path_peek {
         pub async fn implement_fast_path_peek(
             &mut self,
             fast_path: Plan,
-            timestamp: repr::Timestamp,
-            finishing: expr::RowSetFinishing,
+            timestamp: mz_repr::Timestamp,
+            finishing: mz_expr::RowSetFinishing,
             conn_id: u32,
             source_arity: usize,
         ) -> Result<crate::ExecuteResponse, CoordError> {
@@ -5046,7 +5050,7 @@ pub mod fast_path_peek {
                         .create_dataflows(DEFAULT_COMPUTE_INSTANCE_ID, vec![dataflow])
                         .await;
                     // Create an identity MFP operator.
-                    let mut map_filter_project = expr::MapFilterProject::new(source_arity);
+                    let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
                     map_filter_project
                         .permute(index_permutation, index_key.len() + index_thinned_arity);
                     let map_filter_project = map_filter_project
@@ -5094,9 +5098,9 @@ pub mod fast_path_peek {
                 )
                 .await;
 
-            use dataflow_types::PeekResponse;
             use futures::FutureExt;
             use futures::StreamExt;
+            use mz_dataflow_types::PeekResponse;
 
             // Prepare the receiver to return as a response.
             let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
@@ -5144,6 +5148,6 @@ impl Coordinator {
         let df = DataflowDesc::new("".into());
         let _: () = self.ship_dataflow(df.clone()).await;
         let _: () = self.ship_dataflows(vec![df.clone()]).await;
-        let _: DataflowDescription<dataflow_types::plan::Plan> = self.finalize_dataflow(df);
+        let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);
     }
 }

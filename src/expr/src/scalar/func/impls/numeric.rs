@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use dec::{OrderedDecimal, Rounding};
-use repr::adt::numeric::{self, Numeric};
-use repr::strconv;
+use mz_repr::adt::numeric::{self, Numeric};
+use mz_repr::strconv;
 
 use crate::EvalError;
 

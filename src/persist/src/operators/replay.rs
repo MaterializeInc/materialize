@@ -9,7 +9,7 @@
 
 //! A Timely Dataflow operator that emits the records in a snapshot.
 
-use persist_types::Codec;
+use mz_persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream};

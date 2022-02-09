@@ -9,10 +9,10 @@
 
 //! Implementations around supporting the TAIL protocol with the dataflow layer
 
-use dataflow_types::TailResponse;
-use ore::cast::CastFrom;
-use repr::adt::numeric;
-use repr::{Datum, Row};
+use mz_dataflow_types::TailResponse;
+use mz_ore::cast::CastFrom;
+use mz_repr::adt::numeric;
+use mz_repr::{Datum, Row};
 use tokio::sync::mpsc;
 
 /// A description of a pending tail from coord's perspective

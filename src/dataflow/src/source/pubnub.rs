@@ -15,8 +15,8 @@ use pubnub_hyper::core::data::{channel, message::Type};
 use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
-use dataflow_types::{sources::PubNubSourceConnector, SourceErrorDetails};
-use repr::{Datum, Row};
+use mz_dataflow_types::{sources::PubNubSourceConnector, SourceErrorDetails};
+use mz_repr::{Datum, Row};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {

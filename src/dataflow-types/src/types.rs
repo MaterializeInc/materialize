@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
-use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use repr::{Diff, RelationType, Row, Timestamp};
+use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_repr::{Diff, RelationType, Row, Timestamp};
 
 use crate::sources::persistence::SourcePersistDesc;
 use crate::types::sources::SourceDesc;
@@ -320,16 +320,16 @@ pub mod sources {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use kafka_util::KafkaAddrs;
-    use repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+    use mz_kafka_util::KafkaAddrs;
+    use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
         use anyhow::Context;
         use serde::{Deserialize, Serialize};
 
-        use interchange::{avro, protobuf};
-        use repr::{ColumnType, RelationDesc, ScalarType};
+        use mz_interchange::{avro, protobuf};
+        use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
         /// A description of how to interpret data from various sources
         ///
@@ -498,7 +498,7 @@ pub mod sources {
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct AvroEncoding {
             pub schema: String,
-            pub schema_registry_config: Option<ccsr::ClientConfig>,
+            pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
             pub confluent_wire_format: bool,
         }
 
@@ -552,14 +552,14 @@ pub mod sources {
 
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct RegexEncoding {
-            pub regex: repr::adt::regex::Regex,
+            pub regex: mz_repr::adt::regex::Regex,
         }
     }
 
     pub mod persistence {
         use serde::{Deserialize, Serialize};
 
-        use expr::PartitionId;
+        use mz_expr::PartitionId;
 
         /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -1490,9 +1490,9 @@ pub mod sinks {
     use timely::progress::frontier::Antichain;
     use url::Url;
 
-    use expr::GlobalId;
-    use kafka_util::KafkaAddrs;
-    use repr::{RelationDesc, Timestamp};
+    use mz_expr::GlobalId;
+    use mz_kafka_util::KafkaAddrs;
+    use mz_repr::{RelationDesc, Timestamp};
 
     /// A sink for updates to a relational collection.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1657,7 +1657,7 @@ pub mod sinks {
             schema_registry_url: Url,
             key_schema: Option<String>,
             value_schema: String,
-            ccsr_config: ccsr::ClientConfig,
+            ccsr_config: mz_ccsr::ClientConfig,
         },
         Json,
     }

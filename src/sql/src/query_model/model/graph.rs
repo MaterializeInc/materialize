@@ -20,8 +20,8 @@
 use super::super::attribute::core::Attributes;
 use super::scalar::*;
 use itertools::Itertools;
-use ore::id_gen::Gen;
-use sql_parser::ast::Ident;
+use mz_ore::id_gen::Gen;
+use mz_sql_parser::ast::Ident;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -232,7 +232,7 @@ pub(crate) enum BoxType {
 
 #[derive(Debug)]
 pub(crate) struct Get {
-    pub id: expr::GlobalId,
+    pub id: mz_expr::GlobalId,
     pub unique_keys: Vec<Vec<usize>>,
 }
 
@@ -468,7 +468,7 @@ impl Model {
         F: FnMut(&Model, &BoxId) -> Result<(), E>,
         G: FnMut(&Model, &BoxId) -> Result<(), E>,
     {
-        ore::graph::try_nonrecursive_dft(
+        mz_ore::graph::try_nonrecursive_dft(
             self,
             root,
             &mut |model, box_id| {
@@ -507,7 +507,7 @@ impl Model {
         F: FnMut(&mut Model, &BoxId) -> Result<(), E>,
         G: FnMut(&mut Model, &BoxId) -> Result<(), E>,
     {
-        ore::graph::try_nonrecursive_dft_mut(
+        mz_ore::graph::try_nonrecursive_dft_mut(
             self,
             root,
             &mut |model, box_id| {
