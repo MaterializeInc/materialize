@@ -18,7 +18,7 @@ use timely::progress::Timestamp;
 
 use build_info::BuildInfo;
 use dataflow_types::sources::{
-    persistence::{EnvelopePersistDesc, PersistStreamDesc, SourcePersistDesc},
+    persistence::{EnvelopePersistDesc, SourcePersistDesc},
     ExternalSourceConnector, SourceConnector, SourceEnvelope,
 };
 use itertools::Itertools;
@@ -431,14 +431,27 @@ impl PersisterWithConfig {
             // TODO: We might want to add (or change) a get_description() that allows getting the
             // descriptions for a batch of IDs in one go instead of getting them all separately. It
             // shouldn't be an issue right now, though.
-            let primary_stream =
+            let (primary_stream, primary_since, primary_upper) =
                 stream_desc_from_name(serialized_details.primary_stream.clone(), runtime)?;
-            let timestamp_bindings_stream = stream_desc_from_name(
-                serialized_details.timestamp_bindings_stream.clone(),
-                runtime,
-            )?;
+            let (timestamp_bindings_stream, timestamp_bindings_since, timestamp_bindings_upper) =
+                stream_desc_from_name(
+                    serialized_details.timestamp_bindings_stream.clone(),
+                    runtime,
+                )?;
+
+            // Assert invariants!
+            assert_eq!(
+                primary_since, timestamp_bindings_since,
+                "the since of all involved streams must be the same"
+            );
+            assert_eq!(
+                primary_upper, timestamp_bindings_upper,
+                "the upper of all involved streams must be the same"
+            );
 
             Ok(SourcePersistDesc {
+                since_ts: primary_since,
+                upper_seal_ts: primary_upper,
                 primary_stream,
                 timestamp_bindings_stream,
                 envelope_desc,
@@ -452,7 +465,7 @@ impl PersisterWithConfig {
 fn stream_desc_from_name(
     name: String,
     runtime: &RuntimeClient,
-) -> Result<PersistStreamDesc, Error> {
+) -> Result<(String, u64, u64), Error> {
     let description = runtime.get_description(&name);
     let description = match description {
         Ok(description) => description,
@@ -460,11 +473,7 @@ fn stream_desc_from_name(
             // The stream has not been created yet, so return the initial seal timestamp of
             // streams.
             // TODO: We might want to codify this somewhere?
-            return Ok(PersistStreamDesc {
-                name,
-                upper_seal_ts: u64::minimum(),
-                since_ts: u64::minimum(),
-            });
+            return Ok((name, u64::minimum(), u64::minimum()));
         }
         Err(e) => {
             let error_string = format!("Reading upper seal timestamp for {}: {}", name, e);
@@ -485,11 +494,7 @@ fn stream_desc_from_name(
         description.since().iter().exactly_one().map_err(|_| {
             format!("expected exactly one element in the persist compaction frontier")
         })?;
-    Ok(PersistStreamDesc {
-        name,
-        upper_seal_ts: *upper_seal_ts,
-        since_ts: *since_ts,
-    })
+    Ok((name, *since_ts, *upper_seal_ts))
 }
 
 #[derive(Debug, Clone, Serialize)]

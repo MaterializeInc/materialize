@@ -715,36 +715,30 @@ fn get_persist_config(
 
     let (bindings_write, bindings_read) = persist_client
         .create_or_load::<SourceTimestamp, AssignedTimestamp>(
-            &persist_desc.timestamp_bindings_stream.name,
+            &persist_desc.timestamp_bindings_stream,
         );
 
     match persist_desc.envelope_desc {
         EnvelopePersistDesc::Upsert => {
             let (data_write, data_read) = persist_client
                 .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(
-                    &persist_desc.primary_stream.name,
+                    &persist_desc.primary_stream,
                 );
 
-            let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
-            let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
+            let seal_ts = persist_desc.upper_seal_ts;
 
             tracing::debug!(
-                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
                 source_id,
-                persist_desc.primary_stream.name,
-                persist_desc.timestamp_bindings_stream.name,
-                bindings_seal_ts,
-                data_seal_ts,
+                persist_desc.primary_stream,
+                persist_desc.timestamp_bindings_stream,
+                seal_ts
             );
 
-            let bindings_config = PersistentTimestampBindingsConfig::new(
-                bindings_seal_ts,
-                data_seal_ts,
-                bindings_read,
-                bindings_write,
-            );
+            let bindings_config =
+                PersistentTimestampBindingsConfig::new(seal_ts, bindings_read, bindings_write);
 
-            let upsert_config = PersistentUpsertConfig::new(data_seal_ts, data_read, data_write);
+            let upsert_config = PersistentUpsertConfig::new(seal_ts, data_read, data_write);
 
             PersistentSourceConfig::new(
                 bindings_config,
@@ -753,29 +747,22 @@ fn get_persist_config(
         }
         EnvelopePersistDesc::None => {
             let (data_write, data_read) = persist_client
-                .create_or_load::<Result<Row, DecodeError>, ()>(&persist_desc.primary_stream.name);
+                .create_or_load::<Result<Row, DecodeError>, ()>(&persist_desc.primary_stream);
 
-            let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
-            let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
+            let seal_ts = persist_desc.upper_seal_ts;
 
             tracing::debug!(
-                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
                 source_id,
-                persist_desc.primary_stream.name,
-                persist_desc.timestamp_bindings_stream.name,
-                bindings_seal_ts,
-                data_seal_ts,
+                persist_desc.primary_stream,
+                persist_desc.timestamp_bindings_stream,
+                seal_ts,
             );
 
-            let bindings_config = PersistentTimestampBindingsConfig::new(
-                bindings_seal_ts,
-                data_seal_ts,
-                bindings_read,
-                bindings_write,
-            );
+            let bindings_config =
+                PersistentTimestampBindingsConfig::new(seal_ts, bindings_read, bindings_write);
 
-            let none_config =
-                PersistentEnvelopeNoneConfig::new(data_seal_ts, data_read, data_write);
+            let none_config = PersistentEnvelopeNoneConfig::new(seal_ts, data_read, data_write);
 
             PersistentSourceConfig::new(
                 bindings_config,

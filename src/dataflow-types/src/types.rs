@@ -564,13 +564,47 @@ pub mod sources {
         /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct SourcePersistDesc {
+            /// The _current_ upper seal timestamp of all involved streams.
+            ///
+            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
+            /// initially created. When a source is actively writing to this stream, the seal timestamp
+            /// will progress beyond this timestamp.
+            ///
+            /// This is okay for now because we only want to allow one source instantiation for persistent
+            /// sources, meaning the flow is usually this:
+            ///
+            ///  1. coordinator determines seal timestamp
+            ///  2. seal timestamps for a source are sent to dataflow when rendering a source
+            ///  3. coordinator (or anyone) never looks at this timestamp again.
+            ///
+            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
+            /// source running already.
+            pub upper_seal_ts: u64,
+
+            /// The _current_ compaction frontier (aka _since_) of all involved streams.
+            ///
+            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
+            /// initially created. When a source is actively writing to this stream and allowing
+            /// compaction, this will progress beyond this timestamp.
+            ///
+            /// This is okay for now because we only want to allow one source instantiation for persistent
+            /// sources, meaning the flow is usually this:
+            ///
+            ///  1. coordinator determines since timestamp
+            ///  2. timestamps for a source are sent to dataflow when rendering a source
+            ///  3. coordinator (or anyone) never looks at this timestamp again.
+            ///
+            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
+            /// source running already.
+            pub since_ts: u64,
+
             /// Name of the primary persisted stream of this source. This is what a consumer of the
             /// persisted data would be interested in while the secondary stream(s) of the source are an
             /// internal implementation detail.
-            pub primary_stream: PersistStreamDesc,
+            pub primary_stream: String,
 
             /// Persisted stream of timestamp bindings.
-            pub timestamp_bindings_stream: PersistStreamDesc,
+            pub timestamp_bindings_stream: String,
 
             /// Any additional details that we need to make the envelope logic stateful.
             pub envelope_desc: EnvelopePersistDesc,
@@ -587,45 +621,6 @@ pub mod sources {
         pub enum EnvelopePersistDesc {
             Upsert,
             None,
-        }
-
-        /// Description of a single persistent stream.
-        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-        pub struct PersistStreamDesc {
-            /// Name of the persistent stream.
-            pub name: String,
-            /// The _current_ upper seal timestamp of this stream.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream, the seal timestamp
-            /// will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines seal timestamp
-            ///  2. seal timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub upper_seal_ts: u64,
-            /// The _current_ compaction frontier (aka _since_) of this stream.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream and allowing
-            /// compaction, this will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines since timestamp
-            ///  2. timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub since_ts: u64,
         }
 
         /// Structure wrapping a timestamp update from a source
