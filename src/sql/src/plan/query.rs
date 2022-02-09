@@ -29,8 +29,8 @@ use std::mem;
 
 use uuid::Uuid;
 
-use mz_expr::{func as expr_func, LocalId};
 use itertools::Itertools;
+use mz_expr::{func as expr_func, LocalId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;

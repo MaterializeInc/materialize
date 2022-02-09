@@ -19,22 +19,24 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
-use mz_ccsr::Client;
 use csv::ReaderBuilder;
 use itertools::Itertools;
-use reqwest::Url;
+use mz_ccsr::Client;
 use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, Op};
+use reqwest::Url;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
 use mz_dataflow_types::sources::AwsConfig;
-use mz_dataflow_types::sources::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
-use protobuf_native::MessageLite;
+use mz_dataflow_types::sources::{
+    ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
+};
 use mz_repr::strconv;
 use mz_sql_parser::parser::parse_columns;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
+use protobuf_native::MessageLite;
 
 use crate::ast::{
     display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
@@ -254,7 +256,8 @@ pub fn purify(
                             }),
                         ..
                     } => {
-                        let pub_info = mz_postgres_util::publication_info(&conn, &publication).await?;
+                        let pub_info =
+                            mz_postgres_util::publication_info(&conn, &publication).await?;
 
                         // If the user didn't specify targets we'll generate views for all of them
                         let targets = targets.clone().unwrap_or_else(|| {

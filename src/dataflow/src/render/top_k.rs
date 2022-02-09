@@ -21,7 +21,9 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use mz_dataflow_types::plan::top_k::{BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan};
+use mz_dataflow_types::plan::top_k::{
+    BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
+};
 use mz_repr::{Diff, Row};
 
 use crate::render::context::CollectionBundle;
@@ -201,7 +203,9 @@ where
                             indexes.sort_by(|left, right| {
                                 let left = &buffer[left * width..][..width];
                                 let right = &buffer[right * width..][..width];
-                                mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                                mz_expr::compare_columns(&order_key, left, right, || {
+                                    left.cmp(right)
+                                })
                             });
                         }
 

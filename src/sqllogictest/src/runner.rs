@@ -38,10 +38,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use mz_coord::PersistConfig;
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
+use mz_coord::PersistConfig;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use postgres_protocol::types;

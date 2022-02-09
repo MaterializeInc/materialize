@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_coord::PersistConfig;
 use lazy_static::lazy_static;
+use mz_coord::PersistConfig;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use postgres::error::DbError;

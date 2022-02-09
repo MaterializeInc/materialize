@@ -9,8 +9,8 @@
 
 //! Types related to the creation of dataflow sources.
 
-use mz_dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_avro::types::Value;
+use mz_dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
 use mz_persist::indexed::Snapshot;
 use mz_persist::operators::stream::Persist;

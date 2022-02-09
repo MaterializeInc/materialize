@@ -43,7 +43,11 @@ impl JsonEncoder {
         }
     }
 
-    pub fn encode_row(&self, row: mz_repr::Row, names_types: &[(ColumnName, ColumnType)]) -> Vec<u8> {
+    pub fn encode_row(
+        &self,
+        row: mz_repr::Row,
+        names_types: &[(ColumnName, ColumnType)],
+    ) -> Vec<u8> {
         let value = encode_datums_as_json(row.iter(), names_types, self.include_transaction);
         value.to_string().into_bytes()
     }

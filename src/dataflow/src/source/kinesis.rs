@@ -20,11 +20,11 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
+use mz_aws_util::kinesis;
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset,
 };
 use mz_expr::{PartitionId, SourceInstanceId};
-use mz_aws_util::kinesis;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 
 use crate::logging::materialized::Logger;

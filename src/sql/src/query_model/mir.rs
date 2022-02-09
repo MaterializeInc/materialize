@@ -322,10 +322,14 @@ impl<'a> Lowerer<'a> {
                     );
                     // Errors should result from counts > 1.
                     let errors = counts
-                        .filter(vec![mz_expr::MirScalarExpr::Column(outer_arity).call_binary(
-                            mz_expr::MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                            mz_expr::BinaryFunc::Gt,
-                        )])
+                        .filter(vec![mz_expr::MirScalarExpr::Column(outer_arity)
+                            .call_binary(
+                                mz_expr::MirScalarExpr::literal_ok(
+                                    Datum::Int64(1),
+                                    ScalarType::Int64,
+                                ),
+                                mz_expr::BinaryFunc::Gt,
+                            )])
                         .project((0..outer_arity).collect::<Vec<_>>())
                         .map(vec![mz_expr::MirScalarExpr::literal(
                             Err(mz_expr::EvalError::MultipleRowsFromSubquery),
@@ -360,7 +364,9 @@ impl<'a> Lowerer<'a> {
                     .iter()
                     .enumerate()
                     .map(|(input, _)| {
-                        mz_expr::MirScalarExpr::Column(input_mapper.map_column_to_global(col, input))
+                        mz_expr::MirScalarExpr::Column(
+                            input_mapper.map_column_to_global(col, input),
+                        )
                     })
                     .collect_vec()
             })
@@ -397,11 +403,13 @@ impl<'a> Lowerer<'a> {
                 func: func.clone(),
                 expr: Box::new(Self::lower_expression(&*expr, column_map)),
             },
-            BoxScalarExpr::CallBinary { func, expr1, expr2 } => mz_expr::MirScalarExpr::CallBinary {
-                func: func.clone(),
-                expr1: Box::new(Self::lower_expression(expr1, column_map)),
-                expr2: Box::new(Self::lower_expression(expr2, column_map)),
-            },
+            BoxScalarExpr::CallBinary { func, expr1, expr2 } => {
+                mz_expr::MirScalarExpr::CallBinary {
+                    func: func.clone(),
+                    expr1: Box::new(Self::lower_expression(expr1, column_map)),
+                    expr2: Box::new(Self::lower_expression(expr2, column_map)),
+                }
+            }
             BoxScalarExpr::CallVariadic { func, exprs } => mz_expr::MirScalarExpr::CallVariadic {
                 func: func.clone(),
                 exprs: exprs

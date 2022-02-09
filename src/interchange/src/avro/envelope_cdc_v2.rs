@@ -14,7 +14,6 @@ use mz_repr::{Diff, Row, Timestamp};
 use serde_json::json;
 
 use anyhow::anyhow;
-use mz_avro_derive::AvroDecodable;
 use differential_dataflow::capture::{Message, Progress};
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::Schema;
@@ -22,6 +21,7 @@ use mz_avro::{
     define_unexpected, ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
     StatefulAvroDecodable,
 };
+use mz_avro_derive::AvroDecodable;
 use std::{cell::RefCell, rc::Rc};
 
 use super::decode::RowWrapper;

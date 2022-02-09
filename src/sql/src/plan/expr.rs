@@ -17,8 +17,8 @@ use std::fmt;
 use std::mem;
 
 use anyhow::bail;
-use mz_expr::DummyHumanizer;
 use itertools::Itertools;
+use mz_expr::DummyHumanizer;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
@@ -612,7 +612,9 @@ impl AggregateFunc {
             AggregateFunc::ArrayConcat { order_by } => {
                 mz_expr::AggregateFunc::ArrayConcat { order_by }
             }
-            AggregateFunc::ListConcat { order_by } => mz_expr::AggregateFunc::ListConcat { order_by },
+            AggregateFunc::ListConcat { order_by } => {
+                mz_expr::AggregateFunc::ListConcat { order_by }
+            }
             AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg { order_by },
             AggregateFunc::Dummy => mz_expr::AggregateFunc::Dummy,
         }

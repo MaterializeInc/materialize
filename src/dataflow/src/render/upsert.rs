@@ -19,7 +19,9 @@ use timely::dataflow::operators::{Concat, Map, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use mz_dataflow_types::{DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails};
+use mz_dataflow_types::{
+    DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails,
+};
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::result::ResultExt;
 use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};

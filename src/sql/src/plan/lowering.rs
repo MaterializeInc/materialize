@@ -1017,7 +1017,9 @@ impl HirScalarExpr {
                                                         func: mz_expr::UnaryFunc::RecordGet(c),
                                                         expr: Box::new(
                                                             mz_expr::MirScalarExpr::CallUnary {
-                                                                func: mz_expr::UnaryFunc::RecordGet(1),
+                                                                func: mz_expr::UnaryFunc::RecordGet(
+                                                                    1,
+                                                                ),
                                                                 expr: Box::new(
                                                                     mz_expr::MirScalarExpr::Column(
                                                                         record_col,
@@ -1422,10 +1424,11 @@ fn apply_scalar_subquery(
                 );
                 // Errors should result from counts > 1.
                 let errors = counts
-                    .filter(vec![mz_expr::MirScalarExpr::Column(inner_arity).call_binary(
-                        mz_expr::MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                        mz_expr::BinaryFunc::Gt,
-                    )])
+                    .filter(vec![mz_expr::MirScalarExpr::Column(inner_arity)
+                        .call_binary(
+                            mz_expr::MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                            mz_expr::BinaryFunc::Gt,
+                        )])
                     .project((0..inner_arity).collect::<Vec<_>>())
                     .map(vec![mz_expr::MirScalarExpr::literal(
                         Err(mz_expr::EvalError::MultipleRowsFromSubquery),

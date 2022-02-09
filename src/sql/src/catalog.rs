@@ -16,8 +16,8 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
-use mz_dataflow_types::sources::SourceConnector;
 use lazy_static::lazy_static;
+use mz_dataflow_types::sources::SourceConnector;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};

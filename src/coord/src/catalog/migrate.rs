@@ -12,9 +12,9 @@ use std::path::Path;
 use anyhow::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
+use mz_repr::strconv;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
-use mz_repr::strconv;
 use semver::Version;
 use tokio::fs::File;
 
@@ -679,7 +679,9 @@ fn ast_rewrite_csv_column_aliases_0_9_2(
                 Ok(Some(f))
             })?;
 
-            block_on(async { mz_sql::pure::purify_csv(file, &connector, *delimiter, columns).await })?;
+            block_on(async {
+                mz_sql::pure::purify_csv(file, &connector, *delimiter, columns).await
+            })?;
         }
         Ok(())
     })();

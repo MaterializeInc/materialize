@@ -98,8 +98,8 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use rand::Rng;
 use mz_repr::adt::interval::Interval;
+use rand::Rng;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
@@ -265,7 +265,8 @@ pub struct Config {
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
-    dataflow_client: mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
+    dataflow_client:
+        mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -1590,7 +1591,8 @@ impl Coordinator {
         params: &mz_sql::plan::Params,
     ) -> Result<mz_sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
+        let plan =
+            mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
         Ok(plan)
     }
 
@@ -3618,8 +3620,9 @@ impl Coordinator {
                 let catalog = self.catalog.for_session(session);
                 let formatter =
                     mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
-                let mut explanation =
-                    mz_dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog, &formatter);
+                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
+                    &dataflow, &catalog, &formatter,
+                );
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -4287,7 +4290,8 @@ impl Coordinator {
         } else {
             expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
 
-            if let (ExprPrepStyle::Write, mz_expr::MirRelationExpr::Constant { .. }) = (&style, &expr)
+            if let (ExprPrepStyle::Write, mz_expr::MirRelationExpr::Constant { .. }) =
+                (&style, &expr)
             {
                 // We don't perform any optimizations on an expression that is already
                 // a constant for writes, as we want to maximize bulk-insert throughput.
@@ -5094,9 +5098,9 @@ pub mod fast_path_peek {
                 )
                 .await;
 
-            use mz_dataflow_types::PeekResponse;
             use futures::FutureExt;
             use futures::StreamExt;
+            use mz_dataflow_types::PeekResponse;
 
             // Prepare the receiver to return as a response.
             let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)

@@ -14,8 +14,8 @@ use std::str;
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use mz_repr::ColumnType;
+use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
 use mz_ore::fmt::FormatBuffer;

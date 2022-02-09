@@ -14,8 +14,8 @@
 //! can be simplified to a map operation.
 
 use crate::TransformArgs;
-use mz_expr::MirRelationExpr;
 use itertools::Itertools;
+use mz_expr::MirRelationExpr;
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]

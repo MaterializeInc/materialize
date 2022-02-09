@@ -16,18 +16,18 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use itertools::Itertools;
+use lazy_static::lazy_static;
 use mz_dataflow_types::{
     sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
     sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
 };
 use mz_expr::PartitionId;
-use itertools::Itertools;
-use lazy_static::lazy_static;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
-use regex::Regex;
 use mz_repr::Timestamp;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
@@ -553,7 +553,9 @@ impl From<mz_sql::plan::TypeInner> for TypeInner {
     fn from(t: mz_sql::plan::TypeInner) -> TypeInner {
         match t {
             mz_sql::plan::TypeInner::List { element_id } => TypeInner::List { element_id },
-            mz_sql::plan::TypeInner::Map { key_id, value_id } => TypeInner::Map { key_id, value_id },
+            mz_sql::plan::TypeInner::Map { key_id, value_id } => {
+                TypeInner::Map { key_id, value_id }
+            }
         }
     }
 }

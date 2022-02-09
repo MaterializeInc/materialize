@@ -9,13 +9,13 @@
 
 use std::env;
 
-use mz_ccsr::SchemaReference;
 use hyper::server::conn::AddrIncoming;
 use hyper::service;
 use hyper::Server;
 use hyper::StatusCode;
 use hyper::{Body, Response};
 use lazy_static::lazy_static;
+use mz_ccsr::SchemaReference;
 
 use mz_ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
 

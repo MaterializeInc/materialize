@@ -16,12 +16,12 @@ use std::time::Duration;
 
 use timely::progress::Timestamp;
 
+use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::sources::{
     persistence::{EnvelopePersistDesc, SourcePersistDesc},
     ExternalSourceConnector, SourceConnector, SourceEnvelope,
 };
-use itertools::Itertools;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::error::{Error, ErrorLog};
 use mz_persist::indexed::encoding::Id as PersistId;

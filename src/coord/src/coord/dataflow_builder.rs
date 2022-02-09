@@ -28,7 +28,8 @@ pub struct DataflowBuilder<'a> {
     pub indexes: &'a ArrangementFrontiers<Timestamp>,
     pub persister: &'a PersisterWithConfig,
     /// A handle to the storage abstraction, which describe sources from their identifier.
-    pub storage: &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
+    pub storage:
+        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
 }
 
 impl Coordinator {

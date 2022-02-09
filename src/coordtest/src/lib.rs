@@ -66,8 +66,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use mz_dataflow_types::client::{ComputeResponse, Response};
 use futures::future::FutureExt;
+use mz_dataflow_types::client::{ComputeResponse, Response};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;

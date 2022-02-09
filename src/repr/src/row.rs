@@ -16,10 +16,10 @@ use std::mem::{size_of, transmute};
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use ordered_float::OrderedFloat;
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;

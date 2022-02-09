@@ -33,8 +33,10 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
+use mz_dataflow_types::{
+    sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector,
+};
 use mz_expr::{GlobalId, MirRelationExpr, RowSetFinishing};
-use mz_dataflow_types::{sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
 

@@ -25,8 +25,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use itertools::{Either, Itertools};
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Push non-null requirements toward sources.

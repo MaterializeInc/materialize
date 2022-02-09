@@ -12,7 +12,6 @@
 
 use std::collections::BTreeMap;
 
-use mz_dataflow_types::plan::AvailableCollections;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
@@ -22,6 +21,7 @@ use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
+use mz_dataflow_types::plan::AvailableCollections;
 use timely::communication::message::RefOrMut;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, ScopeParent};

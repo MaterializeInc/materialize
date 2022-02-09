@@ -10,8 +10,8 @@
 //! Detects an input being unioned with its negation and cancels them out
 
 use crate::{TransformArgs, TransformError};
-use mz_expr::MirRelationExpr;
 use itertools::Itertools;
+use mz_expr::MirRelationExpr;
 
 /// Detects an input being unioned with its negation and cancels them out
 #[derive(Debug)]

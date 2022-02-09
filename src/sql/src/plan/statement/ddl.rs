@@ -1754,7 +1754,9 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        None | Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
+        None | Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => {
+            SinkEnvelope::Debezium
+        }
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Upsert)) => {

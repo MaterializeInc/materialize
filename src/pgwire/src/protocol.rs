@@ -15,9 +15,9 @@ use std::iter;
 use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use mz_expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use itertools::izip;
+use mz_expr::GlobalId;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
@@ -1621,7 +1621,10 @@ where
     }
 }
 
-fn pad_formats(formats: Vec<mz_pgrepr::Format>, n: usize) -> Result<Vec<mz_pgrepr::Format>, String> {
+fn pad_formats(
+    formats: Vec<mz_pgrepr::Format>,
+    n: usize,
+) -> Result<Vec<mz_pgrepr::Format>, String> {
     match (formats.len(), n) {
         (0, e) => Ok(vec![mz_pgrepr::Format::Text; e]),
         (1, e) => Ok(iter::repeat(formats[0]).take(e).collect()),

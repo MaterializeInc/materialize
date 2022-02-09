@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-
 /// Verifies the correctness of a Materialized coordinator.
 #[derive(clap::Parser)]
 struct Args {

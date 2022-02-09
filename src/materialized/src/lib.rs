@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use compile_time_run::run_command_str;
-use mz_coord::PersistConfig;
 use futures::StreamExt;
+use mz_coord::PersistConfig;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;

@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use mz_build_info::BuildInfo;
 use futures_executor::block_on;
+use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec;
 use semver::Version;

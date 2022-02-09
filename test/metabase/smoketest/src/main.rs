@@ -49,8 +49,8 @@ async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error>
 }
 
 async fn connect_metabase() -> Result<mz_metabase::Client, anyhow::Error> {
-    let mut client =
-        mz_metabase::Client::new("http://metabase:3000").context("failed creating metabase client")?;
+    let mut client = mz_metabase::Client::new("http://metabase:3000")
+        .context("failed creating metabase client")?;
     let setup_token = Retry::default()
         .max_duration(Duration::from_secs(30))
         .retry_async(|_| async {

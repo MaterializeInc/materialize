@@ -396,13 +396,14 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
     type Output = Result<VarChar<String>, EvalError>;
 
     fn call(&self, a: &'a str) -> Result<VarChar<String>, EvalError> {
-        let s = mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
-            assert!(self.fail_on_len);
-            EvalError::StringValueTooLong {
-                target_type: "character varying".to_string(),
-                length: self.length.unwrap(),
-            }
-        })?;
+        let s =
+            mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
+                assert!(self.fail_on_len);
+                EvalError::StringValueTooLong {
+                    target_type: "character varying".to_string(),
+                    length: self.length.unwrap(),
+                }
+            })?;
 
         Ok(VarChar(s))
     }

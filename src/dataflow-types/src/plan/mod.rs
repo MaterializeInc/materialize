@@ -16,8 +16,8 @@ pub mod reduce;
 pub mod threshold;
 pub mod top_k;
 
-use mz_expr::permutation_for_arrangement;
 use join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use mz_expr::permutation_for_arrangement;
 use reduce::{KeyValPlan, ReducePlan};
 use threshold::ThresholdPlan;
 use top_k::TopKPlan;
@@ -1144,7 +1144,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
 /// This method produces a `MapFilterProject` instance that first applies any predicates,
 /// and then introduces `Datum::Dummy` literals in columns that are not demanded.
 /// The `RelationType` is required so that we can fill in the correct type of `Datum::Dummy`.
-pub fn linear_to_mfp(linear: crate::LinearOperator, typ: &mz_repr::RelationType) -> MapFilterProject {
+pub fn linear_to_mfp(
+    linear: crate::LinearOperator,
+    typ: &mz_repr::RelationType,
+) -> MapFilterProject {
     let crate::types::LinearOperator {
         predicates,
         projection,

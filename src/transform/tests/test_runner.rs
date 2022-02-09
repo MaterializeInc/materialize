@@ -27,9 +27,9 @@ mod tests {
     };
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::str::separated;
-    use proc_macro2::TokenTree;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
     use mz_transform::{Optimizer, Transform, TransformArgs};
+    use proc_macro2::TokenTree;
 
     // Global options
     const IN: &str = "in";
@@ -237,7 +237,9 @@ mod tests {
                 limit: None,
             })),
             "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
-            "LiteralLifting" => Ok(Box::new(mz_transform::map_lifting::LiteralLifting::default())),
+            "LiteralLifting" => Ok(Box::new(
+                mz_transform::map_lifting::LiteralLifting::default(),
+            )),
             "NonNullRequirements" => Ok(Box::new(
                 mz_transform::nonnull_requirements::NonNullRequirements::default(),
             )),
@@ -250,15 +252,19 @@ mod tests {
             "ProjectionLifting" => Ok(Box::new(
                 mz_transform::projection_lifting::ProjectionLifting::default(),
             )),
-            "ProjectionPushdown" => {
-                Ok(Box::new(mz_transform::projection_pushdown::ProjectionPushdown))
-            }
-            "ReductionPushdown" => Ok(Box::new(mz_transform::reduction_pushdown::ReductionPushdown)),
-            "RedundantJoin" => Ok(Box::new(mz_transform::redundant_join::RedundantJoin::default())),
+            "ProjectionPushdown" => Ok(Box::new(
+                mz_transform::projection_pushdown::ProjectionPushdown,
+            )),
+            "ReductionPushdown" => Ok(Box::new(
+                mz_transform::reduction_pushdown::ReductionPushdown,
+            )),
+            "RedundantJoin" => Ok(Box::new(
+                mz_transform::redundant_join::RedundantJoin::default(),
+            )),
             "TopKFusion" => Ok(Box::new(mz_transform::fusion::top_k::TopK)),
-            "UnionBranchCancellation" => {
-                Ok(Box::new(mz_transform::union_cancel::UnionBranchCancellation))
-            }
+            "UnionBranchCancellation" => Ok(Box::new(
+                mz_transform::union_cancel::UnionBranchCancellation,
+            )),
             "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",

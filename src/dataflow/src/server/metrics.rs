@@ -19,8 +19,8 @@ use mz_ore::{
 };
 
 use super::PendingPeek;
-use mz_dataflow_types::client::{Command, ComputeCommandKind, StorageCommandKind};
 use enum_iterator::IntoEnumIterator;
+use mz_dataflow_types::client::{Command, ComputeCommandKind, StorageCommandKind};
 use prometheus::core::AtomicI64;
 
 #[derive(Clone)]

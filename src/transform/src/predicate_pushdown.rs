@@ -78,8 +78,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use mz_expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use itertools::Itertools;
+use mz_expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Datum, ScalarType};
 

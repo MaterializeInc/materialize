@@ -119,9 +119,9 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::activator::RcActivator;
+use itertools::Itertools;
 use mz_dataflow_types::*;
 use mz_expr::{GlobalId, Id};
-use itertools::Itertools;
 use mz_ore::collections::CollectionExt as _;
 use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
@@ -200,8 +200,9 @@ pub struct StorageState {
 /// Information about each source that must be communicated between storage and compute layers.
 pub struct SourceBoundary {
     /// Captured `row` updates representing a differential collection.
-    pub ok:
-        ActivatedEventPusher<Rc<EventLink<mz_repr::Timestamp, (Row, mz_repr::Timestamp, mz_repr::Diff)>>>,
+    pub ok: ActivatedEventPusher<
+        Rc<EventLink<mz_repr::Timestamp, (Row, mz_repr::Timestamp, mz_repr::Diff)>>,
+    >,
     /// Captured error updates representing a differential collection.
     pub err: ActivatedEventPusher<
         Rc<EventLink<mz_repr::Timestamp, (DataflowError, mz_repr::Timestamp, mz_repr::Diff)>>,
