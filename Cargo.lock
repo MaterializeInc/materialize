@@ -3418,6 +3418,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "openssl",
+ "paste",
  "pin-project",
  "prometheus",
  "smallvec",

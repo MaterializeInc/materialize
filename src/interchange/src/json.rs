@@ -340,7 +340,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
         }
         ScalarType::Numeric { scale } => {
             let (p, s) = match scale {
-                Some(scale) => (NUMERIC_DATUM_MAX_PRECISION, usize::from(*scale)),
+                Some(scale) => (NUMERIC_DATUM_MAX_PRECISION, *scale),
                 None => (NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION),
             };
             json!({
