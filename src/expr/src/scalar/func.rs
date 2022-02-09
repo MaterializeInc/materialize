@@ -5198,7 +5198,12 @@ fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a>
     }
 
     temp_storage.make_datum(|row| {
-        slice_and_descend(datums[0], &ranges, row);
+        let empty_results = slice_and_descend(datums[0], &ranges, row);
+        // Empty results return an empty list and not NULL.
+        if empty_results {
+            row.truncate_datums(0);
+            row.push(Datum::empty_list());
+        }
     })
 }
 
@@ -5364,6 +5369,7 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     if i < 1 {
         return Datum::Null;
     }
+
     a.unwrap_list()
         .iter()
         .nth(i as usize - 1)
