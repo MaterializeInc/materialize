@@ -38,10 +38,10 @@ use mz_sql_parser::ast::display::{AstDisplay, AstFormatter};
 use mz_sql_parser::ast::fold::Fold;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
+    self, Assignment, AstInfo, Cte, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement,
-    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins,
+    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedDataType,
     UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
@@ -118,8 +118,86 @@ impl ResolvedObjectName {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ResolvedDataType {
+    // TODO(benesch): `AnonymousArray` should not exist because that concept
+    // does not exist in PostgreSQL. Array types exist properly in the catalog
+    // and should be resolved into `Named` types during name resolution.
+    AnonymousArray(Box<ResolvedDataType>),
+    AnonymousList(Box<ResolvedDataType>),
+    AnonymousMap {
+        key_type: Box<ResolvedDataType>,
+        value_type: Box<ResolvedDataType>,
+    },
+    Named {
+        id: GlobalId,
+        name: PartialName,
+        modifiers: Vec<u64>,
+        print_id: bool,
+    },
+}
+
+impl AstDisplay for ResolvedDataType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedDataType::AnonymousArray(element_type) => {
+                element_type.fmt(f);
+                f.write_str("[]");
+            }
+            ResolvedDataType::AnonymousList(element_type) => {
+                element_type.fmt(f);
+                f.write_str(" list");
+            }
+            ResolvedDataType::AnonymousMap {
+                key_type,
+                value_type,
+            } => {
+                f.write_str("map[");
+                key_type.fmt(f);
+                f.write_str("=>");
+                value_type.fmt(f);
+                f.write_str("]");
+            }
+            ResolvedDataType::Named {
+                id,
+                name,
+                modifiers,
+                print_id,
+            } => {
+                if *print_id {
+                    f.write_str(format!("[{} AS ", id));
+                }
+                if let Some(database) = &name.database {
+                    f.write_node(&Ident::new(database));
+                    f.write_str(".");
+                }
+                if let Some(schema) = &name.schema {
+                    f.write_node(&Ident::new(schema));
+                    f.write_str(".");
+                }
+                f.write_node(&Ident::new(&name.item));
+                if *print_id {
+                    f.write_str("]");
+                }
+                if modifiers.len() > 0 {
+                    f.write_str("(");
+                    f.write_node(&ast::display::comma_separated(modifiers));
+                    f.write_str(")");
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for ResolvedDataType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.to_ast_string().as_str())
+    }
+}
+
 impl AstInfo for Aug {
     type ObjectName = ResolvedObjectName;
+    type DataType = ResolvedDataType;
     type Id = Id;
 }
 
@@ -138,6 +216,55 @@ impl<'a> NameResolver<'a> {
             ctes: HashMap::new(),
             status: Ok(()),
             ids: HashSet::new(),
+        }
+    }
+
+    fn fold_data_type_internal(
+        &mut self,
+        data_type: <Raw as AstInfo>::DataType,
+    ) -> Result<<Aug as AstInfo>::DataType, PlanError> {
+        match data_type {
+            UnresolvedDataType::Array(elem_type) => {
+                let elem_type = self.fold_data_type_internal(*elem_type)?;
+                Ok(ResolvedDataType::AnonymousArray(Box::new(elem_type)))
+            }
+            UnresolvedDataType::List(elem_type) => {
+                let elem_type = self.fold_data_type_internal(*elem_type)?;
+                Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
+            }
+            UnresolvedDataType::Map {
+                key_type,
+                value_type,
+            } => {
+                let key_type = self.fold_data_type_internal(*key_type)?;
+                let value_type = self.fold_data_type_internal(*value_type)?;
+                Ok(ResolvedDataType::AnonymousMap {
+                    key_type: Box::new(key_type),
+                    value_type: Box::new(value_type),
+                })
+            }
+            UnresolvedDataType::Other { name, typ_mod } => {
+                let (name, item) = match name {
+                    RawName::Name(name) => {
+                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let item = self.catalog.resolve_item(&name)?;
+                        (item.name().clone().into(), item)
+                    }
+                    RawName::Id(id, name) => {
+                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let gid: GlobalId = id.parse()?;
+                        let item = self.catalog.get_item_by_id(&gid);
+                        (name, item)
+                    }
+                };
+                self.ids.insert(item.id());
+                Ok(ResolvedDataType::Named {
+                    id: item.id(),
+                    name,
+                    modifiers: typ_mod,
+                    print_id: true,
+                })
+            }
         }
     }
 }
@@ -265,6 +392,30 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             }
         }
     }
+
+    fn fold_data_type(
+        &mut self,
+        data_type: <Raw as AstInfo>::DataType,
+    ) -> <Aug as AstInfo>::DataType {
+        match self.fold_data_type_internal(data_type) {
+            Ok(data_type) => data_type,
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e);
+                }
+                ResolvedDataType::Named {
+                    id: GlobalId::User(0),
+                    name: PartialName {
+                        database: None,
+                        schema: None,
+                        item: "ignored".into(),
+                    },
+                    modifiers: vec![],
+                    print_id: false,
+                }
+            }
+        }
+    }
 }
 
 pub fn resolve_names_stmt(
@@ -298,8 +449,8 @@ pub fn resolve_names_expr(qcx: &mut QueryContext, expr: Expr<Raw>) -> Result<Exp
 
 pub fn resolve_names_data_type(
     scx: &StatementContext,
-    data_type: DataType<Raw>,
-) -> Result<(DataType<Aug>, HashSet<GlobalId>), PlanError> {
+    data_type: UnresolvedDataType,
+) -> Result<(ResolvedDataType, HashSet<GlobalId>), PlanError> {
     let mut n = NameResolver::new(scx.catalog);
     let result = n.fold_data_type(data_type);
     n.status?;
@@ -3123,7 +3274,7 @@ fn plan_row(ecx: &ExprContext, exprs: &[Expr<Aug>]) -> Result<CoercibleScalarExp
 fn plan_cast(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
-    data_type: &DataType<Aug>,
+    data_type: &ResolvedDataType,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
     let expr = match expr {
@@ -4192,10 +4343,10 @@ fn parser_datetimefield_to_adt(
 
 pub fn scalar_type_from_sql(
     scx: &StatementContext,
-    data_type: &DataType<Aug>,
+    data_type: &ResolvedDataType,
 ) -> Result<ScalarType, PlanError> {
     Ok(match data_type {
-        DataType::Array(elem_type) => {
+        ResolvedDataType::AnonymousArray(elem_type) => {
             let elem_type = scalar_type_from_sql(scx, &elem_type)?;
             if matches!(
                 elem_type,
@@ -4203,22 +4354,19 @@ pub fn scalar_type_from_sql(
             ) {
                 bail_unsupported!(format!("{}[]", scx.humanize_scalar_type(&elem_type)));
             }
-
             ScalarType::Array(Box::new(elem_type))
         }
-        DataType::List(elem_type) => {
+        ResolvedDataType::AnonymousList(elem_type) => {
             let elem_type = scalar_type_from_sql(scx, &elem_type)?;
-
             if matches!(elem_type, ScalarType::Char { .. }) {
                 bail_unsupported!("char list");
             }
-
             ScalarType::List {
                 element_type: Box::new(elem_type),
                 custom_oid: None,
             }
         }
-        DataType::Map {
+        ResolvedDataType::AnonymousMap {
             key_type,
             value_type,
         } => {
@@ -4235,41 +4383,32 @@ pub fn scalar_type_from_sql(
                 custom_oid: None,
             }
         }
-        DataType::Other { name, typ_mod } => {
-            let item = match scx.catalog.resolve_item(&name.raw_name()) {
-                Ok(i) => i,
-                Err(_) => sql_bail!(
-                    "type {} does not exist",
-                    name.raw_name().to_string().quoted()
-                ),
-            };
-            match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
-                Some(t) => match t {
-                    ScalarType::Numeric { .. } => {
-                        let scale = numeric::extract_typ_mod(typ_mod)?;
-                        ScalarType::Numeric { scale }
-                    }
-                    ScalarType::Char { .. } => {
-                        let length = mz_repr::adt::char::extract_typ_mod(&typ_mod)?;
-                        ScalarType::Char { length }
-                    }
-                    ScalarType::VarChar { .. } => {
-                        let length = mz_repr::adt::varchar::extract_typ_mod(&typ_mod)?;
-                        ScalarType::VarChar { length }
-                    }
-                    t => {
-                        if !typ_mod.is_empty() {
-                            sql_bail!("{} does not support type modifiers", &name.to_string());
-                        }
-                        t
-                    }
-                },
-                None => sql_bail!(
-                    "type {} does not exist",
-                    name.raw_name().to_string().quoted()
-                ),
+        ResolvedDataType::Named {
+            id,
+            name,
+            modifiers,
+            print_id: _,
+        } => match scx.catalog.try_get_lossy_scalar_type_by_id(&id) {
+            Some(ScalarType::Numeric { .. }) => {
+                let scale = numeric::extract_typ_mod(modifiers)?;
+                ScalarType::Numeric { scale }
             }
-        }
+            Some(ScalarType::Char { .. }) => {
+                let length = mz_repr::adt::char::extract_typ_mod(&modifiers)?;
+                ScalarType::Char { length }
+            }
+            Some(ScalarType::VarChar { .. }) => {
+                let length = mz_repr::adt::varchar::extract_typ_mod(&modifiers)?;
+                ScalarType::VarChar { length }
+            }
+            Some(t) => {
+                if !modifiers.is_empty() {
+                    sql_bail!("{} does not support type modifiers", &name.to_string());
+                }
+                t
+            }
+            None => sql_bail!("type {} does not exist", name.to_string().quoted()),
+        },
     })
 }
 

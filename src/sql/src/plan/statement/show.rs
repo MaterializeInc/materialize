@@ -30,7 +30,7 @@ use crate::ast::{
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::PartialName;
 use crate::parse;
-use crate::plan::query::{resolve_names_stmt, Aug, ResolvedObjectName};
+use crate::plan::query::{resolve_names_stmt, Aug, ResolvedDataType, ResolvedObjectName};
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{Params, Plan, SendRowsPlan};
 
@@ -58,6 +58,18 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             let item = self.catalog.get_item_by_id(&id);
             if PartialName::from(item.name().clone()) == name.raw_name() {
                 name.print_id = false;
+            }
+        }
+    }
+
+    fn visit_data_type_mut(&mut self, name: &mut ResolvedDataType) {
+        if let ResolvedDataType::Named {
+            id, name, print_id, ..
+        } = name
+        {
+            let item = self.catalog.get_item_by_id(id);
+            if PartialName::from(item.name().clone()) == *name {
+                *print_id = false;
             }
         }
     }
@@ -107,10 +119,16 @@ pub fn plan_show_create_table(
 ) -> Result<Plan, anyhow::Error> {
     let table = scx.resolve_item(table_name)?;
     if let CatalogItemType::Table = table.item_type() {
+        let parsed = parse::parse(table.create_sql())?.into_element();
+        let mut resolved = resolve_names_stmt(scx.catalog, parsed)?;
+        let mut s = NameSimplifier {
+            catalog: scx.catalog,
+        };
+        s.visit_statement_mut(&mut resolved);
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&table.name().to_string()),
-                Datum::String(table.create_sql()),
+                Datum::String(&resolved.to_ast_string_stable()),
             ])],
         }))
     } else {

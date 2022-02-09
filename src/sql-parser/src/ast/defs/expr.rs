@@ -22,7 +22,7 @@ use std::fmt;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
+use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
 
 /// An SQL expression of any type.
 ///
@@ -97,7 +97,7 @@ pub enum Expr<T: AstInfo> {
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr<T>>,
-        data_type: DataType<T>,
+        data_type: T::DataType,
     },
     /// `expr COLLATE collation`
     Collate {
