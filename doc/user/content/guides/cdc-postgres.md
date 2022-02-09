@@ -17,7 +17,7 @@ There are two ways to connect Materialize to a Postgres database for CDC:
 
 ## Direct Postgres source
 
-If Kafka is not part of your stack, you can use the [Postgres source](/sql/create-source/postgres) to connect directly to Materialize (v0.8.2+). This source uses Postgres’ native replication protocol to continuously ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database.
+If Kafka is not part of your stack, you can use the [Postgres source](/sql/create-source/postgres) to connect directly to Materialize (v0.8.2+). This source uses Postgres’ native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database.
 
 ### Database setup
 

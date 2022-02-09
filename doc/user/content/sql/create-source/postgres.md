@@ -40,7 +40,7 @@ Field | Value type | Description
 
 ### Change data capture
 
-This source uses PostgreSQL's native replication protocol to continuously ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database (also know as _change data capture_).
+This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database (also know as _change data capture_).
 
 For this reason, the upstream database must be configured to support logical replication. To get logical replication set up, follow the step-by-step instructions in the [Change Data Capture (Postgres) guide](/guides/cdc-postgres/#direct-postgres-source).
 
@@ -116,7 +116,7 @@ To produce correct results, Postgres sources can only be materialized _once_. As
 
 1. Performs an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
 
-   **Note:** During this phase, **disk space** consumption may increase before returning to a steady state. To profile disk usage, see [Troubleshooting](/ops/troubleshooting/#how-much-disk-space-is-materialize-using).
+   **Note:** During this phase, **disk space** consumption may increase proportionally to the size of the upstream database before returning to a steady state. To profile disk usage, see [Troubleshooting](/ops/troubleshooting/#how-much-disk-space-is-materialize-using).
 
 1. Incrementally updates the view as new change events stream in as a result of `INSERT`, `UPDATE` and `DELETE` operations in the upstream Postgres database.
 
@@ -125,10 +125,12 @@ To produce correct results, Postgres sources can only be materialized _once_. As
 Each Materialize replication slot can be used to source data for a single materialized view. You can create multiple non-materialized views for the same replication slot using the [`CREATE VIEWS`](/sql/create-views) statement.
 
 {{< warning >}}
-Make sure to delete any replication slots if you stop using Materialize or if either your Materialize or Postgres instances crash.
+Make sure to delete any replication slots if you stop using Materialize, or if either the Materialize or Postgres instances crash.
 {{< /warning >}}
 
-If you stop Materialize or delete the materialized view without dropping the Postgres source first, the upstream replication slot isn't deleted and will continue to accumulate data. In such cases, you should manually delete the replication slot to recover memory and avoid degraded performance in the upstream database.
+If you stop Materialize or delete the materialized view without also dropping the source, the upstream replication slot will linger and continue to accumulate data so that the source can resume in the future. To avoid unbounded disk space usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete the replication slot (in case you have deleted the Materialize instance).
+
+For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_slot_wal_keep_size`](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-SLOT-WAL-KEEP-SIZE) to limit the amount of storage used by replication slots.
 
 ## Known limitations
 
