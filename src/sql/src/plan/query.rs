@@ -4273,49 +4273,6 @@ pub fn scalar_type_from_sql(
     })
 }
 
-pub fn scalar_type_from_pg(ty: &mz_pgrepr::Type) -> Result<ScalarType, PlanError> {
-    match ty {
-        mz_pgrepr::Type::Bool => Ok(ScalarType::Bool),
-        mz_pgrepr::Type::Int2 => Ok(ScalarType::Int16),
-        mz_pgrepr::Type::Int4 => Ok(ScalarType::Int32),
-        mz_pgrepr::Type::Int8 => Ok(ScalarType::Int64),
-        mz_pgrepr::Type::Float4 => Ok(ScalarType::Float32),
-        mz_pgrepr::Type::Float8 => Ok(ScalarType::Float64),
-        mz_pgrepr::Type::Numeric { max_scale, .. } => Ok(ScalarType::Numeric {
-            scale: Some(*max_scale as u8),
-        }),
-        mz_pgrepr::Type::Date => Ok(ScalarType::Date),
-        mz_pgrepr::Type::Time => Ok(ScalarType::Time),
-        mz_pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
-        mz_pgrepr::Type::TimestampTz => Ok(ScalarType::TimestampTz),
-        mz_pgrepr::Type::Interval => Ok(ScalarType::Interval),
-        mz_pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
-        mz_pgrepr::Type::Text => Ok(ScalarType::String),
-        mz_pgrepr::Type::Char { length } => Ok(ScalarType::Char { length: *length }),
-        mz_pgrepr::Type::VarChar { max_length } => Ok(ScalarType::VarChar {
-            length: *max_length,
-        }),
-        mz_pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
-        mz_pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
-        mz_pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),
-        mz_pgrepr::Type::List(l) => Ok(ScalarType::List {
-            element_type: Box::new(scalar_type_from_pg(l)?),
-            custom_oid: None,
-        }),
-        mz_pgrepr::Type::Record(_) => {
-            sql_bail!("internal error: can't convert from pg record to materialize record")
-        }
-        mz_pgrepr::Type::Oid => Ok(ScalarType::Oid),
-        mz_pgrepr::Type::RegClass => Ok(ScalarType::RegClass),
-        mz_pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
-        mz_pgrepr::Type::RegType => Ok(ScalarType::RegType),
-        mz_pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
-            value_type: Box::new(scalar_type_from_pg(value_type)?),
-            custom_oid: None,
-        }),
-    }
-}
-
 /// This is used to collect aggregates and table functions from within an `Expr`.
 /// See the explanation of aggregate handling at the top of the file for more details.
 struct AggregateTableFuncVisitor<'a> {
