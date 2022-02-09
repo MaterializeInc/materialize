@@ -213,7 +213,12 @@ def dashboard_links(start_time: str, env: str) -> None:
     purpose = "load_test"
 
     tests = []
-    for test in ("chbench", "perf-kinesis"):
+    for test in (
+        "chbench",
+        "perf-kinesis",
+        "kafka-ingest-open-loop",
+        "kafka-ingest-open-loop-persist",
+    ):
         url = template.format(
             time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
         )
