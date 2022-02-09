@@ -39,8 +39,8 @@ use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
-use crate::render::StorageState;
 use crate::server::LocalInput;
+use crate::server::StorageState;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::{
     self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
@@ -62,7 +62,7 @@ enum SourceType<Delimited, ByteStream> {
 /// Imports a table (non-durable, local source of input).
 pub(crate) fn import_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
-    storage_state: &mut crate::render::StorageState,
+    storage_state: &mut crate::server::StorageState,
     scope: &mut G,
     persisted_name: Option<String>,
 ) -> (
@@ -138,7 +138,7 @@ pub(crate) fn import_source<G>(
         operators: mut linear_operators,
         persist,
     }: SourceInstanceDesc,
-    storage_state: &mut crate::render::StorageState,
+    storage_state: &mut crate::server::StorageState,
     scope: &mut G,
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
