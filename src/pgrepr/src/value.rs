@@ -465,12 +465,12 @@ impl Value {
                 matches!(**value_type, Type::Map { .. }),
                 |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
             )?),
-            Type::Numeric => Value::Numeric(Numeric(strconv::parse_numeric(raw)?)),
+            Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(raw)?)),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into())
             }
             Type::Text => Value::Text(raw.to_owned()),
-            Type::Char => {
+            Type::Char { .. }=> {
                 let inner = raw.to_owned();
                 let length = Some(inner.chars().count());
 
@@ -479,7 +479,7 @@ impl Value {
                     length,
                 }
             }
-            Type::VarChar => Value::VarChar(raw.to_owned()),
+            Type::VarChar { .. }=> Value::VarChar(raw.to_owned()),
             Type::Time => Value::Time(strconv::parse_time(raw)?),
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
@@ -506,14 +506,14 @@ impl Value {
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
-            Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
+            Type::Numeric { .. } => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
-            Type::Char => String::from_sql(ty.inner(), raw).map(|inner| {
+            Type::Char { .. } => String::from_sql(ty.inner(), raw).map(|inner| {
                 let length = Some(inner.len());
                 Value::Char { inner, length }
             }),
-            Type::VarChar => String::from_sql(ty.inner(), raw).map(Value::VarChar),
+            Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
@@ -569,11 +569,11 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 custom_oid: None,
             }
         }
-        Type::Numeric => ScalarType::Numeric { scale: None },
+        Type::Numeric { .. } => ScalarType::Numeric { scale: None },
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
-        Type::Char => ScalarType::Char { length: None },
-        Type::VarChar => ScalarType::VarChar { length: None },
+        Type::Char { .. } => ScalarType::Char { length: None },
+        Type::VarChar { .. } => ScalarType::VarChar { length: None },
         Type::Time => ScalarType::Time,
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,

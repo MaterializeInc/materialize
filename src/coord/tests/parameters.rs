@@ -73,7 +73,7 @@ async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ("SELECT $1 < 1", vec![Type::Int4]),
         ("SELECT $1 < $2", vec![Type::Text, Type::Text]),
         ("SELECT $1 + 1", vec![Type::Int4]),
-        ("SELECT $1 + 1.0", vec![Type::Numeric]),
+        ("SELECT $1 + 1.0", vec![Type::Numeric{max_scale: 0_u16, max_precision: repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap()}]),
         (
             "SELECT '1970-01-01 00:00:00'::pg_catalog.timestamp + $1",
             vec![Type::Interval],

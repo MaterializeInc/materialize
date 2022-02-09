@@ -5692,7 +5692,7 @@ fn mz_render_typemod<'a>(
     let mut typmod = typmod.unwrap_int32();
     let typmod_base = 65_536;
 
-    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric)) && typmod >= 0 {
+    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric { .. })) && typmod >= 0 {
         typmod -= 4;
         if typmod < 0 {
             temp_storage.push_string(format!("({},{})", 65_535, typmod_base + typmod))

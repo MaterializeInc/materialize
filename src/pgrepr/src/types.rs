@@ -46,7 +46,12 @@ pub enum Type {
         value_type: Box<Type>,
     },
     /// An arbitrary precision number.
-    Numeric { max_scale: u16, max_precision: u16 },
+    Numeric {
+        /// Number of digits after the decimal
+        max_scale: u16,
+        /// Number of overall digits, capped to 38 in Materialize
+        max_precision: u16,
+    },
     /// An object identifier.
     Oid,
     /// A sequence of heterogeneous values.
@@ -54,9 +59,15 @@ pub enum Type {
     /// A variable-length string.
     Text,
     /// A fixed-length string.
-    Char { length: Option<usize> },
+    Char {
+        ///
+        length: Option<usize>,
+    },
     /// A variable-length string with an optional limit.
-    VarChar { max_length: Option<usize> },
+    VarChar {
+        /// Length of VarChar in characters
+        max_length: Option<usize>,
+    },
     /// A time of day without a day.
     Time,
     /// A date and time, without a timezone.
@@ -112,8 +123,8 @@ impl Type {
             postgres_types::Type::INTERVAL => Some(Type::Interval),
             postgres_types::Type::JSONB => Some(Type::Jsonb),
             postgres_types::Type::NUMERIC => Some(Type::Numeric {
-                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
-                max_scale: 0 as u16,
+                max_precision: NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap(),
+                max_scale: 0_u16,
             }),
             postgres_types::Type::OID => Some(Type::Oid),
             postgres_types::Type::TEXT => Some(Type::Text),
@@ -142,8 +153,8 @@ impl Type {
             postgres_types::Type::INTERVAL_ARRAY => Some(Type::Array(Box::new(Type::Interval))),
             postgres_types::Type::JSONB_ARRAY => Some(Type::Array(Box::new(Type::Jsonb))),
             postgres_types::Type::NUMERIC_ARRAY => Some(Type::Array(Box::new(Type::Numeric {
-                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
-                max_scale: 0 as u16,
+                max_precision: NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap(),
+                max_scale: 0_u16,
             }))),
             postgres_types::Type::OID_ARRAY => Some(Type::Array(Box::new(Type::Oid))),
             postgres_types::Type::TEXT_ARRAY => Some(Type::Array(Box::new(Type::Text))),
@@ -162,7 +173,8 @@ impl Type {
             _ => None,
         }
     }
-
+    /// Returns the `Type` corresponding to the oid, with applicable typ_mod applied
+    /// returns errors for unknown type OIDs and invalid typ_mods
     pub fn from_oids(oid: u32, typ_mod: u64) -> Result<Type, anyhow::Error> {
         let ty = match postgres_types::Type::from_oid(oid) {
             Some(t) => t,
@@ -180,10 +192,10 @@ impl Type {
             postgres_types::Type::INTERVAL => Type::Interval,
             postgres_types::Type::JSONB => Type::Jsonb,
             postgres_types::Type::NUMERIC => Type::Numeric {
-                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+                max_precision: NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap(),
                 max_scale: match repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
-                    Some(s) => s as u16,
-                    None => 0 as u16,
+                    Some(s) => s.into(),
+                    None => 0_u16,
                 },
             },
             postgres_types::Type::OID => Type::Oid,
@@ -215,10 +227,10 @@ impl Type {
             postgres_types::Type::INTERVAL_ARRAY => Type::Array(Box::new(Type::Interval)),
             postgres_types::Type::JSONB_ARRAY => Type::Array(Box::new(Type::Jsonb)),
             postgres_types::Type::NUMERIC_ARRAY => Type::Array(Box::new(Type::Numeric {
-                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+                max_precision: NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap(),
                 max_scale: match repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
-                    Some(s) => s as u16,
-                    None => 0 as u16,
+                    Some(s) => s.into(),
+                    None => 0_u16,
                 },
             })),
             postgres_types::Type::OID_ARRAY => Type::Array(Box::new(Type::Oid)),
@@ -449,7 +461,7 @@ impl TryFrom<&Type> for ScalarType {
                 max_scale,
                 max_precision,
             } => {
-                if max_precision > &(NUMERIC_DATUM_MAX_PRECISION as u16) {
+                if max_precision > &(NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap()) {
                     bail!("requested max_precision: {max_precision} exeeds Materialize limit: {NUMERIC_DATUM_MAX_PRECISION}")
                 }
 
@@ -524,10 +536,10 @@ impl From<&ScalarType> for Type {
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { scale } => Type::Numeric {
                 max_scale: match *scale {
-                    Some(scale) => scale as u16,
+                    Some(scale) => scale.into(),
                     None => 0,
                 },
-                max_precision: NUMERIC_DATUM_MAX_PRECISION as u16,
+                max_precision: NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap(),
             },
             ScalarType::RegClass => Type::RegClass,
             ScalarType::RegProc => Type::RegProc,
