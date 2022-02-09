@@ -735,11 +735,6 @@ impl Coordinator {
             });
         }
 
-        // Create the default cluster so that subsequent default cluster commands succeed.
-        self.dataflow_client
-            .create_instance(DEFAULT_COMPUTE_INSTANCE_ID)
-            .await;
-
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
         loop {
@@ -4645,6 +4640,12 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
             };
+            // We must initialize the instance before we enable logging on it.
+            handle.block_on(
+                coord
+                    .dataflow_client
+                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID),
+            );
             if let Some(config) = &logging {
                 handle.block_on(
                     coord.dataflow_client.enable_logging(
