@@ -1,3 +1,8 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+
 use std::collections::{BTreeMap, HashMap};
 use std::rc::{Rc, Weak};
 use std::time::Instant;
