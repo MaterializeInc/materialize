@@ -10,8 +10,8 @@
 use crate::oid;
 use anyhow::bail;
 use lazy_static::lazy_static;
-use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use repr::ScalarType;
+use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use mz_repr::ScalarType;
 
 /// The type of a [`Value`](crate::Value).
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -193,7 +193,7 @@ impl Type {
             postgres_types::Type::JSONB => Type::Jsonb,
             postgres_types::Type::NUMERIC => Type::Numeric {
                 max_precision: NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap(),
-                max_scale: match repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
+                max_scale: match mz_repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
                     Some(s) => s.into(),
                     None => 0_u16,
                 },
@@ -201,10 +201,10 @@ impl Type {
             postgres_types::Type::OID => Type::Oid,
             postgres_types::Type::TEXT => Type::Text,
             postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => Type::Char {
-                length: repr::adt::char::extract_typ_mod(&[typ_mod])?,
+                length: mz_repr::adt::char::extract_typ_mod(&[typ_mod])?,
             },
             postgres_types::Type::VARCHAR => Type::VarChar {
-                max_length: repr::adt::varchar::extract_typ_mod(&[typ_mod])?,
+                max_length: mz_repr::adt::varchar::extract_typ_mod(&[typ_mod])?,
             },
             postgres_types::Type::TIME => Type::Time,
             postgres_types::Type::TIMESTAMP => Type::Timestamp,
@@ -216,7 +216,7 @@ impl Type {
             postgres_types::Type::BOOL_ARRAY => Type::Array(Box::new(Type::Bool)),
             postgres_types::Type::BYTEA_ARRAY => Type::Array(Box::new(Type::Bytea)),
             postgres_types::Type::BPCHAR_ARRAY => Type::Array(Box::new(Type::Char {
-                length: repr::adt::char::extract_typ_mod(&[typ_mod])?,
+                length: mz_repr::adt::char::extract_typ_mod(&[typ_mod])?,
             })),
             postgres_types::Type::DATE_ARRAY => Type::Array(Box::new(Type::Date)),
             postgres_types::Type::FLOAT4_ARRAY => Type::Array(Box::new(Type::Float4)),
@@ -228,7 +228,7 @@ impl Type {
             postgres_types::Type::JSONB_ARRAY => Type::Array(Box::new(Type::Jsonb)),
             postgres_types::Type::NUMERIC_ARRAY => Type::Array(Box::new(Type::Numeric {
                 max_precision: NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap(),
-                max_scale: match repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
+                max_scale: match mz_repr::adt::numeric::extract_typ_mod(&[typ_mod])? {
                     Some(s) => s.into(),
                     None => 0_u16,
                 },
@@ -240,7 +240,7 @@ impl Type {
             postgres_types::Type::TIMESTAMPTZ_ARRAY => Type::Array(Box::new(Type::TimestampTz)),
             postgres_types::Type::UUID_ARRAY => Type::Array(Box::new(Type::Uuid)),
             postgres_types::Type::VARCHAR_ARRAY => Type::Array(Box::new(Type::VarChar {
-                max_length: repr::adt::varchar::extract_typ_mod(&[typ_mod])?,
+                max_length: mz_repr::adt::varchar::extract_typ_mod(&[typ_mod])?,
             })),
             postgres_types::Type::REGCLASS_ARRAY => Type::Array(Box::new(Type::RegClass)),
             postgres_types::Type::REGPROC_ARRAY => Type::Array(Box::new(Type::RegProc)),

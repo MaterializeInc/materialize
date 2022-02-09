@@ -470,7 +470,7 @@ impl Value {
                 return Err("input of anonymous composite types is not implemented".into())
             }
             Type::Text => Value::Text(raw.to_owned()),
-            Type::Char { .. }=> {
+            Type::Char { .. } => {
                 let inner = raw.to_owned();
                 let length = Some(inner.chars().count());
 
@@ -479,7 +479,7 @@ impl Value {
                     length,
                 }
             }
-            Type::VarChar { .. }=> Value::VarChar(raw.to_owned()),
+            Type::VarChar { .. } => Value::VarChar(raw.to_owned()),
             Type::Time => Value::Time(strconv::parse_time(raw)?),
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
