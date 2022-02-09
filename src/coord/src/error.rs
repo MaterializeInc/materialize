@@ -248,7 +248,7 @@ impl CoordError {
                         // TODO: Make this more helpful once we have documentation for persisted
                         // sources.
                         return Some(
-                            "Try creating one materialization and then base more views on top of that.".to_string(),
+                            "Either create one materialization and base more views on that, or create another source to base this materialization upon.".to_string(),
                         );
                     }
                 };
