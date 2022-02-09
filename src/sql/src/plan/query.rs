@@ -4281,7 +4281,9 @@ pub fn scalar_type_from_pg(ty: &mz_pgrepr::Type) -> Result<ScalarType, PlanError
         mz_pgrepr::Type::Int8 => Ok(ScalarType::Int64),
         mz_pgrepr::Type::Float4 => Ok(ScalarType::Float32),
         mz_pgrepr::Type::Float8 => Ok(ScalarType::Float64),
-        mz_pgrepr::Type::Numeric => Ok(ScalarType::Numeric { scale: None }),
+        mz_pgrepr::Type::Numeric { max_scale, .. } => Ok(ScalarType::Numeric {
+            scale: Some(*max_scale as u8),
+        }),
         mz_pgrepr::Type::Date => Ok(ScalarType::Date),
         mz_pgrepr::Type::Time => Ok(ScalarType::Time),
         mz_pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
@@ -4289,8 +4291,10 @@ pub fn scalar_type_from_pg(ty: &mz_pgrepr::Type) -> Result<ScalarType, PlanError
         mz_pgrepr::Type::Interval => Ok(ScalarType::Interval),
         mz_pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
         mz_pgrepr::Type::Text => Ok(ScalarType::String),
-        mz_pgrepr::Type::Char => Ok(ScalarType::Char { length: None }),
-        mz_pgrepr::Type::VarChar => Ok(ScalarType::VarChar { length: None }),
+        mz_pgrepr::Type::Char { length } => Ok(ScalarType::Char { length: *length }),
+        mz_pgrepr::Type::VarChar { max_length } => Ok(ScalarType::VarChar {
+            length: *max_length,
+        }),
         mz_pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
         mz_pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
         mz_pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),
