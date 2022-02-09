@@ -123,7 +123,7 @@ fn tail<G>(
                         as_of.frontier.less_equal(time)
                     };
                     if should_emit {
-                        results.push((row.clone(), *time, *diff));
+                        results.push((*time, row.clone(), *diff));
                     }
                 }
 
@@ -173,7 +173,7 @@ impl TailProtocol {
     }
 
     /// Send further rows as responses.
-    fn send_rows(&mut self, rows: Vec<(Row, Timestamp, Diff)>) {
+    fn send_rows(&mut self, rows: Vec<(Timestamp, Row, Diff)>) {
         let buffer = self
             .tail_response_buffer
             .as_mut()
