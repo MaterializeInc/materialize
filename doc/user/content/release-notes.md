@@ -124,6 +124,10 @@ changes that have not yet been documented.
 - **Breaking change.** Change the output of [`format_type`](/sql/functions/#system-information-func)
   to match Postgres for some specific types.
 
+- **Breaking change.** Return an empty list for slice operations that retrieve
+  no elements (e.g. the beginning of the slice's range exceeds the length of the
+  list); previously Materialize returned NULL.
+
 - Add `microsecond`, `month`, `decade`, `century`, `millennium` units
   to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
   format {{% gh 10532 %}}.
