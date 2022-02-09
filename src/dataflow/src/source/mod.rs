@@ -1136,6 +1136,12 @@ where
             // Record operator has been scheduled
             source_metrics.operator_scheduled_counter.inc();
 
+            // Downgrade capability (if possible) so that we emit at an as up-to-date capability as
+            // possible.
+            timestamp_histories.downgrade(cap, &partition_cursors);
+            offsets_cap.downgrade(cap.time());
+            source_metrics.capability.set(*cap.time());
+
             let mut source_state = (SourceStatus::Alive, MessageProcessing::Active);
             while let (_, MessageProcessing::Active) = source_state {
                 source_state = match source_reader.get_next_message() {
