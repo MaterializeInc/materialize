@@ -91,7 +91,7 @@ def run_one_scenario(
     c: Composition, scenario: Type[Scenario], args: argparse.Namespace
 ) -> Comparator:
     name = scenario.__name__
-    print(f"Now benchmarking {name} ...")
+    print(f"--- Now benchmarking {name} ...")
     comparator = make_comparator(name)
     common_seed = round(time.time())
 
@@ -244,7 +244,11 @@ root_scenario: {args.root_scenario}"""
 
         if comparison.is_regression():
             has_regressions = True
-
         report.dump()
 
-    sys.exit(1 if has_regressions else 0)
+    print("+++ Benchmark Report")
+    report.dump()
+
+    if has_regressions:
+        print("ERROR: benchmarks have regressions")
+        sys.exit(1)
