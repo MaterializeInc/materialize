@@ -34,7 +34,7 @@ lazy_static! {
 
 /// Builds a `MirScalarExpr` from a string.
 ///
-/// See [lowertest::to_json] for the syntax.
+/// See [mz_lowertest::to_json] for the syntax.
 pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
     deserialize(
         &mut tokenize(s)?.into_iter(),
@@ -46,7 +46,7 @@ pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
 
 /// Builds a `MirRelationExpr` from a string.
 ///
-/// See [lowertest::to_json] for the syntax.
+/// See [mz_lowertest::to_json] for the syntax.
 pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, String> {
     deserialize(
         &mut tokenize(s)?.into_iter(),
@@ -74,7 +74,7 @@ pub fn generate_explanation(
     explanation.to_string()
 }
 
-/// Turns the json version of a MirRelationExpr into the [lowertest::to_json]
+/// Turns the json version of a MirRelationExpr into the [mz_lowertest::to_json]
 /// syntax.
 ///
 /// The return value is a tuple of:

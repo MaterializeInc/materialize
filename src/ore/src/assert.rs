@@ -135,21 +135,21 @@ macro_rules! soft_panic_or_log {
 /// Check whether a string contains a substring:
 ///
 /// ```
-/// use ore::assert_contains;
+/// use mz_ore::assert_contains;
 /// assert_contains!("hello", "ello");
 /// ```
 ///
 /// Check whether a slice contains an element:
 ///
 /// ```
-/// use ore::assert_contains;
+/// use mz_ore::assert_contains;
 /// assert_contains!(&[1, 2, 3], 2);
 /// ```
 ///
 /// Failed assertions panic:
 ///
 /// ```should_panic
-/// use ore::assert_contains;
+/// use mz_ore::assert_contains;
 /// assert_contains!("hello", "yellow");
 /// ```
 #[macro_export]

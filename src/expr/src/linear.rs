@@ -418,7 +418,7 @@ impl MapFilterProject {
     /// # Example
     ///
     /// ```rust
-    /// use expr::{BinaryFunc, MapFilterProject, MirScalarExpr};
+    /// use mz_expr::{BinaryFunc, MapFilterProject, MirScalarExpr};
     ///
     /// // imagine an action on columns (a, b, c, d).
     /// let original = MapFilterProject::new(4).map(vec![
@@ -681,7 +681,7 @@ impl MapFilterProject {
     /// along the optimization path.
     ///
     /// ```rust
-    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
@@ -742,7 +742,7 @@ impl MapFilterProject {
     /// in inliniing.
     ///
     /// ```rust
-    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
@@ -776,7 +776,7 @@ impl MapFilterProject {
     /// for example if they occur in conditional branches of a `MirScalarExpr::If`.
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of unconditionally evaluated expressions, as well as
     /// // the non-extraction of common expressions guarded by conditions.
     /// let mut map_filter_project = MapFilterProject::new(2)
@@ -894,7 +894,7 @@ impl MapFilterProject {
     /// pass (the `remove_undemanded` method).
     ///
     /// ```rust
-    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Use the output from first `memoize_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
@@ -1014,7 +1014,7 @@ impl MapFilterProject {
     /// # Example
     ///
     /// ```rust
-    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Use the output from `inline_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![

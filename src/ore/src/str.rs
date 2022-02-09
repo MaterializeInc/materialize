@@ -30,7 +30,7 @@ pub trait StrExt {
     /// double quote characters:
     ///
     /// ```
-    /// use ore::str::StrExt;
+    /// use mz_ore::str::StrExt;
     ///
     /// let name = "bob";
     /// let message = format!("unknown user {}", name.quoted());
@@ -40,7 +40,7 @@ pub trait StrExt {
     /// In a pathological case:
     ///
     /// ```
-    /// use ore::str::StrExt;
+    /// use mz_ore::str::StrExt;
     ///
     /// let name = r#"b@d"inp!t""#;
     /// let message = format!("unknown user {}", name.quoted());

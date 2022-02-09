@@ -901,7 +901,7 @@ where
 /// The returned `Stream` of persisted timestamp bindings can be used to track the persistence
 /// frontier and should be used to seal up the backing collection to that frontier. This function
 /// does not do any sealing and it is the responsibility of the caller to eventually do that, for
-/// example using [`seal`](persist::operators::stream::Seal::seal).
+/// example using [`seal`](mz_persist::operators::stream::Seal::seal).
 pub(crate) fn create_source<G, S: 'static>(
     config: SourceConfig<G>,
     source_connector: &ExternalSourceConnector,

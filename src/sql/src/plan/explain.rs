@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 //! This module houses a pretty printer for [`HirRelationExpr`],
-//! which is the SQL-specific relation expression (as opposed to [`expr::MirRelationExpr`]).
-//! See also [`expr::explain`].
+//! which is the SQL-specific relation expression (as opposed to [`mz_expr::MirRelationExpr`]).
+//! See also [`mz_expr::explain`].
 //!
 //! The format is the same, except for the following extensions:
 //!

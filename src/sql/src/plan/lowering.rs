@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Lowering is the process of transforming a `sql::expr::HirRelationExpr`
-//! into a `expr::MirRelationExpr`.
+//! into a `mz_expr::MirRelationExpr`.
 //!
 //! The most crucial part of lowering is decorrelation; i.e.: rewriting a
 //! `HirScalarExpr` that may contain subqueries (e.g. `SELECT` or `EXISTS`)
@@ -128,7 +128,7 @@ struct CteDesc {
 }
 
 impl HirRelationExpr {
-    /// Rewrite `self` into a `expr::MirRelationExpr`.
+    /// Rewrite `self` into a `mz_expr::MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
     pub fn lower(self) -> mz_expr::MirRelationExpr {
         match self {
@@ -158,7 +158,7 @@ impl HirRelationExpr {
         }
     }
 
-    /// Return a `expr::MirRelationExpr` which evaluates `self` once for each row of `get_outer`.
+    /// Return a `mz_expr::MirRelationExpr` which evaluates `self` once for each row of `get_outer`.
     ///
     /// For uncorrelated `self`, this should be the cross-product between `get_outer` and `self`.
     /// When `self` references columns of `get_outer`, much more work needs to occur.
@@ -677,7 +677,7 @@ impl HirRelationExpr {
 }
 
 impl HirScalarExpr {
-    /// Rewrite `self` into a `expr::ScalarExpr` which can be applied to the modified `inner`.
+    /// Rewrite `self` into a `mz_expr::ScalarExpr` which can be applied to the modified `inner`.
     ///
     /// This method is responsible for decorrelating subqueries in `self` by introducing further columns
     /// to `inner`, and rewriting `self` to refer to its physical columns (specified by `usize` positions).
@@ -1150,7 +1150,7 @@ impl HirScalarExpr {
         (output, subquery_map)
     }
 
-    /// Rewrites `self` into a `expr::ScalarExpr`.
+    /// Rewrites `self` into a `mz_expr::ScalarExpr`.
     pub fn lower_uncorrelated(self) -> Result<mz_expr::MirScalarExpr, anyhow::Error> {
         use self::HirScalarExpr::*;
         use mz_expr::MirScalarExpr as SS;

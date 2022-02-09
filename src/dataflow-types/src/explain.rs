@@ -17,12 +17,12 @@
 //!     the [`LinearOperator`] and then the `projection`.
 //!   * Intermediate views in the dataflow come next.
 //!     The format is "View <name> (<id>):" followed by the output of
-//!     [`expr::explain::ViewExplanation`].
+//!     [`mz_expr::explain::ViewExplanation`].
 //!   * Last is the view or query being explained. The format is "Query:"
-//!     followed by the output of [`expr::explain::ViewExplanation`].
+//!     followed by the output of [`mz_expr::explain::ViewExplanation`].
 //!   * If there are no sources with some [`LinearOperator`] and no intermediate
 //!     views, then the format is identical to the format of
-//!     [`expr::explain::ViewExplanation`].
+//!     [`mz_expr::explain::ViewExplanation`].
 //!
 //! It's important to avoid trailing whitespace everywhere, as plans may be
 //! printed in contexts where trailing whitespace is unacceptable, like

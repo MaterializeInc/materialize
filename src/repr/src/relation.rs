@@ -233,7 +233,7 @@ impl From<&ColumnName> for ColumnName {
 /// A `RelationDesc`s is typically constructed via its builder API:
 ///
 /// ```
-/// use repr::{ColumnType, RelationDesc, ScalarType};
+/// use mz_repr::{ColumnType, RelationDesc, ScalarType};
 ///
 /// let desc = RelationDesc::empty()
 ///     .with_column("id", ScalarType::Int64.nullable(false))
@@ -245,9 +245,9 @@ impl From<&ColumnName> for ColumnName {
 /// type first, and imbue it with column names to form a `RelationDesc` later:
 ///
 /// ```
-/// use repr::RelationDesc;
+/// use mz_repr::RelationDesc;
 ///
-/// # fn plan_query(_: &str) -> repr::RelationType { repr::RelationType::new(vec![]) }
+/// # fn plan_query(_: &str) -> mz_repr::RelationType { mz_repr::RelationType::new(vec![]) }
 /// let relation_type = plan_query("SELECT * FROM table");
 /// let names = (0..relation_type.arity()).map(|i| match i {
 ///     0 => "first",

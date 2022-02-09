@@ -83,7 +83,7 @@ fn serialize_arranged<S: Serializer>(
 /// users of this struct should not rely on the exact strategy used for generating
 /// the permutations. As long as clients apply the thinning expression
 /// when creating arrangements, and permute by the hashmap when reading them,
-/// the contract of the function where they are generated (`expr::permutation_for_arrangement`)
+/// the contract of the function where they are generated (`mz_expr::permutation_for_arrangement`)
 /// ensures that the correct values will be read.
 #[derive(Default, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AvailableCollections {

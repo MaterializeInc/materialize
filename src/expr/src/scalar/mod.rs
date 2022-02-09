@@ -264,8 +264,8 @@ impl MirScalarExpr {
     /// Also canonicalizes the expression.
     ///
     /// ```rust
-    /// use expr::{BinaryFunc, MirScalarExpr};
-    /// use repr::{ColumnType, Datum, RelationType, ScalarType};
+    /// use mz_expr::{BinaryFunc, MirScalarExpr};
+    /// use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
     ///
     /// let expr_0 = MirScalarExpr::Column(0);
     /// let expr_t = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);

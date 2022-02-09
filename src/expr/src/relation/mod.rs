@@ -852,8 +852,8 @@ impl MirRelationExpr {
     /// # Example
     ///
     /// ```rust
-    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
-    /// use expr::MirRelationExpr;
+    /// use mz_repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use mz_expr::MirRelationExpr;
     ///
     /// // A common schema for each input.
     /// let schema = RelationType::new(vec![

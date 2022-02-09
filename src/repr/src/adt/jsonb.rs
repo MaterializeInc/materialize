@@ -33,7 +33,7 @@
 //! parsed, the underlying [`Row`] can be extracted with [`Jsonb::into_row`].
 //!
 //! ```
-//! # use repr::adt::jsonb::Jsonb;
+//! # use mz_repr::adt::jsonb::Jsonb;
 //! let jsonb: Jsonb = r#"{"a": 1, "b": 2}"#.parse()?;
 //! let row = jsonb.into_row();
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -42,7 +42,7 @@
 //! If the source JSON is in bytes, use [`Jsonb::from_slice`] instead:
 //!
 //! ```
-//! # use repr::adt::jsonb::Jsonb;
+//! # use mz_repr::adt::jsonb::Jsonb;
 //! let jsonb = Jsonb::from_slice(br#"{"a": 1, "b": 2}"#);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -53,7 +53,7 @@
 //! The alternate format produces pretty output.
 //!
 //! ```
-//! # use repr::adt::jsonb::Jsonb;
+//! # use mz_repr::adt::jsonb::Jsonb;
 //! # let jsonb: Jsonb = "null".parse().unwrap();
 //! format!("compressed: {}", jsonb);
 //! format!("pretty: {:#}", jsonb);
@@ -66,8 +66,8 @@
 //! copy.
 //!
 //! ```rust
-//! # use repr::adt::jsonb::JsonbPacker;
-//! # use repr::{Datum, Row};
+//! # use mz_repr::adt::jsonb::JsonbPacker;
+//! # use mz_repr::{Datum, Row};
 //! let mut row = Row::default();
 //! row.push(Datum::Int32(42));
 //! row = JsonbPacker::new(row).pack_str("[1, 2]")?;

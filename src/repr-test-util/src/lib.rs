@@ -111,7 +111,7 @@ pub fn datum_to_test_spec(datum: Datum) -> String {
 
 /// Parses `ScalarType` from `scalar_type_stream` or infers it from `litval`
 ///
-/// See [lowertest::to_json] for the syntax for specifying a `ScalarType`.
+/// See [mz_lowertest::to_json] for the syntax for specifying a `ScalarType`.
 /// If `scalar_type_stream` is empty, will attempt to guess a `ScalarType` for
 /// the literal:
 /// * If `litval` is "true", "false", or "null", will return `Bool`.

@@ -269,7 +269,7 @@ impl DateTimeField {
 /// Always starts with the value smaller than the current one.
 ///
 /// ```
-/// use repr::adt::datetime::DateTimeField::*;
+/// use mz_repr::adt::datetime::DateTimeField::*;
 /// let mut itr = Hour.into_iter();
 /// assert_eq!(itr.next(), Some(Minute));
 /// assert_eq!(itr.next(), Some(Second));

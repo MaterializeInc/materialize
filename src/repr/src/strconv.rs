@@ -376,7 +376,7 @@ where
     Nestable::MayNeedEscaping
 }
 
-/// Parses a `DateTime<Utc>` from `s`. See `expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
+/// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
@@ -442,7 +442,7 @@ pub fn parse_interval(s: &str) -> Result<Interval, ParseError> {
 }
 
 /// Parse an interval string, using an optional leading precision for time (H:M:S)
-/// and a specific sql_parser::ast::DateTimeField to identify ambiguous elements.
+/// and a specific mz_sql_parser::ast::DateTimeField to identify ambiguous elements.
 /// For more information about this operation, see the documentation on
 /// ParsedDateTime::build_parsed_datetime_interval.
 pub fn parse_interval_w_disambiguator(

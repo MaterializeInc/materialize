@@ -252,7 +252,7 @@ pub fn plan_explain(
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
-/// an `::expr::MirRelationExpr`, which cannot include correlated expressions.
+/// an `mz_expr::MirRelationExpr`, which cannot include correlated expressions.
 pub fn plan_query(
     scx: &StatementContext,
     query: Query<Raw>,

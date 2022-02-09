@@ -743,7 +743,7 @@ impl CatalogEntry {
         self.item.desc(&self.name)
     }
 
-    /// Returns the [`sql::func::Func`] associated with this `CatalogEntry`.
+    /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         self.item.func(&self.name)
     }
@@ -764,7 +764,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`dataflow_types::sources::SourceConnector`] associated with
+    /// Returns the [`mz_dataflow_types::sources::SourceConnector`] associated with
     /// this `CatalogEntry`.
     pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
         self.item.source_connector(&self.name)

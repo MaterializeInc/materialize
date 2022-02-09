@@ -1,10 +1,14 @@
 [package]
-name = "testdrive"
+name = "mz-testdrive"
 description = "Integration test driver for Materialize."
 version = "0.0.0"
 edition = "2021"
 publish = false
 rust-version = "1.58.0"
+
+[[bin]]
+name = "testdrive"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.53"

@@ -22,7 +22,7 @@
 //! - `sql`: Executes the SQL using transaction rules similar to the simple
 //!   pgwire protocol in a new session (that is, multiple `sql` directives are
 //!   not in the same session). Output is formatted
-//!   [`ExecuteResponse`](coord::ExecuteResponse). The input can contain the
+//!   [`ExecuteResponse`](mz_coord::ExecuteResponse). The input can contain the
 //!   string `<TEMP>` which will be replaced with a temporary directory.
 //! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout which will
 //!   panic) until all datums returned (all columns in all rows in all
@@ -42,11 +42,11 @@
 //!   session. No output.
 //! - `await-sql`: Requires a `session=name` argument. Awaits the results of the
 //!   named session. Output is formatted
-//!   [`ExecuteResponse`](coord::ExecuteResponse). If the input to the awaited
+//!   [`ExecuteResponse`](mz_coord::ExecuteResponse). If the input to the awaited
 //!   session contained the string `<TEMP>`, it will be replaced with a
 //!   temporary directory.
 //! - `update-upper`: Sends a batch of
-//!   [`FrontierUppers`](dataflow_types::client::ComputeResponse::FrontierUppers) to the
+//!   [`FrontierUppers`](mz_dataflow_types::client::ComputeResponse::FrontierUppers) to the
 //!   Coordinator. Input is one update per line of the format
 //!   `database.schema.item N` where N is some numeric timestamp. No output.
 //! - `inc-timestamp`: Increments the timestamp by number in the input. No
@@ -540,7 +540,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
     tf
 }
 
-/// A [`dataflow_types::client::Client`] implementation that intercepts responses from the
+/// A [`mz_dataflow_types::client::Client`] implementation that intercepts responses from the
 /// dataflow server.
 ///
 /// The implementation of the `send` method is unchanged. The implementation of

@@ -24,11 +24,11 @@
 //! or if we are not certain that the input is non-empty (e.g. join).
 //!
 //! ```rust
-//! use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
-//! use ore::id_gen::IdGen;
-//! use repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
+//! use mz_ore::id_gen::IdGen;
+//! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
-//! use transform::predicate_pushdown::PredicatePushdown;
+//! use mz_transform::predicate_pushdown::PredicatePushdown;
 //!
 //! let input1 = MirRelationExpr::constant(vec![], RelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
@@ -57,7 +57,7 @@
 //!        predicate012.clone(),
 //!    ]);
 //!
-//! use transform::{Transform, TransformArgs};
+//! use mz_transform::{Transform, TransformArgs};
 //! PredicatePushdown::default().transform(&mut expr, TransformArgs {
 //!   id_gen: &mut Default::default(),
 //!   indexes: &std::collections::HashMap::new(),

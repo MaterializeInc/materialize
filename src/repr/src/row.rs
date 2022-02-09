@@ -66,7 +66,7 @@ mod encoding;
 /// Creating a row via [`Row::pack_slice`]:
 ///
 /// ```
-/// # use repr::{Row, Datum};
+/// # use mz_repr::{Row, Datum};
 /// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.unpack(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)])
 /// ```
@@ -74,14 +74,14 @@ mod encoding;
 /// `Row`s can be unpacked by iterating over them:
 ///
 /// ```
-/// # use repr::{Row, Datum};
+/// # use mz_repr::{Row, Datum};
 /// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.iter().nth(1).unwrap(), Datum::Int32(1));
 /// ```
 ///
 /// If you want random access to the `Datum`s in a `Row`, use `Row::unpack` to create a `Vec<Datum>`
 /// ```
-/// # use repr::{Row, Datum};
+/// # use mz_repr::{Row, Datum};
 /// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
@@ -830,7 +830,7 @@ impl Row {
     /// Returns the value returned by the closure, if any.
     ///
     /// ```
-    /// # use repr::{Row, Datum};
+    /// # use mz_repr::{Row, Datum};
     /// let mut row = Row::default();
     /// row.push_list_with(|row| {
     ///     row.push(Datum::String("age"));
@@ -877,7 +877,7 @@ impl Row {
     /// # Example
     ///
     /// ```
-    /// # use repr::{Row, Datum};
+    /// # use mz_repr::{Row, Datum};
     /// let mut row = Row::default();
     /// row.push_dict_with(|row| {
     ///
@@ -1326,7 +1326,7 @@ impl RowArena {
     /// take ownership of it for the lifetime of the arena
     ///
     /// ```
-    /// # use repr::{RowArena, Datum};
+    /// # use mz_repr::{RowArena, Datum};
     /// let arena = RowArena::new();
     /// let datum = arena.make_datum(|packer| {
     ///   packer.push_list(&[Datum::String("hello"), Datum::String("world")]);

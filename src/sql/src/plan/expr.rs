@@ -122,9 +122,9 @@ pub enum HirRelationExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Just like expr::MirScalarExpr, except where otherwise noted below.
+/// Just like mz_expr::MirScalarExpr, except where otherwise noted below.
 pub enum HirScalarExpr {
-    /// Unlike expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
+    /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
     /// variable could refer to a column of the current input, or to a column of an outer relation.
     /// We use ColumnRef to denote the difference.
     Column(ColumnRef),
@@ -496,7 +496,7 @@ pub struct AggregateExpr {
     pub distinct: bool,
 }
 
-/// Aggregate functions analogous to `expr::AggregateFunc`, but whose
+/// Aggregate functions analogous to `mz_expr::AggregateFunc`, but whose
 /// types may be different.
 ///
 /// Specifically, the nullability of the aggregate columns is more common
@@ -571,7 +571,7 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    /// Converts the `sql::AggregateFunc` to a corresponding `expr::AggregateFunc`.
+    /// Converts the `sql::AggregateFunc` to a corresponding `mz_expr::AggregateFunc`.
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
         match self {
             AggregateFunc::MaxNumeric => mz_expr::AggregateFunc::MaxNumeric,

@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Converts a Query Graph Model into a [expr::MirRelationExpr].
+//! Converts a Query Graph Model into a [mz_expr::MirRelationExpr].
 //!
 //! The public interface consists of the implementation of
-//! [`Into<expr::MirRelationExpr>`] for [`Model`].
+//! [`Into<mz_expr::MirRelationExpr>`] for [`Model`].
 
 use crate::query_model::model::{
     BaseColumn, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get, Model,

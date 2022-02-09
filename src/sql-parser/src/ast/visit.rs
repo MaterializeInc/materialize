@@ -26,7 +26,7 @@
 //! by invoking the right visitor method of each of its fields.
 //!
 //! ```
-//! # use sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, Raw, AstInfo};
+//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, Raw, AstInfo};
 //! #
 //! pub trait Visit<'ast, T: AstInfo> {
 //!     /* ... */
@@ -66,8 +66,8 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use sql_parser::ast::{AstInfo, Query, Raw};
-//! use sql_parser::ast::visit::{self, Visit};
+//! use mz_sql_parser::ast::{AstInfo, Query, Raw};
+//! use mz_sql_parser::ast::visit::{self, Visit};
 //!
 //! struct SubqueryCounter {
 //!     count: usize,
@@ -87,7 +87,7 @@
 //!
 //! fn main() -> Result<(), Box<dyn Error>> {
 //!     let sql = "SELECT (SELECT 1) FROM (SELECT 1) WHERE EXISTS (SELECT (SELECT 1))";
-//!     let stmts = sql_parser::parser::parse_statements(sql.into())?;
+//!     let stmts = mz_sql_parser::parser::parse_statements(sql.into())?;
 //!
 //!     let mut counter = SubqueryCounter { count: 0 };
 //!     for stmt in &stmts {
@@ -105,8 +105,8 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use sql_parser::ast::{Ident, Raw, AstInfo, RawName};
-//! use sql_parser::ast::visit::{self, Visit};
+//! use mz_sql_parser::ast::{Ident, Raw, AstInfo, RawName};
+//! use mz_sql_parser::ast::visit::{self, Visit};
 //!
 //! struct IdentCollector<'ast> {
 //!     idents: Vec<&'ast Ident>,
@@ -131,7 +131,7 @@
 //!
 //! fn main() -> Result<(), Box<dyn Error>> {
 //!     let sql = "SELECT a FROM b.c WHERE 1 + d(e)";
-//!     let stmts = sql_parser::parser::parse_statements(sql.into())?;
+//!     let stmts = mz_sql_parser::parser::parse_statements(sql.into())?;
 //!
 //!     let mut collector = IdentCollector { idents: vec![] };
 //!     for stmt in &stmts {

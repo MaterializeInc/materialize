@@ -21,7 +21,7 @@
 //! [following the prometheus instructions]:
 //!
 //! ```
-//! # use ore::metrics::MetricsRegistry;
+//! # use mz_ore::metrics::MetricsRegistry;
 //! # fn handle_scrapes() {}
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let registry = MetricsRegistry::new();

@@ -2719,19 +2719,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metabase-smoketest"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "itertools",
- "mz-metabase",
- "mz-ore",
- "tokio",
- "tokio-postgres",
- "tracing",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3385,6 +3372,19 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "mz-metabase-smoketest"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "mz-metabase",
+ "mz-ore",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
 ]
 
 [[package]]

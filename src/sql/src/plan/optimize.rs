@@ -37,7 +37,7 @@ impl<'a> From<&StatementContext<'a>> for OptimizerConfig {
 }
 
 impl HirRelationExpr {
-    /// Perform optimizing algebraic rewrites on this [`HirRelationExpr`] and lower it to a [`expr::MirRelationExpr`].
+    /// Perform optimizing algebraic rewrites on this [`HirRelationExpr`] and lower it to a [`mz_expr::MirRelationExpr`].
     ///
     /// The optimization path is fully-determined by the values of the feature flag defined in the [`OptimizerConfig`].
     pub fn optimize_and_lower(self, config: &OptimizerConfig) -> mz_expr::MirRelationExpr {

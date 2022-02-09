@@ -250,8 +250,8 @@ impl JoinInputMapper {
     /// # Examples
     ///
     /// ```
-    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
-    /// use expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    /// use mz_repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use mz_expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
     /// let schema = RelationType::new(vec![

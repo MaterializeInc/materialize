@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Maintains a catalog of valid casts between [`repr::ScalarType`]s, as well as
+//! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
 use std::cell::RefCell;

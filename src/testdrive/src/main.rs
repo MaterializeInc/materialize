@@ -28,7 +28,7 @@ use walkdir::WalkDir;
 use mz_aws_util::config::AwsConfig;
 use mz_ore::path::PathExt;
 
-use testdrive::Config;
+use mz_testdrive::Config;
 
 macro_rules! die {
     ($($e:expr),*) => {{
@@ -308,9 +308,9 @@ async fn main() {
 
     for file in files.into_iter().take(args.max_tests) {
         let res = if file == Path::new("-") {
-            testdrive::run_stdin(&config).await
+            mz_testdrive::run_stdin(&config).await
         } else {
-            testdrive::run_file(&config, &file).await
+            mz_testdrive::run_file(&config, &file).await
         };
         if let Err(error) = res {
             let _ = error.print_stderr();
