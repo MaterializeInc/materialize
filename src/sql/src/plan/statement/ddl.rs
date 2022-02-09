@@ -71,12 +71,12 @@ use crate::plan::error::PlanError;
 use crate::plan::query::{resolve_names_data_type, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    self, plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption,
-    IndexOptionName, Params, Plan, Sink, Source, Table, Type, TypeInner, View,
+    plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
+    Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -175,7 +175,7 @@ pub fn plan_create_table(
 
     for (i, c) in columns.into_iter().enumerate() {
         let (aug_data_type, ids) = resolve_names_data_type(scx, c.data_type.clone())?;
-        let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
+        let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {

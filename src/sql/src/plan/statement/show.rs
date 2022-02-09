@@ -30,9 +30,9 @@ use crate::ast::{
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::PartialName;
 use crate::parse;
-use crate::plan::query::{resolve_names_stmt, ResolvedObjectName};
+use crate::plan::query::{resolve_names_stmt, Aug, ResolvedObjectName};
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{Aug, Params, Plan, SendRowsPlan};
+use crate::plan::{Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
