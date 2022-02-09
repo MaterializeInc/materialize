@@ -1061,7 +1061,7 @@ where
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
-    let timestamp_histories = temp;
+    let mut timestamp_histories = temp;
 
     let should_emit_timestamp_bindings = source_persist.is_some();
 
@@ -1138,7 +1138,7 @@ where
             };
 
             // Check that we have a valid list of timestamp bindings.
-            let timestamp_histories = match &timestamp_histories {
+            let timestamp_histories = match &mut timestamp_histories {
                 Some(histories) => histories,
                 None => {
                     error!("Source missing list of timestamp bindings");
