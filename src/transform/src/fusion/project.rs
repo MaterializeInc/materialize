@@ -12,7 +12,7 @@
 // TODO(frank): evaluate for redundancy with projection hoisting.
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Fuses Project operators with parent operators when possible.
 #[derive(Debug)]

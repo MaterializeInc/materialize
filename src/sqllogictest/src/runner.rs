@@ -38,12 +38,12 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use coord::PersistConfig;
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
-use ore::metrics::MetricsRegistry;
-use ore::task;
+use mz_coord::PersistConfig;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -53,10 +53,10 @@ use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
-use pgrepr::{Interval, Jsonb, Numeric, Value};
-use repr::adt::numeric;
-use repr::ColumnName;
-use sql::ast::Statement;
+use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
+use mz_repr::adt::numeric;
+use mz_repr::ColumnName;
+use mz_sql::ast::Statement;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -357,7 +357,7 @@ impl<'a> FromSql<'a> for Slt {
                         dims: arr
                             .dimensions()
                             .map(|d| {
-                                Ok(repr::adt::array::ArrayDimension {
+                                Ok(mz_repr::adt::array::ArrayDimension {
                                     lower_bound: d.lower_bound as usize,
                                     length: d.len as usize,
                                 })
@@ -679,7 +679,7 @@ impl Runner {
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
         // get statement
-        let statements = match sql::parse::parse(sql) {
+        let statements = match mz_sql::parse::parse(sql) {
             Ok(statements) => statements,
             Err(e) => match output {
                 Ok(_) => {

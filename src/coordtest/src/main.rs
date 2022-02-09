@@ -19,14 +19,14 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
     let mut iter = 0;
     loop {
         iter += 1;
         if iter > 1 {
             eprintln!("stress iteration {}", iter);
         }
-        coordtest::walk(&args.directory).await;
+        mz_coordtest::walk(&args.directory).await;
         if !args.stress {
             break;
         }

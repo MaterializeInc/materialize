@@ -23,7 +23,7 @@ pub mod util;
 
 #[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let data_dir = tempfile::tempdir()?;
     let config = util::Config::default().data_directory(data_dir.path());

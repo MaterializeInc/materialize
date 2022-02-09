@@ -13,7 +13,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use sql_parser::ast::{Ident, UnresolvedObjectName};
+use mz_sql_parser::ast::{Ident, UnresolvedObjectName};
 
 /// A fully-qualified name of an item in the catalog.
 ///

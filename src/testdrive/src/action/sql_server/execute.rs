@@ -10,7 +10,7 @@
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 
-use ore::str::StrExt;
+use mz_ore::str::StrExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

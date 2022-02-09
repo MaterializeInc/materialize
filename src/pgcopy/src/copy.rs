@@ -14,8 +14,8 @@ use bytes::BytesMut;
 use csv::ByteRecord;
 use csv::ReaderBuilder;
 
-use repr::{Datum, RelationType, Row, RowArena};
-use sql::plan::{CopyFormat, CopyParams};
+use mz_repr::{Datum, RelationType, Row, RowArena};
+use mz_sql::plan::{CopyFormat, CopyParams};
 
 // This is equivalent to a backslash followed by a dot, i.e "\."
 static END_OF_COPY_MARKER: [u8; 2] = [92, 46];
@@ -51,13 +51,13 @@ pub fn encode_copy_row_binary(
     for (field, typ) in row
         .iter()
         .zip(&typ.column_types)
-        .map(|(datum, typ)| (pgrepr::Value::from_datum(datum, &typ.scalar_type), typ))
+        .map(|(datum, typ)| (mz_pgrepr::Value::from_datum(datum, &typ.scalar_type), typ))
     {
         match field {
             None => out.extend(&NULL_BYTES),
             Some(field) => {
                 buf.clear();
-                field.encode_binary(&pgrepr::Type::from(&typ.scalar_type), &mut buf)?;
+                field.encode_binary(&mz_pgrepr::Type::from(&typ.scalar_type), &mut buf)?;
                 out.extend(
                     &i32::try_from(buf.len())
                         .map_err(|_| {
@@ -83,7 +83,7 @@ pub fn encode_copy_row_text(
     let delim = b'\t';
     let null = b"\\N";
     let mut buf = BytesMut::new();
-    for (idx, field) in pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+    for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
         if idx > 0 {
             out.push(delim);
         }
@@ -400,7 +400,7 @@ impl<'a> TryFrom<CopyParams> for CopyFormatParams<'a> {
 
 pub fn decode_copy_format<'a>(
     data: &[u8],
-    column_types: &[pgrepr::Type],
+    column_types: &[mz_pgrepr::Type],
     params: CopyFormatParams<'a>,
 ) -> Result<Vec<Row>, io::Error> {
     match params {
@@ -466,7 +466,7 @@ impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
 
 pub fn decode_copy_format_text(
     data: &[u8],
-    column_types: &[pgrepr::Type],
+    column_types: &[mz_pgrepr::Type],
     CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
@@ -481,7 +481,7 @@ pub fn decode_copy_format_text(
             }
             let raw_value = parser.consume_raw_value()?;
             if let Some(raw_value) = raw_value {
-                match pgrepr::Value::decode_text(&typ, raw_value) {
+                match mz_pgrepr::Value::decode_text(&typ, raw_value) {
                     Ok(value) => row.push(value.into_datum(&buf, &typ).0),
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
@@ -567,7 +567,7 @@ impl<'a> TryFrom<CopyParams> for CopyCsvFormatParams<'a> {
 
 pub fn decode_copy_format_csv(
     data: &[u8],
-    column_types: &[pgrepr::Type],
+    column_types: &[mz_pgrepr::Type],
     CopyCsvFormatParams {
         delimiter,
         quote,
@@ -623,7 +623,7 @@ pub fn decode_copy_format_csv(
             if raw_value == null_as_bytes {
                 row.push(Datum::Null);
             } else {
-                match pgrepr::Value::decode_text(typ, raw_value) {
+                match mz_pgrepr::Value::decode_text(typ, raw_value) {
                     Ok(value) => row.push(value.into_datum(&buf, &typ).0),
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);

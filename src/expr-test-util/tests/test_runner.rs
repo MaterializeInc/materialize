@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 mod test {
-    use expr_test_util::*;
-    use lowertest::{from_json, TestDeserializeContext};
-    use ore::result::ResultExt;
-    use ore::str::separated;
+    use mz_expr_test_util::*;
+    use mz_lowertest::{from_json, TestDeserializeContext};
+    use mz_ore::result::ResultExt;
+    use mz_ore::str::separated;
     use serde::de::DeserializeOwned;
     use serde::Serialize;
 

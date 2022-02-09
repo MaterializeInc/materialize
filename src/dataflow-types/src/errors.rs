@@ -10,8 +10,8 @@
 use std::fmt::Display;
 
 use bytes::BufMut;
-use expr::EvalError;
-use persist_types::Codec;
+use mz_expr::EvalError;
+use mz_persist_types::Codec;
 
 use serde::{Deserialize, Serialize};
 
@@ -129,7 +129,7 @@ impl From<SourceError> for DataflowError {
 
 #[cfg(test)]
 mod tests {
-    use persist_types::Codec;
+    use mz_persist_types::Codec;
 
     use super::DecodeError;
 

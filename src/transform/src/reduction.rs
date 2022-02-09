@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 
-use expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
-use repr::{Datum, Diff, RelationType, Row, RowArena};
+use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
+use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
 
 use crate::{TransformArgs, TransformError};
 
@@ -145,7 +145,7 @@ impl FoldConstants {
                 // the number of columns.
                 let input_arity = input_types.first().unwrap().arity();
                 for (index, scalar) in scalars.iter_mut().enumerate() {
-                    let mut current_type = repr::RelationType::new(
+                    let mut current_type = mz_repr::RelationType::new(
                         relation_type.column_types[..(input_arity + index)].to_vec(),
                     );
                     for key in relation_type.keys.iter() {
@@ -325,7 +325,7 @@ impl FoldConstants {
                     }
 
                     // Now throw away anything that doesn't satisfy the requisite constraints.
-                    let mut datum_vec = repr::DatumVec::new();
+                    let mut datum_vec = mz_repr::DatumVec::new();
                     old_rows.retain(|(row, _count)| {
                         let datums = datum_vec.borrow_with(&row);
                         let temp_storage = RowArena::new();
@@ -504,12 +504,12 @@ impl FoldConstants {
         rows: &'a mut [(Row, Diff)],
     ) {
         // helper functions for comparing elements by order_key and group_key
-        let mut lhs_datum_vec = repr::DatumVec::new();
-        let mut rhs_datum_vec = repr::DatumVec::new();
+        let mut lhs_datum_vec = mz_repr::DatumVec::new();
+        let mut rhs_datum_vec = mz_repr::DatumVec::new();
         let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
             let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
             let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-            expr::compare_columns(order_key, &lhs_datums, &rhs_datums, || lhs.cmp(&rhs))
+            mz_expr::compare_columns(order_key, &lhs_datums, &rhs_datums, || lhs.cmp(&rhs))
         };
         let mut cmp_group_key = {
             let group_key = group_key
@@ -519,12 +519,12 @@ impl FoldConstants {
                     desc: false,
                 })
                 .collect::<Vec<ColumnOrder>>();
-            let mut lhs_datum_vec = repr::DatumVec::new();
-            let mut rhs_datum_vec = repr::DatumVec::new();
+            let mut lhs_datum_vec = mz_repr::DatumVec::new();
+            let mut rhs_datum_vec = mz_repr::DatumVec::new();
             move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
                 let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
                 let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-                expr::compare_columns(&group_key, lhs_datums, rhs_datums, || Ordering::Equal)
+                mz_expr::compare_columns(&group_key, lhs_datums, rhs_datums, || Ordering::Equal)
             }
         };
 
@@ -580,7 +580,7 @@ impl FoldConstants {
         let limit = limit.unwrap_or(usize::MAX);
         let mut new_rows = Vec::new();
         let mut row_packer = Row::default();
-        let mut datum_vec = repr::DatumVec::new();
+        let mut datum_vec = mz_repr::DatumVec::new();
         for (input_row, diff) in rows {
             let datums = datum_vec.borrow_with(&input_row);
             let temp_storage = RowArena::new();
@@ -607,7 +607,7 @@ impl FoldConstants {
         rows: &[(Row, Diff)],
     ) -> Result<Vec<(Row, Diff)>, EvalError> {
         let mut new_rows = Vec::new();
-        let mut datum_vec = repr::DatumVec::new();
+        let mut datum_vec = mz_repr::DatumVec::new();
         'outer: for (row, diff) in rows {
             let datums = datum_vec.borrow_with(&row);
             let temp_storage = RowArena::new();

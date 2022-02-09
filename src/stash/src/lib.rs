@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{named_params, params, Connection, Transaction};
 use timely::PartialOrder;
 
-use persist_types::Codec;
-use timely_util::antichain_ext::Max1Antichain;
+use mz_persist_types::Codec;
+use mz_timely_util::antichain_ext::Max1Antichain;
 
 const APPLICATION_ID: i32 = 0x0872_e898; // chosen randomly
 

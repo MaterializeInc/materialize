@@ -53,5 +53,5 @@ pub mod nemesis;
 // - Equality edge cases around all the various timestamp/frontier checks.
 
 /// A type usable as a persisted key or value.
-pub trait Data: Clone + persist_types::Codec + fmt::Debug + Ord {}
-impl<T: Clone + persist_types::Codec + fmt::Debug + Ord> Data for T {}
+pub trait Data: Clone + mz_persist_types::Codec + fmt::Debug + Ord {}
+impl<T: Clone + mz_persist_types::Codec + fmt::Debug + Ord> Data for T {}

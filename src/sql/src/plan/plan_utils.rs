@@ -13,7 +13,7 @@ use std::fmt;
 
 use anyhow::bail;
 
-use repr::RelationDesc;
+use mz_repr::RelationDesc;
 
 use crate::ast::Ident;
 use crate::normalize;

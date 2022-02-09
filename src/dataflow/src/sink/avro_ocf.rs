@@ -19,14 +19,12 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::Scope;
 use tracing::error;
 
-use dataflow_types::sinks::{AvroOcfSinkConnector, SinkDesc};
-use expr::GlobalId;
-use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
-use repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_dataflow_types::sinks::{AvroOcfSinkConnector, SinkDesc};
+use mz_expr::GlobalId;
+use mz_interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
+use mz_repr::{Diff, RelationDesc, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
-
-use super::SinkBaseMetrics;
 
 impl<G> SinkRender<G> for AvroOcfSinkConnector
 where
@@ -50,7 +48,6 @@ where
         _sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
-        _metrics: &SinkBaseMetrics,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,

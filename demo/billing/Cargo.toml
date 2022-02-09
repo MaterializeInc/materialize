@@ -1,10 +1,14 @@
 [package]
-name = "billing-demo"
+name = "mz-billing-demo"
 description = "Microservice demo using Materialize to power a real-time billing usecase"
 version = "0.0.0"
 edition = "2021"
 publish = false
 rust-version = "1.58.0"
+
+[[bin]]
+name = "billing-demo"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.52"
@@ -17,13 +21,13 @@ futures = "0.3.21"
 futures-channel = "0.3.16"
 hex = "0.4.3"
 tracing = "0.1.29"
-ore = { path = "../../src/ore", features = ["task"] }
+mz-ore = { path = "../../src/ore", features = ["task"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prost = "0.9.0"
 prost-types = "0.9.0"
 rand = "0.8.4"
 rand_distr = "0.4.3"
-test-util = { path = "../../test/test-util" }
+mz-test-util = { path = "../../test/test-util" }
 tokio = "1.16.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 uuid = { version = "0.8.2", features = ["v4"] }

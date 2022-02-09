@@ -10,11 +10,10 @@
 //! Logic for the Avro representation of the CDCv2 protocol.
 
 use mz_avro::schema::{FullName, SchemaNode};
-use repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 use serde_json::json;
 
 use anyhow::anyhow;
-use avro_derive::AvroDecodable;
 use differential_dataflow::capture::{Message, Progress};
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::Schema;
@@ -22,6 +21,7 @@ use mz_avro::{
     define_unexpected, ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
     StatefulAvroDecodable,
 };
+use mz_avro_derive::AvroDecodable;
 use std::{cell::RefCell, rc::Rc};
 
 use super::decode::RowWrapper;
@@ -197,7 +197,7 @@ mod tests {
     use mz_avro::types::Value;
     use mz_avro::AvroDeserializer;
     use mz_avro::GeneralDeserializer;
-    use repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
+    use mz_repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 
     use crate::json::build_row_schema_json;
 

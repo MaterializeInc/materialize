@@ -333,7 +333,7 @@ impl From<(&str, &str)> for LockInfo {
 pub mod tests {
     use std::ops::RangeInclusive;
 
-    use persist_types::Codec;
+    use mz_persist_types::Codec;
 
     use crate::error::Error;
     use crate::gen::persist::ProtoMeta;

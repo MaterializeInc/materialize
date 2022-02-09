@@ -24,17 +24,17 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use kafka_util::client::MzClientContext;
 use lazy_static::lazy_static;
+use mz_kafka_util::client::MzClientContext;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
 use mz_aws_util::config::AwsConfig;
-use ore::display::DisplayExt;
-use ore::retry::Retry;
-use ore::task;
+use mz_ore::display::DisplayExt;
+use mz_ore::retry::Retry;
+use mz_ore::task;
 
 use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
@@ -121,7 +121,7 @@ pub struct State {
     materialized_user: String,
     pgclient: tokio_postgres::Client,
     schema_registry_url: Url,
-    ccsr_client: ccsr::Client,
+    ccsr_client: mz_ccsr::Client,
     kafka_addr: String,
     kafka_admin: rdkafka::admin::AdminClient<MzClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
@@ -535,7 +535,7 @@ pub(crate) async fn build(
                         } else {
                             // do not allow the timeout to be set below the default
                             context.timeout = cmp::max(
-                                repr::util::parse_duration(&duration).map_err(wrap_err)?,
+                                mz_repr::util::parse_duration(&duration).map_err(wrap_err)?,
                                 state.default_timeout,
                             );
                         }
@@ -707,12 +707,12 @@ pub async fn create_state(
     let schema_registry_url = config.schema_registry_url.to_owned();
 
     let ccsr_client = {
-        let mut ccsr_config = ccsr::ClientConfig::new(schema_registry_url.clone());
+        let mut ccsr_config = mz_ccsr::ClientConfig::new(schema_registry_url.clone());
 
         if let Some(cert_path) = &config.cert_path {
             let cert = fs::read(cert_path).context("reading cert")?;
             let pass = config.cert_pass.as_deref().unwrap_or("").to_owned();
-            let ident = ccsr::tls::Identity::from_pkcs12_der(cert, pass)
+            let ident = mz_ccsr::tls::Identity::from_pkcs12_der(cert, pass)
                 .context("reading keystore file as pkcs12")?;
             ccsr_config = ccsr_config.identity(ident);
         }

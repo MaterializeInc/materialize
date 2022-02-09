@@ -17,7 +17,7 @@
 //! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
 //! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 
-use expr::ColumnOrder;
+use mz_expr::ColumnOrder;
 use serde::{Deserialize, Serialize};
 
 /// A plan encapsulating different variants to compute a TopK operation.
@@ -102,7 +102,7 @@ pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
     /// Ordering that is used within each group.
-    pub order_key: Vec<expr::ColumnOrder>,
+    pub order_key: Vec<mz_expr::ColumnOrder>,
 }
 
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
@@ -111,7 +111,7 @@ pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
     /// Ordering that is used within each group.
-    pub order_key: Vec<expr::ColumnOrder>,
+    pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
     pub limit: Option<usize>,
@@ -125,7 +125,7 @@ pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
     /// Ordering that is used within each group.
-    pub order_key: Vec<expr::ColumnOrder>,
+    pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
     pub limit: Option<usize>,

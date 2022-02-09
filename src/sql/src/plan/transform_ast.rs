@@ -15,9 +15,9 @@
 
 use uuid::Uuid;
 
-use ore::stack::{CheckedRecursion, RecursionGuard};
-use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Raw, Select, SelectItem,
     TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
@@ -530,7 +530,7 @@ impl Desugarer {
             if let (Expr::Row { exprs: left }, Expr::Row { exprs: right }) =
                 (&mut **left, &mut **right)
             {
-                if matches!(op.op_str(), "=" | "<>" | "<" | "<=" | ">" | ">=") {
+                if matches!(normalize::op(op)?, "=" | "<>" | "<" | "<=" | ">" | ">=") {
                     if left.len() != right.len() {
                         sql_bail!("unequal number of entries in row expressions");
                     }
@@ -539,19 +539,19 @@ impl Desugarer {
                         sql_bail!("cannot compare rows of zero length");
                     }
                 }
-                match op.op_str() {
+                match normalize::op(op)? {
                     "=" | "<>" => {
                         let mut new = Expr::Value(Value::Boolean(true));
                         for (l, r) in left.iter_mut().zip(right) {
                             new = l.take().equals(r.take()).and(new);
                         }
-                        if op.op_str() == "<>" {
+                        if normalize::op(op)? == "<>" {
                             new = new.negate();
                         }
                         *expr = new;
                     }
                     "<" | "<=" | ">" | ">=" => {
-                        let strict_op = match op.op_str() {
+                        let strict_op = match normalize::op(op)? {
                             "<" | "<=" => "<",
                             ">" | ">=" => ">",
                             _ => unreachable!(),
@@ -561,7 +561,7 @@ impl Desugarer {
                         for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
                             new = l
                                 .clone()
-                                .binop(Op::Bare(String::from(strict_op)), r.clone())
+                                .binop(Op::bare(strict_op), r.clone())
                                 .or(l.take().equals(r.take()).and(new));
                         }
                         *expr = new;

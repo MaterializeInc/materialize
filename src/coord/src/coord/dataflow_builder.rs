@@ -14,10 +14,10 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use ore::stack::maybe_grow;
+use mz_ore::stack::maybe_grow;
 
-use dataflow_types::sinks::SinkDesc;
-use dataflow_types::IndexDesc;
+use mz_dataflow_types::sinks::SinkDesc;
+use mz_dataflow_types::IndexDesc;
 
 use super::*;
 use crate::error::RematerializedSourceType;
@@ -28,7 +28,8 @@ pub struct DataflowBuilder<'a> {
     pub indexes: &'a ArrangementFrontiers<Timestamp>,
     pub persister: &'a PersisterWithConfig,
     /// A handle to the storage abstraction, which describe sources from their identifier.
-    pub storage: &'a dataflow_types::client::Controller<Box<dyn dataflow_types::client::Client>>,
+    pub storage:
+        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
 }
 
 impl Coordinator {
@@ -59,7 +60,7 @@ impl Coordinator {
         } else {
             Some((
                 index_entry.name().to_string(),
-                dataflow_types::IndexDesc {
+                mz_dataflow_types::IndexDesc {
                     on_id: index.on,
                     key: index.keys.clone(),
                 },
@@ -198,7 +199,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
 
         Ok(dataflow)
     }
@@ -232,7 +233,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(dataflow, self.catalog.enabled_indexes())?;
 
         Ok(())
     }

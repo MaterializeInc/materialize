@@ -20,8 +20,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
-use interchange::json::JsonEncoder;
 use itertools::Itertools;
+use mz_interchange::json::JsonEncoder;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
@@ -41,24 +41,26 @@ use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
 use tracing::{debug, error, info};
 
-use dataflow_types::sinks::{
+use mz_avro::types::Value;
+use mz_dataflow_types::sinks::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
 };
-use expr::GlobalId;
-use interchange::avro::{self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator};
-use interchange::encode::Encode;
-use kafka_util::client::MzClientContext;
-use mz_avro::types::Value;
-use ore::cast::CastFrom;
-use ore::collections::CollectionExt;
-use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use ore::retry::Retry;
-use ore::task;
-use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
-use timely_util::async_op;
-use timely_util::operators_async_ext::OperatorBuilderExt;
+use mz_expr::GlobalId;
+use mz_interchange::avro::{
+    self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
+};
+use mz_interchange::encode::Encode;
+use mz_kafka_util::client::MzClientContext;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_repr::{Datum, Diff, RelationDesc, Row, Timestamp};
+use mz_timely_util::async_op;
+use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
-use super::{KafkaBaseMetrics, SinkBaseMetrics};
+use super::KafkaBaseMetrics;
 use crate::render::sinks::SinkRender;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -86,7 +88,6 @@ where
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
-        metrics: &SinkBaseMetrics,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -138,7 +139,7 @@ where
             self.value_desc.clone(),
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
-            &metrics.kafka,
+            &compute_state.sink_metrics.kafka,
         );
 
         compute_state
@@ -670,14 +671,17 @@ impl KafkaSinkState {
                 .context("creating consumer client failed")?;
 
             // ensure the consistency topic has exactly one partition
-            let partitions =
-                kafka_util::client::get_partitions(consumer.client(), consistency_topic, timeout)
-                    .with_context(|| {
-                    format!(
-                        "Unable to fetch metadata about consistency topic {}",
-                        consistency_topic
-                    )
-                })?;
+            let partitions = mz_kafka_util::client::get_partitions(
+                consumer.client(),
+                consistency_topic,
+                timeout,
+            )
+            .with_context(|| {
+                format!(
+                    "Unable to fetch metadata about consistency topic {}",
+                    consistency_topic
+                )
+            })?;
 
             if partitions.len() != 1 {
                 bail!(

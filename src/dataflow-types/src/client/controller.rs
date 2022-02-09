@@ -10,8 +10,8 @@
 //! A client that maintains summaries of the involved objects.
 
 use crate::client::{Client, Command, ComputeCommand, ComputeResponse, Response, StorageCommand};
-use expr::GlobalId;
-use repr::Timestamp;
+use mz_expr::GlobalId;
+use mz_repr::Timestamp;
 use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.

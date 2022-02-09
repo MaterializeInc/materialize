@@ -1,19 +1,23 @@
 [package]
-name = "dataflowd"
+name = "mz-dataflowd"
 description = "Independent dataflow server for Materialize."
 version = "0.0.0"
 edition = "2021"
 publish = false
 rust-version = "1.58.0"
 
+[[bin]]
+name = "dataflowd"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0.52"
 async-trait = "0.1.52"
 clap = { version = "3.0.14", features = ["derive", "env"] }
-dataflow-types = { path = "../dataflow-types" }
-dataflow = { path = "../dataflow" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-dataflow = { path = "../dataflow" }
 tracing = "0.1.29"
-ore = { path = "../ore" }
+mz-ore = { path = "../ore" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tracing-subscriber = "0.3.7"
 tokio = { version = "1.16.1", features = ["macros", "rt-multi-thread"] }

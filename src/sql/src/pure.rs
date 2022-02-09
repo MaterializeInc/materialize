@@ -19,22 +19,24 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
-use ccsr::Client;
 use csv::ReaderBuilder;
 use itertools::Itertools;
+use mz_ccsr::Client;
+use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, Op};
 use reqwest::Url;
-use sql_parser::ast::{CsrSeedCompiledOrLegacy, Op};
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
-use dataflow_types::sources::AwsConfig;
-use dataflow_types::sources::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
+use mz_dataflow_types::sources::AwsConfig;
+use mz_dataflow_types::sources::{
+    ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
+};
+use mz_repr::strconv;
+use mz_sql_parser::parser::parse_columns;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
-use repr::strconv;
-use sql_parser::parser::parse_columns;
 
 use crate::ast::{
     display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
@@ -128,16 +130,16 @@ pub fn purify(
                         Some(start_offsets) => {
                             // Drop `kafka_time_offset`
                             with_options.retain(|val| match val {
-                                sql_parser::ast::SqlOption::Value { name, .. } => {
+                                mz_sql_parser::ast::SqlOption::Value { name, .. } => {
                                     name.as_str() != "kafka_time_offset"
                                 }
                                 _ => true,
                             });
 
                             // Add `start_offset`
-                            with_options.push(sql_parser::ast::SqlOption::Value {
-                                name: sql_parser::ast::Ident::new("start_offset"),
-                                value: sql_parser::ast::Value::Array(
+                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                                name: mz_sql_parser::ast::Ident::new("start_offset"),
+                                value: mz_sql_parser::ast::Value::Array(
                                     start_offsets
                                         .iter()
                                         .map(|offset| Value::Number(offset.to_string()))
@@ -157,9 +159,9 @@ pub fn purify(
                         let r = mz_avro::Reader::new(f)?;
                         if !with_options_map.contains_key("reader_schema") {
                             let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                            with_options.push(sql_parser::ast::SqlOption::Value {
-                                name: sql_parser::ast::Ident::new("reader_schema"),
-                                value: sql_parser::ast::Value::String(schema),
+                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                                name: mz_sql_parser::ast::Ident::new("reader_schema"),
+                                value: mz_sql_parser::ast::Value::String(schema),
                             });
                         }
                         Ok::<_, anyhow::Error>(())
@@ -207,7 +209,7 @@ pub fn purify(
                     // verify that we can connect upstream
                     // TODO(petrosagg): store this info along with the source for better error
                     // detection
-                    let _ = postgres_util::publication_info(&conn, &publication).await?;
+                    let _ = mz_postgres_util::publication_info(&conn, &publication).await?;
                 }
                 CreateSourceConnector::PubNub { .. } => (),
             }
@@ -254,7 +256,8 @@ pub fn purify(
                             }),
                         ..
                     } => {
-                        let pub_info = postgres_util::publication_info(&conn, &publication).await?;
+                        let pub_info =
+                            mz_postgres_util::publication_info(&conn, &publication).await?;
 
                         // If the user didn't specify targets we'll generate views for all of them
                         let targets = targets.clone().unwrap_or_else(|| {
@@ -479,7 +482,7 @@ async fn purify_source_format_single(
                     .await?
             }
             AvroSchema::InlineSchema {
-                schema: sql_parser::ast::Schema::File(path),
+                schema: mz_sql_parser::ast::Schema::File(path),
                 with_options,
             } => {
                 let file_schema = tokio::fs::read_to_string(path).await?;
@@ -498,7 +501,7 @@ async fn purify_source_format_single(
                     });
                 }
                 *schema = AvroSchema::InlineSchema {
-                    schema: sql_parser::ast::Schema::Inline(file_schema),
+                    schema: mz_sql_parser::ast::Schema::Inline(file_schema),
                     with_options: with_options.clone(),
                 };
             }
@@ -513,11 +516,11 @@ async fn purify_source_format_single(
                 message_name: _,
                 schema,
             } => {
-                if let sql_parser::ast::Schema::File(path) = schema {
+                if let mz_sql_parser::ast::Schema::File(path) = schema {
                     let descriptors = tokio::fs::read(path).await?;
                     let mut buf = String::new();
                     strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = sql_parser::ast::Schema::Inline(buf);
+                    *schema = mz_sql_parser::ast::Schema::Inline(buf);
                 }
             }
         },
@@ -761,12 +764,12 @@ pub async fn purify_csv(
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
     pub confluent_wire_format: bool,
 }
 
 async fn get_remote_csr_schema(
-    schema_registry_config: ccsr::ClientConfig,
+    schema_registry_config: mz_ccsr::ClientConfig,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
     let ccsr_client = schema_registry_config.clone().build()?;

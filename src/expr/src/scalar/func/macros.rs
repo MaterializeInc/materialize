@@ -67,7 +67,7 @@ macro_rules! sqlfunc {
             $body:block
     ) => {
         paste::paste! {
-            #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, lowertest::MzReflect)]
+            #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
             pub struct [<$fn_name:camel>];
 
             impl<'a> crate::func::EagerUnaryFunc<'a> for [<$fn_name:camel>] {
@@ -78,8 +78,8 @@ macro_rules! sqlfunc {
                     $fn_name(a)
                 }
 
-                fn output_type(&self, input_type: repr::ColumnType) -> repr::ColumnType {
-                    use repr::AsColumnType;
+                fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+                    use mz_repr::AsColumnType;
                     let output = Self::Output::as_column_type();
                     let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
                     let nullable = output.nullable;
@@ -110,7 +110,7 @@ macro_rules! sqlfunc {
 mod test {
     use crate::scalar::func::LazyUnaryFunc;
     use crate::EvalError;
-    use repr::ScalarType;
+    use mz_repr::ScalarType;
 
     sqlfunc!(
         #[sqlname = "INFALLIBLE"]

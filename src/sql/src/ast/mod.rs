@@ -9,5 +9,5 @@
 
 //! SQL abstract syntax tree.
 
-pub use sql_parser::ast::*;
+pub use mz_sql_parser::ast::*;
 pub mod transform;

@@ -1,5 +1,5 @@
 [package]
-name = "metabase"
+name = "mz-metabase"
 description = "An API client for Metabase."
 version = "0.0.0"
 edition = "2021"

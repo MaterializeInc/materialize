@@ -26,7 +26,7 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::debug;
 
-use dataflow_types::{
+use mz_dataflow_types::{
     sinks::{
         AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
         KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
@@ -42,13 +42,13 @@ use dataflow_types::{
         PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
     },
 };
-use expr::GlobalId;
-use interchange::avro::{self, AvroSchemaGenerator};
-use interchange::envelopes;
-use ore::collections::CollectionExt;
-use ore::str::StrExt;
-use repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
-use sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
+use mz_expr::GlobalId;
+use mz_interchange::avro::{self, AvroSchemaGenerator};
+use mz_interchange::envelopes;
+use mz_ore::collections::CollectionExt;
+use mz_ore::str::StrExt;
+use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -445,8 +445,8 @@ pub fn plan_create_source(
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
                 compression: match compression {
-                    Compression::Gzip => dataflow_types::sources::Compression::Gzip,
-                    Compression::None => dataflow_types::sources::Compression::None,
+                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
+                    Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
                 tail,
             });
@@ -467,13 +467,13 @@ pub fn plan_create_source(
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
-                    sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        dataflow_types::sources::S3KeySource::Scan {
+                    mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
+                        mz_dataflow_types::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
-                    sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        dataflow_types::sources::S3KeySource::SqsNotifications {
+                    mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
+                        mz_dataflow_types::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -493,8 +493,8 @@ pub fn plan_create_source(
                     .transpose()?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => dataflow_types::sources::Compression::Gzip,
-                    Compression::None => dataflow_types::sources::Compression::None,
+                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
+                    Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
@@ -544,7 +544,7 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
-                compression: dataflow_types::sources::Compression::None,
+                compression: mz_dataflow_types::sources::Compression::None,
                 tail,
             });
             if !matches!(format, CreateSourceFormat::None) {
@@ -570,10 +570,10 @@ pub fn plan_create_source(
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         // TODO: fixup key envelope
-        sql_parser::ast::Envelope::None => {
+        mz_sql_parser::ast::Envelope::None => {
             SourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
         }
-        sql_parser::ast::Envelope::Debezium(mode) => {
+        mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
@@ -690,7 +690,7 @@ pub fn plan_create_source(
 
             SourceEnvelope::Debezium(dbz_envelope)
         }
-        sql_parser::ast::Envelope::Upsert => {
+        mz_sql_parser::ast::Envelope::Upsert => {
             if encoding.key_ref().is_none() {
                 bail_unsupported!(format!("upsert requires a key/value format: {:?}", format));
             }
@@ -701,7 +701,7 @@ pub fn plan_create_source(
             };
             SourceEnvelope::Upsert(key_envelope)
         }
-        sql_parser::ast::Envelope::CdcV2 => {
+        mz_sql_parser::ast::Envelope::CdcV2 => {
             //TODO check that key envelope is not set
             if let CreateSourceConnector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
@@ -818,7 +818,7 @@ pub fn plan_create_source(
     };
 
     let expr = HirRelationExpr::Get {
-        id: expr::Id::LocalBareSource,
+        id: mz_expr::Id::LocalBareSource,
         typ: desc.typ().clone(),
     }
     .lower();
@@ -989,7 +989,7 @@ fn typecheck_debezium_dedup(
     })
 }
 
-fn get_encoding<T: sql_parser::ast::AstInfo>(
+fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
     format: &CreateSourceFormat<Raw>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<T>>,
@@ -1022,7 +1022,7 @@ fn get_encoding<T: sql_parser::ast::AstInfo>(
     Ok(encoding)
 }
 
-fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
+fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
     format: &Format<Raw>,
     with_options: &Vec<SqlOption<T>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
@@ -1039,7 +1039,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
                 AvroSchema::InlineSchema {
-                    schema: sql_parser::ast::Schema::Inline(schema),
+                    schema: mz_sql_parser::ast::Schema::Inline(schema),
                     with_options,
                 } => {
                     with_options! {
@@ -1058,7 +1058,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                     }
                 }
                 AvroSchema::InlineSchema {
-                    schema: sql_parser::ast::Schema::File(_),
+                    schema: mz_sql_parser::ast::Schema::File(_),
                     ..
                 } => {
                     unreachable!("File schema should already have been inlined")
@@ -1165,8 +1165,8 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 schema,
             } => {
                 let descriptors = match schema {
-                    sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-                    sql_parser::ast::Schema::File(_) => {
+                    mz_sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
+                    mz_sql_parser::ast::Schema::File(_) => {
                         unreachable!("File schema should already have been inlined")
                     }
                 };
@@ -1181,7 +1181,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         Format::Regex(regex) => {
             let regex = Regex::new(&regex)?;
             DataEncoding::Regex(RegexEncoding {
-                regex: repr::adt::regex::Regex(regex),
+                regex: mz_repr::adt::regex::Regex(regex),
             })
         }
         Format::Csv { columns, delimiter } => {
@@ -1754,10 +1754,12 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        None | Some(Envelope::Debezium(sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
+        None | Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => {
+            SinkEnvelope::Debezium
+        }
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
-        Some(Envelope::Debezium(sql_parser::ast::DbzMode::Upsert)) => {
+        Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Upsert)) => {
             bail_unsupported!("UPSERT doesn't make sense for sinks")
         }
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
@@ -2036,7 +2038,7 @@ pub fn plan_create_index(
             let index_name_col_suffix = keys
                 .iter()
                 .map(|k| match k {
-                    expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
+                    mz_expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
                         Some(col_name) => col_name.to_string(),
                         None => format!("{}", i + 1),
                     },
@@ -2472,7 +2474,7 @@ fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, an
         None => (),
         Some("off") => out.push(IndexOption::LogicalCompactionWindow(None)),
         Some(s) => {
-            let window = Some(repr::util::parse_duration(s)?);
+            let window = Some(mz_repr::util::parse_duration(s)?);
             out.push(IndexOption::LogicalCompactionWindow(window))
         }
     };

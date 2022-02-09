@@ -20,12 +20,12 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use tracing::{debug, error, info, warn};
 
-use dataflow_types::{
+use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
     DataflowError, DecodeError,
 };
-use expr::GlobalId;
-use repr::{Datum, Diff, Row};
+use mz_expr::GlobalId;
+use mz_repr::{Datum, Diff, Row};
 
 use crate::metrics::Metrics;
 use crate::source::DecodeResult;

@@ -17,7 +17,7 @@ use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use repr::Timestamp;
+use mz_repr::Timestamp;
 
 use super::{SourceStatus, SourceToken};
 

@@ -14,8 +14,8 @@
 use bytes::BufMut;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use dec::Decimal;
-use ore::cast::CastFrom;
-use persist_types::Codec;
+use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec;
 use prost::Message;
 use uuid::Uuid;
 
@@ -299,7 +299,7 @@ impl TryFrom<&ProtoRow> for Row {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-    use persist_types::Codec;
+    use mz_persist_types::Codec;
     use uuid::Uuid;
 
     use crate::adt::array::ArrayDimension;

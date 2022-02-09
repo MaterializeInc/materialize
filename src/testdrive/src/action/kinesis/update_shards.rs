@@ -14,7 +14,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use aws_sdk_kinesis::model::{ScalingType, StreamStatus};
 
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

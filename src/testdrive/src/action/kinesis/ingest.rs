@@ -13,7 +13,7 @@ use aws_sdk_kinesis::{Blob, SdkError};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

@@ -12,7 +12,7 @@ use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
 use mz_avro::types::Value as AvroValue;
 
-use interchange::avro::{parse_schema, Decoder};
+use mz_interchange::avro::{parse_schema, Decoder};
 use std::ops::Add;
 
 pub fn bench_avro(c: &mut Criterion) {

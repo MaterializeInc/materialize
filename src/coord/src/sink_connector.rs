@@ -14,14 +14,14 @@ use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::config::ClientConfig;
 
-use dataflow_types::sinks::{
+use mz_dataflow_types::sinks::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
     KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
     PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
-use expr::GlobalId;
-use kafka_util::client::MzClientContext;
-use ore::collections::CollectionExt;
+use mz_expr::GlobalId;
+use mz_kafka_util::client::MzClientContext;
+use mz_ore::collections::CollectionExt;
 
 use crate::error::CoordError;
 
@@ -141,14 +141,14 @@ async fn register_kafka_topic(
     }
 
     if succeed_if_exists {
-        kafka_util::admin::ensure_topic(
+        mz_kafka_util::admin::ensure_topic(
             client,
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
             &kafka_topic,
         )
         .await
     } else {
-        kafka_util::admin::create_new_topic(
+        mz_kafka_util::admin::create_new_topic(
             client,
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
             &kafka_topic,
@@ -165,12 +165,12 @@ async fn register_kafka_topic(
 /// TODO(benesch): do we need to delete the Kafka topic if publishing the
 // schema fails?
 async fn publish_kafka_schemas(
-    ccsr: &ccsr::Client,
+    ccsr: &mz_ccsr::Client,
     topic: &str,
     key_schema: Option<&str>,
-    key_schema_type: Option<ccsr::SchemaType>,
+    key_schema_type: Option<mz_ccsr::SchemaType>,
     value_schema: &str,
-    value_schema_type: ccsr::SchemaType,
+    value_schema_type: mz_ccsr::SchemaType,
 ) -> Result<(Option<i32>, i32), CoordError> {
     let value_schema_id = ccsr
         .publish_schema(
@@ -243,7 +243,7 @@ async fn build_kafka(
     .await
     .context("error registering kafka topic for sink")?;
     let published_schema_info = match builder.format {
-        dataflow_types::sinks::KafkaSinkFormat::Avro {
+        mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
             ccsr_config,
@@ -254,9 +254,9 @@ async fn build_kafka(
                 &ccsr,
                 &topic,
                 key_schema.as_deref(),
-                Some(ccsr::SchemaType::Avro),
+                Some(mz_ccsr::SchemaType::Avro),
                 &value_schema,
-                ccsr::SchemaType::Avro,
+                mz_ccsr::SchemaType::Avro,
             )
             .await
             .context("error publishing kafka schemas for sink")?;
@@ -265,11 +265,11 @@ async fn build_kafka(
                 value_schema_id,
             })
         }
-        dataflow_types::sinks::KafkaSinkFormat::Json => None,
+        mz_dataflow_types::sinks::KafkaSinkFormat::Json => None,
     };
 
     let consistency = match builder.consistency_format {
-        Some(dataflow_types::sinks::KafkaSinkFormat::Avro {
+        Some(mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
             value_schema,
             ccsr_config,
             ..
@@ -299,7 +299,7 @@ async fn build_kafka(
                 None,
                 None,
                 &value_schema,
-                ccsr::SchemaType::Avro,
+                mz_ccsr::SchemaType::Avro,
             )
             .await
             .context("error publishing kafka consistency schemas for sink")?;

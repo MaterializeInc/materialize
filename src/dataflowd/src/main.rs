@@ -17,9 +17,9 @@ use tokio::select;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use dataflow_types::client::Client;
-use ore::metrics::MetricsRegistry;
-use ore::now::SYSTEM_TIME;
+use mz_dataflow_types::client::Client;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 
 /// Independent dataflow server for Materialize.
 #[derive(clap::Parser)]
@@ -66,7 +66,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run(ore::cli::parse_args()).await {
+    if let Err(err) = run(mz_ore::cli::parse_args()).await {
         eprintln!("dataflowd: {:#}", err);
         process::exit(1);
     }
@@ -150,7 +150,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let (conn, _addr) = listener.accept().await?;
     info!("coordinator connection accepted");
 
-    let (_server, mut client) = dataflow::serve(dataflow::Config {
+    let (_server, mut client) = mz_dataflow::serve(mz_dataflow::Config {
         workers: args.workers,
         timely_config,
         experimental_mode: false,
@@ -159,7 +159,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         persister: None,
     })?;
 
-    let mut conn = dataflowd::tcp::framed_server(conn);
+    let mut conn = mz_dataflowd::tcp::framed_server(conn);
     loop {
         select! {
             cmd = conn.try_next() => match cmd? {

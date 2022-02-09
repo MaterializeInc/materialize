@@ -12,7 +12,7 @@ use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config, NoTls};
 use url::Url;
 
-use ore::task;
+use mz_ore::task;
 
 /// Constructs a URL from PostgreSQL configuration parameters.
 ///

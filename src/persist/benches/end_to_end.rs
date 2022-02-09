@@ -17,22 +17,22 @@ use criterion::measurement::{Measurement, WallTime};
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use differential_dataflow::operators::Count;
 use differential_dataflow::AsCollection;
-use ore::cast::CastFrom;
-use ore::metrics::MetricsRegistry;
-use persist::s3::{S3Blob, S3BlobConfig};
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
+use mz_persist::s3::{S3Blob, S3BlobConfig};
 use timely::dataflow::operators::Map;
 use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use timely::Config;
 use tokio::runtime::Runtime as AsyncRuntime;
 
-use persist::client::RuntimeClient;
-use persist::error::{Error, ErrorLog};
-use persist::file::FileBlob;
-use persist::operators::source::PersistedSource;
-use persist::runtime::{self, RuntimeConfig};
-use persist::storage::{Blob, LockInfo};
-use persist::workload::{self, DataGenerator};
+use mz_persist::client::RuntimeClient;
+use mz_persist::error::{Error, ErrorLog};
+use mz_persist::file::FileBlob;
+use mz_persist::operators::source::PersistedSource;
+use mz_persist::runtime::{self, RuntimeConfig};
+use mz_persist::storage::{Blob, LockInfo};
+use mz_persist::workload::{self, DataGenerator};
 
 pub fn bench_load(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
     let config =
@@ -63,7 +63,7 @@ fn bench_load_s3_one_iter(data: &DataGenerator, config: &S3BlobConfig) -> Result
         RuntimeConfig::default(),
         ErrorLog,
         s3_blob,
-        build_info::DUMMY_BUILD_INFO,
+        mz_build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
         None,
     )?;
@@ -156,7 +156,7 @@ fn create_runtime(base_path: &Path, nonce: &str) -> Result<RuntimeClient, Error>
         RuntimeConfig::default(),
         ErrorLog,
         FileBlob::open_exclusive(blob_dir.into(), lock_info)?,
-        build_info::DUMMY_BUILD_INFO,
+        mz_build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
         None,
     )?;

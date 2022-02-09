@@ -47,7 +47,7 @@ pub fn adjust_rlimits() {
 
     #[cfg(target_os = "macos")]
     let hard = {
-        use ore::result::ResultExt;
+        use mz_ore::result::ResultExt;
         use std::cmp;
         use sysctl::Sysctl;
 

@@ -9,12 +9,12 @@
 
 #[cfg(test)]
 mod tests {
-    use lowertest::*;
+    use mz_lowertest::*;
 
     use std::collections::HashMap;
 
     use lazy_static::lazy_static;
-    use ore::result::ResultExt;
+    use mz_ore::result::ResultExt;
     use proc_macro2::TokenTree;
     use serde::{Deserialize, Serialize};
     use serde_json::Value;

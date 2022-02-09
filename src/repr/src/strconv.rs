@@ -34,18 +34,18 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
-use lowertest::MzReflect;
+use mz_lowertest::MzReflect;
+use mz_ore::display::DisplayExt;
+use mz_ore::result::ResultExt;
 use num_traits::Float as NumFloat;
-use ore::display::DisplayExt;
-use ore::result::ResultExt;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ore::fmt::FormatBuffer;
-use ore::lex::LexBuf;
-use ore::str::StrExt;
+use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
+use mz_ore::str::StrExt;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
@@ -376,7 +376,7 @@ where
     Nestable::MayNeedEscaping
 }
 
-/// Parses a `DateTime<Utc>` from `s`. See `expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
+/// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
@@ -442,7 +442,7 @@ pub fn parse_interval(s: &str) -> Result<Interval, ParseError> {
 }
 
 /// Parse an interval string, using an optional leading precision for time (H:M:S)
-/// and a specific sql_parser::ast::DateTimeField to identify ambiguous elements.
+/// and a specific mz_sql_parser::ast::DateTimeField to identify ambiguous elements.
 /// For more information about this operation, see the documentation on
 /// ParsedDateTime::build_parsed_datetime_interval.
 pub fn parse_interval_w_disambiguator(

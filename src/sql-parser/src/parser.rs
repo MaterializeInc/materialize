@@ -26,9 +26,9 @@ use std::fmt;
 use itertools::Itertools;
 use tracing::warn;
 
-use ore::collections::CollectionExt;
-use ore::option::OptionExt;
-use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::collections::CollectionExt;
+use mz_ore::option::OptionExt;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 
 use crate::ast::*;
 use crate::keywords::*;
@@ -926,7 +926,7 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(OPERATOR) => {
                 self.expect_token(&Token::LParen)?;
-                let op = self.parse_operator_name()?;
+                let op = self.parse_operator()?;
                 self.expect_token(&Token::RParen)?;
                 Some(op)
             }
@@ -1171,37 +1171,26 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Parse a possibly qualified, possibly quoted operator, e.g.
-    /// `+`, `pg_catalog.+`, or `"pg_catalog".+`
-    fn parse_operator_name(&mut self) -> Result<Op, ParserError> {
-        let mut schema = vec![];
-        let original_pos = self.index;
-        while !matches!(self.peek_token(), Some(Token::Op(_)) | Some(Token::Star)) {
-            schema.push(self.parse_identifier()?);
+    /// Parse an operator reference.
+    ///
+    /// Examples:
+    ///   * `+`
+    ///   * `OPERATOR(schema.+)`
+    ///   * `OPERATOR("foo"."bar"."baz".@>)`
+    fn parse_operator(&mut self) -> Result<Op, ParserError> {
+        let mut namespace = vec![];
+        loop {
+            match self.next_token() {
+                Some(Token::Keyword(kw)) => namespace.push(kw.into_ident()),
+                Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
+                Some(Token::Op(op)) => return Ok(Op { namespace, op }),
+                Some(Token::Star) => {
+                    let op = String::from("*");
+                    return Ok(Op { namespace, op });
+                }
+                tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
+            }
             self.expect_token(&Token::Dot)?;
-        }
-
-        // Supporting qualified operators fully is difficult, so we simplify the
-        // problem by requiring that the operator's schema is `pg_catalog`.
-        // See #9282 for details.
-        // Once materialize supports the creation of custom operators, this code can be removed
-        if !(schema.is_empty() || (schema.len() == 1 && schema[0].as_str() == "pg_catalog")) {
-            return parser_err!(
-                self,
-                original_pos,
-                "Expected {}, found {}",
-                "pg_catalog",
-                schema.iter().map(|e| e.to_string()).join("."),
-            );
-        }
-
-        match self.next_token() {
-            Some(Token::Op(op)) => Ok(Op::Qualified { schema, name: op }),
-            Some(Token::Star) => Ok(Op::Qualified {
-                schema,
-                name: String::from("*"),
-            }),
-            _ => self.expected(self.peek_pos(), "operator", self.peek_token()),
         }
     }
 

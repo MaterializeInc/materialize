@@ -7,16 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use persist::client::{StreamReadHandle, StreamWriteHandle};
+use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
 use timely::dataflow::operators::{Concat, Map, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
-use persist::operators::replay::Replay;
-use persist::operators::stream::{Persist, RetractUnsealed};
-use persist_types::Codec;
-use repr::{Diff, Row, Timestamp};
+use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
+use mz_persist::operators::replay::Replay;
+use mz_persist::operators::stream::{Persist, RetractUnsealed};
+use mz_persist_types::Codec;
+use mz_repr::{Diff, Row, Timestamp};
 
 /// Persist configuration for `ENVELOPE NONE` sources.
 #[derive(Debug, Clone)]

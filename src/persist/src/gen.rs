@@ -71,7 +71,7 @@ impl ProtoMeta {
     }
 }
 
-impl persist_types::Codec for ProtoMeta {
+impl mz_persist_types::Codec for ProtoMeta {
     fn codec_name() -> String {
         "protobuf+md5[ProtoMeta]".into()
     }
@@ -118,7 +118,7 @@ impl persist_types::Codec for ProtoMeta {
 
 #[cfg(test)]
 mod tests {
-    use persist_types::Codec;
+    use mz_persist_types::Codec;
 
     use super::*;
 

@@ -20,17 +20,16 @@ use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, Probe, UnorderedInput};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
 
-use persist::client::{MultiWriteHandle, StreamWriteHandle};
-use persist::operators::source::PersistedSource;
-use persist::operators::stream::{AwaitFrontier, Seal};
-use persist::operators::upsert::PersistentUpsertConfig;
-use persist_types::Codec;
+use mz_persist::client::{MultiWriteHandle, StreamWriteHandle};
+use mz_persist::operators::source::PersistedSource;
+use mz_persist::operators::stream::{AwaitFrontier, Seal};
+use mz_persist::operators::upsert::PersistentUpsertConfig;
+use mz_persist_types::Codec;
 
-use dataflow_types::sources::{encoding::*, persistence::*, *};
-use dataflow_types::*;
-use expr::{GlobalId, PartitionId, SourceInstanceId};
-use ore::now::NowFn;
-use repr::{Diff, Row, Timestamp};
+use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
+use mz_dataflow_types::*;
+use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
+use mz_repr::{Diff, Row, Timestamp};
 use timely::progress::Antichain;
 
 use crate::decode::decode_cdcv2;
@@ -42,7 +41,6 @@ use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
 use crate::render::StorageState;
 use crate::server::LocalInput;
-use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::{
     self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
@@ -63,7 +61,7 @@ enum SourceType<Delimited, ByteStream> {
 
 /// Imports a table (non-durable, local source of input).
 pub(crate) fn import_table<G>(
-    as_of_frontier: &timely::progress::Antichain<repr::Timestamp>,
+    as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     storage_state: &mut crate::render::StorageState,
     scope: &mut G,
     persisted_name: Option<String>,
@@ -134,7 +132,7 @@ where
 pub(crate) fn import_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
-    as_of_frontier: &timely::progress::Antichain<repr::Timestamp>,
+    as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     SourceInstanceDesc {
         description: src,
         operators: mut linear_operators,
@@ -144,8 +142,6 @@ pub(crate) fn import_source<G>(
     scope: &mut G,
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
-    now: NowFn,
-    base_metrics: &SourceBaseMetrics,
 ) -> (
     (Collection<G, Row>, Collection<G, DataflowError>),
     Rc<dyn std::any::Any>,
@@ -244,8 +240,8 @@ where
                 worker_count: scope.peers(),
                 logger: materialized_logging,
                 encoding: encoding.clone(),
-                now,
-                base_metrics,
+                now: storage_state.now.clone(),
+                base_metrics: &storage_state.source_metrics,
             };
 
             let (mut collection, capability) = if let ExternalSourceConnector::PubNub(
@@ -577,11 +573,11 @@ where
                                     .into_plan()
                                     .unwrap_or_else(|e| panic!("{}", e));
                             // Reusable allocation for unpacking datums.
-                            let mut datum_vec = repr::DatumVec::new();
+                            let mut datum_vec = mz_repr::DatumVec::new();
                             let mut row_builder = Row::default();
                             // Closure that applies the linear operators to each `input_row`.
                             move |(input_row, time, diff)| {
-                                let arena = repr::RowArena::new();
+                                let arena = mz_repr::RowArena::new();
                                 let mut datums_local = datum_vec.borrow_with(&input_row);
                                 linear_op_mfp.evaluate(
                                     &mut datums_local,
@@ -703,7 +699,7 @@ pub enum PersistentEnvelopeConfig<K: Codec, V: Codec> {
 fn get_persist_config(
     source_id: &SourceInstanceId,
     persist_desc: SourcePersistDesc,
-    persist_client: &mut persist::client::RuntimeClient,
+    persist_client: &mut mz_persist::client::RuntimeClient,
 ) -> PersistentSourceConfig<
     Result<Row, DecodeError>,
     Result<Row, DecodeError>,
@@ -715,36 +711,30 @@ fn get_persist_config(
 
     let (bindings_write, bindings_read) = persist_client
         .create_or_load::<SourceTimestamp, AssignedTimestamp>(
-            &persist_desc.timestamp_bindings_stream.name,
+            &persist_desc.timestamp_bindings_stream,
         );
 
     match persist_desc.envelope_desc {
         EnvelopePersistDesc::Upsert => {
             let (data_write, data_read) = persist_client
                 .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(
-                    &persist_desc.primary_stream.name,
+                    &persist_desc.primary_stream,
                 );
 
-            let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
-            let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
+            let seal_ts = persist_desc.upper_seal_ts;
 
             tracing::debug!(
-                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
                 source_id,
-                persist_desc.primary_stream.name,
-                persist_desc.timestamp_bindings_stream.name,
-                bindings_seal_ts,
-                data_seal_ts,
+                persist_desc.primary_stream,
+                persist_desc.timestamp_bindings_stream,
+                seal_ts
             );
 
-            let bindings_config = PersistentTimestampBindingsConfig::new(
-                bindings_seal_ts,
-                data_seal_ts,
-                bindings_read,
-                bindings_write,
-            );
+            let bindings_config =
+                PersistentTimestampBindingsConfig::new(seal_ts, bindings_read, bindings_write);
 
-            let upsert_config = PersistentUpsertConfig::new(data_seal_ts, data_read, data_write);
+            let upsert_config = PersistentUpsertConfig::new(seal_ts, data_read, data_write);
 
             PersistentSourceConfig::new(
                 bindings_config,
@@ -753,29 +743,22 @@ fn get_persist_config(
         }
         EnvelopePersistDesc::None => {
             let (data_write, data_read) = persist_client
-                .create_or_load::<Result<Row, DecodeError>, ()>(&persist_desc.primary_stream.name);
+                .create_or_load::<Result<Row, DecodeError>, ()>(&persist_desc.primary_stream);
 
-            let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
-            let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
+            let seal_ts = persist_desc.upper_seal_ts;
 
             tracing::debug!(
-                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
                 source_id,
-                persist_desc.primary_stream.name,
-                persist_desc.timestamp_bindings_stream.name,
-                bindings_seal_ts,
-                data_seal_ts,
+                persist_desc.primary_stream,
+                persist_desc.timestamp_bindings_stream,
+                seal_ts,
             );
 
-            let bindings_config = PersistentTimestampBindingsConfig::new(
-                bindings_seal_ts,
-                data_seal_ts,
-                bindings_read,
-                bindings_write,
-            );
+            let bindings_config =
+                PersistentTimestampBindingsConfig::new(seal_ts, bindings_read, bindings_write);
 
-            let none_config =
-                PersistentEnvelopeNoneConfig::new(data_seal_ts, data_read, data_write);
+            let none_config = PersistentEnvelopeNoneConfig::new(seal_ts, data_read, data_write);
 
             PersistentSourceConfig::new(
                 bindings_config,

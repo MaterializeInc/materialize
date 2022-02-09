@@ -16,7 +16,7 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
-use repr::{ColumnType, ScalarType};
+use mz_repr::{ColumnType, ScalarType};
 
 mod id;
 mod linear;

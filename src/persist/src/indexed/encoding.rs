@@ -21,8 +21,8 @@ use std::ops::Range;
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
-use ore::cast::CastFrom;
-use persist_types::Codec;
+use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec;
 use prost::Message;
 use semver::Version;
 use serde::{Deserialize, Serialize};

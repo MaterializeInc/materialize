@@ -12,7 +12,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use repr::strconv;
+use mz_repr::strconv;
 
 fn bench_parse_float32(c: &mut Criterion) {
     for s in &["-3.0", "9.7", "NaN", "inFiNiTy"] {

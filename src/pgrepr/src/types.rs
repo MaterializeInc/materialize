@@ -9,7 +9,7 @@
 
 use crate::oid;
 use lazy_static::lazy_static;
-use repr::ScalarType;
+use mz_repr::ScalarType;
 
 /// The type of a [`Value`](crate::Value).
 #[derive(Debug, Clone, Eq, PartialEq)]

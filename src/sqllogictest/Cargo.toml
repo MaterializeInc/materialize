@@ -1,29 +1,33 @@
 [package]
-name = "sqllogictest"
+name = "mz-sqllogictest"
 description = "A driver for sqllogictest, a SQL correctness testing framework."
 version = "0.0.1"
 edition = "2021"
 publish = false
 rust-version = "1.58.0"
 
+[[bin]]
+name = "sqllogictest"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0.52"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.0.14", features = ["derive"] }
-coord = { path = "../coord" }
-expr = { path = "../expr" }
+mz-coord = { path = "../coord" }
+mz-expr = { path = "../expr" }
 fallible-iterator = "0.2.0"
 futures = "0.3.21"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
 md-5 = "0.10.0"
-ore = { path = "../ore", features = ["task"] }
-pgrepr = { path = "../pgrepr" }
+mz-ore = { path = "../ore", features = ["task"] }
+mz-pgrepr = { path = "../pgrepr" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 regex = "1.5.4"
-repr = { path = "../repr" }
+mz-repr = { path = "../repr" }
 serde_json = "1.0.78"
-sql = { path = "../sql" }
+mz-sql = { path = "../sql" }
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.16.1"

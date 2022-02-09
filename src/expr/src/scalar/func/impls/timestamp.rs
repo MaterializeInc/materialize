@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 
-use repr::strconv;
+use mz_repr::strconv;
 
 sqlfunc!(
     #[sqlname = "tstostr"]

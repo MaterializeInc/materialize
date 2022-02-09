@@ -11,9 +11,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
-use repr::adt::numeric::{self, Numeric};
-use repr::{strconv, ColumnType, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_repr::adt::numeric::{self, Numeric};
+use mz_repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;

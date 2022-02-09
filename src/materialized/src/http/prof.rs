@@ -19,14 +19,14 @@ use askama::Template;
 use cfg_if::cfg_if;
 use hyper::{Body, Request, Response};
 
-use prof::{ProfStartTime, StackProfile};
+use mz_prof::{ProfStartTime, StackProfile};
 
 use crate::http::util;
 use crate::BUILD_INFO;
 
 pub async fn handle_prof(
     req: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     cfg_if! {
         if #[cfg(target_os = "macos")] {
@@ -69,7 +69,7 @@ async fn time_prof<'a>(
         if #[cfg(target_os = "macos")] {
             ctl_lock = ();
         } else {
-            ctl_lock = if let Some(ctl) = prof::jemalloc::PROF_CTL.as_ref() {
+            ctl_lock = if let Some(ctl) = mz_prof::jemalloc::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
                 borrow.deactivate()?;
                 Some(borrow)
@@ -82,7 +82,7 @@ async fn time_prof<'a>(
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
     let stacks =
-        unsafe { prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
+        unsafe { mz_prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
     flamegraph(stacks, "CPU Time Flamegraph", false, &[])
@@ -94,7 +94,7 @@ fn flamegraph(
     display_bytes: bool,
     extras: &[&str],
 ) -> anyhow::Result<Response<Body>> {
-    let collated = prof::collate_stacks(stacks);
+    let collated = mz_prof::collate_stacks(stacks);
     let data_json = RefCell::new(String::new());
     collated.dfs(
         |node| {
@@ -179,11 +179,11 @@ mod enabled {
 
     use hyper::http::HeaderValue;
     use hyper::{header, Body, Method, Request, Response, StatusCode};
-    use prof::symbolicate;
+    use mz_prof::symbolicate;
     use tokio::sync::Mutex;
     use url::form_urlencoded;
 
-    use prof::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
+    use mz_prof::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;

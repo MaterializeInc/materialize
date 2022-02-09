@@ -9,13 +9,13 @@
 
 //! Types related to the creation of dataflow sources.
 
-use dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_avro::types::Value;
-use persist::client::{StreamReadHandle, StreamWriteHandle};
-use persist::indexed::Snapshot;
-use persist::operators::stream::Persist;
-use persist_types::Codec;
-use repr::MessagePayload;
+use mz_dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
+use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
+use mz_persist::indexed::Snapshot;
+use mz_persist::operators::stream::Persist;
+use mz_persist_types::Codec;
+use mz_repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
@@ -34,19 +34,19 @@ use timely::dataflow::{
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use dataflow_types::{
+use mz_dataflow_types::{
     sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset},
     SourceError,
 };
-use expr::{GlobalId, PartitionId, SourceInstanceId};
-use ore::cast::CastFrom;
-use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use ore::now::NowFn;
-use ore::task;
+use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::now::NowFn;
+use mz_ore::task;
 use prometheus::core::{AtomicI64, AtomicU64};
 use tracing::error;
 
-use repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::{operator, OutputHandle};
 use timely::dataflow::{Scope, Stream};
@@ -901,7 +901,7 @@ where
 /// The returned `Stream` of persisted timestamp bindings can be used to track the persistence
 /// frontier and should be used to seal up the backing collection to that frontier. This function
 /// does not do any sealing and it is the responsibility of the caller to eventually do that, for
-/// example using [`seal`](persist::operators::stream::Seal::seal).
+/// example using [`seal`](mz_persist::operators::stream::Seal::seal).
 pub(crate) fn create_source<G, S: 'static>(
     config: SourceConfig<G>,
     source_connector: &ExternalSourceConnector,
@@ -996,11 +996,10 @@ where
                 let starting_offsets = source_persist.get_starting_offsets(valid_bindings.iter());
 
                 tracing::debug!(
-                    "In {}, initial (restored) source offsets: {:?}. upper_bindings_seal_ts = {}, upper_data_seal_ts = {}",
+                    "In {}, initial (restored) source offsets: {:?}. upper_seal_ts = {}",
                     name,
                     starting_offsets,
-                    source_persist.config.upper_bindings_seal_ts,
-                    source_persist.config.upper_data_seal_ts,
+                    source_persist.config.upper_seal_ts,
                 );
 
                 tracing::debug!(
@@ -1059,7 +1058,7 @@ where
                     }
                 }
 
-                Ok((Some(source_persist), Some(valid_bindings), Some(retractions), persist_config.upper_bindings_seal_ts))
+                Ok((Some(source_persist), Some(valid_bindings), Some(retractions), persist_config.upper_seal_ts))
             });
 
                 match result {
@@ -1341,10 +1340,8 @@ impl SourceReaderPersistence {
             Vec<(SourceTimestamp, AssignedTimestamp)>,
             Vec<((SourceTimestamp, AssignedTimestamp), Diff)>,
         ),
-        persist::error::Error,
+        mz_persist::error::Error,
     > {
-        assert!(self.config.upper_bindings_seal_ts >= self.config.upper_data_seal_ts);
-
         // Materialized version of bindings updates that are not beyond the common seal timestamp.
         let mut valid_bindings: HashMap<_, isize> = HashMap::new();
 
@@ -1358,7 +1355,7 @@ impl SourceReaderPersistence {
         // sealed. Thus, it represents the content of the timestamp histories at exactly that
         // point.
         for ((source_timestamp, assigned_timestamp), ts, diff) in buf.into_iter() {
-            if ts < self.config.upper_data_seal_ts {
+            if ts < self.config.upper_seal_ts {
                 *valid_bindings
                     .entry((source_timestamp.clone(), assigned_timestamp))
                     .or_default() += diff;
@@ -1461,14 +1458,8 @@ impl SourceReaderPersistence {
 /// bindings.
 #[derive(Clone)]
 pub struct PersistentTimestampBindingsConfig<ST: Codec, AT: Codec> {
-    /// The timestamp up to which which timestamp bindings have been sealed.
-    upper_bindings_seal_ts: u64,
-
-    /// The timestamp up to which which data (the updates read from the source) has been sealed.
-    ///
-    /// This can be different from `upper_bindings_seal_ts` because we seal bindings before data,
-    /// and the latter can fail after we succesfully sealed the bindings.
-    upper_data_seal_ts: u64,
+    /// The timestamp up to which all involved streams have been sealed.
+    upper_seal_ts: u64,
 
     /// [`StreamReadHandle`] for the collection that we should persist to.
     read_handle: StreamReadHandle<ST, AT>,
@@ -1480,17 +1471,12 @@ pub struct PersistentTimestampBindingsConfig<ST: Codec, AT: Codec> {
 impl<K: Codec, V: Codec> PersistentTimestampBindingsConfig<K, V> {
     /// Creates a new [`PersistentTimestampBindingsConfig`] from the given parts.
     pub fn new(
-        upper_bindings_seal_ts: u64,
-        upper_data_seal_ts: u64,
+        upper_seal_ts: u64,
         read_handle: StreamReadHandle<K, V>,
         write_handle: StreamWriteHandle<K, V>,
     ) -> Self {
-        // We always seal bindings before data.
-        assert!(upper_bindings_seal_ts >= upper_data_seal_ts);
-
         PersistentTimestampBindingsConfig {
-            upper_bindings_seal_ts,
-            upper_data_seal_ts,
+            upper_seal_ts,
             read_handle,
             write_handle,
         }

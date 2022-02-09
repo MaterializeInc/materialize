@@ -80,11 +80,11 @@ you view it as [rustdoc for the persist crate].
 Persist has 2 public APIs: one based on rust's async [Future] and another one
 made of a set of differential dataflow operators built on top of it.
 
-The Async API client lives in [`persist::client`]. Most methods have a
+The Async API client lives in [`mz_persist::client`]. Most methods have a
 correspondence to part of the following dataflow:
 
 [Future]: std::future::Future
-[`persist::client`]: crate::client
+[`mz_persist::client`]: crate::client
 
 ```rust,no_run
     use differential_dataflow::operators::arrange::ArrangeByKey;
@@ -136,12 +136,12 @@ user of persist is responsible for adapting the semantics.
 # Operator API
 
 Built on top of the async API is a set of dataflow operators that all live in
-[`persist::operators`], collectively called the operator API. The most notable
+[`mz_persist::operators`], collectively called the operator API. The most notable
 of these is [PersistedSource]. The rest are more in flux and specific to the
 needs of source persistence and are individually documented in the rustdoc.
 
 [PersistedSource]: crate::operators::source::PersistedSource
-[`persist::operators`]: crate::operators
+[`mz_persist::operators`]: crate::operators
 
 The `PersistedSource` operator is a zero-input operator that reflects the
 contents of a persisted collection in its single output. As records are written
@@ -154,8 +154,8 @@ downgrade on the operator output.
     use timely::progress::frontier::Antichain;
     use timely::*;
 
-    use persist::client::RuntimeClient;
-    use persist::operators::source::PersistedSource;
+    use mz_persist::client::RuntimeClient;
+    use mz_persist::operators::source::PersistedSource;
 
     let p: RuntimeClient = unimplemented!("start runtime");
     let (_, read) = p.create_or_load::<String, String>("collection name");
@@ -178,7 +178,7 @@ Persist allows for arbitrary key and value types in persisted collections
 if/when necessary). Internally, it translates these to `&[u8]` via a user
 supplied implementation of the [Codec] trait.
 
-[Codec]: persist_types::Codec
+[Codec]: mz_persist_types::Codec
 
 `Codec` implementors are responsible for backward compatibility. If an encoding
 changes, the decode side needs to be able to detect and handle the old format.

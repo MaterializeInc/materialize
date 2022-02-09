@@ -13,8 +13,8 @@ use std::borrow::ToOwned;
 
 use anyhow::{anyhow, bail};
 use lazy_static::lazy_static;
+use mz_repr::ColumnName;
 use regex::Regex;
-use repr::ColumnName;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 

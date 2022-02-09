@@ -25,7 +25,7 @@
 //!
 //! ```
 //! use std::time::Duration;
-//! use ore::retry::Retry;
+//! use mz_ore::retry::Retry;
 //!
 //! let res = Retry::default().retry(|state| {
 //!    if state.i == 3 {
@@ -41,7 +41,7 @@
 //!
 //! ```
 //! use std::time::Duration;
-//! use ore::retry::Retry;
+//! use mz_ore::retry::Retry;
 //!
 //! let res = Retry::default().max_tries(2).retry(|state| {
 //!    if state.i == 3 {

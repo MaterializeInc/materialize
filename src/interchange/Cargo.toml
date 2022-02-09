@@ -1,5 +1,5 @@
 [package]
-name = "interchange"
+name = "mz-interchange"
 description = "Translations for various data serialization formats."
 version = "0.0.0"
 edition = "2021"
@@ -7,16 +7,16 @@ publish = false
 rust-version = "1.58.0"
 
 [[bench]]
-name = "interchange-bench"
+name = "mz-interchange-bench"
 path = "benches/benches.rs"
 harness = false
 
 [dependencies]
 anyhow = "1.0.52"
-avro-derive = { path = "../avro-derive" }
+mz-avro-derive = { path = "../avro-derive" }
 base64 = "0.13.0"
 byteorder = "1.4.3"
-ccsr = { path = "../ccsr" }
+mz-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -28,11 +28,11 @@ tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
 ordered-float = { version = "2.10.0", features = ["serde"] }
-ore = { path = "../ore" }
+mz-ore = { path = "../ore" }
 prost = "0.9.0"
 prost-reflect = "0.5.2"
 regex = "1.5.4"
-repr = { path = "../repr" }
+mz-repr = { path = "../repr" }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 sha2 = "0.10.1"

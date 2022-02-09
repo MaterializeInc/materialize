@@ -10,17 +10,17 @@
 //! Prometheus metrics for our interactive dataflow server
 use std::collections::HashMap;
 
-use ore::metrics::{
+use mz_ore::metrics::{
     CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, MetricsRegistry,
 };
-use ore::{
+use mz_ore::{
     metric,
     metrics::{IntCounterVec, IntGaugeVec},
 };
 
 use super::PendingPeek;
-use dataflow_types::client::{Command, ComputeCommandKind, StorageCommandKind};
 use enum_iterator::IntoEnumIterator;
+use mz_dataflow_types::client::{Command, ComputeCommandKind, StorageCommandKind};
 use prometheus::core::AtomicI64;
 
 #[derive(Clone)]

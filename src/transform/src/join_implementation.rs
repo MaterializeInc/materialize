@@ -19,10 +19,10 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{
+use mz_expr::{
     Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
-use ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -110,7 +110,7 @@ impl JoinImplementation {
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
             // Canonicalize the equivalence classes
-            expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+            mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
 
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
@@ -214,7 +214,7 @@ impl JoinImplementation {
 
 mod delta_queries {
 
-    use expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     ///
@@ -284,7 +284,7 @@ mod delta_queries {
 
 mod differential {
 
-    use expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     pub fn plan(

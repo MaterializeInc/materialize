@@ -10,7 +10,7 @@
 //! Fuses a sequence of `Negate` operators in to one or zero `Negate` operators.
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Fuses a sequence of `Negate` operators in to one or zero `Negate` operators.
 #[derive(Debug)]

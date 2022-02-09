@@ -1,5 +1,5 @@
 [package]
-name = "persist-types"
+name = "mz-persist-types"
 description = "Types for the persist crate."
 version = "0.0.0"
 edition = "2021"

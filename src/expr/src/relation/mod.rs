@@ -16,11 +16,11 @@ use std::fmt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
-use ore::collections::CollectionExt;
-use ore::id_gen::IdGen;
-use ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
-use repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen::IdGen;
+use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
@@ -852,8 +852,8 @@ impl MirRelationExpr {
     /// # Example
     ///
     /// ```rust
-    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
-    /// use expr::MirRelationExpr;
+    /// use mz_repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use mz_expr::MirRelationExpr;
     ///
     /// // A common schema for each input.
     /// let schema = RelationType::new(vec![
@@ -2111,8 +2111,8 @@ impl RowSetFinishing {
     }
     /// Applies finishing actions to a row set.
     pub fn finish(&self, rows: &mut Vec<Row>) {
-        let mut left_datum_vec = repr::DatumVec::new();
-        let mut right_datum_vec = repr::DatumVec::new();
+        let mut left_datum_vec = mz_repr::DatumVec::new();
+        let mut right_datum_vec = mz_repr::DatumVec::new();
         let mut sort_by = |left: &Row, right: &Row| {
             let left_datums = left_datum_vec.borrow_with(left);
             let right_datums = right_datum_vec.borrow_with(right);
@@ -2137,7 +2137,7 @@ impl RowSetFinishing {
             }
             rows.sort_by(&mut sort_by);
             let mut row_packer = Row::default();
-            let mut datum_vec = repr::DatumVec::new();
+            let mut datum_vec = mz_repr::DatumVec::new();
             for row in rows.iter_mut() {
                 *row = {
                     let datums = datum_vec.borrow_with(&row);

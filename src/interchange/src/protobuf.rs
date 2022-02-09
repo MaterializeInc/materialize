@@ -16,8 +16,8 @@ use prost_reflect::{
     ReflectMessage, Value,
 };
 
-use ore::str::StrExt;
-use repr::{ColumnName, ColumnType, Datum, Row, ScalarType};
+use mz_ore::str::StrExt;
+use mz_repr::{ColumnName, ColumnType, Datum, Row, ScalarType};
 
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug, PartialEq)]

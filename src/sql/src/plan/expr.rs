@@ -17,12 +17,12 @@ use std::fmt;
 use std::mem;
 
 use anyhow::bail;
-use expr::DummyHumanizer;
 use itertools::Itertools;
+use mz_expr::DummyHumanizer;
 
-use ore::collections::CollectionExt;
-use ore::stack;
-use repr::*;
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack;
+use mz_repr::*;
 
 use crate::plan::error::PlanError;
 use crate::plan::query::ExprContext;
@@ -30,8 +30,8 @@ use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
-pub use expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
-use repr::adt::array::ArrayDimension;
+pub use mz_expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
+use mz_repr::adt::array::ArrayDimension;
 
 use super::Explanation;
 
@@ -43,14 +43,14 @@ pub enum HirRelationExpr {
         typ: RelationType,
     },
     Get {
-        id: expr::Id,
+        id: mz_expr::Id,
         typ: RelationType,
     },
     /// CTE
     Let {
         name: String,
         /// The identifier to be used in `Get` variants to retrieve `value`.
-        id: expr::LocalId,
+        id: mz_expr::LocalId,
         /// The collection to be bound to `name`.
         value: Box<HirRelationExpr>,
         /// The result of the `Let`, evaluated with `name` bound to `value`.
@@ -122,9 +122,9 @@ pub enum HirRelationExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Just like expr::MirScalarExpr, except where otherwise noted below.
+/// Just like mz_expr::MirScalarExpr, except where otherwise noted below.
 pub enum HirScalarExpr {
-    /// Unlike expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
+    /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
     /// variable could refer to a column of the current input, or to a column of an outer relation.
     /// We use ColumnRef to denote the difference.
     Column(ColumnRef),
@@ -284,9 +284,9 @@ impl ScalarWindowExpr {
         self.func.output_type()
     }
 
-    pub fn into_expr(self) -> expr::AggregateFunc {
+    pub fn into_expr(self) -> mz_expr::AggregateFunc {
         match self.func {
-            ScalarWindowFunc::RowNumber => expr::AggregateFunc::RowNumber {
+            ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber {
                 order_by: self.order_by,
             },
         }
@@ -496,7 +496,7 @@ pub struct AggregateExpr {
     pub distinct: bool,
 }
 
-/// Aggregate functions analogous to `expr::AggregateFunc`, but whose
+/// Aggregate functions analogous to `mz_expr::AggregateFunc`, but whose
 /// types may be different.
 ///
 /// Specifically, the nullability of the aggregate columns is more common
@@ -571,50 +571,52 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    /// Converts the `sql::AggregateFunc` to a corresponding `expr::AggregateFunc`.
-    pub fn into_expr(self) -> expr::AggregateFunc {
+    /// Converts the `sql::AggregateFunc` to a corresponding `mz_expr::AggregateFunc`.
+    pub fn into_expr(self) -> mz_expr::AggregateFunc {
         match self {
-            AggregateFunc::MaxNumeric => expr::AggregateFunc::MaxNumeric,
-            AggregateFunc::MaxInt64 => expr::AggregateFunc::MaxInt64,
-            AggregateFunc::MaxInt16 => expr::AggregateFunc::MaxInt16,
-            AggregateFunc::MaxInt32 => expr::AggregateFunc::MaxInt32,
-            AggregateFunc::MaxFloat32 => expr::AggregateFunc::MaxFloat32,
-            AggregateFunc::MaxFloat64 => expr::AggregateFunc::MaxFloat64,
-            AggregateFunc::MaxBool => expr::AggregateFunc::MaxBool,
-            AggregateFunc::MaxString => expr::AggregateFunc::MaxString,
-            AggregateFunc::MaxDate => expr::AggregateFunc::MaxDate,
-            AggregateFunc::MaxTimestamp => expr::AggregateFunc::MaxTimestamp,
-            AggregateFunc::MaxTimestampTz => expr::AggregateFunc::MaxTimestampTz,
-            AggregateFunc::MinNumeric => expr::AggregateFunc::MinNumeric,
-            AggregateFunc::MinInt16 => expr::AggregateFunc::MinInt16,
-            AggregateFunc::MinInt32 => expr::AggregateFunc::MinInt32,
-            AggregateFunc::MinInt64 => expr::AggregateFunc::MinInt64,
-            AggregateFunc::MinFloat32 => expr::AggregateFunc::MinFloat32,
-            AggregateFunc::MinFloat64 => expr::AggregateFunc::MinFloat64,
-            AggregateFunc::MinBool => expr::AggregateFunc::MinBool,
-            AggregateFunc::MinString => expr::AggregateFunc::MinString,
-            AggregateFunc::MinDate => expr::AggregateFunc::MinDate,
-            AggregateFunc::MinTimestamp => expr::AggregateFunc::MinTimestamp,
-            AggregateFunc::MinTimestampTz => expr::AggregateFunc::MinTimestampTz,
-            AggregateFunc::SumInt16 => expr::AggregateFunc::SumInt16,
-            AggregateFunc::SumInt32 => expr::AggregateFunc::SumInt32,
-            AggregateFunc::SumInt64 => expr::AggregateFunc::SumInt64,
-            AggregateFunc::SumFloat32 => expr::AggregateFunc::SumFloat32,
-            AggregateFunc::SumFloat64 => expr::AggregateFunc::SumFloat64,
-            AggregateFunc::SumNumeric => expr::AggregateFunc::SumNumeric,
-            AggregateFunc::Count => expr::AggregateFunc::Count,
-            AggregateFunc::Any => expr::AggregateFunc::Any,
-            AggregateFunc::All => expr::AggregateFunc::All,
-            AggregateFunc::JsonbAgg { order_by } => expr::AggregateFunc::JsonbAgg { order_by },
+            AggregateFunc::MaxNumeric => mz_expr::AggregateFunc::MaxNumeric,
+            AggregateFunc::MaxInt64 => mz_expr::AggregateFunc::MaxInt64,
+            AggregateFunc::MaxInt16 => mz_expr::AggregateFunc::MaxInt16,
+            AggregateFunc::MaxInt32 => mz_expr::AggregateFunc::MaxInt32,
+            AggregateFunc::MaxFloat32 => mz_expr::AggregateFunc::MaxFloat32,
+            AggregateFunc::MaxFloat64 => mz_expr::AggregateFunc::MaxFloat64,
+            AggregateFunc::MaxBool => mz_expr::AggregateFunc::MaxBool,
+            AggregateFunc::MaxString => mz_expr::AggregateFunc::MaxString,
+            AggregateFunc::MaxDate => mz_expr::AggregateFunc::MaxDate,
+            AggregateFunc::MaxTimestamp => mz_expr::AggregateFunc::MaxTimestamp,
+            AggregateFunc::MaxTimestampTz => mz_expr::AggregateFunc::MaxTimestampTz,
+            AggregateFunc::MinNumeric => mz_expr::AggregateFunc::MinNumeric,
+            AggregateFunc::MinInt16 => mz_expr::AggregateFunc::MinInt16,
+            AggregateFunc::MinInt32 => mz_expr::AggregateFunc::MinInt32,
+            AggregateFunc::MinInt64 => mz_expr::AggregateFunc::MinInt64,
+            AggregateFunc::MinFloat32 => mz_expr::AggregateFunc::MinFloat32,
+            AggregateFunc::MinFloat64 => mz_expr::AggregateFunc::MinFloat64,
+            AggregateFunc::MinBool => mz_expr::AggregateFunc::MinBool,
+            AggregateFunc::MinString => mz_expr::AggregateFunc::MinString,
+            AggregateFunc::MinDate => mz_expr::AggregateFunc::MinDate,
+            AggregateFunc::MinTimestamp => mz_expr::AggregateFunc::MinTimestamp,
+            AggregateFunc::MinTimestampTz => mz_expr::AggregateFunc::MinTimestampTz,
+            AggregateFunc::SumInt16 => mz_expr::AggregateFunc::SumInt16,
+            AggregateFunc::SumInt32 => mz_expr::AggregateFunc::SumInt32,
+            AggregateFunc::SumInt64 => mz_expr::AggregateFunc::SumInt64,
+            AggregateFunc::SumFloat32 => mz_expr::AggregateFunc::SumFloat32,
+            AggregateFunc::SumFloat64 => mz_expr::AggregateFunc::SumFloat64,
+            AggregateFunc::SumNumeric => mz_expr::AggregateFunc::SumNumeric,
+            AggregateFunc::Count => mz_expr::AggregateFunc::Count,
+            AggregateFunc::Any => mz_expr::AggregateFunc::Any,
+            AggregateFunc::All => mz_expr::AggregateFunc::All,
+            AggregateFunc::JsonbAgg { order_by } => mz_expr::AggregateFunc::JsonbAgg { order_by },
             AggregateFunc::JsonbObjectAgg { order_by } => {
-                expr::AggregateFunc::JsonbObjectAgg { order_by }
+                mz_expr::AggregateFunc::JsonbObjectAgg { order_by }
             }
             AggregateFunc::ArrayConcat { order_by } => {
-                expr::AggregateFunc::ArrayConcat { order_by }
+                mz_expr::AggregateFunc::ArrayConcat { order_by }
             }
-            AggregateFunc::ListConcat { order_by } => expr::AggregateFunc::ListConcat { order_by },
-            AggregateFunc::StringAgg { order_by } => expr::AggregateFunc::StringAgg { order_by },
-            AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
+            AggregateFunc::ListConcat { order_by } => {
+                mz_expr::AggregateFunc::ListConcat { order_by }
+            }
+            AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg { order_by },
+            AggregateFunc::Dummy => mz_expr::AggregateFunc::Dummy,
         }
     }
 
@@ -1266,7 +1268,7 @@ impl HirRelationExpr {
         HirRelationExpr::Constant { rows, typ }
     }
 
-    pub fn finish(&mut self, finishing: expr::RowSetFinishing) {
+    pub fn finish(&mut self, finishing: mz_expr::RowSetFinishing) {
         if !finishing.is_trivial(self.arity()) {
             *self = HirRelationExpr::Project {
                 input: Box::new(HirRelationExpr::TopK {
@@ -1619,9 +1621,9 @@ impl HirScalarExpr {
 
     fn simplify_to_literal(self) -> Option<Row> {
         let mut expr = self.lower_uncorrelated().ok()?;
-        expr.reduce(&repr::RelationType::empty());
+        expr.reduce(&mz_repr::RelationType::empty());
         match expr {
-            expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
+            mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
             _ => None,
         }
     }

@@ -51,7 +51,7 @@ use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 
 use crate::TransformArgs;
-use expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
@@ -98,7 +98,7 @@ impl ReductionPushdown {
                 for index in 0..scalars.len() {
                     let (lower, upper) = scalars.split_at_mut(index);
                     upper[0].visit_mut_post(&mut |e| {
-                        if let expr::MirScalarExpr::Column(c) = e {
+                        if let mz_expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = lower[*c - arity].clone();
                             }
@@ -107,7 +107,7 @@ impl ReductionPushdown {
                 }
                 for key in group_key.iter_mut() {
                     key.visit_mut_post(&mut |e| {
-                        if let expr::MirScalarExpr::Column(c) = e {
+                        if let mz_expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();
                             }
@@ -116,7 +116,7 @@ impl ReductionPushdown {
                 }
                 for agg in aggregates.iter_mut() {
                     agg.expr.visit_mut_post(&mut |e| {
-                        if let expr::MirScalarExpr::Column(c) = e {
+                        if let mz_expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();
                             }

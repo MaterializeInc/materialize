@@ -17,7 +17,7 @@ use tokio::time::{self, Duration};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 
 use crate::BUILD_INFO;
 
@@ -32,7 +32,7 @@ pub struct Config {
     /// The number of workers the dataflow server is hosting.
     pub workers: usize,
     /// A client for the coordinator to introspect.
-    pub coord_client: coord::Client,
+    pub coord_client: mz_coord::Client,
 }
 
 /// Runs the telemetry reporting loop.

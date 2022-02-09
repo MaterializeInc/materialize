@@ -1,5 +1,5 @@
 [package]
-name = "ccsr"
+name = "mz-ccsr"
 description = "Confluent-compatible schema registry API client."
 version = "0.0.0"
 edition = "2021"
@@ -23,4 +23,4 @@ lazy_static = "1.4.0"
 serde_json = "1.0.78"
 tokio = { version = "1.16.1", features = ["macros"] }
 tracing = "0.1.29"
-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["task"] }

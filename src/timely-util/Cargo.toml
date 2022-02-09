@@ -1,5 +1,5 @@
 [package]
-name = "timely-util"
+name = "mz-timely-util"
 description = "Utilities for working with Timely."
 version = "0.0.0"
 edition = "2021"

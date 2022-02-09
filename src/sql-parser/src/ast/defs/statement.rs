@@ -1582,9 +1582,9 @@ pub enum ExplainStage {
     QueryGraph,
     /// Optimized Query Graph
     OptimizedQueryGraph,
-    /// The expr::MirRelationExpr after decorrelation
+    /// The mz_expr::MirRelationExpr after decorrelation
     DecorrelatedPlan,
-    /// The expr::MirRelationExpr after optimization
+    /// The mz_expr::MirRelationExpr after optimization
     OptimizedPlan,
     /// The render::plan::Plan
     PhysicalPlan,

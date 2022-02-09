@@ -11,19 +11,19 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
-use ore::stack::CheckedRecursion;
-use ore::stack::RecursionGuard;
+use mz_ore::stack::CheckedRecursion;
+use mz_ore::stack::RecursionGuard;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzReflect;
-use ore::collections::CollectionExt;
-use ore::stack::maybe_grow;
-use ore::str::separated;
-use repr::adt::array::InvalidArrayError;
-use repr::adt::datetime::DateTimeUnits;
-use repr::adt::regex::Regex;
-use repr::strconv::{ParseError, ParseHexError};
-use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack::maybe_grow;
+use mz_ore::str::separated;
+use mz_repr::adt::array::InvalidArrayError;
+use mz_repr::adt::datetime::DateTimeUnits;
+use mz_repr::adt::regex::Regex;
+use mz_repr::strconv::{ParseError, ParseHexError};
+use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 use crate::scalar::func::parse_timezone;
@@ -264,8 +264,8 @@ impl MirScalarExpr {
     /// Also canonicalizes the expression.
     ///
     /// ```rust
-    /// use expr::{BinaryFunc, MirScalarExpr};
-    /// use repr::{ColumnType, Datum, RelationType, ScalarType};
+    /// use mz_expr::{BinaryFunc, MirScalarExpr};
+    /// use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
     ///
     /// let expr_0 = MirScalarExpr::Column(0);
     /// let expr_t = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);

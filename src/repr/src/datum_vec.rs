@@ -72,7 +72,7 @@ pub struct DatumVecBorrow<'outer> {
 
 impl<'outer> Drop for DatumVecBorrow<'outer> {
     fn drop(&mut self) {
-        *self.outer = ore::vec::repurpose_allocation(std::mem::take(&mut self.inner));
+        *self.outer = mz_ore::vec::repurpose_allocation(std::mem::take(&mut self.inner));
     }
 }
 

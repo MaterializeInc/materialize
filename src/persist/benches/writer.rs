@@ -17,26 +17,26 @@ use std::time::{Duration, Instant};
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use differential_dataflow::trace::Description;
-use ore::metrics::MetricsRegistry;
-use persist::indexed::columnar::ColumnarRecords;
-use persist::s3::{S3Blob, S3BlobConfig};
-use persist_types::Codec;
+use mz_ore::metrics::MetricsRegistry;
+use mz_persist::indexed::columnar::ColumnarRecords;
+use mz_persist::s3::{S3Blob, S3BlobConfig};
+use mz_persist_types::Codec;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
 use timely::progress::Antichain;
 use tokio::runtime::Runtime as AsyncRuntime;
 
-use persist::client::WriteReqBuilder;
-use persist::error::Error;
-use persist::file::{FileBlob, FileLog};
-use persist::indexed::cache::BlobCache;
-use persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
-use persist::indexed::metrics::Metrics;
-use persist::indexed::{Cmd, Indexed};
-use persist::mem::MemRegistry;
-use persist::pfuture::{PFuture, PFutureHandle};
-use persist::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
-use persist::workload::{self, DataGenerator};
+use mz_persist::client::WriteReqBuilder;
+use mz_persist::error::Error;
+use mz_persist::file::{FileBlob, FileLog};
+use mz_persist::indexed::cache::BlobCache;
+use mz_persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
+use mz_persist::indexed::metrics::Metrics;
+use mz_persist::indexed::{Cmd, Indexed};
+use mz_persist::mem::MemRegistry;
+use mz_persist::pfuture::{PFuture, PFutureHandle};
+use mz_persist::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use mz_persist::workload::{self, DataGenerator};
 
 fn new_file_log(name: &str, parent: &Path) -> FileLog {
     let file_log_dir = parent.join(name);
@@ -276,7 +276,7 @@ pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, Wall
     let async_runtime = Arc::new(AsyncRuntime::new().unwrap());
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
     let blob_cache = BlobCache::new(
-        build_info::DUMMY_BUILD_INFO,
+        mz_build_info::DUMMY_BUILD_INFO,
         Arc::clone(&metrics),
         async_runtime,
         file_blob,
@@ -342,7 +342,7 @@ pub fn bench_blob_cache_set_unsealed_batch(
         .expect("creating a MemBlob cannot fail");
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
     let mut mem_blob_cache = BlobCache::new(
-        build_info::DUMMY_BUILD_INFO,
+        mz_build_info::DUMMY_BUILD_INFO,
         metrics,
         Arc::clone(&async_runtime),
         mem_blob,
@@ -355,7 +355,7 @@ pub fn bench_blob_cache_set_unsealed_batch(
 
     let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
     let mut file_blob_cache = BlobCache::new(
-        build_info::DUMMY_BUILD_INFO,
+        mz_build_info::DUMMY_BUILD_INFO,
         metrics,
         async_runtime,
         file_blob,

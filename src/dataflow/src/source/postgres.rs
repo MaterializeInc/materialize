@@ -26,8 +26,8 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
-use dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
-use repr::{Datum, Row};
+use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
+use mz_repr::{Datum, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
@@ -145,7 +145,7 @@ impl PostgresSourceReader {
         buffer: &mut W,
     ) -> Result<(), ReplicationError> {
         let client =
-            try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
+            try_recoverable!(mz_postgres_util::connect_replication(&self.connector.conn).await);
 
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
@@ -158,7 +158,7 @@ impl PostgresSourceReader {
 
         // Get all the relevant tables for this publication
         let publication_tables = try_recoverable!(
-            postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
+            mz_postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
                 .await
         );
 
@@ -213,7 +213,7 @@ impl PostgresSourceReader {
                 mz_row.push(relation_id);
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
-                let parser = pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+                let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
                 let mut raw_values = parser.iter_raw(info.schema.len() as i32);
                 try_fatal!(mz_row.push_list_with(|rp| -> Result<(), anyhow::Error> {
@@ -294,7 +294,7 @@ impl PostgresSourceReader {
         use ReplicationError::*;
 
         let client =
-            try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
+            try_recoverable!(mz_postgres_util::connect_replication(&self.connector.conn).await);
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}

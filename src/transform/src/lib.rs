@@ -25,10 +25,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
-use expr::GlobalId;
-use expr::MirRelationExpr;
-use expr::MirScalarExpr;
-use ore::id_gen::IdGen;
+use mz_expr::GlobalId;
+use mz_expr::MirRelationExpr;
+use mz_expr::MirScalarExpr;
+use mz_ore::id_gen::IdGen;
 
 pub mod canonicalize_mfp;
 pub mod column_knowledge;
@@ -55,7 +55,7 @@ pub mod update_let;
 
 pub mod dataflow;
 pub use dataflow::optimize_dataflow;
-use ore::stack::RecursionLimitError;
+use mz_ore::stack::RecursionLimitError;
 
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
@@ -373,9 +373,9 @@ impl Optimizer {
     pub fn optimize(
         &mut self,
         mut relation: MirRelationExpr,
-    ) -> Result<expr::OptimizedMirRelationExpr, TransformError> {
+    ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
         self.transform(&mut relation, &HashMap::new())?;
-        Ok(expr::OptimizedMirRelationExpr(relation))
+        Ok(mz_expr::OptimizedMirRelationExpr(relation))
     }
 
     /// Optimizes the supplied relation expression in place, using available arrangements.

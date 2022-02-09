@@ -20,11 +20,11 @@ use derivative::Derivative;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
-use expr::GlobalId;
-use pgrepr::Format;
-use repr::{Datum, Diff, Row, ScalarType, Timestamp};
-use sql::ast::{Raw, Statement, TransactionAccessMode};
-use sql::plan::{Params, PlanContext, StatementDesc};
+use mz_expr::GlobalId;
+use mz_pgrepr::Format;
+use mz_repr::{Datum, Diff, Row, ScalarType, Timestamp};
+use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
+use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
 use crate::error::CoordError;
 
@@ -304,7 +304,7 @@ impl Session {
         desc: StatementDesc,
         stmt: Option<Statement<Raw>>,
         params: Vec<(Datum, ScalarType)>,
-        result_formats: Vec<pgrepr::Format>,
+        result_formats: Vec<mz_pgrepr::Format>,
     ) -> Result<(), CoordError> {
         // The empty portal can be silently replaced.
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
@@ -466,7 +466,7 @@ pub struct Portal {
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
-    pub result_formats: Vec<pgrepr::Format>,
+    pub result_formats: Vec<mz_pgrepr::Format>,
     /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
     pub state: PortalState,

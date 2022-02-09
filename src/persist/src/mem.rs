@@ -14,8 +14,8 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
-use ore::cast::CastFrom;
-use ore::metrics::MetricsRegistry;
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
 use tokio::runtime::Runtime as AsyncRuntime;
 
 use crate::client::RuntimeClient;
@@ -435,7 +435,7 @@ impl MemRegistry {
         let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
         let async_runtime = Arc::new(AsyncRuntime::new()?);
         let blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::clone(&metrics),
             async_runtime,
             self.blob_no_reentrance()?,
@@ -457,7 +457,7 @@ impl MemRegistry {
         let blob = self.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
         let blob = BlobCache::new(
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             Arc::clone(&metrics),
             async_runtime,
             blob,
@@ -475,7 +475,7 @@ impl MemRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )
@@ -495,7 +495,7 @@ impl MemRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )
@@ -574,7 +574,7 @@ impl MemMultiRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
-            build_info::DUMMY_BUILD_INFO,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )

@@ -11,8 +11,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ore::str::StrExt;
-use sql_parser::ast::RawName;
+use mz_ore::str::StrExt;
+use mz_sql_parser::ast::RawName;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -326,7 +326,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     }
     fn visit_object_name_mut(
         &mut self,
-        object_name: &'ast mut <sql_parser::ast::Raw as AstInfo>::ObjectName,
+        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ObjectName,
     ) {
         match object_name {
             RawName::Name(n) | RawName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),

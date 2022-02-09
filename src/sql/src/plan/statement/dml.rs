@@ -16,9 +16,9 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 
-use expr::MirRelationExpr;
-use ore::collections::CollectionExt;
-use repr::{RelationDesc, ScalarType};
+use mz_expr::MirRelationExpr;
+use mz_ore::collections::CollectionExt;
+use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
@@ -252,7 +252,7 @@ pub fn plan_explain(
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
-/// an `::expr::MirRelationExpr`, which cannot include correlated expressions.
+/// an `mz_expr::MirRelationExpr`, which cannot include correlated expressions.
 pub fn plan_query(
     scx: &StatementContext,
     query: Query<Raw>,

@@ -20,7 +20,7 @@
 use std::mem;
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Fuses a sequence of `Map` operators in to one `Map` operator.
 #[derive(Debug)]

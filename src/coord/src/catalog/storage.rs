@@ -15,13 +15,13 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::sources::MzOffset;
-use expr::{GlobalId, PartitionId};
-use ore::cast::CastFrom;
-use ore::soft_assert_eq;
-use repr::Timestamp;
-use sql::catalog::CatalogError as SqlCatalogError;
-use sql::names::{DatabaseSpecifier, FullName};
+use mz_dataflow_types::sources::MzOffset;
+use mz_expr::{GlobalId, PartitionId};
+use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_eq;
+use mz_repr::Timestamp;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql::names::{DatabaseSpecifier, FullName};
 use uuid::Uuid;
 
 use crate::catalog::error::{Error, ErrorKind};

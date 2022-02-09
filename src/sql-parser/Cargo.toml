@@ -1,5 +1,5 @@
 [package]
-name = "sql-parser"
+name = "mz-sql-parser"
 description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.0.0"
 exclude = ["tests/testdata"]
@@ -13,7 +13,7 @@ hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 tracing = "0.1.29"
-ore = { path = "../ore", default-features = false, features = ["stack"] }
+mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.10.1", features = ["uncased"] }
 uncased = "0.9.6"
 
@@ -23,8 +23,8 @@ unicode-width = "0.1.9"
 
 [build-dependencies]
 anyhow = "1.0.52"
-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false }
 phf = { version = "0.10.1", features = ["uncased"] }
 phf_codegen = { version = "0.10.0" }
 uncased = "0.9.6"
-walkabout = { path = "../walkabout" }
+mz-walkabout = { path = "../walkabout" }

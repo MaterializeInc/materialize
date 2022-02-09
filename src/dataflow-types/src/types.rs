@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
-use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use repr::{Diff, RelationType, Row, Timestamp};
+use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_repr::{Diff, RelationType, Row, Timestamp};
 
 use crate::sources::persistence::SourcePersistDesc;
 use crate::types::sources::SourceDesc;
@@ -320,16 +320,16 @@ pub mod sources {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use kafka_util::KafkaAddrs;
-    use repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+    use mz_kafka_util::KafkaAddrs;
+    use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
         use anyhow::Context;
         use serde::{Deserialize, Serialize};
 
-        use interchange::{avro, protobuf};
-        use repr::{ColumnType, RelationDesc, ScalarType};
+        use mz_interchange::{avro, protobuf};
+        use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
         /// A description of how to interpret data from various sources
         ///
@@ -498,7 +498,7 @@ pub mod sources {
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct AvroEncoding {
             pub schema: String,
-            pub schema_registry_config: Option<ccsr::ClientConfig>,
+            pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
             pub confluent_wire_format: bool,
         }
 
@@ -552,25 +552,59 @@ pub mod sources {
 
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct RegexEncoding {
-            pub regex: repr::adt::regex::Regex,
+            pub regex: mz_repr::adt::regex::Regex,
         }
     }
 
     pub mod persistence {
         use serde::{Deserialize, Serialize};
 
-        use expr::PartitionId;
+        use mz_expr::PartitionId;
 
         /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct SourcePersistDesc {
+            /// The _current_ upper seal timestamp of all involved streams.
+            ///
+            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
+            /// initially created. When a source is actively writing to this stream, the seal timestamp
+            /// will progress beyond this timestamp.
+            ///
+            /// This is okay for now because we only want to allow one source instantiation for persistent
+            /// sources, meaning the flow is usually this:
+            ///
+            ///  1. coordinator determines seal timestamp
+            ///  2. seal timestamps for a source are sent to dataflow when rendering a source
+            ///  3. coordinator (or anyone) never looks at this timestamp again.
+            ///
+            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
+            /// source running already.
+            pub upper_seal_ts: u64,
+
+            /// The _current_ compaction frontier (aka _since_) of all involved streams.
+            ///
+            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
+            /// initially created. When a source is actively writing to this stream and allowing
+            /// compaction, this will progress beyond this timestamp.
+            ///
+            /// This is okay for now because we only want to allow one source instantiation for persistent
+            /// sources, meaning the flow is usually this:
+            ///
+            ///  1. coordinator determines since timestamp
+            ///  2. timestamps for a source are sent to dataflow when rendering a source
+            ///  3. coordinator (or anyone) never looks at this timestamp again.
+            ///
+            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
+            /// source running already.
+            pub since_ts: u64,
+
             /// Name of the primary persisted stream of this source. This is what a consumer of the
             /// persisted data would be interested in while the secondary stream(s) of the source are an
             /// internal implementation detail.
-            pub primary_stream: PersistStreamDesc,
+            pub primary_stream: String,
 
             /// Persisted stream of timestamp bindings.
-            pub timestamp_bindings_stream: PersistStreamDesc,
+            pub timestamp_bindings_stream: String,
 
             /// Any additional details that we need to make the envelope logic stateful.
             pub envelope_desc: EnvelopePersistDesc,
@@ -587,45 +621,6 @@ pub mod sources {
         pub enum EnvelopePersistDesc {
             Upsert,
             None,
-        }
-
-        /// Description of a single persistent stream.
-        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-        pub struct PersistStreamDesc {
-            /// Name of the persistent stream.
-            pub name: String,
-            /// The _current_ upper seal timestamp of this stream.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream, the seal timestamp
-            /// will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines seal timestamp
-            ///  2. seal timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub upper_seal_ts: u64,
-            /// The _current_ compaction frontier (aka _since_) of this stream.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream and allowing
-            /// compaction, this will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines since timestamp
-            ///  2. timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub since_ts: u64,
         }
 
         /// Structure wrapping a timestamp update from a source
@@ -1495,9 +1490,9 @@ pub mod sinks {
     use timely::progress::frontier::Antichain;
     use url::Url;
 
-    use expr::GlobalId;
-    use kafka_util::KafkaAddrs;
-    use repr::{RelationDesc, Timestamp};
+    use mz_expr::GlobalId;
+    use mz_kafka_util::KafkaAddrs;
+    use mz_repr::{RelationDesc, Timestamp};
 
     /// A sink for updates to a relational collection.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1662,7 +1657,7 @@ pub mod sinks {
             schema_registry_url: Url,
             key_schema: Option<String>,
             value_schema: String,
-            ccsr_config: ccsr::ClientConfig,
+            ccsr_config: mz_ccsr::ClientConfig,
         },
         Json,
     }

@@ -9,10 +9,10 @@
 
 #[cfg(test)]
 mod tests {
-    use lowertest::{deserialize_optional, tokenize, GenericTestDeserializeContext};
-    use ore::str::separated;
-    use repr::ScalarType;
-    use repr_test_util::*;
+    use mz_lowertest::{deserialize_optional, tokenize, GenericTestDeserializeContext};
+    use mz_ore::str::separated;
+    use mz_repr::ScalarType;
+    use mz_repr_test_util::*;
 
     fn build_datum(s: &str) -> Result<String, String> {
         // 1) Convert test spec to the row containing the datum.

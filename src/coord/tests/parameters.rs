@@ -11,11 +11,11 @@ use std::error::Error;
 
 use tempfile::NamedTempFile;
 
-use coord::catalog::Catalog;
-use ore::collections::CollectionExt;
-use ore::now::NOW_ZERO;
-use pgrepr::Type;
-use sql::plan::PlanContext;
+use mz_coord::catalog::Catalog;
+use mz_ore::collections::CollectionExt;
+use mz_ore::now::NOW_ZERO;
+use mz_pgrepr::Type;
+use mz_sql::plan::PlanContext;
 
 #[tokio::test]
 async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
@@ -96,8 +96,8 @@ async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
     let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
-        let stmt = sql::parse::parse(sql)?.into_element();
-        let desc = sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[])?;
+        let stmt = mz_sql::parse::parse(sql)?.into_element();
+        let desc = mz_sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[])?;
         assert_eq!(desc.param_types, types);
     }
     Ok(())

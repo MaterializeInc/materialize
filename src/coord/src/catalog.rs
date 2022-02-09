@@ -16,40 +16,40 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::{
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use mz_dataflow_types::{
     sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
     sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
 };
-use expr::PartitionId;
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use ore::collections::CollectionExt;
-use ore::metrics::MetricsRegistry;
-use ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_expr::PartitionId;
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_repr::Timestamp;
 use regex::Regex;
-use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
-use build_info::DUMMY_BUILD_INFO;
-use dataflow_types::{
+use mz_build_info::DUMMY_BUILD_INFO;
+use mz_dataflow_types::{
     sinks::{SinkConnector, SinkConnectorBuilder},
     sources::{SourceConnector, Timeline},
 };
-use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
-use repr::{RelationDesc, ScalarType};
-use sql::ast::display::AstDisplay;
-use sql::ast::{Expr, Raw};
-use sql::catalog::{
+use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_repr::{RelationDesc, ScalarType};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{Expr, Raw};
+use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, SessionCatalog,
 };
-use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
-use sql::plan::{
+use mz_sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
+use mz_sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
-use transform::Optimizer;
+use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
@@ -108,7 +108,7 @@ pub struct Catalog {
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     transient_revision: u64,
-    config: sql::catalog::CatalogConfig,
+    config: mz_sql::catalog::CatalogConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +129,7 @@ impl CatalogState {
     pub fn source_description_for(
         &self,
         id: GlobalId,
-    ) -> Option<dataflow_types::sources::SourceDesc> {
+    ) -> Option<mz_dataflow_types::sources::SourceDesc> {
         let entry = self.get_by_id(&id);
 
         match entry.item() {
@@ -138,7 +138,7 @@ impl CatalogState {
                     timeline: table.timeline(),
                     persisted_name: table.persist_name.clone(),
                 };
-                Some(dataflow_types::sources::SourceDesc {
+                Some(mz_dataflow_types::sources::SourceDesc {
                     name: entry.name().to_string(),
                     connector,
                     desc: table.desc.clone(),
@@ -146,7 +146,7 @@ impl CatalogState {
             }
             CatalogItem::Source(source) => {
                 let connector = source.connector.clone();
-                Some(dataflow_types::sources::SourceDesc {
+                Some(mz_dataflow_types::sources::SourceDesc {
                     name: entry.name().to_string(),
                     connector,
                     desc: source.desc.clone(),
@@ -549,11 +549,13 @@ pub enum TypeInner {
     Pseudo,
 }
 
-impl From<sql::plan::TypeInner> for TypeInner {
-    fn from(t: sql::plan::TypeInner) -> TypeInner {
+impl From<mz_sql::plan::TypeInner> for TypeInner {
+    fn from(t: mz_sql::plan::TypeInner) -> TypeInner {
         match t {
-            sql::plan::TypeInner::List { element_id } => TypeInner::List { element_id },
-            sql::plan::TypeInner::Map { key_id, value_id } => TypeInner::Map { key_id, value_id },
+            mz_sql::plan::TypeInner::List { element_id } => TypeInner::List { element_id },
+            mz_sql::plan::TypeInner::Map { key_id, value_id } => {
+                TypeInner::Map { key_id, value_id }
+            }
         }
     }
 }
@@ -561,7 +563,7 @@ impl From<sql::plan::TypeInner> for TypeInner {
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
     #[serde(skip)]
-    pub inner: &'static sql::func::Func,
+    pub inner: &'static mz_sql::func::Func,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -583,15 +585,15 @@ impl Volatility {
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
-    fn typ(&self) -> sql::catalog::CatalogItemType {
+    fn typ(&self) -> mz_sql::catalog::CatalogItemType {
         match self {
-            CatalogItem::Table(_) => sql::catalog::CatalogItemType::Table,
-            CatalogItem::Source(_) => sql::catalog::CatalogItemType::Source,
-            CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
-            CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
-            CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
-            CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
-            CatalogItem::Func(_) => sql::catalog::CatalogItemType::Func,
+            CatalogItem::Table(_) => mz_sql::catalog::CatalogItemType::Table,
+            CatalogItem::Source(_) => mz_sql::catalog::CatalogItemType::Source,
+            CatalogItem::Sink(_) => mz_sql::catalog::CatalogItemType::Sink,
+            CatalogItem::View(_) => mz_sql::catalog::CatalogItemType::View,
+            CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
+            CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
+            CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
         }
     }
 
@@ -610,7 +612,7 @@ impl CatalogItem {
         }
     }
 
-    pub fn func(&self, name: &FullName) -> Result<&'static sql::func::Func, SqlCatalogError> {
+    pub fn func(&self, name: &FullName) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         match &self {
             CatalogItem::Func(func) => Ok(func.inner),
             _ => Err(SqlCatalogError::UnknownFunction(name.to_string())),
@@ -681,12 +683,12 @@ impl CatalogItem {
         rename_self: bool,
     ) -> Result<CatalogItem, String> {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
-            let mut create_stmt = sql::parse::parse(&create_sql).unwrap().into_element();
+            let mut create_stmt = mz_sql::parse::parse(&create_sql).unwrap().into_element();
             if rename_self {
-                sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
+                mz_sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
             }
             // Determination of what constitutes an ambiguous request is done here.
-            sql::ast::transform::create_stmt_rename_refs(&mut create_stmt, from, to_item_name)?;
+            mz_sql::ast::transform::create_stmt_rename_refs(&mut create_stmt, from, to_item_name)?;
             Ok(create_stmt.to_ast_string_stable())
         };
 
@@ -741,8 +743,8 @@ impl CatalogEntry {
         self.item.desc(&self.name)
     }
 
-    /// Returns the [`sql::func::Func`] associated with this `CatalogEntry`.
-    pub fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
+    /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
+    pub fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         self.item.func(&self.name)
     }
 
@@ -762,7 +764,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`dataflow_types::sources::SourceConnector`] associated with
+    /// Returns the [`mz_dataflow_types::sources::SourceConnector`] associated with
     /// this `CatalogEntry`.
     pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
         self.item.source_connector(&self.name)
@@ -823,7 +825,7 @@ impl Catalog {
             },
             oid_counter: FIRST_USER_OID,
             transient_revision: 0,
-            config: sql::catalog::CatalogConfig {
+            config: mz_sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
                 nonce: rand::random(),
@@ -913,7 +915,7 @@ impl Catalog {
                         name.clone(),
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
-                            connector: dataflow_types::sources::SourceConnector::Local {
+                            connector: mz_dataflow_types::sources::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
                                 persisted_name: None,
                             },
@@ -2203,8 +2205,8 @@ impl Catalog {
         table_persist_name: Option<String>,
         source_persist_details: Option<SerializedSourcePersistDetails>,
     ) -> Result<CatalogItem, anyhow::Error> {
-        let stmt = sql::parse::parse(&create_sql)?.into_element();
-        let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        let plan = mz_sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
                 assert!(
@@ -2361,7 +2363,7 @@ impl Catalog {
         serde_json::to_string(&self.state.by_name).expect("serialization cannot fail")
     }
 
-    pub fn config(&self) -> &sql::catalog::CatalogConfig {
+    pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
 
@@ -2521,8 +2523,8 @@ pub enum SerializedEnvelopePersistDetails {
 impl From<SourcePersistDesc> for SerializedSourcePersistDetails {
     fn from(source_persist_desc: SourcePersistDesc) -> Self {
         SerializedSourcePersistDetails {
-            primary_stream: source_persist_desc.primary_stream.name,
-            timestamp_bindings_stream: source_persist_desc.timestamp_bindings_stream.name,
+            primary_stream: source_persist_desc.primary_stream,
+            timestamp_bindings_stream: source_persist_desc.timestamp_bindings_stream,
             envelope_details: source_persist_desc.envelope_desc.into(),
         }
     }
@@ -2631,7 +2633,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             ty => {
-                let pgrepr_type = pgrepr::Type::from(ty);
+                let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let res = if self
                     .search_path
                     .iter()
@@ -2685,7 +2687,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_database(
         &self,
         database_name: &str,
-    ) -> Result<&dyn sql::catalog::CatalogDatabase, SqlCatalogError> {
+    ) -> Result<&dyn mz_sql::catalog::CatalogDatabase, SqlCatalogError> {
         match self.catalog.state.by_name.get(database_name) {
             Some(database) => Ok(database),
             None => Err(SqlCatalogError::UnknownDatabase(database_name.into())),
@@ -2696,7 +2698,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         database: Option<String>,
         schema_name: &str,
-    ) -> Result<&dyn sql::catalog::CatalogSchema, SqlCatalogError> {
+    ) -> Result<&dyn mz_sql::catalog::CatalogSchema, SqlCatalogError> {
         Ok(self
             .catalog
             .resolve_schema(&self.database, database, schema_name, self.conn_id)?)
@@ -2705,7 +2707,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_role(
         &self,
         role_name: &str,
-    ) -> Result<&dyn sql::catalog::CatalogRole, SqlCatalogError> {
+    ) -> Result<&dyn mz_sql::catalog::CatalogRole, SqlCatalogError> {
         match self.catalog.state.roles.get(role_name) {
             Some(role) => Ok(role),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
@@ -2715,7 +2717,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_item(
         &self,
         name: &PartialName,
-    ) -> Result<&dyn sql::catalog::CatalogItem, SqlCatalogError> {
+    ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self
             .catalog
             .resolve_item(&self.database, self.search_path, name, self.conn_id)?)
@@ -2724,23 +2726,23 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_function(
         &self,
         name: &PartialName,
-    ) -> Result<&dyn sql::catalog::CatalogItem, SqlCatalogError> {
+    ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self
             .catalog
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
     }
 
-    fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn sql::catalog::CatalogItem> {
+    fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         self.catalog
             .try_get_by_id(*id)
-            .map(|item| item as &dyn sql::catalog::CatalogItem)
+            .map(|item| item as &dyn mz_sql::catalog::CatalogItem)
     }
 
-    fn get_item_by_id(&self, id: &GlobalId) -> &dyn sql::catalog::CatalogItem {
+    fn get_item_by_id(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {
         self.catalog.get_by_id(id)
     }
 
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn sql::catalog::CatalogItem {
+    fn get_item_by_oid(&self, oid: &u32) -> &dyn mz_sql::catalog::CatalogItem {
         let id = self.catalog.state.by_oid[oid];
         self.catalog.get_by_id(&id)
     }
@@ -2763,7 +2765,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .expect("array's element_id refers to a valid type");
                 ScalarType::Array(Box::new(element_type))
             }
-            TypeInner::Base => pgrepr::Type::from_oid(entry.oid())?.to_scalar_type_lossy(),
+            TypeInner::Base => mz_pgrepr::Type::from_oid(entry.oid())?.to_scalar_type_lossy(),
             TypeInner::List { element_id } => {
                 let element_type = self
                     .try_get_lossy_scalar_type_by_id(&element_id)
@@ -2791,7 +2793,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         })
     }
 
-    fn config(&self) -> &sql::catalog::CatalogConfig {
+    fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.catalog.config
     }
 
@@ -2800,7 +2802,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 }
 
-impl sql::catalog::CatalogDatabase for Database {
+impl mz_sql::catalog::CatalogDatabase for Database {
     fn name(&self) -> &str {
         &self.name
     }
@@ -2814,7 +2816,7 @@ impl sql::catalog::CatalogDatabase for Database {
     }
 }
 
-impl sql::catalog::CatalogSchema for Schema {
+impl mz_sql::catalog::CatalogSchema for Schema {
     fn name(&self) -> &SchemaName {
         &self.name
     }
@@ -2828,7 +2830,7 @@ impl sql::catalog::CatalogSchema for Schema {
     }
 }
 
-impl sql::catalog::CatalogRole for Role {
+impl mz_sql::catalog::CatalogRole for Role {
     fn name(&self) -> &str {
         &self.name
     }
@@ -2838,7 +2840,7 @@ impl sql::catalog::CatalogRole for Role {
     }
 }
 
-impl sql::catalog::CatalogItem for CatalogEntry {
+impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &FullName {
         self.name()
     }
@@ -2855,7 +2857,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.desc()?)
     }
 
-    fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
+    fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         Ok(self.func()?)
     }
 
@@ -2908,8 +2910,8 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 mod tests {
     use tempfile::NamedTempFile;
 
-    use ore::now::NOW_ZERO;
-    use sql::names::{DatabaseSpecifier, FullName, PartialName};
+    use mz_ore::now::NOW_ZERO;
+    use mz_sql::names::{DatabaseSpecifier, FullName, PartialName};
 
     use crate::catalog::{Catalog, Op, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
     use crate::session::Session;

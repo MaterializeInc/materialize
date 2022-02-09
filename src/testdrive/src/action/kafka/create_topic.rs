@@ -179,7 +179,7 @@ impl Action for CreateTopicAction {
             new_topic
         };
 
-        kafka_util::admin::ensure_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
+        mz_kafka_util::admin::ensure_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await?;
         state.kafka_topics.insert(topic_name, self.partitions);
         Ok(())

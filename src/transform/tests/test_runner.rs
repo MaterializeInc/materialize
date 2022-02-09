@@ -20,16 +20,16 @@ mod tests {
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
-    use expr::{GlobalId, Id, MirRelationExpr};
-    use expr_test_util::{
+    use mz_expr::{GlobalId, Id, MirRelationExpr};
+    use mz_expr_test_util::{
         build_rel, generate_explanation, json_to_spec, MirRelationExprDeserializeContext,
         TestCatalog, RTI,
     };
-    use lowertest::{deserialize, tokenize};
-    use ore::str::separated;
+    use mz_lowertest::{deserialize, tokenize};
+    use mz_ore::str::separated;
+    use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
+    use mz_transform::{Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
-    use transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
-    use transform::{Optimizer, Transform, TransformArgs};
 
     // Global options
     const IN: &str = "in";
@@ -44,11 +44,11 @@ mod tests {
                 .transforms
                 .into_iter()
                 .chain(std::iter::once(
-                    Box::new(transform::projection_pushdown::ProjectionPushdown)
+                    Box::new(mz_transform::projection_pushdown::ProjectionPushdown)
                         as Box<dyn Transform>,
                 ))
                 .chain(std::iter::once(
-                    Box::new(transform::update_let::UpdateLet::default()) as Box<dyn Transform>
+                    Box::new(mz_transform::update_let::UpdateLet::default()) as Box<dyn Transform>
                 ))
                 .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
                 .chain(Optimizer::physical_optimizer().transforms.into_iter())
@@ -227,39 +227,45 @@ mod tests {
         // TODO(justin): is there a way to just extract these from the Optimizer list of
         // transforms?
         match name {
-            "CanonicalizeMfp" => Ok(Box::new(transform::canonicalize_mfp::CanonicalizeMfp)),
+            "CanonicalizeMfp" => Ok(Box::new(mz_transform::canonicalize_mfp::CanonicalizeMfp)),
             "ColumnKnowledge" => Ok(Box::new(
-                transform::column_knowledge::ColumnKnowledge::default(),
+                mz_transform::column_knowledge::ColumnKnowledge::default(),
             )),
-            "Demand" => Ok(Box::new(transform::demand::Demand::default())),
-            "FilterFusion" => Ok(Box::new(transform::fusion::filter::Filter)),
-            "FoldConstants" => Ok(Box::new(transform::reduction::FoldConstants {
+            "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
+            "FilterFusion" => Ok(Box::new(mz_transform::fusion::filter::Filter)),
+            "FoldConstants" => Ok(Box::new(mz_transform::reduction::FoldConstants {
                 limit: None,
             })),
-            "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
-            "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting::default())),
+            "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
+            "LiteralLifting" => Ok(Box::new(
+                mz_transform::map_lifting::LiteralLifting::default(),
+            )),
             "NonNullRequirements" => Ok(Box::new(
-                transform::nonnull_requirements::NonNullRequirements::default(),
+                mz_transform::nonnull_requirements::NonNullRequirements::default(),
             )),
             "PredicatePushdown" => Ok(Box::new(
-                transform::predicate_pushdown::PredicatePushdown::default(),
+                mz_transform::predicate_pushdown::PredicatePushdown::default(),
             )),
             "ProjectionExtraction" => Ok(Box::new(
-                transform::projection_extraction::ProjectionExtraction,
+                mz_transform::projection_extraction::ProjectionExtraction,
             )),
             "ProjectionLifting" => Ok(Box::new(
-                transform::projection_lifting::ProjectionLifting::default(),
+                mz_transform::projection_lifting::ProjectionLifting::default(),
             )),
-            "ProjectionPushdown" => {
-                Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
-            }
-            "ReductionPushdown" => Ok(Box::new(transform::reduction_pushdown::ReductionPushdown)),
-            "RedundantJoin" => Ok(Box::new(transform::redundant_join::RedundantJoin::default())),
-            "TopKFusion" => Ok(Box::new(transform::fusion::top_k::TopK)),
-            "UnionBranchCancellation" => {
-                Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
-            }
-            "UnionFusion" => Ok(Box::new(transform::fusion::union::Union)),
+            "ProjectionPushdown" => Ok(Box::new(
+                mz_transform::projection_pushdown::ProjectionPushdown,
+            )),
+            "ReductionPushdown" => Ok(Box::new(
+                mz_transform::reduction_pushdown::ReductionPushdown,
+            )),
+            "RedundantJoin" => Ok(Box::new(
+                mz_transform::redundant_join::RedundantJoin::default(),
+            )),
+            "TopKFusion" => Ok(Box::new(mz_transform::fusion::top_k::TopK)),
+            "UnionBranchCancellation" => Ok(Box::new(
+                mz_transform::union_cancel::UnionBranchCancellation,
+            )),
+            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

@@ -87,7 +87,7 @@ struct Args {
 }
 
 fn main() -> Result<(), anyhow::Error> {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
     let flattened = flatten_object(args.sample_json)?;
     let selections: Vec<String> = flattened
         .iter()

@@ -558,7 +558,7 @@ impl TimelyWorkers {
 
 #[cfg(test)]
 mod tests {
-    use ore::metrics::MetricsRegistry;
+    use mz_ore::metrics::MetricsRegistry;
     use tempfile::TempDir;
 
     use crate::file::{FileBlob, FileLog};
@@ -596,7 +596,7 @@ mod tests {
                 RuntimeConfig::for_tests(),
                 log,
                 blob,
-                build_info::DUMMY_BUILD_INFO,
+                mz_build_info::DUMMY_BUILD_INFO,
                 &MetricsRegistry::new(),
                 None,
             )

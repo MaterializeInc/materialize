@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use crate::query_model::model::*;
-use repr::*;
+use mz_repr::*;
 
 pub(crate) fn cref(quantifier_id: QuantifierId, position: usize) -> ColumnReference {
     ColumnReference {
@@ -22,7 +22,7 @@ pub(crate) mod qgm {
 
     pub(crate) fn get(id: u64) -> Get {
         Get {
-            id: expr::GlobalId::User(id),
+            id: mz_expr::GlobalId::User(id),
             unique_keys: vec![],
         }
     }
@@ -41,7 +41,7 @@ pub(crate) mod exp {
 
     pub(crate) fn add(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::AddInt32,
+            func: mz_expr::BinaryFunc::AddInt32,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -49,7 +49,7 @@ pub(crate) mod exp {
 
     pub(crate) fn sub(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::SubInt32,
+            func: mz_expr::BinaryFunc::SubInt32,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -57,7 +57,7 @@ pub(crate) mod exp {
 
     pub(crate) fn gt(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::Gt,
+            func: mz_expr::BinaryFunc::Gt,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -65,7 +65,7 @@ pub(crate) mod exp {
 
     pub(crate) fn gte(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::Gte,
+            func: mz_expr::BinaryFunc::Gte,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -73,7 +73,7 @@ pub(crate) mod exp {
 
     pub(crate) fn lt(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::Lt,
+            func: mz_expr::BinaryFunc::Lt,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -81,7 +81,7 @@ pub(crate) mod exp {
 
     pub(crate) fn lte(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::Lte,
+            func: mz_expr::BinaryFunc::Lte,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -89,7 +89,7 @@ pub(crate) mod exp {
 
     pub(crate) fn eq(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::Eq,
+            func: mz_expr::BinaryFunc::Eq,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -97,7 +97,7 @@ pub(crate) mod exp {
 
     pub(crate) fn not_eq(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::NotEq,
+            func: mz_expr::BinaryFunc::NotEq,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -105,7 +105,7 @@ pub(crate) mod exp {
 
     pub(crate) fn or(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::Or,
+            func: mz_expr::BinaryFunc::Or,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -113,7 +113,7 @@ pub(crate) mod exp {
 
     pub(crate) fn and(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallBinary {
-            func: expr::BinaryFunc::And,
+            func: mz_expr::BinaryFunc::And,
             expr1: Box::new(lhs),
             expr2: Box::new(rhs),
         }
@@ -121,14 +121,14 @@ pub(crate) mod exp {
 
     pub(crate) fn not(expr: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallUnary {
-            func: expr::UnaryFunc::Not(expr::func::Not),
+            func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
             expr: Box::new(expr),
         }
     }
 
     pub(crate) fn isnull(expr: BoxScalarExpr) -> BoxScalarExpr {
         BoxScalarExpr::CallUnary {
-            func: expr::UnaryFunc::IsNull(expr::func::IsNull),
+            func: mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull),
             expr: Box::new(expr),
         }
     }

@@ -14,12 +14,12 @@ use std::time::Duration;
 use anyhow::bail;
 use async_trait::async_trait;
 
-use coord::catalog::Catalog;
-use coord::session::Session;
-use ore::now::NOW_ZERO;
-use ore::retry::Retry;
-use sql::catalog::SessionCatalog;
-use sql::names::PartialName;
+use mz_coord::catalog::Catalog;
+use mz_coord::session::Session;
+use mz_ore::now::NOW_ZERO;
+use mz_ore::retry::Retry;
+use mz_sql::catalog::SessionCatalog;
+use mz_sql::names::PartialName;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

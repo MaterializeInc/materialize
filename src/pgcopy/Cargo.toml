@@ -1,5 +1,5 @@
 [package]
-name = "pgcopy"
+name = "mz-pgcopy"
 description = "Encoding/decoding of PostgreSQL COPY formats."
 version = "0.0.0"
 edition = "2021"
@@ -11,6 +11,6 @@ rust-version = "1.58.0"
 [dependencies]
 bytes = "1.1.0"
 csv = "1.1.6"
-pgrepr = { path = "../pgrepr" }
-repr = { path = "../repr" }
-sql = { path = "../sql" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }

@@ -19,7 +19,7 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use lowertest::MzReflect;
+use mz_lowertest::MzReflect;
 
 use crate::adt::array::Array;
 use crate::adt::char::Char;

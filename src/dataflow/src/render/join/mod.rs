@@ -9,7 +9,7 @@
 
 //! Rendering of `MirRelationExpr::Join` operators, and supporting types.
 //!
-//! Consult [dataflow_types::plan::join::JoinPlan] documentation for details.
+//! Consult [mz_dataflow_types::plan::join::JoinPlan] documentation for details.
 
 mod delta_join;
 mod linear_join;

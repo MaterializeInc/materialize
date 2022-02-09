@@ -12,7 +12,6 @@
 
 use std::collections::BTreeMap;
 
-use dataflow_types::plan::AvailableCollections;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
@@ -22,6 +21,7 @@ use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
+use mz_dataflow_types::plan::AvailableCollections;
 use timely::communication::message::RefOrMut;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, ScopeParent};
@@ -30,9 +30,9 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use crate::operator::CollectionExt;
-use dataflow_types::{DataflowDescription, DataflowError};
-use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
-use repr::{DatumVec, Diff, Row, RowArena};
+use mz_dataflow_types::{DataflowDescription, DataflowError};
+use mz_expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
+use mz_repr::{DatumVec, Diff, Row, RowArena};
 
 // Local type definition to avoid the horror in signatures.
 pub type Arrangement<S, V> = Arranged<S, TraceRowHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
@@ -73,7 +73,7 @@ where
     /// without affecting the results. We *should* apply it, to sources and
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
-    pub as_of_frontier: Antichain<repr::Timestamp>,
+    pub as_of_frontier: Antichain<mz_repr::Timestamp>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
@@ -402,18 +402,18 @@ where
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        Tr: TraceReader<Key = Row, Val = Row, Time = S::Timestamp, R = repr::Diff>
+        Tr: TraceReader<Key = Row, Val = Row, Time = S::Timestamp, R = mz_repr::Diff>
             + Clone
             + 'static,
-        Tr::Batch: BatchReader<Row, Tr::Val, S::Timestamp, repr::Diff> + 'static,
-        Tr::Cursor: Cursor<Row, Tr::Val, S::Timestamp, repr::Diff> + 'static,
+        Tr::Batch: BatchReader<Row, Tr::Val, S::Timestamp, mz_repr::Diff> + 'static,
+        Tr::Cursor: Cursor<Row, Tr::Val, S::Timestamp, mz_repr::Diff> + 'static,
         I: IntoIterator,
         I::Item: Data,
         L: for<'a, 'b> FnMut(
                 RefOrMut<'b, Row>,
                 RefOrMut<'b, Row>,
                 &'a S::Timestamp,
-                &'a repr::Diff,
+                &'a mz_repr::Diff,
             ) -> I
             + 'static,
     {
@@ -468,9 +468,9 @@ where
     }
 }
 
-impl<S> CollectionBundle<S, repr::Row, repr::Timestamp>
+impl<S> CollectionBundle<S, mz_repr::Row, mz_repr::Timestamp>
 where
-    S: Scope<Timestamp = repr::Timestamp>,
+    S: Scope<Timestamp = mz_repr::Timestamp>,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -485,11 +485,27 @@ where
         mut mfp: MapFilterProject,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
     ) -> (
-        Collection<S, repr::Row, Diff>,
+        Collection<S, mz_repr::Row, Diff>,
         Collection<S, DataflowError, Diff>,
     ) {
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
+
+        // If the MFP is trivial, we can just call `as_collection`.
+        // In the case that we weren't going to apply the `key_val` optimization,
+        // this path results in a slightly smaller and faster
+        // dataflow graph, and is intended to fix
+        // https://github.com/MaterializeInc/materialize/issues/10507
+        let has_key_val = if let Some((_key, Some(_val))) = &key_val {
+            true
+        } else {
+            false
+        };
+
+        if mfp_plan.is_identity() && !has_key_val {
+            let key = key_val.map(|(k, _v)| k);
+            return self.as_specific_collection(key.as_deref());
+        }
         let (stream, errors) = self.flat_map(key_val, || {
             let mut row_builder = Row::default();
             let mut datum_vec = DatumVec::new();

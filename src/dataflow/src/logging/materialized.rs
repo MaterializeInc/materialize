@@ -27,9 +27,9 @@ use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::replay::MzReplay;
-use expr::{permutation_for_arrangement, GlobalId, MirScalarExpr, SourceInstanceId};
-use repr::adt::jsonb::Jsonb;
-use repr::{Datum, DatumVec, Row, Timestamp};
+use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr, SourceInstanceId};
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::{Datum, DatumVec, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -106,7 +106,7 @@ impl Peek {
 /// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    config: &dataflow_types::logging::LoggingConfig,
+    config: &mz_dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
     activator: RcActivator,
 ) -> std::collections::HashMap<LogVariant, KeysValsHandle> {

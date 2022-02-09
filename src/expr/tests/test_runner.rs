@@ -8,12 +8,12 @@
 // by the Apache License, Version 2.0.
 
 mod test {
-    use expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
-    use expr::{MapFilterProject, MirScalarExpr};
-    use expr_test_util::*;
-    use lowertest::{deserialize, tokenize};
-    use ore::str::separated;
-    use repr::RelationType;
+    use mz_expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
+    use mz_expr::{MapFilterProject, MirScalarExpr};
+    use mz_expr_test_util::*;
+    use mz_lowertest::{deserialize, tokenize};
+    use mz_ore::str::separated;
+    use mz_repr::RelationType;
 
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {
         let mut input_stream = tokenize(&s)?.into_iter();

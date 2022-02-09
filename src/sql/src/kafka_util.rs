@@ -17,16 +17,16 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 
-use kafka_util::client::MzClientContext;
-use ore::task;
+use mz_kafka_util::client::MzClientContext;
+use mz_ore::task;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use reqwest::Url;
 use tokio::time::Duration;
 
-use ccsr::tls::{Certificate, Identity};
-use sql_parser::ast::Value;
+use mz_ccsr::tls::{Certificate, Identity};
+use mz_sql_parser::ast::Value;
 
 enum ValType {
     Path,
@@ -368,7 +368,7 @@ pub async fn lookup_start_offsets(
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions
-            let num_partitions = kafka_util::client::get_partitions(
+            let num_partitions = mz_kafka_util::client::get_partitions(
                 consumer.as_ref().client(),
                 &topic,
                 Duration::from_secs(10),
@@ -466,8 +466,8 @@ pub fn generate_ccsr_client_config(
     csr_url: Url,
     _kafka_options: &BTreeMap<String, String>,
     ccsr_options: &mut BTreeMap<String, Value>,
-) -> Result<ccsr::ClientConfig, anyhow::Error> {
-    let mut client_config = ccsr::ClientConfig::new(csr_url);
+) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
+    let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
     if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {

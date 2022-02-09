@@ -22,8 +22,8 @@
 //! reduce the verbosity a little bit. A typical subsystem will look like the following:
 //!
 //! ```rust
-//! # use ore::metrics::{MetricsRegistry, UIntCounter};
-//! # use ore::metric;
+//! # use mz_ore::metrics::{MetricsRegistry, UIntCounter};
+//! # use mz_ore::metric;
 //! #[derive(Debug, Clone)] // Note that prometheus metrics can safely be cloned
 //! struct Metrics {
 //!     pub bytes_sent: UIntCounter,

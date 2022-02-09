@@ -15,7 +15,7 @@
 
 use std::error::Error;
 
-use pid_file::PidFile;
+use mz_pid_file::PidFile;
 
 #[test]
 fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
@@ -28,7 +28,7 @@ fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
 
     // Attempting to open the PID file again should fail.
     match PidFile::open(&path) {
-        Err(pid_file::Error::AlreadyRunning { .. }) => (),
+        Err(mz_pid_file::Error::AlreadyRunning { .. }) => (),
         Ok(_) => panic!("unexpected success when opening pid file"),
         Err(e) => return Err(e.into()),
     }

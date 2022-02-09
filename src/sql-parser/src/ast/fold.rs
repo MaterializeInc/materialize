@@ -26,7 +26,7 @@
 //! by invoking the right folder method on each of its fields.
 //!
 //! ```
-//! # use sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, Raw, AstInfo};
+//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, Raw, AstInfo};
 //! #
 //! pub trait Fold<T: AstInfo, T2: AstInfo> {
 //!     /* ... */

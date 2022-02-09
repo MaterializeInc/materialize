@@ -1,7 +1,7 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.19.1-dev"
+version = "0.20.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2021"
@@ -33,17 +33,17 @@ askama = { version = "0.11.0", default-features = false, features = ["config", "
 async-trait = "0.1.52"
 atty = "0.2.14"
 backtrace = "0.3.64"
-build-info = { path = "../build-info" }
+mz-build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.0.14", features = ["wrap_help", "env", "derive"] }
 compile-time-run = "0.2.12"
 console-subscriber = { version = "0.1.1", optional = true }
-coord = { path = "../coord" }
+mz-coord = { path = "../coord" }
 crossbeam-channel = "0.5.2"
-dataflow = { path = "../dataflow" }
-dataflowd = { path = "../dataflowd" }
-dataflow-types = { path = "../dataflow-types" }
+mz-dataflow = { path = "../dataflow" }
+mz-dataflowd = { path = "../dataflowd" }
+mz-dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
@@ -61,21 +61,21 @@ nix = "0.23.1"
 num_cpus = "1.13.1"
 openssl = { version = "0.10.38", features = ["vendored"] }
 openssl-sys = { version = "0.9.72", features = ["vendored"] }
-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["task"] }
 os_info = "3.2.0"
-pid-file = { path = "../pid-file" }
-pgwire = { path = "../pgwire" }
-prof = { path = "../prof" }
+mz-pid-file = { path = "../pid-file" }
+mz-pgwire = { path = "../pgwire" }
+mz-prof = { path = "../prof" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-repr = { path = "../repr" }
+mz-repr = { path = "../repr" }
 reqwest = { version = "0.11.9", features = ["json"] }
 rlimit = "0.6.2"
 semver = "1.0.5"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 shell-words = "1.1.0"
-sql = { path = "../sql" }
+mz-sql = { path = "../sql" }
 sysctl = "0.4.3"
 sysinfo = "0.23.0"
 tempfile = "3.2.0"
@@ -94,26 +94,26 @@ uuid = "0.8.2"
 # (Namely: if the application relies on new threads not being created for whatever reason)
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-prof = { path = "../prof", features = ["jemalloc"] }
+mz-prof = { path = "../prof", features = ["jemalloc"] }
 tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
 assert_cmd = "2.0.4"
 bytes = "1.1.0"
-coordtest = { path = "../coordtest" }
+mz-coordtest = { path = "../coordtest" }
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.3"
-kafka-util = { path = "../kafka-util" }
-pgrepr = { path = "../pgrepr" }
-pgtest = { path = "../pgtest" }
+mz-kafka-util = { path = "../kafka-util" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-pgtest = { path = "../pgtest" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 predicates = "2.1.1"
 rand = "0.8.4"
-repr = { path = "../repr" }
+mz-repr = { path = "../repr" }
 reqwest = { version = "0.11.9", features = ["blocking"] }
 serde_json = "1.0.78"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }

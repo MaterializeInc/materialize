@@ -1,5 +1,5 @@
 [package]
-name = "pgwire"
+name = "mz-pgwire"
 description = "A server for the PostgreSQL wire protocol."
 version = "0.0.0"
 edition = "2021"
@@ -12,22 +12,22 @@ async-trait = "0.1.52"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-coord = { path = "../coord" }
+mz-coord = { path = "../coord" }
 csv = "1.1.6"
-dataflow-types = { path = "../dataflow-types" }
-expr = { path = "../expr" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-expr = { path = "../expr" }
 futures = "0.3.21"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 tracing = "0.1.29"
 openssl = { version = "0.10.38", features = ["vendored"] }
 ordered-float = { version = "2.10.0", features = ["serde"] }
-ore = { path = "../ore" }
-pgcopy = { path = "../pgcopy" }
-pgrepr = { path = "../pgrepr" }
+mz-ore = { path = "../ore" }
+mz-pgcopy = { path = "../pgcopy" }
+mz-pgrepr = { path = "../pgrepr" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-repr = { path = "../repr" }
-sql = { path = "../sql" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }
 tokio = "1.16.1"
 tokio-openssl = "0.6.3"
 tokio-stream = "0.1.8"

@@ -32,7 +32,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 use crate::TransformArgs;
 

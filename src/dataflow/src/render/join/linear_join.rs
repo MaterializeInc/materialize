@@ -22,15 +22,15 @@ use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use dataflow_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
-use dataflow_types::plan::join::JoinClosure;
-use dataflow_types::DataflowError;
-use repr::{Diff, Row, RowArena};
+use mz_dataflow_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
+use mz_dataflow_types::plan::join::JoinClosure;
+use mz_dataflow_types::DataflowError;
+use mz_repr::{Diff, Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
-use repr::DatumVec;
+use mz_repr::DatumVec;
 
 /// Different forms the streamed data might take.
 enum JoinedFlavor<G, T>
@@ -255,12 +255,12 @@ where
         closure: JoinClosure,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
-        J: JoinCore<G, Row, Row, repr::Diff>,
-        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = repr::Diff>
+        J: JoinCore<G, Row, Row, mz_repr::Diff>,
+        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = mz_repr::Diff>
             + Clone
             + 'static,
-        Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
-        Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
+        Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, mz_repr::Diff> + 'static,
+        Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, mz_repr::Diff> + 'static,
     {
         use differential_dataflow::AsCollection;
         use timely::dataflow::operators::OkErr;

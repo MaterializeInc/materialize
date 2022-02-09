@@ -11,11 +11,11 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use csv::Writer;
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 use rand::Rng;
 use tokio_postgres::Client;
 
-use test_util::mz_client;
+use mz_test_util::mz_client;
 
 pub async fn create_proto_source(
     mz_client: &Client,

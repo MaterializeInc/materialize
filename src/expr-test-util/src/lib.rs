@@ -13,15 +13,15 @@ use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 use serde_json::Value;
 
-use expr::explain::ViewExplanation;
-use expr::{
+use mz_expr::explain::ViewExplanation;
+use mz_expr::{
     DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr,
 };
-use lowertest::*;
-use ore::result::ResultExt;
-use ore::str::separated;
-use repr::{ColumnType, RelationType, Row, ScalarType};
-use repr_test_util::*;
+use mz_lowertest::*;
+use mz_ore::result::ResultExt;
+use mz_ore::str::separated;
+use mz_repr::{ColumnType, RelationType, Row, ScalarType};
+use mz_repr_test_util::*;
 
 lazy_static! {
     pub static ref RTI: ReflectedTypeInfo = {
@@ -34,7 +34,7 @@ lazy_static! {
 
 /// Builds a `MirScalarExpr` from a string.
 ///
-/// See [lowertest::to_json] for the syntax.
+/// See [mz_lowertest::to_json] for the syntax.
 pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
     deserialize(
         &mut tokenize(s)?.into_iter(),
@@ -46,7 +46,7 @@ pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
 
 /// Builds a `MirRelationExpr` from a string.
 ///
-/// See [lowertest::to_json] for the syntax.
+/// See [mz_lowertest::to_json] for the syntax.
 pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, String> {
     deserialize(
         &mut tokenize(s)?.into_iter(),
@@ -74,7 +74,7 @@ pub fn generate_explanation(
     explanation.to_string()
 }
 
-/// Turns the json version of a MirRelationExpr into the [lowertest::to_json]
+/// Turns the json version of a MirRelationExpr into the [mz_lowertest::to_json]
 /// syntax.
 ///
 /// The return value is a tuple of:

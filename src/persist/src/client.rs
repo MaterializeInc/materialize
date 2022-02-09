@@ -17,7 +17,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use differential_dataflow::trace::Description;
-use persist_types::Codec;
+use mz_persist_types::Codec;
 use timely::progress::Antichain;
 
 use crate::error::Error;

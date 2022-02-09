@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::Context;
 
-use persist_types::Codec;
+use mz_persist_types::Codec;
 
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn seal_frontier_advance_only_on_success() -> Result<(), Error> {
-        ore::test::init_logging();
+        mz_ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
@@ -887,7 +887,7 @@ mod tests {
     /// incorrectly process any seal futures after the operator has been closed.
     #[test]
     fn regression_9419_seal_close() -> Result<(), Error> {
-        ore::test::init_logging();
+        mz_ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
@@ -954,7 +954,7 @@ mod tests {
     // realistically assert on the order we get from the channels.
     #[test]
     fn seal_multiple_streams() -> Result<(), Error> {
-        ore::test::init_logging();
+        mz_ore::test::init_logging();
         let mut registry = MemRegistry::new();
 
         let p = registry.runtime_no_reentrance()?;
@@ -1175,7 +1175,7 @@ mod tests {
 
     #[test]
     fn retract_unsealed() -> Result<(), Error> {
-        ore::test::init_logging();
+        mz_ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let p = registry.runtime_no_reentrance()?;
 

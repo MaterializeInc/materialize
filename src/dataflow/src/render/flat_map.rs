@@ -9,17 +9,17 @@
 
 use timely::dataflow::Scope;
 
-use expr::{MapFilterProject, MirScalarExpr, TableFunc};
-use repr::{Row, RowArena};
+use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
+use mz_repr::{Row, RowArena};
 
 use crate::operator::StreamExt;
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
-use repr::DatumVec;
+use mz_repr::DatumVec;
 
-impl<G> Context<G, Row, repr::Timestamp>
+impl<G> Context<G, Row, mz_repr::Timestamp>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(

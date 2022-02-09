@@ -25,7 +25,7 @@
 //! by invoking the right visitor method of each of its fields.
 //!
 //! ```
-//! # use sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, AstInfo};
+//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, AstInfo};
 //! #
 //! pub trait VisitMut<'ast, T: AstInfo> {
 //!     /* ... */
@@ -65,8 +65,8 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use sql_parser::ast::{AstInfo, Expr};
-//! use sql_parser::ast::visit_mut::{self, VisitMut};
+//! use mz_sql_parser::ast::{AstInfo, Expr};
+//! use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 //!
 //! struct RemoveParens;
 //!
@@ -81,9 +81,9 @@
 //!
 //! fn main() -> Result<(), Box<dyn Error>> {
 //!     let sql = "(a + ((b))) + c";
-//!     let mut expr = sql_parser::parser::parse_expr(sql.into())?;
+//!     let mut expr = mz_sql_parser::parser::parse_expr(sql.into())?;
 //!     RemoveParens.visit_expr_mut(&mut expr);
-//!     let expected = sql_parser::parser::parse_expr("a + b + c".into())?;
+//!     let expected = mz_sql_parser::parser::parse_expr("a + b + c".into())?;
 //!     assert_eq!(expr, expected);
 //!     Ok(())
 //! }

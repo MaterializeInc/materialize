@@ -15,8 +15,8 @@
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
 use crate::TransformArgs;
-use expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
-use repr::{Datum, RelationType, ScalarType};
+use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use mz_repr::{Datum, RelationType, ScalarType};
 
 /// Harvests information about non-nullability of columns from sources.
 #[derive(Debug)]

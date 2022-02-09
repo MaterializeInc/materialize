@@ -16,16 +16,16 @@ use std::rc::Rc;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::trace::TraceReader;
-use ore::metric;
-use ore::metrics::{
+use mz_ore::metric;
+use mz_ore::metrics::{
     CounterVec, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
     MetricsRegistry, UIntGaugeVec,
 };
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use dataflow_types::DataflowError;
-use expr::GlobalId;
-use repr::{Diff, Row, Timestamp};
+use mz_dataflow_types::DataflowError;
+use mz_expr::GlobalId;
+use mz_repr::{Diff, Row, Timestamp};
 
 pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;

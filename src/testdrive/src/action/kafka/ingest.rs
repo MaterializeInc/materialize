@@ -263,7 +263,7 @@ impl Action for IngestAction {
             for subject in stale_subjects {
                 println!("Deleting stale schema registry subject {}", subject);
                 match state.ccsr_client.delete_subject(&subject).await {
-                    Ok(()) | Err(ccsr::DeleteError::SubjectNotFound) => (),
+                    Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
                     Err(e) => return Err(e.into()),
                 }
             }
@@ -290,7 +290,7 @@ impl Action for IngestAction {
                 } => {
                     let schema_id = if self.publish {
                         let schema_id = ccsr_client
-                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Avro, &[])
+                            .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
                             .await
                             .context("publishing to schema registry")?;
                         schema_id

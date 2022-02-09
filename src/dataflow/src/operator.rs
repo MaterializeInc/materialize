@@ -21,7 +21,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use repr::Diff;
+use mz_repr::Diff;
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, D1>

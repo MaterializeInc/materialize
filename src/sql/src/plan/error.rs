@@ -12,11 +12,11 @@ use std::fmt;
 use std::num::ParseIntError;
 use std::num::TryFromIntError;
 
-use expr::EvalError;
-use ore::stack::RecursionLimitError;
-use ore::str::StrExt;
-use repr::strconv::ParseError;
-use repr::ColumnName;
+use mz_expr::EvalError;
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::StrExt;
+use mz_repr::strconv::ParseError;
+use mz_repr::ColumnName;
 
 use crate::catalog::CatalogError;
 use crate::names::PartialName;
