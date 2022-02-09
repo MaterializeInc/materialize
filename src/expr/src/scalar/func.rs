@@ -4747,7 +4747,11 @@ fn is_like_pattern_match_dynamic<'a>(
     case_insensitive: bool,
 ) -> Result<Datum<'a>, EvalError> {
     let haystack = a.unwrap_str();
-    let needle = like_pattern::compile(b.unwrap_str(), case_insensitive, '\\')?;
+    let needle = like_pattern::compile(
+        b.unwrap_str(),
+        case_insensitive,
+        like_pattern::DEFAULT_ESCAPE,
+    )?;
     Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }
 

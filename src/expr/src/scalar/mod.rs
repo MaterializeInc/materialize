@@ -347,8 +347,11 @@ impl MirScalarExpr {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(&pattern, *case_insensitive, '\\')
-                                {
+                                *e = match like_pattern::compile(
+                                    &pattern,
+                                    *case_insensitive,
+                                    like_pattern::DEFAULT_ESCAPE,
+                                ) {
                                     Ok(matcher) => expr1
                                         .take()
                                         .call_unary(UnaryFunc::IsLikePatternMatch(matcher)),
@@ -1264,6 +1267,7 @@ pub enum EvalError {
     MultipleRowsFromSubquery,
     Undefined(String),
     LikePatternTooLong,
+    LikeEscapeTooLong,
     StringValueTooLong {
         target_type: String,
         length: usize,
@@ -1384,6 +1388,9 @@ impl fmt::Display for EvalError {
             EvalError::LikePatternTooLong => {
                 write!(f, "LIKE pattern exceeds maximum length")
             }
+            EvalError::LikeEscapeTooLong => {
+                write!(f, "invalid escape string")
+            }
             EvalError::StringValueTooLong {
                 target_type,
                 length,
@@ -1425,6 +1432,9 @@ impl EvalError {
             EvalError::InvalidBase64EndSequence => Some(
                 "Input data is missing padding, is truncated, or is otherwise corrupted.".into(),
             ),
+            EvalError::LikeEscapeTooLong => {
+                Some("Escape string must be empty or one character.".into())
+            }
             _ => None,
         }
     }
