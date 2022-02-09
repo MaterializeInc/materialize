@@ -72,7 +72,7 @@ where
         b.iter(|| search_poem(&matcher))
     });
     matcher = compile_fn("%e%e%e%e%e?");
-    group.bench_function(format!("{}_search_expensive", name), |b| {
+    group.bench_function(format!("{}_search_adversarial", name), |b| {
         b.iter(|| matcher.is_match(black_box("wheeeeeeeeeeeeeeeeeeeeee!")))
     });
 }
