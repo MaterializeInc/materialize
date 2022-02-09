@@ -649,6 +649,7 @@ pub mod partitioned {
     use std::cmp::Ordering;
     use std::collections::hash_map::Entry;
     use std::collections::HashMap;
+    use std::iter::Fuse;
 
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
@@ -693,14 +694,16 @@ pub mod partitioned {
 
         async fn recv(&mut self) -> Option<Response> {
             use futures::StreamExt;
-            if let Some(stashed) = self.state.stashed_response.take() {
+            if let Some(stashed) = self.state.stashed_responses.next() {
                 return Some(stashed);
             }
             self.cursor = (self.cursor + 1) % self.shards.len();
             let mut stream = super::SelectStream::new(&mut self.shards[..], self.cursor);
             while let Some((index, response)) = stream.next().await {
-                let message = self.state.absorb_response(index, response);
-                if let Some(message) = message {
+                let messages = self.state.absorb_response(index, response).fuse();
+                assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
+                self.state.stashed_responses = messages;
+                if let Some(message) = self.state.stashed_responses.next() {
                     return Some(message);
                 }
             }
@@ -840,19 +843,21 @@ pub mod partitioned {
         /// `None` is a sentinel value indicating that the tail has been dropped and no
         /// further messages should be forwarded.
         pending_tails: HashMap<GlobalId, Option<PendingTail>>,
-        /// The next response to return immediately, if any
-        stashed_response: Option<Response>,
+        /// The next responses to return immediately, if any
+        stashed_responses: Fuse<Box<dyn Iterator<Item = Response> + Send>>,
     }
 
     impl PartitionedClientState {
         /// Instantiates a new client state machine wrapping a number of parts.
         pub fn new(parts: usize) -> Self {
+            let stashed_responses: Box<dyn Iterator<Item = Response> + Send> =
+                Box::new(None.into_iter());
             Self {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
                 pending_tails: Default::default(),
-                stashed_response: None,
+                stashed_responses: stashed_responses.fuse(),
             }
         }
 
@@ -883,7 +888,11 @@ pub mod partitioned {
         }
 
         /// Absorbs a response, and produces response that should be emitted.
-        pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
+        pub fn absorb_response(
+            &mut self,
+            shard_id: usize,
+            message: Response,
+        ) -> Box<dyn Iterator<Item = Response> + Send> {
             match message {
                 Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
                     assert_eq!(instance, super::DEFAULT_COMPUTE_INSTANCE_ID);
@@ -908,10 +917,13 @@ pub mod partitioned {
                         }
                     }
 
-                    Some(Response::Compute(
-                        ComputeResponse::FrontierUppers(list),
-                        instance,
-                    ))
+                    Box::new(
+                        Some(Response::Compute(
+                            ComputeResponse::FrontierUppers(list),
+                            instance,
+                        ))
+                        .into_iter(),
+                    )
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
@@ -923,9 +935,12 @@ pub mod partitioned {
                             changes.clear();
                         }
                     }
-                    Some(Response::Storage(StorageResponse::TimestampBindings(
-                        feedback,
-                    )))
+                    Box::new(
+                        Some(Response::Storage(StorageResponse::TimestampBindings(
+                            feedback,
+                        )))
+                        .into_iter(),
+                    )
                 }
                 Response::Compute(
                     ComputeResponse::PeekResponse(connection, response),
@@ -954,15 +969,18 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&connection);
-                        Some(Response::Compute(
-                            ComputeResponse::PeekResponse(connection, response),
-                            instance,
-                        ))
+                        Box::new(
+                            Some(Response::Compute(
+                                ComputeResponse::PeekResponse(connection, response),
+                                instance,
+                            ))
+                            .into_iter(),
+                        )
                     } else {
-                        None
+                        Box::new(None.into_iter())
                     }
                 }
-                Response::Compute(ComputeResponse::TailResponse(id, response)) => {
+                Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
                     let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
                         Some(PendingTail {
                             frontiers: HashMap::new(),
@@ -977,42 +995,66 @@ pub mod partitioned {
                             // This tail has been dropped;
                             // we should pernanently block
                             // any messages from it
-                            return None;
+                            return Box::new(None.into_iter());
                         }
                         Some(entry) => entry,
                     };
 
-                    let tail_response = match response {
+                    let responses: Box<dyn Iterator<Item = Response> + Send> = match response {
                         TailResponse::Progress(frontier) => {
                             if let Some(new_frontier) = entry.record_progress(shard_id, frontier) {
                                 let data = entry.consolidate_up_to(new_frontier.clone());
                                 let progress_response = TailResponse::Progress(new_frontier.into());
                                 if data.is_empty() {
-                                    Some(progress_response)
+                                    Box::new(
+                                        Some(Response::Compute(
+                                            ComputeResponse::TailResponse(id, progress_response),
+                                            instance,
+                                        ))
+                                        .into_iter(),
+                                    )
                                 } else {
                                     // Return the data first, then the progress message.
-                                    assert!(self.stashed_response.is_none());
-                                    self.stashed_response = Some(Response::Compute(
-                                        ComputeResponse::TailResponse(id, progress_response),
-                                    ));
-                                    Some(TailResponse::Rows(data))
+                                    Box::new(
+                                        vec![
+                                            Response::Compute(
+                                                ComputeResponse::TailResponse(
+                                                    id,
+                                                    TailResponse::Rows(data),
+                                                ),
+                                                instance,
+                                            ),
+                                            Response::Compute(
+                                                ComputeResponse::TailResponse(
+                                                    id,
+                                                    progress_response,
+                                                ),
+                                                instance,
+                                            ),
+                                        ]
+                                        .into_iter(),
+                                    )
                                 }
                             } else {
-                                None
+                                Box::new(None.into_iter())
                             }
                         }
                         TailResponse::Rows(rows) => {
                             entry.push_data(rows);
-                            None
+                            Box::new(None.into_iter())
                         }
                         TailResponse::Dropped => {
                             *maybe_entry = None;
-                            Some(TailResponse::Dropped)
+                            Box::new(
+                                Some(Response::Compute(
+                                    ComputeResponse::TailResponse(id, TailResponse::Dropped),
+                                    instance,
+                                ))
+                                .into_iter(),
+                            )
                         }
                     };
-                    tail_response.map(|response| {
-                        Response::Compute(ComputeResponse::TailResponse(id, response))
-                    })
+                    responses
                 }
             }
         }
