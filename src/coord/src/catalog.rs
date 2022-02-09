@@ -491,6 +491,15 @@ pub struct Source {
     pub desc: RelationDesc,
 }
 
+impl Source {
+    pub fn requires_single_materialization(&self) -> bool {
+        // Persisted sources must only be persisted once because we use the source ID to derive the
+        // names of the persistent collections that back it. If we allowed multiple instances,
+        // those would clash when trying to write to those collections.
+        self.connector.requires_single_materialization() || self.persist_details.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Sink {
     pub create_sql: String,
