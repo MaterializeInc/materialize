@@ -21,30 +21,18 @@ use std::collections::HashSet;
 use crate::query_model::attribute::core::Attribute;
 use crate::query_model::attribute::propagated_nulls::PropagatedNulls;
 use crate::query_model::attribute::rejected_nulls::RejectedNulls;
-use crate::query_model::model::BoxType;
+use crate::query_model::model::{BoxType, QuantifierType, Select};
 use crate::query_model::rewrite::ApplyStrategy;
 use crate::query_model::rewrite::Rule;
 use crate::query_model::rewrite::VisitOrder;
-use crate::query_model::BoxId;
-use crate::query_model::QuantifierId;
+use crate::query_model::{BoxId, Model, QuantifierId};
 
-pub(crate) struct SimplifyOuterJoins();
-
-/// A struct that indicates an outer join simplification action.
-pub(crate) enum Action {
-    /// Simplify a full outer join to a left/right outer join by
-    /// changing the type of [`QuantifierId`] from `PreservedForeach`
-    /// to `Foreach`.
-    OuterToOuter(BoxId, QuantifierId),
-    /// Simplify a full outer join to an inner join by
-    /// changing all quantifier types from `PreservedForeach`
-    /// to `Foreach` and the box type from `OuterJoin` to `Select`.
-    OuterToInner(BoxId),
-}
+pub(crate) struct SimplifyOuterJoins;
 
 impl Rule for SimplifyOuterJoins {
-    /// A (non-empty) sequence of simplification actions to be performed.
-    type Match = Vec<Action>;
+    /// A (non-empty) sequence of boxes to be modified, together with
+    /// specifically which quantifiers are to be changed to type Foreach
+    type Match = Vec<(BoxId, Vec<QuantifierId>)>;
 
     fn name(&self) -> &'static str {
         "SimplifyOuterJoins"
@@ -78,7 +66,7 @@ impl Rule for SimplifyOuterJoins {
         // An optional match found at the current box.
         let mut mat = vec![] as Self::Match;
 
-        // A stack that keeps track of the number of randing quantifiers
+        // A stack that keeps track of the number of ranging quantifiers
         // associated with each box along the recursion trace.
         let quantifier_counts = RefCell::new(vec![] as Vec<usize>);
 
@@ -137,18 +125,20 @@ impl Rule for SimplifyOuterJoins {
                         let rej_lhs = rej_nulls_child.iter().any(|c| c.quantifier_id == lhs.id);
                         let rej_rhs = rej_nulls_child.iter().any(|c| c.quantifier_id == rhs.id);
 
-                        // TODO: this classification incomplete and probably incorrect
-                        match (rej_lhs, rej_rhs) {
-                            // If both sides are rejected, return a match that
-                            // indicates that this box should be converted to
-                            // an inner join.
-                            (true, true) => mat.push(Action::OuterToInner(r#box.id)),
-                            // If only one side is rejected, we need to check
-                            // which side it is.
-                            (true, false) => mat.push(Action::OuterToOuter(r#box.id, lhs.id)),
-                            (false, true) => mat.push(Action::OuterToOuter(r#box.id, rhs.id)),
-                            // If no side is rejected, do nothing.
-                            (false, false) => (),
+                        let mut quantifiers_to_change = Vec::new();
+
+                        // If null rows are rejected from LHS, and RHS is a
+                        // PreservedForeach quantifier, change the RHS to a Foreach
+                        // quantifier.
+                        if rej_lhs && rhs.quantifier_type == QuantifierType::PreservedForeach {
+                            quantifiers_to_change.push(rhs.id);
+                        }
+                        // And vice versa.
+                        if rej_rhs && lhs.quantifier_type == QuantifierType::PreservedForeach {
+                            quantifiers_to_change.push(lhs.id);
+                        }
+                        if !quantifiers_to_change.is_empty() {
+                            mat.push((*box_id, quantifiers_to_change));
                         }
                     };
 
@@ -183,7 +173,30 @@ impl Rule for SimplifyOuterJoins {
         }
     }
 
-    fn rewrite(&self, _model: &mut crate::query_model::Model, _mat: Self::Match) {
-        todo!()
+    fn rewrite(&self, model: &mut Model, mat: Self::Match) {
+        for (box_id, q_ids) in mat {
+            // Change the specified quantifiers to type Foreach.
+            for q_id in q_ids {
+                let mut q = model.get_mut_quantifier(q_id);
+                q.quantifier_type = QuantifierType::Foreach;
+            }
+
+            // If all the quantifiers in the box are type Foreach,
+            // convert the box to type Select.
+            let mut r#box = model.get_mut_box(box_id);
+            if r#box
+                .input_quantifiers()
+                .all(|q| q.quantifier_type == QuantifierType::Foreach)
+            {
+                let predicates = if let BoxType::OuterJoin(outer_join) = &r#box.box_type {
+                    Some(outer_join.predicates.clone())
+                } else {
+                    None
+                };
+                let mut select = Select::default();
+                select.predicates = predicates.unwrap();
+                r#box.box_type = BoxType::from(select);
+            }
+        }
     }
 }

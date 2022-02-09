@@ -128,7 +128,7 @@ impl Default for VisitOrder {
 pub fn rewrite_model(model: &mut Model) {
     let rules: Vec<Box<dyn ApplyRule>> = vec![
         // simplify outer joins first
-        Box::new(rule::simplify_outer_joins::SimplifyOuterJoins()) as Box<dyn ApplyRule>,
+        Box::new(rule::simplify_outer_joins::SimplifyOuterJoins),
     ];
     apply_rules_to_model(model, rules);
     model.garbage_collect();
