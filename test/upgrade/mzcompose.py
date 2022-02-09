@@ -88,7 +88,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument(
         "--tests",
-        metavar="S",
         choices=["all", "non-ssl", "ssl"],
         default="all",
         help="limit testing to certain scenarios",
