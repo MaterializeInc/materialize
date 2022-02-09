@@ -369,7 +369,21 @@ impl TimestampBindingBox {
                 ts = std::cmp::min(ts, partition_ts);
             }
         }
-        cap.downgrade(&ts);
+        match cap.try_downgrade(&ts) {
+            Ok(_) => (),
+            Err(e) => {
+                panic!(
+                    "error trying to downgrade {:?} to {}; cursors: {:?}, bindings: {:?}, upper: {}, compaction: {:?}, error: {}",
+                    cap,
+                    ts,
+                    cursors,
+                    self.partitions,
+                    self.upper(),
+                    self.compaction_frontier,
+                    e
+                );
+            }
+        }
     }
 
     fn get_or_propose_binding(&mut self, partition: &PartitionId, offset: MzOffset) -> Timestamp {
