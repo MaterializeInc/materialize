@@ -1482,9 +1482,14 @@ fn handle_message<S: SourceReader>(
     if let Some(len) = out.len() {
         *bytes_read += len;
     }
-    let ts_cap = cap.delayed(&ts);
 
-    output.session(&ts_cap).give(Ok(SourceOutput::new(
+    // NOTE: It is **very** important that we emit with the capability that we are given. This
+    // capability is also used to emit updates about the current read offset, and we need to make
+    // sure that these updates happen at the same timestamp, such that we can have a consistent
+    // state if/when the source restarts from persisted offsets/data.
+    //
+    // TODO: This futzes with the timestamp that emitted data has, not sure that's a problem.
+    output.session(&cap).give(Ok(SourceOutput::new(
         key,
         out,
         offset.offset,
