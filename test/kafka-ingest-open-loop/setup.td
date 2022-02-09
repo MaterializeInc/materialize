@@ -32,13 +32,25 @@ $ kafka-create-topic topic=load-test partitions=4
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE ${arg.envelope}
 
+# Create an intermediate view that applies meaningless filters (in the sense that
+# no data can get filtered out) which defeat the demand optimization that gets
+# pushed into non-persistent upsert.
+#
+# TODO: remove this once the optimization is pushed down into persistent upsert
+# as well.
+> CREATE VIEW intermediate AS SELECT key0, data, kafka_partition, mz_offset FROM load_test
+  WHERE key0 != '\\x0' AND
+  data != '\\x0' AND
+  kafka_partition != 10000 AND
+  mz_offset != -1
+
 # Render a dataflow that uses the source, but does a minimal amount of
 # work and keeps a minimal amount of data in memory.
 #
 # This view can be also be used to track how many records have been ingested when
 # the data is append only (ie no duplicate keys).
 > CREATE MATERIALIZED VIEW load_test_count AS SELECT
-  COUNT(*) FROM load_test;
+  COUNT(*) FROM intermediate;
 
 # Create a view so we can easily query the time that has fully been
 # closed in the load test.
