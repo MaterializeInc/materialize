@@ -490,6 +490,13 @@ where
     ) {
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
+        // This path results in a slightly smaller and faster
+        // dataflow graph, and is intended to fix
+        // https://github.com/MaterializeInc/materialize/issues/10507
+        if mfp_plan.is_identity() && !matches!(key_val, Some((_, Some(_)))) {
+            let key = key_val.map(|(k, _v)| k);
+            return self.as_specific_collection(key.as_deref());
+        }
         let (stream, errors) = self.flat_map(key_val, || {
             let mut row_builder = Row::default();
             let mut datum_vec = DatumVec::new();
