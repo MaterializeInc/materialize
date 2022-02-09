@@ -490,10 +490,19 @@ where
     ) {
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
-        // This path results in a slightly smaller and faster
+
+        // If the MFP is trivial, we can just call `as_collection`.
+        // In the case that we weren't going to apply the `key_val` optimization,
+        // this path results in a slightly smaller and faster
         // dataflow graph, and is intended to fix
         // https://github.com/MaterializeInc/materialize/issues/10507
-        if mfp_plan.is_identity() && !matches!(key_val, Some((_, Some(_)))) {
+        let has_key_val = if let Some((_key, Some(_val))) = &key_val {
+            true
+        } else {
+            false
+        };
+
+        if mfp_plan.is_identity() && !has_key_val {
             let key = key_val.map(|(k, _v)| k);
             return self.as_specific_collection(key.as_deref());
         }
