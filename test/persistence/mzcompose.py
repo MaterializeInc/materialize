@@ -31,6 +31,10 @@ mz_disable_user_indexes = Materialized(
     options=f"{mz_options} --disable-user-indexes",
 )
 
+mz_fast_metrics = Materialized(
+    options=f"{mz_options} --metrics-scraping-interval=1s",
+)
+
 prerequisites = ["zookeeper", "kafka", "schema-registry"]
 
 SERVICES = [
@@ -54,6 +58,7 @@ def workflow_default(c: Composition) -> None:
             workflow_failpoints(c)
 
     workflow_disable_user_indexes(c)
+    workflow_compaction(c)
 
 
 def workflow_kafka_sources(c: Composition) -> None:
@@ -143,6 +148,20 @@ def workflow_disable_user_indexes(c: Composition) -> None:
         c.wait_for_materialized()
 
         c.run("testdrive-svc", f"--seed={seed}", "disable-user-indexes/after.td")
+
+        c.kill("materialized")
+
+    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+
+    c.rm_volumes("mzdata")
+
+
+def workflow_compaction(c: Composition) -> None:
+    with c.override(mz_fast_metrics):
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        c.run("testdrive-svc", "compaction/compaction.td")
 
         c.kill("materialized")
 
