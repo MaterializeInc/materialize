@@ -3044,7 +3044,7 @@ fn plan_expr_inner<'a>(
 
         // Generalized functions, operators, and casts.
         Expr::Op { op, expr1, expr2 } => {
-            Ok(plan_op(ecx, op.op_str(), expr1, expr2.as_deref())?.into())
+            Ok(plan_op(ecx, normalize::op(op)?, expr1, expr2.as_deref())?.into())
         }
         Expr::Cast { expr, data_type } => plan_cast(ecx, expr, data_type),
         Expr::Function(func) => Ok(plan_function(ecx, func)?.into()),

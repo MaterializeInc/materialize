@@ -26,7 +26,7 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, TableFunction,
+    IfExistsBehavior, Op, Query, Raw, SqlOption, Statement, TableFactor, TableFunction,
     UnresolvedObjectName, Value, ViewDefinition,
 };
 
@@ -61,6 +61,22 @@ pub fn unresolved_object_name(mut name: UnresolvedObjectName) -> Result<PartialN
     };
     assert!(name.0.is_empty());
     Ok(out)
+}
+
+/// Normalizes an operator reference.
+///
+/// Qualified operators outside of the pg_catalog schema are rejected.
+pub fn op(op: &Op) -> Result<&str, PlanError> {
+    if !op.namespace.is_empty()
+        && (op.namespace.len() != 1 || op.namespace[0].as_str() != "pg_catalog")
+    {
+        sql_bail!(
+            "operator does not exist: {}.{}",
+            op.namespace.iter().map(|n| n.to_string()).join("."),
+            op.op,
+        )
+    }
+    Ok(&op.op)
 }
 
 /// Normalizes a list of `WITH` options.
