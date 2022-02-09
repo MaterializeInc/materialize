@@ -34,8 +34,6 @@ use mz_repr::{Diff, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
 
-use super::SinkBaseMetrics;
-
 impl<G> SinkRender<G> for TailSinkConnector
 where
     G: Scope<Timestamp = Timestamp>,
@@ -58,7 +56,6 @@ where
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
-        _metrics: &SinkBaseMetrics,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,

@@ -105,7 +105,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::rc::Weak;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
@@ -119,7 +119,6 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::activator::RcActivator;
-use itertools::Itertools;
 use mz_dataflow_types::*;
 use mz_expr::{GlobalId, Id};
 use mz_ore::collections::CollectionExt as _;
@@ -134,7 +133,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::sources::PersistedSourceManager;
 use crate::replay::MzReplay;
-use crate::server::LocalInput;
+use crate::server::{LocalInput, PendingPeek};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
@@ -170,6 +169,12 @@ pub struct ComputeState {
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Peek commands that are awaiting fulfillment.
+    pub(crate) pending_peeks: Vec<PendingPeek>,
+    /// Tracks the frontier information that has been sent over `response_tx`.
+    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Undocumented
+    pub sink_metrics: SinkBaseMetrics,
 }
 
 /// Worker-local state related to the ingress or egress of collections of data.
@@ -195,6 +200,14 @@ pub struct StorageState {
     pub metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
+    /// Tracks the timestamp binding durability information that has been sent over `response_tx`.
+    pub reported_bindings_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Tracks the last time we sent binding durability info over `response_tx`.
+    pub last_bindings_feedback: Instant,
+    /// Undocumented
+    pub now: NowFn,
+    /// Metrics for the source-specific side of dataflows.
+    pub source_metrics: SourceBaseMetrics,
 }
 
 /// Information about each source that must be communicated between storage and compute layers.
@@ -219,8 +232,6 @@ pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     dataflow: &DataflowDescription<plan::Plan>,
-    now: NowFn,
-    source_metrics: &SourceBaseMetrics,
 ) -> BTreeMap<GlobalId, SourceBoundary> {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -238,17 +249,6 @@ pub fn build_storage_dataflow<A: Allocate>(
             let dataflow_id = scope.addr().into_element();
             let debug_name = format!("{}-sources", dataflow.debug_name);
 
-            assert!(
-                !dataflow
-                    .source_imports
-                    .iter()
-                    .map(|(id, _src)| id)
-                    .duplicates()
-                    .next()
-                    .is_some(),
-                "computation of unique IDs assumes a source appears no more than once per dataflow"
-            );
-
             // Import declared sources into the rendering context.
             for (src_id, source) in &dataflow.source_imports {
                 let ((ok, err), token) = crate::render::sources::import_source(
@@ -260,8 +260,6 @@ pub fn build_storage_dataflow<A: Allocate>(
                     region,
                     materialized_logging.clone(),
                     src_id.clone(),
-                    now.clone(),
-                    source_metrics,
                 );
 
                 let ok_activator = RcActivator::new(format!("{debug_name}-ok"), 1);
@@ -300,7 +298,6 @@ pub fn build_compute_dataflow<A: Allocate>(
     compute_state: &mut ComputeState,
     sources: BTreeMap<GlobalId, SourceBoundary>,
     dataflow: DataflowDescription<plan::Plan>,
-    sink_metrics: &SinkBaseMetrics,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -380,14 +377,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Export declared sinks.
             for (sink_id, imports, sink) in sinks {
-                context.export_sink(
-                    compute_state,
-                    &mut tokens,
-                    imports,
-                    sink_id,
-                    &sink,
-                    sink_metrics,
-                );
+                context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
             }
         });
     })

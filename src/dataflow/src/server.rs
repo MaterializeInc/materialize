@@ -94,8 +94,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     assert!(config.workers > 0);
 
     let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
-    let dataflow_source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
-    let dataflow_sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
+    let source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
+    let sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream and send the responses to the coordinator.
@@ -131,8 +131,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
         let worker_idx = timely_worker.index();
         let metrics = metrics.clone();
         let trace_metrics = trace_metrics.clone();
-        let dataflow_source_metrics = dataflow_source_metrics.clone();
-        let dataflow_sink_metrics = dataflow_sink_metrics.clone();
+        let source_metrics = source_metrics.clone();
+        let sink_metrics = sink_metrics.clone();
         Worker {
             timely_worker,
             compute_state: ComputeState {
@@ -140,6 +140,9 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 dataflow_tokens: HashMap::new(),
                 tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 sink_write_frontiers: HashMap::new(),
+                pending_peeks: Vec::new(),
+                reported_frontiers: HashMap::new(),
+                sink_metrics,
             },
             storage_state: StorageState {
                 local_inputs: HashMap::new(),
@@ -149,18 +152,15 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 persisted_sources: PersistedSourceManager::new(),
                 metrics,
                 persist: config.persister.clone(),
+                reported_bindings_frontiers: HashMap::new(),
+                last_bindings_feedback: Instant::now(),
+                now: now.clone(),
+                source_metrics,
             },
             materialized_logger: None,
             command_rx,
-            pending_peeks: Vec::new(),
             response_tx,
-            reported_frontiers: HashMap::new(),
-            reported_bindings_frontiers: HashMap::new(),
-            last_bindings_feedback: Instant::now(),
-            metrics: server_metrics.for_worker_id(worker_idx),
-            now: now.clone(),
-            dataflow_source_metrics,
-            dataflow_sink_metrics,
+            command_metrics: server_metrics.for_worker_id(worker_idx),
         }
         .run()
     })
@@ -198,22 +198,10 @@ where
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
     command_rx: crossbeam_channel::Receiver<Command>,
-    /// Peek commands that are awaiting fulfillment.
-    pending_peeks: Vec<PendingPeek>,
     /// The channel over which frontier information is reported.
     response_tx: mpsc::UnboundedSender<Response>,
-    /// Tracks the frontier information that has been sent over `response_tx`.
-    reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Tracks the timestamp binding durability information that has been sent over `response_tx`.
-    reported_bindings_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Tracks the last time we sent binding durability info over `response_tx`.
-    last_bindings_feedback: Instant,
     /// Metrics bundle.
-    metrics: WorkerMetrics,
-    now: NowFn,
-    /// Metrics for the source-specific side of dataflows.
-    dataflow_source_metrics: SourceBaseMetrics,
-    dataflow_sink_metrics: SinkBaseMetrics,
+    command_metrics: WorkerMetrics,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -235,7 +223,7 @@ where
         // started, so that the logging sources can be joined with tables and
         // other real time sources for semi-sensible results.
         let now = Instant::now();
-        let unix = Duration::from_millis((self.now)());
+        let unix = Duration::from_millis((self.storage_state.now)());
 
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
@@ -415,7 +403,9 @@ where
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()));
-            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            self.compute_state
+                .reported_frontiers
+                .insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
         for (log, trace) in r_traces {
@@ -423,7 +413,9 @@ where
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()));
-            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            self.compute_state
+                .reported_frontiers
+                .insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
         for (log, trace) in d_traces {
@@ -431,7 +423,9 @@ where
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()));
-            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            self.compute_state
+                .reported_frontiers
+                .insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
         for (log, trace) in m_traces {
@@ -439,7 +433,9 @@ where
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()));
-            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            self.compute_state
+                .reported_frontiers
+                .insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
 
@@ -492,14 +488,15 @@ where
                     }
                 }
             }
-            self.metrics.observe_command_queue(&cmds);
+            self.command_metrics.observe_command_queue(&cmds);
             for cmd in cmds {
-                self.metrics.observe_command(&cmd);
+                self.command_metrics.observe_command(&cmd);
                 self.handle_command(cmd);
             }
 
-            self.metrics.observe_pending_peeks(&self.pending_peeks);
-            self.metrics.observe_command_finish();
+            self.command_metrics
+                .observe_pending_peeks(&self.compute_state.pending_peeks);
+            self.command_metrics.observe_command_finish();
             self.process_peeks();
             self.process_tails();
         }
@@ -534,6 +531,7 @@ where
             // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
             let prev_frontier = self
+                .compute_state
                 .reported_frontiers
                 .get_mut(&id)
                 .expect("Index frontier missing!");
@@ -555,6 +553,7 @@ where
         for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
+                .compute_state
                 .reported_frontiers
                 .get_mut(&id)
                 .expect("Sink frontier missing!");
@@ -578,7 +577,13 @@ where
     fn report_timestamp_bindings(&mut self) {
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
-        if self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS {
+        if self
+            .storage_state
+            .last_bindings_feedback
+            .elapsed()
+            .as_millis()
+            < TS_BINDING_FEEDBACK_INTERVAL_MS
+        {
             return;
         }
 
@@ -593,6 +598,7 @@ where
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
             let prev_frontier = self
+                .storage_state
                 .reported_bindings_frontiers
                 .get_mut(&id)
                 .expect("Frontier missing!");
@@ -628,7 +634,7 @@ where
                 TimestampBindingFeedback { changes, bindings },
             ));
         }
-        self.last_bindings_feedback = Instant::now();
+        self.storage_state.last_bindings_feedback = Instant::now();
     }
     /// Instruct all real-time sources managed by the worker to close their current
     /// timestamp and move to the next wall clock time.
@@ -658,11 +664,13 @@ where
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
-                        self.reported_frontiers
+                        self.compute_state
+                            .reported_frontiers
                             .insert(*sink_id, Antichain::from_elem(0));
                     }
                     for (idx_id, idx, _) in dataflow.index_exports.iter() {
-                        self.reported_frontiers
+                        self.compute_state
+                            .reported_frontiers
                             .insert(*idx_id, Antichain::from_elem(0));
                         if let Some(logger) = self.materialized_logger.as_mut() {
                             logger.log(MaterializedEvent::Dataflow(*idx_id, true));
@@ -680,8 +688,6 @@ where
                         self.timely_worker,
                         &mut self.storage_state,
                         &dataflow,
-                        self.now.clone(),
-                        &self.dataflow_source_metrics,
                     );
 
                     render::build_compute_dataflow(
@@ -689,14 +695,13 @@ where
                         &mut self.compute_state,
                         sources_captured,
                         dataflow,
-                        &self.dataflow_sink_metrics,
                     );
                 }
             }
 
             ComputeCommand::DropSinks(ids) => {
                 for id in ids {
-                    self.reported_frontiers.remove(&id);
+                    self.compute_state.reported_frontiers.remove(&id);
                     self.compute_state.sink_write_frontiers.remove(&id);
                     self.compute_state.dataflow_tokens.remove(&id);
                 }
@@ -705,6 +710,7 @@ where
                 for id in ids {
                     self.compute_state.traces.del_trace(&id);
                     let frontier = self
+                        .compute_state
                         .reported_frontiers
                         .remove(&id)
                         .expect("Dropped index with no frontier");
@@ -759,22 +765,23 @@ where
                 if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
                     self.send_peek_response(peek, response);
                 } else {
-                    self.pending_peeks.push(peek);
+                    self.compute_state.pending_peeks.push(peek);
                 }
-                self.metrics.observe_pending_peeks(&self.pending_peeks);
+                self.command_metrics
+                    .observe_pending_peeks(&self.compute_state.pending_peeks);
             }
 
             ComputeCommand::CancelPeek { conn_id } => {
-                let pending_peeks_len = self.pending_peeks.len();
+                let pending_peeks_len = self.compute_state.pending_peeks.len();
                 let mut pending_peeks = std::mem::replace(
-                    &mut self.pending_peeks,
+                    &mut self.compute_state.pending_peeks,
                     Vec::with_capacity(pending_peeks_len),
                 );
                 for peek in pending_peeks.drain(..) {
                     if peek.conn_id == conn_id {
                         self.send_peek_response(peek, PeekResponse::Canceled);
                     } else {
-                        self.pending_peeks.push(peek);
+                        self.compute_state.pending_peeks.push(peek);
                     }
                 }
             }
@@ -849,7 +856,7 @@ where
                 {
                     let rt_default = TimestampBindingRc::new(
                         ts_frequency.as_millis().try_into().unwrap(),
-                        self.now.clone(),
+                        self.storage_state.now.clone(),
                     );
                     match connector {
                         ExternalSourceConnector::AvroOcf(_)
@@ -902,8 +909,8 @@ where
 
                     let prev = self.storage_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
-                    self.reported_frontiers.insert(id, Antichain::from_elem(0));
-                    self.reported_bindings_frontiers
+                    self.storage_state
+                        .reported_bindings_frontiers
                         .insert(id, Antichain::from_elem(0));
                 } else {
                     assert!(bindings.is_empty());
@@ -931,8 +938,7 @@ where
                     tracing::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
 
-                self.reported_frontiers.remove(&id);
-                self.reported_bindings_frontiers.remove(&id);
+                self.storage_state.reported_bindings_frontiers.remove(&id);
             }
         }
     }
@@ -940,16 +946,16 @@ where
     /// Scan pending peeks and attempt to retire each.
     fn process_peeks(&mut self) {
         let mut upper = Antichain::new();
-        let pending_peeks_len = self.pending_peeks.len();
+        let pending_peeks_len = self.compute_state.pending_peeks.len();
         let mut pending_peeks = std::mem::replace(
-            &mut self.pending_peeks,
+            &mut self.compute_state.pending_peeks,
             Vec::with_capacity(pending_peeks_len),
         );
         for mut peek in pending_peeks.drain(..) {
             if let Some(response) = peek.seek_fulfillment(&mut upper) {
                 self.send_peek_response(peek, response);
             } else {
-                self.pending_peeks.push(peek);
+                self.compute_state.pending_peeks.push(peek);
             }
         }
     }
@@ -1000,7 +1006,7 @@ pub struct LocalInput {
 ///
 /// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
 /// as each `PendingPeek` is meant to be dropped after it's responded to.
-struct PendingPeek {
+pub(crate) struct PendingPeek {
     /// The identifier of the dataflow to peek.
     id: GlobalId,
     /// An optional key to use for the arrangement.

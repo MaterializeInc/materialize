@@ -60,7 +60,7 @@ use mz_repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
-use super::{KafkaBaseMetrics, SinkBaseMetrics};
+use super::KafkaBaseMetrics;
 use crate::render::sinks::SinkRender;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -88,7 +88,6 @@ where
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
-        metrics: &SinkBaseMetrics,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -140,7 +139,7 @@ where
             self.value_desc.clone(),
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
-            &metrics.kafka,
+            &compute_state.sink_metrics.kafka,
         );
 
         compute_state
