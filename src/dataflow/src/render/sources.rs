@@ -29,7 +29,6 @@ use mz_persist_types::Codec;
 use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
 use mz_dataflow_types::*;
 use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
-use mz_ore::now::NowFn;
 use mz_repr::{Diff, Row, Timestamp};
 use timely::progress::Antichain;
 
@@ -42,7 +41,6 @@ use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
 use crate::render::StorageState;
 use crate::server::LocalInput;
-use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::{
     self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
@@ -144,8 +142,6 @@ pub(crate) fn import_source<G>(
     scope: &mut G,
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
-    now: NowFn,
-    base_metrics: &SourceBaseMetrics,
 ) -> (
     (Collection<G, Row>, Collection<G, DataflowError>),
     Rc<dyn std::any::Any>,
@@ -244,8 +240,8 @@ where
                 worker_count: scope.peers(),
                 logger: materialized_logging,
                 encoding: encoding.clone(),
-                now,
-                base_metrics,
+                now: storage_state.now.clone(),
+                base_metrics: &storage_state.source_metrics,
             };
 
             let (mut collection, capability) = if let ExternalSourceConnector::PubNub(

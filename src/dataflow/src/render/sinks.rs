@@ -24,7 +24,6 @@ use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format}
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
-use crate::sink::SinkBaseMetrics;
 
 impl<G> Context<G, Row, Timestamp>
 where
@@ -38,7 +37,6 @@ where
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
-        metrics: &SinkBaseMetrics,
     ) {
         let sink_render = get_sink_render_for(&sink.connector);
 
@@ -80,7 +78,7 @@ where
         // if we figure out a protocol for that.
 
         let sink_token =
-            sink_render.render_continuous_sink(compute_state, sink, sink_id, collection, metrics);
+            sink_render.render_continuous_sink(compute_state, sink, sink_id, collection);
 
         if let Some(sink_token) = sink_token {
             needed_tokens.push(sink_token);
@@ -219,7 +217,6 @@ where
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
-        metrics: &SinkBaseMetrics,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>;
