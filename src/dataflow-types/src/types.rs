@@ -1485,6 +1485,7 @@ pub mod sinks {
 
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
     use timely::progress::frontier::Antichain;
@@ -1647,8 +1648,8 @@ pub mod sinks {
 
     #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
     pub struct KafkaSinkConnectorRetention {
-        pub retention_ms: Option<i64>,
-        pub retention_bytes: Option<i64>,
+        pub duration: Option<Option<Duration>>,
+        pub bytes: Option<i64>,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

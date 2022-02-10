@@ -1557,15 +1557,15 @@ fn kafka_sink_builder(
         );
     }
 
-    let retention_ms = match with_options.remove("retention_ms") {
+    let retention_duration = match with_options.remove("retention_ms") {
         None => None,
-        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(Value::Number(n)) => match n.parse::<i64>()? {
+            -1 => Some(None),
+            millis @ 0.. => Some(Some(Duration::from_millis(millis as u64))),
+            _ => bail!("retention ms for sink topics must be greater than or equal to -1"),
+        },
         Some(_) => bail!("retention ms for sink topics must be an integer"),
     };
-
-    if retention_ms.unwrap_or(0) < -1 {
-        bail!("retention ms for sink topics must be greater than or equal to -1");
-    }
 
     let retention_bytes = match with_options.remove("retention_bytes") {
         None => None,
@@ -1577,8 +1577,8 @@ fn kafka_sink_builder(
         bail!("retention bytes for sink topics must be greater than or equal to -1");
     }
     let retention = KafkaSinkConnectorRetention {
-        retention_ms,
-        retention_bytes,
+        duration: retention_duration,
+        bytes: retention_bytes,
     };
 
     let consistency_topic = consistency_config.clone().map(|config| config.0);
