@@ -19,7 +19,7 @@ set -euo pipefail
 ci_init
 
 while read -r binary cwd; do
-    (cd "$cwd" && ci_try "/tests/$binary" --nocapture -Z unstable-options --format json --report-time | tee -a $MZ_ROOT/results.json && cd "$OLDPWD")
+    (cd "$cwd" && ci_try "/tests/$binary" --nocapture -Z unstable-options --format json --report-time | tee -a $MZ_ROOT/results.json)
 done < /tests/manifest
 
 ci_status_report
