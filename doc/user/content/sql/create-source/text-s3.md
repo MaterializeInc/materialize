@@ -23,6 +23,10 @@ contain multiple byte- or text-encoded records, separated by newlines.
 
 {{< diagram "with-options-aws.svg" >}}
 
+#### `static_credentials`
+
+{{< diagram "with-options-aws-static.svg" >}}
+
 {{% create-source/syntax-details connector="s3" formats="regex text bytes" envelopes="append-only" keyConstraint=true %}}
 
 ## Examples

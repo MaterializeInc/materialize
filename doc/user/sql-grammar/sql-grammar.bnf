@@ -476,12 +476,20 @@ update_stmt ::=
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
 with_options ::= 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
-with_options_aws ::=
-  'WITH' '('
+with_options_aws ::= 'WITH' '('
     (
-      ( 'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )? )
-      | ( 'profile_name' '=' val )
-    )?
-    ( 'role_arn' '=' val (',' 'external_id' '=' val )? )?
-    ( 'region' '=' val )?
-  ')'
+      static_credentials
+      | 'profile_name' '=' val
+      | 'role_arn' '=' val
+      | 'region' '=' val
+    )
+    (
+      static_credentials
+      | 'profile_name' '=' val
+      | 'role_arn' '=' val
+      | 'region' '=' val
+    )*
+    ')'
+
+with_options_aws_static ::=
+  'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?

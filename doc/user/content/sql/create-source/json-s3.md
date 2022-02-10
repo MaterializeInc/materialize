@@ -19,6 +19,10 @@ contain multiple records serialized as JSON, separated by newlines.
 
 {{< diagram "with-options-aws.svg" >}}
 
+#### `static_credentials`
+
+{{< diagram "with-options-aws-static.svg" >}}
+
 {{% create-source/syntax-details connector="s3" formats="text bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Example

@@ -31,6 +31,10 @@ streams.
 
 {{< diagram "with-options-aws.svg" >}}
 
+#### `static_credentials`
+
+{{< diagram "with-options-aws-static.svg" >}}
+
 {{% create-source/syntax-details connector="kinesis" formats="csv" envelopes="append-only" keyConstraint=true %}}
 
 ## Example
