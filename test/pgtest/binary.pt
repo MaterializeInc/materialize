@@ -1,0 +1,17 @@
+# Test binary encodings
+
+send
+Parse {"query": "SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[107, 73, 209, 255, 255, 255, 255, 255, 127, 255, 255, 255, 0, 0, 0, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
