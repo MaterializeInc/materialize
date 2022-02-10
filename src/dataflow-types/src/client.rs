@@ -762,7 +762,9 @@ pub mod partitioned {
             // }
             // self.buffer.drain(0..offset).collect()
             differential_dataflow::consolidation::consolidate_updates(&mut self.buffer);
-            let split_point = self.buffer.partition_point(|(t, _, _)| !upper.less_equal(t));
+            let split_point = self
+                .buffer
+                .partition_point(|(t, _, _)| !upper.less_equal(t));
             self.buffer.drain(0..split_point).collect()
         }
 
