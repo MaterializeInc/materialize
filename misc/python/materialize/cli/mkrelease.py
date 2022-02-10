@@ -259,7 +259,8 @@ def release(
     if create_branch is not None:
         git.create_branch(create_branch)
 
-    confirm_on_latest_rc(affect_remote)
+    if not version.prerelease:
+        confirm_on_latest_rc(affect_remote)
 
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
