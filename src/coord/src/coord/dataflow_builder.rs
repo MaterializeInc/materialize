@@ -108,9 +108,8 @@ impl<'a> DataflowBuilder<'a> {
                         dataflow.import_source(*id, source_description, persist_details);
                     }
                     CatalogItem::Source(source) => {
-                        if source.connector.requires_single_materialization() {
-                            let source_type =
-                                RematerializedSourceType::for_connector(&source.connector);
+                        if source.requires_single_materialization() {
+                            let source_type = RematerializedSourceType::for_source(source);
                             let dependent_indexes = self.catalog.dependent_indexes(*id);
                             // If this source relies on any pre-existing indexes (i.e., indexes
                             // that we're not building as part of this `DataflowBuilder`), we're
