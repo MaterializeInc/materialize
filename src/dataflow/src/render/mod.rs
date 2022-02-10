@@ -104,18 +104,22 @@ use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
+use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::*;
 use mz_expr::{GlobalId, Id};
+use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{Row, Timestamp};
 
 use crate::arrangement::manager::TraceBundle;
 pub use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::ComputeState;
+use crate::server::boundary::{ComputeReplay, StorageCapture};
+use crate::server::{ComputeState, StorageState};
 
 pub mod context;
 mod debezium;
@@ -128,6 +132,135 @@ pub mod sources;
 mod threshold;
 mod top_k;
 mod upsert;
+
+/// Assemble the "storage" side of a dataflow, i.e. the sources.
+///
+/// This method creates a new dataflow to host the implementations of sources for the `dataflow`
+/// argument, and returns assets for each source that can import the results into a new dataflow.
+pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
+    timely_worker: &mut TimelyWorker<A>,
+    storage_state: &mut StorageState,
+    dataflow: &DataflowDescription<mz_dataflow_types::plan::Plan>,
+    boundary: &mut B,
+) {
+    let worker_logging = timely_worker.log_register().get("timely");
+    let name = format!("Dataflow: {}", &dataflow.debug_name);
+    let materialized_logging = timely_worker.log_register().get("materialized");
+
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // The scope.clone() occurs to allow import in the region.
+        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // so that other similar uses (e.g. with iterative scopes) do not require weird
+        // alternate type signatures.
+        scope.clone().region_named(&name, |region| {
+            let as_of = dataflow.as_of.clone().unwrap();
+            let dataflow_id = scope.addr().into_element();
+            let debug_name = format!("{}-sources", dataflow.debug_name);
+
+            // Import declared sources into the rendering context.
+            for (src_id, source) in &dataflow.source_imports {
+                let ((ok, err), token) = crate::render::sources::import_source(
+                    &debug_name,
+                    dataflow_id,
+                    &as_of,
+                    source.clone(),
+                    storage_state,
+                    region,
+                    materialized_logging.clone(),
+                    src_id.clone(),
+                );
+
+                boundary.capture(*src_id, ok, err, token, &debug_name);
+            }
+        })
+    });
+}
+
+/// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
+///
+/// This method imports sources from provided assets, and then builds the remaining
+/// dataflow using "compute-local" assets like shared arrangements, and producing
+/// both arrangements and sinks.
+pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
+    timely_worker: &mut TimelyWorker<A>,
+    compute_state: &mut ComputeState,
+    dataflow: DataflowDescription<mz_dataflow_types::plan::Plan>,
+    boundary: &mut B,
+) {
+    let worker_logging = timely_worker.log_register().get("timely");
+    let name = format!("Dataflow: {}", &dataflow.debug_name);
+
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // The scope.clone() occurs to allow import in the region.
+        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // so that other similar uses (e.g. with iterative scopes) do not require weird
+        // alternate type signatures.
+        scope.clone().region_named(&name, |region| {
+            let mut context = crate::render::context::Context::for_dataflow(
+                &dataflow,
+                scope.addr().into_element(),
+            );
+            let mut tokens = BTreeMap::new();
+
+            // Import declared sources into the rendering context.
+            for source_id in dataflow.source_imports.keys() {
+                if let Some((ok, err, token)) =
+                    boundary.replay(*source_id, region, &format!("{name}-{source_id}"))
+                {
+                    // Associate collection bundle with the source identifier.
+                    context.insert_id(
+                        mz_expr::Id::Global(*source_id),
+                        crate::render::CollectionBundle::from_collections(ok, err),
+                    );
+                    // Associate returned tokens with the source identifier.
+                    tokens.insert(*source_id, token);
+                } else {
+                    panic!("Unable to replay source: {source_id}");
+                }
+            }
+
+            // Import declared indexes into the rendering context.
+            for (idx_id, idx) in &dataflow.index_imports {
+                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
+            }
+
+            // We first determine indexes and sinks to export, then build the declared object, and
+            // finally export indexes and sinks. The reason for this is that we want to avoid
+            // cloning the dataflow plan for `build_object`, which can be expensive.
+
+            // Determine indexes to export
+            let indexes = dataflow
+                .index_exports
+                .iter()
+                .cloned()
+                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.get_imports(&idx.on_id), idx))
+                .collect::<Vec<_>>();
+
+            // Determine sinks to export
+            let sinks = dataflow
+                .sink_exports
+                .iter()
+                .cloned()
+                .map(|(sink_id, sink)| (sink_id, dataflow.get_imports(&sink.from), sink))
+                .collect::<Vec<_>>();
+
+            // Build declared objects.
+            for object in dataflow.objects_to_build {
+                context.build_object(region, object);
+            }
+
+            // Export declared indexes.
+            for (idx_id, imports, idx) in indexes {
+                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
+            }
+
+            // Export declared sinks.
+            for (sink_id, imports, sink) in sinks {
+                context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
+            }
+        });
+    })
+}
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where

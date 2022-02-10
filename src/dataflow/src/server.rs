@@ -45,9 +45,11 @@ use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
+pub mod boundary;
 mod compute_state;
 mod metrics;
 mod storage_state;
+
 use compute_state::ActiveComputeState;
 pub(crate) use compute_state::ComputeState;
 use storage_state::ActiveStorageState;
@@ -285,17 +287,20 @@ where
                         }
                     }
 
-                    let sources_captured = storage_state::build_storage_dataflow(
+                    let mut boundary = boundary::EventLinkBoundary::new();
+
+                    crate::render::build_storage_dataflow(
                         self.timely_worker,
                         &mut self.storage_state,
                         &dataflow,
+                        &mut boundary,
                     );
 
-                    compute_state::build_compute_dataflow(
+                    crate::render::build_compute_dataflow(
                         self.timely_worker,
                         &mut self.compute_state,
-                        sources_captured,
                         dataflow,
+                        &mut boundary,
                     );
                 }
             }

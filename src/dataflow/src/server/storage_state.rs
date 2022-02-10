@@ -3,13 +3,11 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-use std::collections::{BTreeMap, HashMap};
-use std::rc::{Rc, Weak};
+use std::collections::HashMap;
+use std::rc::Weak;
 use std::time::Instant;
 
 use timely::communication::Allocate;
-use timely::dataflow::operators::capture::EventLink;
-use timely::dataflow::Scope;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
@@ -20,18 +18,14 @@ use mz_dataflow_types::client::{
     Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_dataflow_types::DataflowDescription;
 use mz_expr::{GlobalId, PartitionId};
-use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
 use mz_repr::Timestamp;
 
-use crate::activator::RcActivator;
-use crate::event::ActivatedEventPusher;
 use crate::metrics::Metrics;
 use crate::render::sources::PersistedSourceManager;
-use crate::server::{LocalInput, SourceBoundary};
+use crate::server::LocalInput;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
@@ -77,72 +71,7 @@ pub struct StorageState {
     pub timely_worker_peers: usize,
 }
 
-/// Assemble the "storage" side of a dataflow, i.e. the sources.
-///
-/// This method creates a new dataflow to host the implementations of sources for the `dataflow`
-/// argument, and returns assets for each source that can import the results into a new dataflow.
-pub fn build_storage_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
-    storage_state: &mut StorageState,
-    dataflow: &DataflowDescription<mz_dataflow_types::plan::Plan>,
-) -> BTreeMap<GlobalId, SourceBoundary> {
-    let worker_logging = timely_worker.log_register().get("timely");
-    let name = format!("Dataflow: {}", &dataflow.debug_name);
-    let materialized_logging = timely_worker.log_register().get("materialized");
-
-    let mut results = BTreeMap::new();
-
-    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow,
-        // so that other similar uses (e.g. with iterative scopes) do not require weird
-        // alternate type signatures.
-        scope.clone().region_named(&name, |region| {
-            let as_of = dataflow.as_of.clone().unwrap();
-            let dataflow_id = scope.addr().into_element();
-            let debug_name = format!("{}-sources", dataflow.debug_name);
-
-            // Import declared sources into the rendering context.
-            for (src_id, source) in &dataflow.source_imports {
-                let ((ok, err), token) = crate::render::sources::import_source(
-                    &debug_name,
-                    dataflow_id,
-                    &as_of,
-                    source.clone(),
-                    storage_state,
-                    region,
-                    materialized_logging.clone(),
-                    src_id.clone(),
-                );
-
-                let ok_activator = RcActivator::new(format!("{debug_name}-ok"), 1);
-                let err_activator = RcActivator::new(format!("{debug_name}-err"), 1);
-
-                let ok_handle =
-                    ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator.clone());
-                let err_handle =
-                    ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator.clone());
-
-                results.insert(
-                    *src_id,
-                    SourceBoundary {
-                        ok: ActivatedEventPusher::<_>::clone(&ok_handle),
-                        err: ActivatedEventPusher::<_>::clone(&err_handle),
-                        token,
-                    },
-                );
-
-                use timely::dataflow::operators::Capture;
-
-                ok.inner.capture_into(ok_handle);
-                err.inner.capture_into(err_handle);
-            }
-        })
-    });
-
-    results
-}
-
+/// A wrapper around [StorageState] with a live timely worker and response channel.
 pub struct ActiveStorageState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
@@ -153,81 +82,7 @@ pub struct ActiveStorageState<'a, A: Allocate> {
 }
 
 impl<'a, A: Allocate> ActiveStorageState<'a, A> {
-    /// Send information about new timestamp bindings created by dataflow workers back to
-    /// the coordinator.
-    pub fn report_timestamp_bindings(&mut self) {
-        // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
-        // the last time we reported timestamp bindings.
-        if self
-            .storage_state
-            .last_bindings_feedback
-            .elapsed()
-            .as_millis()
-            < TS_BINDING_FEEDBACK_INTERVAL_MS
-        {
-            return;
-        }
-
-        let mut changes = Vec::new();
-        let mut bindings = Vec::new();
-        let mut new_frontier = Antichain::new();
-
-        // Need to go through all sources that are generating timestamp bindings, and extract their upper frontiers.
-        // If that frontier is different than the durability frontier we've previously reported then we also need to
-        // get the new bindings we've produced and send them to the coordinator.
-        for (id, history) in self.storage_state.ts_histories.iter() {
-            // Read the upper frontier and compare to what we've reported.
-            history.read_upper(&mut new_frontier);
-            let prev_frontier = self
-                .storage_state
-                .reported_bindings_frontiers
-                .get_mut(&id)
-                .expect("Frontier missing!");
-            assert!(<_ as PartialOrder>::less_equal(
-                prev_frontier,
-                &new_frontier
-            ));
-            if prev_frontier != &new_frontier {
-                let mut change_batch = ChangeBatch::new();
-                for time in prev_frontier.elements().iter() {
-                    change_batch.update(time.clone(), -1);
-                }
-                for time in new_frontier.elements().iter() {
-                    change_batch.update(time.clone(), 1);
-                }
-                change_batch.compact();
-                if !change_batch.is_empty() {
-                    changes.push((*id, change_batch));
-                }
-                // Add all timestamp bindings we know about between the old and new frontier.
-                bindings.extend(
-                    history
-                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow())
-                        .into_iter()
-                        .map(|(pid, ts, offset)| (*id, pid, ts, offset)),
-                );
-                prev_frontier.clone_from(&new_frontier);
-            }
-        }
-
-        if !changes.is_empty() || !bindings.is_empty() {
-            self.send_storage_response(StorageResponse::TimestampBindings(
-                TimestampBindingFeedback { changes, bindings },
-            ));
-        }
-        self.storage_state.last_bindings_feedback = Instant::now();
-    }
-    /// Instruct all real-time sources managed by the worker to close their current
-    /// timestamp and move to the next wall clock time.
-    ///
-    /// Needs to be called periodically (ideally once per "timestamp_frequency" in order
-    /// for real time sources to make progress.
-    pub fn update_rt_timestamps(&self) {
-        for (_, history) in self.storage_state.ts_histories.iter() {
-            history.update_timestamp();
-        }
-    }
-
+    /// Entry point for applying a storage command.
     pub(crate) fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::CreateSources(_sources) => {
@@ -370,6 +225,80 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
 
                 self.storage_state.reported_bindings_frontiers.remove(&id);
             }
+        }
+    }
+    /// Send information about new timestamp bindings created by dataflow workers back to
+    /// the coordinator.
+    pub fn report_timestamp_bindings(&mut self) {
+        // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
+        // the last time we reported timestamp bindings.
+        if self
+            .storage_state
+            .last_bindings_feedback
+            .elapsed()
+            .as_millis()
+            < TS_BINDING_FEEDBACK_INTERVAL_MS
+        {
+            return;
+        }
+
+        let mut changes = Vec::new();
+        let mut bindings = Vec::new();
+        let mut new_frontier = Antichain::new();
+
+        // Need to go through all sources that are generating timestamp bindings, and extract their upper frontiers.
+        // If that frontier is different than the durability frontier we've previously reported then we also need to
+        // get the new bindings we've produced and send them to the coordinator.
+        for (id, history) in self.storage_state.ts_histories.iter() {
+            // Read the upper frontier and compare to what we've reported.
+            history.read_upper(&mut new_frontier);
+            let prev_frontier = self
+                .storage_state
+                .reported_bindings_frontiers
+                .get_mut(&id)
+                .expect("Frontier missing!");
+            assert!(<_ as PartialOrder>::less_equal(
+                prev_frontier,
+                &new_frontier
+            ));
+            if prev_frontier != &new_frontier {
+                let mut change_batch = ChangeBatch::new();
+                for time in prev_frontier.elements().iter() {
+                    change_batch.update(time.clone(), -1);
+                }
+                for time in new_frontier.elements().iter() {
+                    change_batch.update(time.clone(), 1);
+                }
+                change_batch.compact();
+                if !change_batch.is_empty() {
+                    changes.push((*id, change_batch));
+                }
+                // Add all timestamp bindings we know about between the old and new frontier.
+                bindings.extend(
+                    history
+                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow())
+                        .into_iter()
+                        .map(|(pid, ts, offset)| (*id, pid, ts, offset)),
+                );
+                prev_frontier.clone_from(&new_frontier);
+            }
+        }
+
+        if !changes.is_empty() || !bindings.is_empty() {
+            self.send_storage_response(StorageResponse::TimestampBindings(
+                TimestampBindingFeedback { changes, bindings },
+            ));
+        }
+        self.storage_state.last_bindings_feedback = Instant::now();
+    }
+    /// Instruct all real-time sources managed by the worker to close their current
+    /// timestamp and move to the next wall clock time.
+    ///
+    /// Needs to be called periodically (ideally once per "timestamp_frequency" in order
+    /// for real time sources to make progress.
+    pub fn update_rt_timestamps(&self) {
+        for (_, history) in self.storage_state.ts_histories.iter() {
+            history.update_timestamp();
         }
     }
 

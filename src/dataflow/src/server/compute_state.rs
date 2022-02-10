@@ -5,15 +5,14 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::Collection;
 use timely::communication::Allocate;
-use timely::dataflow::Scope;
 use timely::logging::Logger;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -24,9 +23,8 @@ use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, Response};
 use mz_dataflow_types::logging::LoggingConfig;
-use mz_dataflow_types::{DataflowDescription, DataflowError, PeekResponse, TailResponse};
+use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_expr::GlobalId;
-use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::Timestamp;
 
 use crate::activator::RcActivator;
@@ -34,8 +32,7 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
-use crate::replay::MzReplay;
-use crate::server::{PendingPeek, SourceBoundary};
+use crate::server::PendingPeek;
 use crate::sink::SinkBaseMetrics;
 
 /// Worker-local state that is maintained across dataflows.
@@ -66,104 +63,7 @@ pub struct ComputeState {
     pub materialized_logger: Option<logging::materialized::Logger>,
 }
 
-/// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
-///
-/// This method imports sources from provided assets, and then builds the remaining
-/// dataflow using "compute-local" assets like shared arrangements, and producing
-/// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
-    compute_state: &mut ComputeState,
-    sources: BTreeMap<GlobalId, SourceBoundary>,
-    dataflow: DataflowDescription<mz_dataflow_types::plan::Plan>,
-) {
-    let worker_logging = timely_worker.log_register().get("timely");
-    let name = format!("Dataflow: {}", &dataflow.debug_name);
-
-    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow,
-        // so that other similar uses (e.g. with iterative scopes) do not require weird
-        // alternate type signatures.
-        scope.clone().region_named(&name, |region| {
-            let mut context = crate::render::context::Context::for_dataflow(
-                &dataflow,
-                scope.addr().into_element(),
-            );
-            let mut tokens = BTreeMap::new();
-
-            // Import declared sources into the rendering context.
-            for (source_id, source) in sources.into_iter() {
-                // Associate collection bundle with the source identifier.
-                let ok = Some(source.ok.inner)
-                    .mz_replay(
-                        region,
-                        &format!("{name}-{source_id}"),
-                        Duration::MAX,
-                        source.ok.activator,
-                    )
-                    .as_collection();
-                let err = Some(source.err.inner)
-                    .mz_replay(
-                        region,
-                        &format!("{name}-{source_id}-err"),
-                        Duration::MAX,
-                        source.err.activator,
-                    )
-                    .as_collection();
-                context.insert_id(
-                    mz_expr::Id::Global(source_id),
-                    crate::render::CollectionBundle::from_collections(ok, err),
-                );
-
-                // Associate returned tokens with the source identifier.
-                let prior = tokens.insert(source_id, source.token);
-                assert!(prior.is_none());
-            }
-
-            // Import declared indexes into the rendering context.
-            for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
-            }
-
-            // We first determine indexes and sinks to export, then build the declared object, and
-            // finally export indexes and sinks. The reason for this is that we want to avoid
-            // cloning the dataflow plan for `build_object`, which can be expensive.
-
-            // Determine indexes to export
-            let indexes = dataflow
-                .index_exports
-                .iter()
-                .cloned()
-                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.get_imports(&idx.on_id), idx))
-                .collect::<Vec<_>>();
-
-            // Determine sinks to export
-            let sinks = dataflow
-                .sink_exports
-                .iter()
-                .cloned()
-                .map(|(sink_id, sink)| (sink_id, dataflow.get_imports(&sink.from), sink))
-                .collect::<Vec<_>>();
-
-            // Build declared objects.
-            for object in dataflow.objects_to_build {
-                context.build_object(region, object);
-            }
-
-            // Export declared indexes.
-            for (idx_id, imports, idx) in indexes {
-                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
-            }
-
-            // Export declared sinks.
-            for (sink_id, imports, sink) in sinks {
-                context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
-            }
-        });
-    })
-}
-
+/// A wrapper around [ComputeState] with a live timely worker and response channel.
 pub struct ActiveComputeState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
@@ -174,6 +74,7 @@ pub struct ActiveComputeState<'a, A: Allocate> {
 }
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
+    /// Entrypoint for applying a compute command.
     pub(crate) fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
             ComputeCommand::CreateInstance | ComputeCommand::DropInstance => {
