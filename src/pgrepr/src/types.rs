@@ -461,7 +461,7 @@ impl TryFrom<&Type> for ScalarType {
                 max_scale,
                 max_precision,
             } => {
-                if max_precision > &(NUMERIC_DATUM_MAX_PRECISION.try_into().unwrap()) {
+                if *max_precision > u16::from(NUMERIC_DATUM_MAX_PRECISION) {
                     bail!("requested max_precision: {max_precision} exeeds Materialize limit: {NUMERIC_DATUM_MAX_PRECISION}")
                 }
 
