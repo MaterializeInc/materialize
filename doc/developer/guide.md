@@ -156,6 +156,13 @@ source ~/.bashrc
 confluent local services start
 ```
 
+If you have multiple JDKs installed and your current JAVA_HOME points to an incompatible version, 
+you can explicitly run confluent with JDK 8 or 11:
+
+```
+JAVA_HOME=$(/usr/libexec/java_home -v 1.8) confluent local services start
+```
+
 #### Linux
 
 On Debian-based Linux variants, you can use APT to install Java and the
