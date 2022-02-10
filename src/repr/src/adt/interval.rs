@@ -64,13 +64,14 @@ impl Interval {
         // equivalent to:
         // ```
         // SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds';
-        // SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds';
+        // SELECT INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds';
         // ```
         if i.duration > 193_273_528_233_599_999_999_000
-            || i.duration < -193_273_528_233_599_999_999_000
+            || i.duration < -193_273_528_323_599_999_999_000
         {
             bail!(
-                "exceeds min/max interval duration +/-(2147483647 days 2147483647 hours \
+                "exceeds min/max interval duration +(2147483647 days 2147483647 hours \
+                59 minutes 59.999999 seconds)/-(2147483648 days 2147483648 hours \
                 59 minutes 59.999999 seconds)"
             )
         } else {
