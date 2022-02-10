@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::rc::Weak;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
@@ -32,7 +32,7 @@ use crate::source::SourceToken;
 
 /// How frequently each dataflow worker sends timestamp binding updates
 /// back to the coordinator.
-static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
+const TS_BINDING_FEEDBACK_INTERVAL: Duration = Duration::from_millis(1_000);
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
@@ -232,13 +232,7 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
     pub fn report_timestamp_bindings(&mut self) {
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
-        if self
-            .storage_state
-            .last_bindings_feedback
-            .elapsed()
-            .as_millis()
-            < TS_BINDING_FEEDBACK_INTERVAL_MS
-        {
+        if self.storage_state.last_bindings_feedback.elapsed() < TS_BINDING_FEEDBACK_INTERVAL {
             return;
         }
 
