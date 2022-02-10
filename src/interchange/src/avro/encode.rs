@@ -13,16 +13,17 @@ use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_avro::types::AvroMap;
+use serde_json::json;
+
+use mz_avro::types::{AvroMap, DecimalValue, Value};
+use mz_avro::Schema;
+use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
-use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::json::build_row_schema_json;
-use mz_avro::types::{DecimalValue, Value};
-use mz_avro::Schema;
 
 lazy_static! {
     // TODO(rkhaitan): this schema intentionally omits the data_collections field
@@ -308,7 +309,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                             (
                                 numeric::numeric_to_twos_complement_be(d).to_vec(),
                                 NUMERIC_DATUM_MAX_PRECISION,
-                                usize::from(*scale),
+                                *scale,
                             )
                         }
                         // Decimals without specified scale must nonetheless be
@@ -323,8 +324,8 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     };
                     Value::Decimal(DecimalValue {
                         unscaled,
-                        precision,
-                        scale,
+                        precision: usize::cast_from(precision),
+                        scale: usize::cast_from(scale),
                     })
                 }
                 ScalarType::Date => Value::Date(datum.unwrap_date()),

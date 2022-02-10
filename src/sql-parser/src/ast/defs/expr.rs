@@ -22,7 +22,7 @@ use std::fmt;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
+use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
 
 /// An SQL expression of any type.
 ///
@@ -97,7 +97,7 @@ pub enum Expr<T: AstInfo> {
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr<T>>,
-        data_type: DataType<T>,
+        data_type: T::DataType,
     },
     /// `expr COLLATE collation`
     Collate {
@@ -562,44 +562,42 @@ impl<T: AstInfo> Expr<T> {
     }
 }
 
+/// A reference to an operator.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Op {
-    Bare(String),
-    Qualified { schema: Vec<Ident>, name: String },
+pub struct Op {
+    /// Any namespaces that preceded the operator.
+    pub namespace: Vec<Ident>,
+    /// The operator itself.
+    pub op: String,
 }
 
 impl AstDisplay for Op {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Op::Bare(s) => f.write_str(s),
-            Op::Qualified { schema, name } => {
-                f.write_str("OPERATOR(");
-                for part in schema {
-                    f.write_node(part);
-                    f.write_str(".");
-                }
-                f.write_str(&name);
-                f.write_str(")");
+        if self.namespace.is_empty() {
+            f.write_str(&self.op)
+        } else {
+            f.write_str("OPERATOR(");
+            for name in &self.namespace {
+                f.write_node(name);
+                f.write_str(".");
             }
+            f.write_str(&self.op);
+            f.write_str(")");
         }
     }
 }
 impl_display!(Op);
 
 impl Op {
-    // returns the bare operator name in all cases, rather than the fully qualified name
-    pub fn op_str(&self) -> &str {
-        match self {
-            Op::Bare(name) => &*name,
-            Op::Qualified { schema: _, name } => &*name,
-        }
-    }
-
-    pub fn bare<S>(name: S) -> Op
+    /// Constructs a new unqualified operator reference.
+    pub fn bare<S>(op: S) -> Op
     where
         S: Into<String>,
     {
-        Op::Bare(name.into())
+        Op {
+            namespace: vec![],
+            op: op.into(),
+        }
     }
 }
 

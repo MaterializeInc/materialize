@@ -131,8 +131,12 @@ async fn register_kafka_topic(
         TopicReplication::Fixed(replication_factor),
     );
 
-    let retention_ms_str = retention.retention_ms.map(|s| s.to_string());
-    let retention_bytes_str = retention.retention_bytes.map(|s| s.to_string());
+    let retention_ms_str = match retention.duration {
+        Some(Some(d)) => Some(d.as_millis().to_string()),
+        Some(None) => Some("-1".to_string()),
+        None => None,
+    };
+    let retention_bytes_str = retention.bytes.map(|s| s.to_string());
     if let Some(ref retention_ms) = retention_ms_str {
         kafka_topic = kafka_topic.set("retention.ms", retention_ms);
     }

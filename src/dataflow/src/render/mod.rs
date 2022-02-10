@@ -100,46 +100,28 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
-use std::rc::Weak;
-use std::time::{Duration, Instant};
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
-use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::Capture;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
-
-use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::activator::RcActivator;
 use mz_dataflow_types::*;
 use mz_expr::{GlobalId, Id};
-use mz_ore::collections::CollectionExt as _;
-use mz_ore::now::NowFn;
-use mz_persist::client::RuntimeClient;
+use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{Row, Timestamp};
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::event::ActivatedEventPusher;
-use crate::metrics::Metrics;
-use crate::render::context::CollectionBundle;
+use crate::arrangement::manager::TraceBundle;
+pub use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::render::sources::PersistedSourceManager;
-use crate::replay::MzReplay;
-use crate::server::{LocalInput, PendingPeek};
-use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
-use crate::source::timestamp::TimestampBindingRc;
-use crate::source::SourceToken;
+use crate::server::boundary::{ComputeReplay, StorageCapture};
+use crate::server::{ComputeState, StorageState};
 
-mod context;
+pub mod context;
 mod debezium;
 mod envelope_none;
 mod flat_map;
@@ -151,93 +133,19 @@ mod threshold;
 mod top_k;
 mod upsert;
 
-/// Worker-local state that is maintained across dataflows.
-///
-/// This state is restricted to the COMPUTE state, the deterministic, idempotent work
-/// done between data ingress and egress.
-pub struct ComputeState {
-    /// The traces available for sharing across dataflows.
-    pub traces: TraceManager,
-    /// Tokens that should be dropped when a dataflow is dropped to clean up
-    /// associated state.
-    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
-    /// Shared buffer with TAIL operator instances by which they can respond.
-    ///
-    /// The entries are pairs of sink identifier (to identify the tail instance)
-    /// and the response itself.
-    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
-    /// Frontier of sink writes (all subsequent writes will be at times at or
-    /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Peek commands that are awaiting fulfillment.
-    pub(crate) pending_peeks: Vec<PendingPeek>,
-    /// Tracks the frontier information that has been sent over `response_tx`.
-    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Undocumented
-    pub sink_metrics: SinkBaseMetrics,
-}
-
-/// Worker-local state related to the ingress or egress of collections of data.
-pub struct StorageState {
-    /// Handles to local inputs, keyed by ID.
-    pub local_inputs: HashMap<GlobalId, LocalInput>,
-    /// Source descriptions that have been created and not yet dropped.
-    ///
-    /// For the moment we retain all source descriptions, even those that have been
-    /// dropped, as this is used to check for rebinding of previous identifiers.
-    /// Once we have a better mechanism to avoid that, for example that identifiers
-    /// must strictly increase, we can clean up descriptions when sources are dropped.
-    pub source_descriptions: HashMap<GlobalId, mz_dataflow_types::sources::SourceDesc>,
-    /// Handles to external sources, keyed by ID.
-    pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
-    /// Timestamp data updates for each source.
-    pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
-    /// Handles that allow setting the compaction frontier for a persisted source. There can only
-    /// ever be one running (rendered) source of a persisted source, and if there is one, this map
-    /// will contain a handle to it.
-    pub persisted_sources: PersistedSourceManager,
-    /// Metrics reported by all dataflows.
-    pub metrics: Metrics,
-    /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient>,
-    /// Tracks the timestamp binding durability information that has been sent over `response_tx`.
-    pub reported_bindings_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Tracks the last time we sent binding durability info over `response_tx`.
-    pub last_bindings_feedback: Instant,
-    /// Undocumented
-    pub now: NowFn,
-    /// Metrics for the source-specific side of dataflows.
-    pub source_metrics: SourceBaseMetrics,
-}
-
-/// Information about each source that must be communicated between storage and compute layers.
-pub struct SourceBoundary {
-    /// Captured `row` updates representing a differential collection.
-    pub ok: ActivatedEventPusher<
-        Rc<EventLink<mz_repr::Timestamp, (Row, mz_repr::Timestamp, mz_repr::Diff)>>,
-    >,
-    /// Captured error updates representing a differential collection.
-    pub err: ActivatedEventPusher<
-        Rc<EventLink<mz_repr::Timestamp, (DataflowError, mz_repr::Timestamp, mz_repr::Diff)>>,
-    >,
-    /// A token that should be dropped to terminate the source.
-    pub token: Rc<dyn std::any::Any>,
-}
-
 /// Assemble the "storage" side of a dataflow, i.e. the sources.
 ///
 /// This method creates a new dataflow to host the implementations of sources for the `dataflow`
 /// argument, and returns assets for each source that can import the results into a new dataflow.
-pub fn build_storage_dataflow<A: Allocate>(
+pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
-    dataflow: &DataflowDescription<plan::Plan>,
-) -> BTreeMap<GlobalId, SourceBoundary> {
+    dataflow: &DataflowDescription<mz_dataflow_types::plan::Plan>,
+    boundary: &mut B,
+) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let materialized_logging = timely_worker.log_register().get("materialized");
-
-    let mut results = BTreeMap::new();
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -262,30 +170,10 @@ pub fn build_storage_dataflow<A: Allocate>(
                     src_id.clone(),
                 );
 
-                let ok_activator = RcActivator::new(format!("{debug_name}-ok"), 1);
-                let err_activator = RcActivator::new(format!("{debug_name}-err"), 1);
-
-                let ok_handle =
-                    ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator.clone());
-                let err_handle =
-                    ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator.clone());
-
-                results.insert(
-                    *src_id,
-                    SourceBoundary {
-                        ok: ActivatedEventPusher::<_>::clone(&ok_handle),
-                        err: ActivatedEventPusher::<_>::clone(&err_handle),
-                        token,
-                    },
-                );
-
-                ok.inner.capture_into(ok_handle);
-                err.inner.capture_into(err_handle);
+                boundary.capture(*src_id, ok, err, token, &debug_name);
             }
         })
     });
-
-    results
 }
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
@@ -293,11 +181,11 @@ pub fn build_storage_dataflow<A: Allocate>(
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate>(
+pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    sources: BTreeMap<GlobalId, SourceBoundary>,
-    dataflow: DataflowDescription<plan::Plan>,
+    dataflow: DataflowDescription<mz_dataflow_types::plan::Plan>,
+    boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -308,36 +196,27 @@ pub fn build_compute_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
+            let mut context = crate::render::context::Context::for_dataflow(
+                &dataflow,
+                scope.addr().into_element(),
+            );
             let mut tokens = BTreeMap::new();
 
             // Import declared sources into the rendering context.
-            for (source_id, source) in sources.into_iter() {
-                // Associate collection bundle with the source identifier.
-                let ok = Some(source.ok.inner)
-                    .mz_replay(
-                        region,
-                        &format!("{name}-{source_id}"),
-                        Duration::MAX,
-                        source.ok.activator,
-                    )
-                    .as_collection();
-                let err = Some(source.err.inner)
-                    .mz_replay(
-                        region,
-                        &format!("{name}-{source_id}-err"),
-                        Duration::MAX,
-                        source.err.activator,
-                    )
-                    .as_collection();
-                context.insert_id(
-                    Id::Global(source_id),
-                    CollectionBundle::from_collections(ok, err),
-                );
-
-                // Associate returned tokens with the source identifier.
-                let prior = tokens.insert(source_id, source.token);
-                assert!(prior.is_none());
+            for source_id in dataflow.source_imports.keys() {
+                if let Some((ok, err, token)) =
+                    boundary.replay(*source_id, region, &format!("{name}-{source_id}"))
+                {
+                    // Associate collection bundle with the source identifier.
+                    context.insert_id(
+                        mz_expr::Id::Global(*source_id),
+                        crate::render::CollectionBundle::from_collections(ok, err),
+                    );
+                    // Associate returned tokens with the source identifier.
+                    tokens.insert(*source_id, token);
+                } else {
+                    panic!("Unable to replay source: {source_id}");
+                }
             }
 
             // Import declared indexes into the rendering context.
@@ -387,7 +266,7 @@ impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn import_index(
+    pub(crate) fn import_index(
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
@@ -429,7 +308,7 @@ where
         }
     }
 
-    fn build_object(
+    pub(crate) fn build_object(
         &mut self,
         scope: &mut Child<'g, G, G::Timestamp>,
         object: BuildDesc<plan::Plan>,
@@ -439,7 +318,7 @@ where
         self.insert_id(Id::Global(object.id), bundle);
     }
 
-    fn export_index(
+    pub(crate) fn export_index(
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,

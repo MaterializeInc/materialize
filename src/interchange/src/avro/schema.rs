@@ -18,6 +18,7 @@ use tracing::warn;
 
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
+use mz_ore::cast::CastFrom;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
@@ -152,7 +153,7 @@ fn validate_schema_2(
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {
-            if *precision > NUMERIC_DATUM_MAX_PRECISION {
+            if *precision > usize::cast_from(NUMERIC_DATUM_MAX_PRECISION) {
                 bail!(
                     "decimals with precision greater than {} are not supported",
                     NUMERIC_DATUM_MAX_PRECISION

@@ -25,9 +25,9 @@ use mz_sql::ast::{
     AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceConnector,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
     CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
-    CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, DataType, Format, Function,
-    Ident, ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFunction, UnresolvedObjectName,
-    Value, ViewDefinition, WithOption, WithOptionValue,
+    CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, Format, Function, Ident,
+    ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFunction, UnresolvedDataType,
+    UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use mz_sql::plan::resolve_names_stmt;
 
@@ -292,8 +292,8 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
     }
 
     impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
-        fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType<Raw>) {
-            if let DataType::Other { name, typ_mod } = data_type {
+        fn visit_data_type_mut(&mut self, data_type: &'ast mut UnresolvedDataType) {
+            if let UnresolvedDataType::Other { name, typ_mod } = data_type {
                 if name.name() == &*CHAR_REFERENCE {
                     let t = TEXT_REFERENCE.clone();
                     *name = match name {
@@ -555,8 +555,8 @@ fn ast_rewrite_type_references_0_6_1(
     struct TypeNormalizer;
 
     impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
-        fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType<Raw>) {
-            if let DataType::Other { name, .. } = data_type {
+        fn visit_data_type_mut(&mut self, data_type: &'ast mut UnresolvedDataType) {
+            if let UnresolvedDataType::Other { name, .. } = data_type {
                 let mut unresolved_name = name.name().clone();
                 if unresolved_name.0.len() == 1 {
                     unresolved_name = UnresolvedObjectName(vec![

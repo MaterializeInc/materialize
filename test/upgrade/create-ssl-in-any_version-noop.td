@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,12 +6,5 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-#
-# mzcompose — runs Docker Compose with Materialize customizations.
 
-if [ "$1" == "--dev" ] ; then
-   shift
-   exec "$(dirname "$0")"/pyactivate --dev -m materialize.cli.mzcompose "$@"
-else
-   exec "$(dirname "$0")"/pyactivate -m materialize.cli.mzcompose "$@"
-fi
+# no-op to keep the upgrade test glob simple

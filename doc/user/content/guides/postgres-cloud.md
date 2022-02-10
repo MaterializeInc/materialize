@@ -4,7 +4,7 @@ description: "How to configure Postgres CDC for instances hosted on cloud servic
 aliases:
 ---
 
-**Required:** PostgreSQL 10+
+**Minimum requirements:** Postgres 10+
 
 To use a PostgreSQL instance running on Amazon RDS, AWS Aurora, or Cloud SQL for [Change Data Capture](../cdc-postgres/), you need to ensure that the database is configured to support logical replication.
 
@@ -40,7 +40,7 @@ As an account with the `rds_superuser` role, make these changes to the upstream 
     CREATE PUBLICATION mz_source FOR ALL TABLES;
     ```
 
-    The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream. We strongly recommend that you **limit** publications only to the tables you need.
+    The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
 For more information, see the [Amazon RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) documentation.
 
@@ -89,7 +89,7 @@ As a superuser, make these changes to the upstream database:
     CREATE PUBLICATION mz_source FOR ALL TABLES;
     ```
 
-    The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream. We strongly recommend that you **limit** publications only to the tables you need.
+    The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
 For more information, see the [AWS Aurora](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure) documentation.
 
@@ -119,11 +119,11 @@ As a user with the `cloudsqlsuperuser` role, make these changes to the upstream 
     CREATE PUBLICATION mz_source FOR ALL TABLES;
     ```
 
-    The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream. We strongly recommend that you **limit** publications only to the tables you need.
+    The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
 For more information, see the [Cloud SQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance) documentation.
 
 ## Related pages
 
-- [Change Data Capture with PostgreSQL](../cdc-postgres/)
+- [Change Data Capture (Postgres)](../cdc-postgres/)
 - [`CREATE SOURCE FROM POSTGRES`](/sql/create-source/postgres/)

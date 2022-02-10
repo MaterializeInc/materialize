@@ -49,9 +49,7 @@ td_test = os.environ.pop("TD_TEST", "*")
 
 
 def workflow_default(c: Composition) -> None:
-    # TODO: add back mz_logical_compaction_window_off in the line below.
-    # See: https://github.com/MaterializeInc/materialize/issues/10488
-    for mz in [mz_default]:
+    for mz in [mz_default, mz_logical_compaction_window_off]:
         with c.override(mz):
             workflow_kafka_sources(c)
             workflow_user_tables(c)

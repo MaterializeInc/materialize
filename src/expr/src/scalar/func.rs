@@ -29,6 +29,7 @@ use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::str::StrExt;
@@ -358,7 +359,7 @@ fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, Eva
         // b equal to the maximum remaining scale the value can support.
         b = std::cmp::min(
             b,
-            (numeric::NUMERIC_DATUM_MAX_PRECISION as u32
+            (u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
                 - (numeric::get_precision(&a) - u32::from(numeric::get_scale(&a))))
                 as i32,
         );
@@ -366,7 +367,7 @@ fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, Eva
     } else {
         // To avoid invalid operations, clamp b to be within 1 more than the
         // precision limit.
-        const MAX_P_LIMIT: i32 = 1 + numeric::NUMERIC_DATUM_MAX_PRECISION as i32;
+        const MAX_P_LIMIT: i32 = 1 + cast::u8_to_i32(numeric::NUMERIC_DATUM_MAX_PRECISION);
         b = std::cmp::min(MAX_P_LIMIT, b);
         b = std::cmp::max(-MAX_P_LIMIT, b);
         let mut b = numeric::Numeric::from(b);
@@ -979,7 +980,7 @@ fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
         // limitation of dividing irrational numbers. To correct that, see if
         // rounding off the value from its `numeric::NUMERIC_DATUM_MAX_PRECISION
         // - 1`th position results in an integral value.
-        cx.set_precision(numeric::NUMERIC_DATUM_MAX_PRECISION - 1)
+        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))
             .expect("reducing precision below max always succeeds");
         let mut integral_check = b.clone();
 
@@ -5692,7 +5693,7 @@ fn mz_render_typemod<'a>(
     let mut typmod = typmod.unwrap_int32();
     let typmod_base = 65_536;
 
-    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric)) && typmod >= 0 {
+    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric { .. })) && typmod >= 0 {
         typmod -= 4;
         if typmod < 0 {
             temp_storage.push_string(format!("({},{})", 65_535, typmod_base + typmod))

@@ -2592,7 +2592,7 @@ checksum = "a3e378b66a060d48947b590737b30a1be76706c8dd7b8ba0f2fe3989c68a853f"
 
 [[package]]
 name = "materialized"
-version = "0.19.1-dev"
+version = "0.20.1-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3418,6 +3418,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "openssl",
+ "paste",
  "pin-project",
  "prometheus",
  "smallvec",
@@ -3508,6 +3509,7 @@ dependencies = [
 name = "mz-pgrepr"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "byteorder",
  "bytes",
  "chrono",

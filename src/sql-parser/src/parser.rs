@@ -926,7 +926,7 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(OPERATOR) => {
                 self.expect_token(&Token::LParen)?;
-                let op = self.parse_operator_name()?;
+                let op = self.parse_operator()?;
                 self.expect_token(&Token::RParen)?;
                 Some(op)
             }
@@ -1171,37 +1171,26 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Parse a possibly qualified, possibly quoted operator, e.g.
-    /// `+`, `pg_catalog.+`, or `"pg_catalog".+`
-    fn parse_operator_name(&mut self) -> Result<Op, ParserError> {
-        let mut schema = vec![];
-        let original_pos = self.index;
-        while !matches!(self.peek_token(), Some(Token::Op(_)) | Some(Token::Star)) {
-            schema.push(self.parse_identifier()?);
+    /// Parse an operator reference.
+    ///
+    /// Examples:
+    ///   * `+`
+    ///   * `OPERATOR(schema.+)`
+    ///   * `OPERATOR("foo"."bar"."baz".@>)`
+    fn parse_operator(&mut self) -> Result<Op, ParserError> {
+        let mut namespace = vec![];
+        loop {
+            match self.next_token() {
+                Some(Token::Keyword(kw)) => namespace.push(kw.into_ident()),
+                Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
+                Some(Token::Op(op)) => return Ok(Op { namespace, op }),
+                Some(Token::Star) => {
+                    let op = String::from("*");
+                    return Ok(Op { namespace, op });
+                }
+                tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
+            }
             self.expect_token(&Token::Dot)?;
-        }
-
-        // Supporting qualified operators fully is difficult, so we simplify the
-        // problem by requiring that the operator's schema is `pg_catalog`.
-        // See #9282 for details.
-        // Once materialize supports the creation of custom operators, this code can be removed
-        if !(schema.is_empty() || (schema.len() == 1 && schema[0].as_str() == "pg_catalog")) {
-            return parser_err!(
-                self,
-                original_pos,
-                "Expected {}, found {}",
-                "pg_catalog",
-                schema.iter().map(|e| e.to_string()).join("."),
-            );
-        }
-
-        match self.next_token() {
-            Some(Token::Op(op)) => Ok(Op::Qualified { schema, name: op }),
-            Some(Token::Star) => Ok(Op::Qualified {
-                schema,
-                name: String::from("*"),
-            }),
-            _ => self.expected(self.peek_pos(), "operator", self.peek_token()),
         }
     }
 
@@ -2982,8 +2971,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<DataType<Raw>, ParserError> {
-        let other = |name: &str| DataType::Other {
+    fn parse_data_type(&mut self) -> Result<UnresolvedDataType, ParserError> {
+        let other = |name: &str| UnresolvedDataType::Other {
             name: RawName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
@@ -2997,7 +2986,7 @@ impl<'a> Parser<'a> {
                     } else {
                         "bpchar"
                     };
-                    DataType::Other {
+                    UnresolvedDataType::Other {
                         name: RawName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: match self.parse_optional_precision()? {
                             Some(u) => vec![u],
@@ -3005,14 +2994,14 @@ impl<'a> Parser<'a> {
                         },
                     }
                 }
-                BPCHAR => DataType::Other {
+                BPCHAR => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("bpchar")),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
                         None => vec![],
                     },
                 },
-                VARCHAR => DataType::Other {
+                VARCHAR => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
@@ -3024,7 +3013,7 @@ impl<'a> Parser<'a> {
                 // Number-like types
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
-                DEC | DECIMAL => DataType::Other {
+                DEC | DECIMAL => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -3080,16 +3069,16 @@ impl<'a> Parser<'a> {
                 JSON => other("jsonb"),
                 _ => {
                     self.prev_token();
-                    DataType::Other {
+                    UnresolvedDataType::Other {
                         name: RawName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
             },
-            Some(Token::Ident(_)) => {
+            Some(Token::Ident(_) | Token::LBracket) => {
                 self.prev_token();
-                DataType::Other {
-                    name: RawName::Name(self.parse_object_name()?),
+                UnresolvedDataType::Other {
+                    name: self.parse_raw_name()?,
                     typ_mod: self.parse_typ_mod()?,
                 }
             }
@@ -3100,7 +3089,7 @@ impl<'a> Parser<'a> {
             match self.peek_token() {
                 Some(Token::Keyword(LIST)) => {
                     self.next_token();
-                    data_type = DataType::List(Box::new(data_type));
+                    data_type = UnresolvedDataType::List(Box::new(data_type));
                 }
                 Some(Token::LBracket) => {
                     // Handle array suffixes. Note that `int[]`, `int[][][]`,
@@ -3108,8 +3097,8 @@ impl<'a> Parser<'a> {
                     self.next_token();
                     let _ = self.maybe_parse(|parser| parser.parse_number_value());
                     self.expect_token(&Token::RBracket)?;
-                    if !matches!(data_type, DataType::Array(_)) {
-                        data_type = DataType::Array(Box::new(data_type));
+                    if !matches!(data_type, UnresolvedDataType::Array(_)) {
+                        data_type = UnresolvedDataType::Array(Box::new(data_type));
                     }
                 }
                 _ => break,
@@ -3180,6 +3169,29 @@ impl<'a> Parser<'a> {
                 }))
             }
             None => Ok(None),
+        }
+    }
+
+    fn parse_raw_name(&mut self) -> Result<RawName, ParserError> {
+        if self.consume_token(&Token::LBracket) {
+            let id = match self.next_token() {
+                Some(Token::Ident(id)) => id,
+                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+            };
+            self.expect_keyword(AS)?;
+            let name = self.parse_object_name()?;
+            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
+            if name.0.len() < 2 {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "table name in square brackets must be fully qualified"
+                );
+            }
+            self.expect_token(&Token::RBracket)?;
+            Ok(RawName::Id(id, name))
+        } else {
+            Ok(RawName::Name(self.parse_object_name()?))
         }
     }
 
@@ -3283,13 +3295,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<DataType<Raw>, ParserError> {
+    fn parse_map(&mut self) -> Result<UnresolvedDataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
         let value_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::RBracket)?;
-        Ok(DataType::Map {
+        Ok(UnresolvedDataType::Map {
             key_type,
             value_type,
         })
@@ -3976,45 +3988,25 @@ impl<'a> Parser<'a> {
                 join: Box::new(table_and_joins),
                 alias: self.parse_optional_table_alias()?,
             })
-        } else if self.consume_token(&Token::LBracket) {
-            let id = match self.next_token() {
-                Some(Token::Ident(id)) => id,
-                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
-            };
-            self.expect_keyword(AS)?;
-            let name = self.parse_object_name()?;
-            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
-            if name.0.len() < 2 {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "table name in square brackets must be fully qualified"
-                );
-            }
-            self.expect_token(&Token::RBracket)?;
-
-            Ok(TableFactor::Table {
-                name: RawName::Id(id, name),
-                alias: self.parse_optional_table_alias()?,
-            })
         } else if self.parse_keywords(&[ROWS, FROM]) {
             Ok(self.parse_rows_from()?)
         } else {
-            let name = self.parse_object_name()?;
-            if self.consume_token(&Token::LParen) {
-                let args = self.parse_optional_args(false)?;
-                let alias = self.parse_optional_table_alias()?;
-                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
-                Ok(TableFactor::Function {
-                    function: TableFunction { name, args },
-                    alias,
-                    with_ordinality,
-                })
-            } else {
-                Ok(TableFactor::Table {
-                    name: RawName::Name(name),
+            let name = self.parse_raw_name()?;
+            match name {
+                RawName::Name(name) if self.consume_token(&Token::LParen) => {
+                    let args = self.parse_optional_args(false)?;
+                    let alias = self.parse_optional_table_alias()?;
+                    let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+                    Ok(TableFactor::Function {
+                        function: TableFunction { name, args },
+                        alias,
+                        with_ordinality,
+                    })
+                }
+                _ => Ok(TableFactor::Table {
+                    name,
                     alias: self.parse_optional_table_alias()?,
-                })
+                }),
             }
         }
     }

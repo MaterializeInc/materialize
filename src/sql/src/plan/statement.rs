@@ -94,7 +94,7 @@ pub fn describe(
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
-            param_types.insert(i + 1, query::scalar_type_from_pg(ty)?);
+            param_types.insert(i + 1, ty.to_scalar_type_lossy());
         }
     }
 
