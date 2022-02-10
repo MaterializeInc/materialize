@@ -122,8 +122,9 @@ impl Rule for SimplifyOuterJoins {
     }
 
     fn rewrite(&self, model: &mut Model, mat: Self::Match) {
+        let (box_id, q_ids) = (mat.0, mat.1);
+
         // Change the specified quantifiers to type Foreach.
-        let q_ids = mat.1;
         for q_id in q_ids {
             let mut q = model.get_mut_quantifier(q_id);
             q.quantifier_type = QuantifierType::Foreach;
@@ -131,20 +132,17 @@ impl Rule for SimplifyOuterJoins {
 
         // If all the quantifiers in the box are type Foreach,
         // convert the box to type Select.
-        let box_id = mat.0;
         let mut r#box = model.get_mut_box(box_id);
         if r#box
             .input_quantifiers()
             .all(|q| q.quantifier_type == QuantifierType::Foreach)
         {
-            let predicates = if let BoxType::OuterJoin(outer_join) = &r#box.box_type {
-                Some(outer_join.predicates.clone())
-            } else {
-                None
+            r#box.box_type = match &mut r#box.box_type {
+                BoxType::OuterJoin(outer_join) => {
+                    Select::new(outer_join.predicates.split_off(0)).into()
+                }
+                _ => Select::default().into(),
             };
-            let mut select = Select::default();
-            select.predicates = predicates.unwrap();
-            r#box.box_type = BoxType::from(select);
         }
     }
 }
