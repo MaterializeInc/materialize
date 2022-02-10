@@ -96,16 +96,6 @@ fn tail<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    // // make sure all data is routed to one worker by keying on the sink id
-    // let batches = sinked_collection
-    //     .map(move |(k, v)| {
-    //         assert!(k.is_none(), "tail does not support keys");
-    //         let v = v.expect("tail must have values");
-    //         (sink_id, v)
-    //     })
-    //     .arrange_by_key()
-    //     .stream;
-
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
 

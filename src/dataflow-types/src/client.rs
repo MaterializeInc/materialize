@@ -737,30 +737,6 @@ pub mod partitioned {
             &mut self,
             upper: Antichain<Timestamp>,
         ) -> Vec<(Timestamp, Row, Diff)> {
-            // self.buffer
-            //     .sort_unstable_by(|(d1, t1, _r1), (d2, t2, _r2)| (t1, d1).cmp(&(t2, d2)));
-            // let mut offset = 0;
-            // let mut index = 1;
-            // while index < self.buffer.len()
-            //     && PartialOrder::less_than(&Antichain::from_elem(self.buffer[index].1), &upper)
-            // {
-            //     if self.buffer[index].0 == self.buffer[offset].0
-            //         && self.buffer[index].1 == self.buffer[offset].1
-            //     {
-            //         self.buffer[offset].2 += self.buffer[index].2;
-            //     } else {
-            //         if self.buffer[offset].2 != 0 {
-            //             offset += 1;
-            //         }
-            //         let next = std::mem::take(&mut self.buffer[index]);
-            //         self.buffer[offset] = next;
-            //     }
-            //     index += 1;
-            // }
-            // if offset < self.buffer.len() && self.buffer[offset].2 != 0 {
-            //     offset += 1;
-            // }
-            // self.buffer.drain(0..offset).collect()
             differential_dataflow::consolidation::consolidate_updates(&mut self.buffer);
             let split_point = self
                 .buffer
@@ -995,7 +971,7 @@ pub mod partitioned {
                     let entry = match maybe_entry {
                         None => {
                             // This tail has been dropped;
-                            // we should pernanently block
+                            // we should permanently block
                             // any messages from it
                             return Box::new(None.into_iter());
                         }
