@@ -186,38 +186,42 @@ impl PartitionTimestamps {
         self.bindings.push((timestamp, offset));
     }
 
-    /// Gets the minimal timestamp binding (time, offset) for offset (the minimal time
-    /// with offset > requested offset.
+    /// Returns the timestamp associated with an offset, if it is known for certain.
     ///
-    /// Returns None if no such binding exists.
+    /// A timestamp may not be known for certain for offsets greater or equal to the
+    /// last offset to be bound. We only know that the timestamps of such offsets are
+    /// *at least* some value, but not the value itself.
     fn get_binding(&self, offset: MzOffset) -> Option<Timestamp> {
         // Rust's binary search is inconvenient so let's roll our own.
         // Maintain the invariants that the offset at lo (entries[lo].1) is always <=
-        // than the requested offset, and n is > 1. Check for violations of that before we
-        // start the main loop.
+        // than the requested offset, and `remaining` is > 1.
+        // Check for violations of that before we start the main loop.
         if self.bindings.is_empty() {
             return None;
         }
 
-        let mut n = self.bindings.len();
+        let mut remaining = self.bindings.len();
         let mut lo = 0;
+
         if self.bindings[lo].1 > offset {
             return Some(self.bindings[lo].0);
         }
 
-        while n > 1 {
-            let half = n / 2;
+        while remaining > 1 {
+            let step = remaining / 2;
 
             // Advance lo if a later element has an offset less than / equal to the one requested.
-            if self.bindings[lo + half].1 <= offset {
-                lo += half;
+            if self.bindings[lo + step].1 <= offset {
+                lo += step;
             }
 
-            n -= half;
+            remaining -= step;
         }
-
+        // If this is not the last binding, we can return the bound time which is
+        // the one found in `self.bindings[lo].0`. The time in `self.bindings[lo+1].0`
+        // is the lower bound on all offsets `self.bindings[lo+1].1` and greater.
         if lo + 1 < self.bindings.len() {
-            Some(self.bindings[lo + 1].0)
+            Some(self.bindings[lo].0)
         } else {
             None
         }
