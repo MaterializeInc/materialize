@@ -84,6 +84,7 @@ Default
 Delete
 Delimited
 Desc
+Details
 Discard
 Discover
 Distinct

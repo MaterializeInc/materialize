@@ -1396,6 +1396,7 @@ pub mod sources {
         pub conn: String,
         pub publication: String,
         pub slot_name: String,
+        pub details: String,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

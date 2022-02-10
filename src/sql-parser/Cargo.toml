@@ -15,6 +15,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.10.1", features = ["uncased"] }
 tracing = "0.1.31"
 uncased = "0.9.6"
+mz-dataflow-types = { path = "../dataflow-types" }
 
 [dev-dependencies]
 datadriven = "0.6.0"

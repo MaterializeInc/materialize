@@ -2017,11 +2017,17 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
+                let details = if self.parse_keyword(DETAILS) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
 
                 Ok(CreateSourceConnector::Postgres {
                     conn,
                     publication,
                     slot,
+                    details,
                 })
             }
             FILE => {

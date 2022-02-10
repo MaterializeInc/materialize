@@ -507,6 +507,111 @@ impl fmt::Display for Type {
     }
 }
 
+// impl AstDisplay for PgScalarType {
+//     -    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+//     -        match self {
+//     -            Self::Simple(typ) => {
+//     -                f.write_str(typ);
+//     -            }
+//     -            Self::Numeric(typ_mod) => {
+//     -                f.write_str("numeric");
+//     -                if let Some(typ_mod) = typ_mod {
+//     -                    f.write_str("(");
+//     -                    f.write_str(typ_mod.precision);
+//     -                    f.write_str(", ");
+//     -                    f.write_str(typ_mod.scale);
+//     -                    f.write_str(")");
+//     -                }
+//     -            }
+//     -            Self::NumericArray(typ_mod) => {
+//     -                f.write_str("numeric");
+//     -                if let Some(typ_mod) = typ_mod {
+//     -                    f.write_str("(");
+//     -                    f.write_str(typ_mod.precision);
+//     -                    f.write_str(", ");
+//     -                    f.write_str(typ_mod.scale);
+//     -                    f.write_str(")");
+//     -                }
+//     -                f.write_str("[]");
+//     -            }
+//     -            Self::BPChar { length } => {
+//     -                f.write_str("character(");
+//     -                f.write_str(length);
+//     -                f.write_str(")");
+//     -            }
+//     -            Self::BPCharArray { length } => {
+//     -                f.write_str("character(");
+//     -                f.write_str(length);
+//     -                f.write_str(")[]");
+//     -            }
+//     -            Self::VarChar { length } => {
+//     -                f.write_str("character varying(");
+//     -                f.write_str(length);
+//     -                f.write_str(")");
+//     -            }
+//     -            Self::VarCharArray { length } => {
+//     -                f.write_str("character varying(");
+//     -                f.write_str(length);
+//     -                f.write_str(")[]");
+//     -            }
+//     -        }
+//     -    }
+//     -}
+impl Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        Ok(match self {
+            Type::Array(typ) => {
+                f.write_str(&format!("{typ}"))?;
+                f.write_str("[]")?;
+            },
+            Type::Bool => {
+                f.write_str("boolean")?;
+            }
+            Type::Bytea => todo!(),
+            Type::Date => todo!(),
+            Type::Float4 => todo!(),
+            Type::Float8 => todo!(),
+            Type::Int2 => todo!(),
+            Type::Int4 => todo!(),
+            Type::Int8 => todo!(),
+            Type::Interval => todo!(),
+            Type::Jsonb => todo!(),
+            Type::List(_) => unreachable!(),
+            Type::Map { .. } => unreachable!(),
+            Type::Numeric {
+                max_scale,
+                max_precision,
+            } => {
+                f.write_str(&format!("numeric({max_scale},{max_precision})"))?;
+            }
+            Type::Oid => {
+                f.write_str("oid[]")?;
+            },
+            Type::Record(_) => todo!(),
+            Type::Text => todo!(),
+            Type::Char { length } => {
+                f.write_str(&format!("character"))?;
+                if let Some(length) = length {
+                    f.write_str(&format!("({length})"))?;
+                }
+            },
+            Type::VarChar { max_length } => {
+                f.write_str("character varying")?;
+                if let Some(max_length) = max_length {
+                    f.write_str(&format!("({max_length})"))?;
+                };
+            }
+            Type::Time => todo!(),
+            Type::Timestamp => todo!(),
+            Type::TimestampTz => todo!(),
+            Type::Uuid => todo!(),
+            Type::RegProc => todo!(),
+            Type::RegType => todo!(),
+            Type::RegClass => todo!(),
+        })
+    }
+}
+
 impl TryFrom<&Type> for ScalarType {
     type Error = anyhow::Error;
 
