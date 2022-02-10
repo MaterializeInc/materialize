@@ -17,12 +17,12 @@
 //! names.
 //!
 //! If `clippy` sent you here, replace:
-//! ```
+//! ```ignore
 //!     tokio::spawn(my_future)
 //!     tokio::task::spawn_blocking(my_blocking_closure)
 //! ```
 //! with
-//! ```
+//! ```ignore
 //!     mz_ore::task::spawn(|| format!("taskname:{}", info), my_future)
 //!     mz_ore::task::spawn_blocking(|| format!("name:{}", info), my_blocking_closure)
 //! ```
