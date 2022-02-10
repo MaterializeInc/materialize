@@ -15,12 +15,21 @@ cat
 ok
 
 # Example seen from real life user that our MIR optimizer does not handle.
-# Nulls from y are rejected by an outer select predicate.
+#
+#            SELECT(p3)              SELECT(p3)
+#               |                       |
+#            LOJ(p2)     ==>         LOJ(p2)
+#           /       \               /       \
+#       LOJ(p1)      z         JOIN(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
+# Nulls from y are rejected by an outer select predicate p3.
 # In the first left join, y is on the rhs, so the left join becomes an inner one.
 # In the second left join, y is on the lhs, so the left join is unchanged.
 opt
 select x.f1, x.f2, y.f3, y.f4, z.f2
-from x 
+from x
 left join y on x.f1 = y.f1 and x.f2 = y.f2
 left join z on x.f1 = z.f1
 where y.f4 <> 0
@@ -29,7 +38,7 @@ digraph G {
     compound = true
     labeljust = l
     label = "select x.f1, x.f2, y.f3, y.f4, z.f2
-from x 
+from x
 left join y on x.f1 = y.f1 and x.f2 = y.f2
 left join z on x.f1 = z.f1
 where y.f4 \<\> 0"
@@ -102,14 +111,20 @@ where y.f4 \<\> 0"
     Q1 -> boxhead3 [ lhead = cluster3 ]
 }
 
+#            ROJ(p2)                 ROJ(p2)
+#           /       \               /       \
+#       FOJ(p1)      z   ==>    ROJ(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
 # Nulls from y are rejected by the right outer join.
 # In the full join, y is on the rhs, so the full join becomes a right join.
 opt
 SELECT
     x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
 FROM
-    x 
-    FULL OUTER JOIN y ON x.f1 = y.f1 
+    x
+    FULL OUTER JOIN y ON x.f1 = y.f1
     RIGHT OUTER JOIN z ON y.f2 = z.f2
 ----
 digraph G {
@@ -118,8 +133,8 @@ digraph G {
     label = "SELECT
     x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
 FROM
-    x 
-    FULL OUTER JOIN y ON x.f1 = y.f1 
+    x
+    FULL OUTER JOIN y ON x.f1 = y.f1
     RIGHT OUTER JOIN z ON y.f2 = z.f2"
     node [ shape = box ]
     subgraph cluster5 {
@@ -180,17 +195,25 @@ FROM
     Q1 -> boxhead3 [ lhead = cluster3 ]
 }
 
-# Nulls from x are rejected by an outer select predicate.
+#            SELECT(p3)              SELECT(p3)
+#               |                       |
+#            ROJ(p2)     ==>        JOIN(p2)
+#           /       \               /       \
+#       FOJ(p1)      z         JOIN(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
+# Nulls from x are rejected by an outer select predicate p3.
 # In the right join, x is on lhs, so the right join becomes an inner join.
 # Nulls from y are rejected by the right join.
 # In the full join, x is on lhs and y is on rhs, so the full join becomes an
-# inner join. 
+# inner join.
 opt
 SELECT
     x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
 FROM
-    x 
-    FULL OUTER JOIN y ON x.f2 = y.f2 
+    x
+    FULL OUTER JOIN y ON x.f2 = y.f2
     RIGHT OUTER JOIN z ON y.f2 = z.f2
 WHERE
     x.f1 > 0
@@ -201,8 +224,8 @@ digraph G {
     label = "SELECT
     x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
 FROM
-    x 
-    FULL OUTER JOIN y ON x.f2 = y.f2 
+    x
+    FULL OUTER JOIN y ON x.f2 = y.f2
     RIGHT OUTER JOIN z ON y.f2 = z.f2
 WHERE
     x.f1 \> 0"
@@ -275,6 +298,14 @@ WHERE
     Q1 -> boxhead3 [ lhead = cluster3 ]
 }
 
+#            SELECT(p3)              SELECT(p3)
+#               |                       |
+#            ROJ(p2)     ==>        JOIN(p2)
+#           /       \               /       \
+#       LOJ(p1)      z          LOJ(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
 # Nulls from x are rejected by an outer select predicate.
 # In the right join, x is on lhs, so the right join becomes an inner join.
 # In the left join, x is on lhs and y is on rhs, so it stays the same.
@@ -282,8 +313,8 @@ opt
 SELECT
     x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
 FROM
-    x 
-    LEFT OUTER JOIN y ON x.f2 = y.f2 
+    x
+    LEFT OUTER JOIN y ON x.f2 = y.f2
     RIGHT OUTER JOIN z ON x.f2 = z.f2
 WHERE
     x.f1 > 0
@@ -294,8 +325,8 @@ digraph G {
     label = "SELECT
     x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
 FROM
-    x 
-    LEFT OUTER JOIN y ON x.f2 = y.f2 
+    x
+    LEFT OUTER JOIN y ON x.f2 = y.f2
     RIGHT OUTER JOIN z ON x.f2 = z.f2
 WHERE
     x.f1 \> 0"
@@ -368,12 +399,18 @@ WHERE
     Q1 -> boxhead3 [ lhead = cluster3 ]
 }
 
+#               JOIN(p3)                          JOIN(p3)
+#              /       \                         /       \
+#       ROJ(p1)         LOJ(p2)    ==>   JOIN(p1)        JOIN(p2)
+#      /       \       /       \         /       \       /       \
+#     x         y     y         z       x         y     y         z
+#
 # A test where the two outer joins to be simplified are in two separate
 # subgraphs. Both outer joins should be converted to inner joins.
 opt
 SELECT * FROM
 (SELECT x.*, y.f1 as f3 FROM x RIGHT OUTER JOIN y on y.f1 = x.f1) x
-INNER JOIN 
+INNER JOIN
 (SELECT z.*, y.f1 as f3 FROM y LEFT OUTER JOIN z on y.f1 = z.f1) z ON x.f2 + z.f2 = 5
 ----
 digraph G {
@@ -381,7 +418,7 @@ digraph G {
     labeljust = l
     label = "SELECT * FROM
 (SELECT x.*, y.f1 as f3 FROM x RIGHT OUTER JOIN y on y.f1 = x.f1) x
-INNER JOIN 
+INNER JOIN
 (SELECT z.*, y.f1 as f3 FROM y LEFT OUTER JOIN z on y.f1 = z.f1) z ON x.f2 + z.f2 = 5"
     node [ shape = box ]
     subgraph cluster0 {
@@ -464,16 +501,24 @@ INNER JOIN
     Q5 -> boxhead6 [ lhead = cluster6 ]
 }
 
+#      JOIN(p1)
+#      /       \
+#     |         |
+#      \       /
+#       FOJ(p1)
+#      /       \
+#     x         y
+#
 # Test that we currently avoid simplifying outer joins with more than one parent
 # box.
 opt
-WITH w(f1, f2, f3) as (select x.*, y.f3 from x full outer join y on x.f1 = y.f3) 
+WITH w(f1, f2, f3) as (select x.*, y.f3 from x full outer join y on x.f1 = y.f3)
 select * from w w1 inner join w w2 on w1.f1 = w1.f3
 ----
 digraph G {
     compound = true
     labeljust = l
-    label = "WITH w(f1, f2, f3) as (select x.*, y.f3 from x full outer join y on x.f1 = y.f3) 
+    label = "WITH w(f1, f2, f3) as (select x.*, y.f3 from x full outer join y on x.f1 = y.f3)
 select * from w w1 inner join w w2 on w1.f1 = w1.f3"
     node [ shape = box ]
     subgraph cluster4 {
