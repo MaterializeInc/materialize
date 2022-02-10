@@ -20,7 +20,30 @@ ci_init
 
 while read -r binary cwd; do
     cd "$cwd"
-    ci_try "/tests/$binary" --nocapture
+    ci_try "/tests/$binary" --nocapture -Z unstable-options --format json --report-time | tee results.json
+    ci_try "/usr/local/cargo2junit" < results.json > junit.xml
+    ci_try "/bin/cat" junit.xml | sed 's/"/\\"/g' > escaped.xml
+    junit=$(<escaped.xml)
+    curl --request POST \
+         --url https://analytics-api.buildkite.com/v1/uploads \
+         --header 'Authorization: Token token=$token;' \
+         --header 'Content-Type: application/json' \
+         --data @- << EOF
+            {
+                "format": "junit",
+                "run_env": {
+                    "CI": "buildkite",
+                    "key": "BUILDKITE_BUILD_ID",
+                    "number": "BUILDKITE_BUILD_NUMBER",
+                    "job_id": "BUILDKITE_JOB_ID",
+                    "branch": "BUILDKITE_BRANCH",
+                    "commit_sha": "BUILDKITE_COMMIT",
+                    "message": "BUILDKITE_MESSAGE",
+                    "url": "BUILDKITE_BUILD_URL"
+                },
+                "data": "$junit"
+            }
+EOF
     cd "$OLDPWD"
 done < /tests/manifest
 
