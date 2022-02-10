@@ -163,32 +163,28 @@ fn unique_ancestor_chain(model: &Model, target: BoxId) -> Option<Vec<BoxId>> {
         model.top_box,
         &mut |model, box_id| {
             let r#box = model.get_box(*box_id);
-            // If target is reached, register this and stop further traversal.
+            // Check and register if the target is reached.
             if *box_id == target {
                 *unique_ancestor_chain_found.borrow_mut() = true;
-                return Ok(vec![]);
             }
+
             if *unique_ancestor_chain_found.borrow() {
-                return Ok(vec![]);
-            }
-            // Otherwise, register that we have visited this node.
-            let mut ancestor_chain = ancestor_chain.borrow_mut();
-            ancestor_chain.push(*box_id);
-            // Only go deeper if the box has more than one parent.
-            if r#box.ranging_quantifiers().count() > 1 {
+                // If target is reached, stop further traversal.
                 Ok(vec![])
             } else {
-                Ok(model
-                    .get_box(*box_id)
-                    .input_quantifiers()
-                    .map(|q| q.input_box)
-                    .collect())
+                // Otherwise, register that we have visited this node.
+                ancestor_chain.borrow_mut().push(*box_id);
+                // Only go deeper if the box has more than one parent.
+                if r#box.ranging_quantifiers().count() > 1 {
+                    Ok(vec![])
+                } else {
+                    Ok(r#box.input_quantifiers().map(|q| q.input_box).collect())
+                }
             }
         },
         &mut |_, _| {
             if !*unique_ancestor_chain_found.borrow() {
-                let mut ancestor_chain = ancestor_chain.borrow_mut();
-                ancestor_chain.pop();
+                ancestor_chain.borrow_mut().pop();
             }
             Ok(())
         },
