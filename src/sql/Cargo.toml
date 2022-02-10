@@ -15,6 +15,8 @@ dec = "0.4.8"
 enum-kinds = "0.5.1"
 futures = "0.3.21"
 globset = "0.4.8"
+hex = "0.4.3"
+mz-interchange = { path = "../interchange" }
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
@@ -23,7 +25,6 @@ mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
-mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgrepr = { path = "../pgrepr" }
@@ -33,6 +34,7 @@ mz-sql-parser = { path = "../sql-parser" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 protobuf-native = "0.2.1"
+prost = "0.9.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 regex = "1.5.4"
 reqwest = "0.11.9"

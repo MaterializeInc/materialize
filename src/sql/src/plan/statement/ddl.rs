@@ -507,15 +507,17 @@ pub fn plan_create_source(
             conn,
             publication,
             slot,
+            details,
         } => {
             let slot_name = slot
                 .as_ref()
                 .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
-
+            let detail_string = details.as_ref().ok_or_else(|| anyhow!("Postgres sources must have source details"))?;
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 slot_name: slot_name.clone(),
+                details: ToString::to_string(detail_string),
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);

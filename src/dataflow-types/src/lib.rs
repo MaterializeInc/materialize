@@ -19,6 +19,7 @@ pub mod plan;
 
 mod errors;
 mod explain;
+mod gen;
 mod types;
 
 pub use errors::*;
@@ -27,3 +28,4 @@ pub use explain::Explanation;
 pub use explain::JsonViewFormatter;
 pub use plan::Plan;
 pub use types::*;
+pub use gen::*;
