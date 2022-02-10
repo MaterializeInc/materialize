@@ -87,7 +87,7 @@ pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
 
 // Interval after which the source operator will yield control.
-static YIELD_INTERVAL_MS: u128 = 10;
+const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Shared configuration information for all source types.
 pub struct SourceConfig<'a, G> {
@@ -1586,7 +1586,7 @@ fn handle_message<S: SourceReader>(
         }
     }
 
-    if timer.elapsed().as_millis() > YIELD_INTERVAL_MS {
+    if timer.elapsed() > YIELD_INTERVAL {
         // We didn't drain the entire queue, so indicate that we
         // should run again but yield the CPU to other operators.
         (SourceStatus::Alive, MessageProcessing::Yielded)

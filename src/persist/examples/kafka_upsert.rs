@@ -120,10 +120,10 @@ where
     //
     // An "epoch" source that is an input to the "real" sources could do the
     // trick.
-    // let epoch_interval_ms = 1000;
+    // let epoch_interval = Duration::from_secs(1);
 
-    let source_interval_ms = 1000;
-    let timestamp_interval_ms = 5000;
+    let source_interval = Duration::from_secs(1);
+    let timestamp_interval = Duration::from_secs(5);
     let now_fn = SYSTEM_TIME.clone();
 
     let start_ts = cmp::min(sealed_ts(&ts_read)?, sealed_ts(&out_read)?);
@@ -133,8 +133,8 @@ where
         scope,
         start_ts,
         now_fn,
-        source_interval_ms,
-        timestamp_interval_ms,
+        source_interval,
+        timestamp_interval,
         ts_read,
     )?;
 
@@ -190,8 +190,8 @@ fn read_source<G, S>(
     scope: &mut G,
     start_ts: u64,
     now_fn: NowFn,
-    emission_interval_ms: u64,
-    timestamp_interval_ms: u64,
+    emission_interval: Duration,
+    timestamp_interval: Duration,
     bindings_read: StreamReadHandle<S::SourceTimestamp, AssignedTimestamp>,
 ) -> Result<
     (
@@ -222,7 +222,7 @@ where
 
     let mut source = S::new(
         starting_offsets,
-        emission_interval_ms,
+        emission_interval,
         now_fn.clone(),
         worker_index,
         num_workers,
@@ -243,7 +243,7 @@ where
         move |_frontiers| {
             // only emit a binding update if we actually have a current offset
             let now = now_fn();
-            let now_clamped = now - (now % timestamp_interval_ms);
+            let now_clamped = now - (now % timestamp_interval.as_millis() as u64);
             if now_clamped != current_ts {
                 // emit bindings for all offsets we're currently aware of
                 let mut bindings_out = bindings_out.activate();
@@ -299,7 +299,7 @@ trait Source {
 
     fn new(
         starting_offsets: Vec<Self::SourceTimestamp>,
-        emission_interval_ms: u64,
+        emission_interval: Duration,
         now_fn: NowFn,
         worker_index: usize,
         num_workers: usize,
@@ -315,7 +315,7 @@ trait Source {
 struct KafkaSource {
     current_offsets: HashMap<KafkaPartition, KafkaOffset>,
     last_message_time: u64,
-    emission_interval_ms: u64,
+    emission_interval: Duration,
     now_fn: NowFn,
     last_partition: usize,
 }
@@ -327,7 +327,7 @@ impl Source for KafkaSource {
 
     fn new(
         starting_offsets: Vec<Self::SourceTimestamp>,
-        emission_interval_ms: u64,
+        emission_interval: Duration,
         now_fn: NowFn,
         worker_index: usize,
         num_workers: usize,
@@ -368,7 +368,7 @@ impl Source for KafkaSource {
         KafkaSource {
             last_message_time: u64::MIN,
             current_offsets,
-            emission_interval_ms,
+            emission_interval,
             now_fn,
             last_partition: 0,
         }
@@ -381,7 +381,7 @@ impl Source for KafkaSource {
         SourceTimestamp<KafkaPartition, KafkaOffset>,
     )> {
         let now = (self.now_fn)();
-        let now_clamped = now - (now % self.emission_interval_ms);
+        let now_clamped = now - (now % self.emission_interval.as_millis() as u64);
 
         if self.current_offsets.is_empty() {
             // this sink doesn't have any partitions assigned
