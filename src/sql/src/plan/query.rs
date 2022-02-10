@@ -2166,6 +2166,7 @@ fn plan_scalar_table_funcs(
                 item: id.clone(),
             });
             scope.items[i].from_single_column_function = num_cols == 1;
+            scope.items[i].allow_unqualified_references = false;
             i += 1;
         }
         // Ordinality column. This doubles as the
@@ -2177,8 +2178,11 @@ fn plan_scalar_table_funcs(
             item: id.clone(),
         });
         scope.items[i].is_exists_column_for_a_table_function_that_was_in_the_target_list = true;
+        scope.items[i].allow_unqualified_references = false;
         i += 1;
     }
+    // Coalesced ordinality column.
+    scope.items[i].allow_unqualified_references = false;
     Ok((expr, scope))
 }
 
