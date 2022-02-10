@@ -41,23 +41,21 @@ fn normalize_pattern(pattern: &str, escape: &str) -> Result<String, EvalError> {
             return Err(EvalError::LikeEscapeTooLong);
         }
         let mut cs = pattern.chars();
-        loop {
-            match cs.next() {
-                Some(c) if c == custom_escape_char => match cs.next() {
+        while let Some(c) = cs.next() {
+            if c == custom_escape_char {
+                match cs.next() {
                     Some(c2) => {
                         p.push(default_escape_char);
                         p.push(c2);
                     }
                     None => return Err(EvalError::UnterminatedLikeEscapeSequence),
-                },
-                Some(c) => {
-                    if c == default_escape_char {
-                        p.push(c);
-                    }
-                    p.push(c);
                 }
-                None => break,
+                continue;
             }
+            if c == default_escape_char {
+                p.push(c);
+            }
+            p.push(c);
         }
     }
     p.shrink_to_fit();
@@ -117,7 +115,17 @@ pub fn compile(pattern: &str, case_insensitive: bool, escape: &str) -> Result<Ma
     if pattern.len() > 8 << 10 {
         return Err(EvalError::LikePatternTooLong);
     }
+
+    // The way we handle user-specified escape strings is to first normalize the
+    // LIKE pattern. This process converts the pattern to one that uses the
+    // default escape string ('\\') instead. This is slightly less efficient,
+    // but works well with Materialize's diagnostic output. Explain plans and
+    // other debug output sometimes use the ~~ and ~~* operators; these binary
+    // operators do not allow for user-supplied escape strings. Normalizing to
+    // the default escape string lets us display the stored pattern in the form
+    // that would be expected by these operators.
     let p = normalize_pattern(pattern, escape)?;
+
     let subpatterns = build_subpatterns(&p)?;
     let matcher_impl = match case_insensitive || subpatterns.len() > 5 {
         false => MatcherImpl::String(subpatterns),
