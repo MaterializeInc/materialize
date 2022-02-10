@@ -10,7 +10,7 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
@@ -75,7 +75,7 @@ where
     /// potentially incorrect results are visible in sinks.
     pub as_of_frontier: Antichain<mz_repr::Timestamp>,
     /// Bindings of identifiers to collections.
-    pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
+    pub bindings: HashMap<Id, CollectionBundle<S, V, T>>,
 }
 
 impl<S: Scope, V: Data, T> Context<S, V, T>
@@ -94,7 +94,7 @@ where
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,
-            bindings: BTreeMap::new(),
+            bindings: HashMap::new(),
         }
     }
 
@@ -258,7 +258,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     pub collection: Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
+    pub arranged: HashMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
 }
 
 impl<S: Scope, V: Data, T: Lattice> CollectionBundle<S, V, T>
@@ -273,7 +273,7 @@ where
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
-            arranged: BTreeMap::default(),
+            arranged: HashMap::default(),
         }
     }
 
@@ -282,7 +282,7 @@ where
         exprs: Vec<MirScalarExpr>,
         arrangements: ArrangementFlavor<S, V, T>,
     ) -> Self {
-        let mut arranged = BTreeMap::new();
+        let mut arranged = HashMap::new();
         arranged.insert(exprs, arrangements);
         Self {
             collection: None,

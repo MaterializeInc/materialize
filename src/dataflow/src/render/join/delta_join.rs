@@ -12,7 +12,7 @@
 //! Consult [DeltaJoinPlan] documentation for details.
 
 #![allow(clippy::op_ref)]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use timely::dataflow::Scope;
 
 use mz_dataflow_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
@@ -59,7 +59,7 @@ where
             // This reduces redundant imports, and simplifies the dataflow structure.
             // As the arrangements are all shared, it should not dramatically improve
             // the efficiency, but the dataflow simplification is worth doing.
-            let mut arrangements = std::collections::BTreeMap::new();
+            let mut arrangements = HashMap::new();
             for path_plan in join_plan.path_plans.iter() {
                 for stage_plan in path_plan.stage_plans.iter() {
                     let lookup_idx = stage_plan.lookup_relation;
@@ -129,9 +129,8 @@ where
                     use timely::dataflow::operators::Map;
 
                     // Ensure this input is rendered, and extract its update stream.
-                    let (_key, val) = arrangements
-                        .iter()
-                        .find(|(key, _val)| key.0 == source_relation && key.1 == source_key)
+                    let val = arrangements
+                        .get(&(source_relation, source_key))
                         .expect("Arrangement promised by the planner is absent!");
                     let as_of = self.as_of_frontier.clone();
                     let update_stream = match val {

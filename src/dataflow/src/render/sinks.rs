@@ -11,7 +11,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
@@ -33,7 +33,7 @@ where
     pub(crate) fn export_sink(
         &mut self,
         compute_state: &mut crate::server::ComputeState,
-        tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &mut HashMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,

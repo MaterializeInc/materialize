@@ -51,7 +51,7 @@ pub use event_link::EventLinkBoundary;
 mod event_link {
 
     use std::any::Any;
-    use std::collections::BTreeMap;
+    use std::collections::HashMap;
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -72,13 +72,13 @@ mod event_link {
 
     /// A simple boundary that uses activated event linked lists.
     pub struct EventLinkBoundary {
-        sources: BTreeMap<GlobalId, SourceBoundary>,
+        sources: HashMap<GlobalId, SourceBoundary>,
     }
 
     impl EventLinkBoundary {
         pub fn new() -> Self {
             Self {
-                sources: BTreeMap::new(),
+                sources: HashMap::new(),
             }
         }
     }

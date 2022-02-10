@@ -100,7 +100,7 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
@@ -200,7 +200,7 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
                 &dataflow,
                 scope.addr().into_element(),
             );
-            let mut tokens = BTreeMap::new();
+            let mut tokens = HashMap::new();
 
             // Import declared sources into the rendering context.
             for source_id in dataflow.source_imports.keys() {
@@ -269,7 +269,7 @@ where
     pub(crate) fn import_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &mut HashMap<GlobalId, Rc<dyn std::any::Any>>,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
@@ -321,7 +321,7 @@ where
     pub(crate) fn export_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &mut HashMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
