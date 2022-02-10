@@ -121,7 +121,7 @@ where
 ///
 /// See the [module][`self`] docs for more info.
 pub trait RuntimeExt {
-    /// Replaces [`tokio::runtime::Runtime::spawn`].
+    /// Replaces [`tokio::runtime::Runtime::spawn_blocking`].
     ///
     /// See the [module][`self`] docs for more info.
     #[track_caller]
@@ -136,7 +136,7 @@ pub trait RuntimeExt {
         Function: FnOnce() -> Output + Send + 'static,
         Output: Send + 'static;
 
-    /// Replaces [`tokio::runtime::Runtime::spawn_blocking`].
+    /// Replaces [`tokio::runtime::Runtime::spawn`].
     ///
     /// See the [module][`self`] docs for more info.
     #[track_caller]
