@@ -157,25 +157,25 @@ fn unique_ancestor_chain(model: &Model, target: BoxId) -> Option<Vec<BoxId>> {
     let unique_ancestor_chain_found = RefCell::new(false);
 
     // Traverse the graph starting from the top until `target` is reached.
-    // If a box with more than one parent is found, do not go deeper.
     let _: Result<(), ()> = mz_ore::graph::try_nonrecursive_dft(
         model,
         model.top_box,
         &mut |model, box_id| {
             let r#box = model.get_box(*box_id);
-            // Check and register if the target is reached.
-            if *box_id == target {
-                *unique_ancestor_chain_found.borrow_mut() = true;
-            }
-
             if *unique_ancestor_chain_found.borrow() {
-                // If target is reached, stop further traversal.
+                // If target has been reached, don't do anything.
                 Ok(vec![])
             } else {
-                // Otherwise, register that we have visited this node.
+                // Register that we have visited this node.
                 ancestor_chain.borrow_mut().push(*box_id);
-                // Only go deeper if the box has more than one parent.
+
                 if r#box.ranging_quantifiers().count() > 1 {
+                    // If a box with more than one parent is found:
+                    // * Do not go deeper.
+                    // * Do not check if the box is the target.
+                    Ok(vec![])
+                } else if *box_id == target {
+                    *unique_ancestor_chain_found.borrow_mut() = true;
                     Ok(vec![])
                 } else {
                     Ok(r#box.input_quantifiers().map(|q| q.input_box).collect())
@@ -190,7 +190,9 @@ fn unique_ancestor_chain(model: &Model, target: BoxId) -> Option<Vec<BoxId>> {
         },
     );
     if *unique_ancestor_chain_found.borrow() {
-        Some(ancestor_chain.take())
+        let mut ancestor_chain = ancestor_chain.take();
+        ancestor_chain.pop();
+        Some(ancestor_chain)
     } else {
         None
     }

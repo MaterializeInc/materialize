@@ -505,12 +505,14 @@ INNER JOIN
 #      /       \
 #     |         |
 #      \       /
+#       SELECT
+#          |
 #       FOJ(p1)
 #      /       \
 #     x         y
 #
-# Test that we currently avoid simplifying outer joins with more than one parent
-# box.
+# Test that we currently avoid simplifying outer joins where an ancestor has
+# more than one parent box.
 opt
 WITH w(f1, f2, f3) as (select x.*, y.f3 from x full outer join y on x.f1 = y.f3)
 select * from w w1 inner join w w2 on w1.f1 = w1.f3
@@ -568,6 +570,67 @@ select * from w w1 inner join w w2 on w1.f1 = w1.f3"
     Q3 -> boxhead3 [ lhead = cluster3 ]
     Q4 -> boxhead3 [ lhead = cluster3 ]
     Q2 -> boxhead0 [ lhead = cluster0 ]
+    Q0 -> boxhead1 [ lhead = cluster1 ]
+    Q1 -> boxhead2 [ lhead = cluster2 ]
+}
+
+#      JOIN(p1)
+#      /       \
+#     |         |
+#      \       /
+#       FOJ(p1)
+#      /       \
+#     x         y
+#
+# Test that we currently avoid simplifying outer joins with more than one parent
+# box.
+opt
+WITH w(f1, f2, f3, f4, f5, f6) as (select * from x full outer join y on x.f1 = y.f3)
+select * from w w1 inner join w w2 on w1.f1 = w1.f6
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "WITH w(f1, f2, f3, f4, f5, f6) as (select * from x full outer join y on x.f1 = y.f3)
+select * from w w1 inner join w w2 on w1.f1 = w1.f6"
+    node [ shape = box ]
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: Q2.C3| 4: Q2.C4| 5: Q2.C5| 6: Q3.C0| 7: Q3.C1| 8: Q3.C2| 9: Q3.C3| 10: Q3.C4| 11: Q3.C5| (Q2.C0 = Q2.C5) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:OuterJoin"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| (Q0.C0 = Q1.C2) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(P)" ]
+            Q1 [ label = "Q1(P)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Get"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead0 [ lhead = cluster0 ]
+    Q3 -> boxhead0 [ lhead = cluster0 ]
     Q0 -> boxhead1 [ lhead = cluster1 ]
     Q1 -> boxhead2 [ lhead = cluster2 ]
 }
