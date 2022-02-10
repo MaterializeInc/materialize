@@ -85,7 +85,6 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: cargo-test
-          run: app
 
   - id: miri-test
     label: Miri test
