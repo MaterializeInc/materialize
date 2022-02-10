@@ -47,8 +47,8 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsConfig, Compression, ExternalSourceConnector, MzOffset,
-    S3KeySource,
+    encoding::SourceDataEncoding, AwsConfig, AwsExternalId, Compression, ExternalSourceConnector,
+    MzOffset, S3KeySource,
 };
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_ore::retry::{Retry, RetryReader};
@@ -127,11 +127,12 @@ async fn download_objects_task(
     tx: Sender<S3Result<InternalMessage>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_config: AwsConfig,
+    aws_external_id: AwsExternalId,
     activator: SyncActivator,
     compression: Compression,
     metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load().await;
+    let config = aws_config.load(aws_external_id).await;
     let client = mz_aws_util::s3::client(&config);
 
     struct BucketInfo {
@@ -243,10 +244,11 @@ async fn scan_bucket_task(
     source_id: String,
     glob: Option<GlobMatcher>,
     aws_config: AwsConfig,
+    aws_external_id: AwsExternalId,
     tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load().await;
+    let config = aws_config.load(aws_external_id).await;
     let client = mz_aws_util::s3::client(&config);
 
     let glob = glob.as_ref();
@@ -359,6 +361,7 @@ async fn read_sqs_task(
     glob: Option<GlobMatcher>,
     queue: String,
     aws_config: AwsConfig,
+    aws_external_id: AwsExternalId,
     tx: Sender<S3Result<KeyInfo>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
@@ -369,7 +372,7 @@ async fn read_sqs_task(
         queue,
     );
 
-    let config = aws_config.load().await;
+    let config = aws_config.load(aws_external_id).await;
     let client = mz_aws_util::sqs::client(&config);
 
     let glob = glob.as_ref();
@@ -807,6 +810,7 @@ impl SourceReader for S3SourceReader {
         _worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
@@ -834,6 +838,7 @@ impl SourceReader for S3SourceReader {
                     dataflow_tx,
                     shutdown_rx.clone(),
                     s3_conn.aws.clone(),
+                    aws_external_id.clone(),
                     consumer_activator,
                     s3_conn.compression,
                     metrics.clone(),
@@ -857,6 +862,7 @@ impl SourceReader for S3SourceReader {
                                 source_id.to_string(),
                                 glob.clone(),
                                 s3_conn.aws.clone(),
+                                aws_external_id.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
                             ),
@@ -876,6 +882,7 @@ impl SourceReader for S3SourceReader {
                                 glob.clone(),
                                 queue,
                                 s3_conn.aws.clone(),
+                                aws_external_id.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
                                 metrics.clone(),

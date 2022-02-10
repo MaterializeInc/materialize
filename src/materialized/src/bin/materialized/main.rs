@@ -43,6 +43,7 @@ use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::metric;
 use mz_ore::metrics::ThirdPartyMetric;
@@ -778,7 +779,10 @@ dataflow workers: {workers}",
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
         telemetry,
-        aws_external_id: args.aws_external_id,
+        aws_external_id: args
+            .aws_external_id
+            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
+            .unwrap_or(AwsExternalId::NotProvided),
         introspection_frequency: args
             .introspection_frequency
             .unwrap_or_else(|| Duration::from_secs(1)),

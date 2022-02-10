@@ -3762,6 +3762,7 @@ dependencies = [
  "materialized",
  "md-5",
  "mz-coord",
+ "mz-dataflow-types",
  "mz-expr",
  "mz-ore",
  "mz-pgrepr",

@@ -114,7 +114,7 @@ use mz_dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
-    ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
+    AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
 use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
 use mz_expr::{
@@ -256,7 +256,7 @@ pub struct Config {
     pub disable_user_indexes: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
-    pub aws_external_id: Option<String>,
+    pub aws_external_id: AwsExternalId,
     pub metrics_registry: MetricsRegistry,
     pub persister: PersisterWithConfig,
     pub now: NowFn,

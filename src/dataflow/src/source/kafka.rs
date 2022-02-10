@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use mz_dataflow_types::sources::AwsExternalId;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -76,6 +77,7 @@ impl SourceReader for KafkaSourceReader {
         worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        _: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         logger: Option<Logger>,

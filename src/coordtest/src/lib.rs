@@ -68,6 +68,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::FutureExt;
 use mz_dataflow_types::client::{ComputeResponse, Response};
+use mz_dataflow_types::sources::AwsExternalId;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;
@@ -125,6 +126,7 @@ impl CoordTest {
             now: now.clone(),
             metrics_registry: metrics_registry.clone(),
             persister: None,
+            aws_external_id: AwsExternalId::NotProvided,
         })?;
         let dataflow_client = InterceptingDataflowClient::new(dataflow_client);
 
@@ -146,7 +148,7 @@ impl CoordTest {
             disable_user_indexes: false,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
-            aws_external_id: None,
+            aws_external_id: AwsExternalId::NotProvided,
             metrics_registry,
             persister,
             now,

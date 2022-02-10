@@ -34,7 +34,7 @@ use tracing::{info, trace};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::{
     sinks::{SinkConnector, SinkConnectorBuilder},
-    sources::{SourceConnector, Timeline},
+    sources::{AwsExternalId, SourceConnector, Timeline},
 };
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_repr::{RelationDesc, ScalarType};
@@ -1204,7 +1204,7 @@ impl Catalog {
             experimental_mode,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
-            aws_external_id: None,
+            aws_external_id: AwsExternalId::NotProvided,
             timestamp_frequency: Duration::from_secs(1),
             now,
             skip_migrations: true,
