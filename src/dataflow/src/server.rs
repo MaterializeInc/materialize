@@ -10,7 +10,6 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -20,7 +19,6 @@ use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
-use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::ActivateCapability;
 use timely::order::PartialOrder;
@@ -29,7 +27,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{Command, ComputeCommand, LocalClient, Response};
-use mz_dataflow_types::{DataflowError, PeekResponse};
+use mz_dataflow_types::PeekResponse;
 use mz_expr::{GlobalId, RowSetFinishing};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -308,20 +306,6 @@ where
             Command::Storage(cmd) => self.activate_storage().handle_storage_command(cmd),
         }
     }
-}
-
-/// Information about each source that must be communicated between storage and compute layers.
-pub struct SourceBoundary {
-    /// Captured `row` updates representing a differential collection.
-    pub ok: ActivatedEventPusher<
-        Rc<EventLink<mz_repr::Timestamp, (Row, mz_repr::Timestamp, mz_repr::Diff)>>,
-    >,
-    /// Captured error updates representing a differential collection.
-    pub err: ActivatedEventPusher<
-        Rc<EventLink<mz_repr::Timestamp, (DataflowError, mz_repr::Timestamp, mz_repr::Diff)>>,
-    >,
-    /// A token that should be dropped to terminate the source.
-    pub token: Rc<dyn std::any::Any>,
 }
 
 pub struct LocalInput {

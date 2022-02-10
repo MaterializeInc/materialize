@@ -5,23 +5,14 @@
 
 /// Traits and types for capturing and replaying collections of data.
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::Duration;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::Scope;
 
 use mz_dataflow_types::DataflowError;
 use mz_expr::GlobalId;
 use mz_repr::{Diff, Row};
-
-use crate::activator::RcActivator;
-use crate::replay::MzReplay;
-use crate::server::ActivatedEventPusher;
-use crate::server::SourceBoundary;
 
 /// A type that can capture a specific source.
 pub trait StorageCapture {
@@ -55,78 +46,117 @@ pub trait ComputeReplay {
     )>;
 }
 
+pub use event_link::EventLinkBoundary;
 /// A simple boundary that uses activated event linked lists.
-pub struct EventLinkBoundary {
-    sources: BTreeMap<GlobalId, crate::server::SourceBoundary>,
-}
+mod event_link {
 
-impl EventLinkBoundary {
-    pub fn new() -> Self {
-        Self {
-            sources: BTreeMap::new(),
+    use std::any::Any;
+    use std::collections::BTreeMap;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use differential_dataflow::AsCollection;
+    use differential_dataflow::Collection;
+    use timely::dataflow::operators::capture::EventLink;
+    use timely::dataflow::Scope;
+
+    use mz_dataflow_types::DataflowError;
+    use mz_expr::GlobalId;
+    use mz_repr::{Diff, Row};
+
+    use crate::activator::RcActivator;
+    use crate::replay::MzReplay;
+    use crate::server::ActivatedEventPusher;
+
+    use super::{ComputeReplay, StorageCapture};
+
+    /// A simple boundary that uses activated event linked lists.
+    pub struct EventLinkBoundary {
+        sources: BTreeMap<GlobalId, SourceBoundary>,
+    }
+
+    impl EventLinkBoundary {
+        pub fn new() -> Self {
+            Self {
+                sources: BTreeMap::new(),
+            }
         }
     }
-}
 
-impl StorageCapture for EventLinkBoundary {
-    fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
-        &mut self,
-        id: GlobalId,
-        ok: Collection<G, Row, Diff>,
-        err: Collection<G, DataflowError, Diff>,
-        token: Rc<dyn Any>,
-        name: &str,
-    ) {
-        let ok_activator = RcActivator::new(format!("{name}-ok"), 1);
-        let err_activator = RcActivator::new(format!("{name}-err"), 1);
+    impl StorageCapture for EventLinkBoundary {
+        fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
+            &mut self,
+            id: GlobalId,
+            ok: Collection<G, Row, Diff>,
+            err: Collection<G, DataflowError, Diff>,
+            token: Rc<dyn Any>,
+            name: &str,
+        ) {
+            let ok_activator = RcActivator::new(format!("{name}-ok"), 1);
+            let err_activator = RcActivator::new(format!("{name}-err"), 1);
 
-        let ok_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator);
-        let err_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator);
+            let ok_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator);
+            let err_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator);
 
-        self.sources.insert(
-            id,
-            SourceBoundary {
-                ok: ActivatedEventPusher::<_>::clone(&ok_handle),
-                err: ActivatedEventPusher::<_>::clone(&err_handle),
-                token,
-            },
-        );
+            self.sources.insert(
+                id,
+                SourceBoundary {
+                    ok: ActivatedEventPusher::<_>::clone(&ok_handle),
+                    err: ActivatedEventPusher::<_>::clone(&err_handle),
+                    token,
+                },
+            );
 
-        use timely::dataflow::operators::Capture;
-        ok.inner.capture_into(ok_handle);
-        err.inner.capture_into(err_handle);
+            use timely::dataflow::operators::Capture;
+            ok.inner.capture_into(ok_handle);
+            err.inner.capture_into(err_handle);
+        }
     }
-}
 
-impl ComputeReplay for EventLinkBoundary {
-    fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
-        &mut self,
-        id: GlobalId,
-        scope: &mut G,
-        name: &str,
-    ) -> Option<(
-        Collection<G, Row, Diff>,
-        Collection<G, DataflowError, Diff>,
-        Rc<dyn Any>,
-    )> {
-        self.sources.remove(&id).map(|source| {
-            let ok = Some(source.ok.inner)
-                .mz_replay(
-                    scope,
-                    &format!("{name}-ok"),
-                    Duration::MAX,
-                    source.ok.activator,
-                )
-                .as_collection();
-            let err = Some(source.err.inner)
-                .mz_replay(
-                    scope,
-                    &format!("{name}-err"),
-                    Duration::MAX,
-                    source.err.activator,
-                )
-                .as_collection();
-            (ok, err, source.token)
-        })
+    impl ComputeReplay for EventLinkBoundary {
+        fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
+            &mut self,
+            id: GlobalId,
+            scope: &mut G,
+            name: &str,
+        ) -> Option<(
+            Collection<G, Row, Diff>,
+            Collection<G, DataflowError, Diff>,
+            Rc<dyn Any>,
+        )> {
+            self.sources.remove(&id).map(|source| {
+                let ok = Some(source.ok.inner)
+                    .mz_replay(
+                        scope,
+                        &format!("{name}-ok"),
+                        Duration::MAX,
+                        source.ok.activator,
+                    )
+                    .as_collection();
+                let err = Some(source.err.inner)
+                    .mz_replay(
+                        scope,
+                        &format!("{name}-err"),
+                        Duration::MAX,
+                        source.err.activator,
+                    )
+                    .as_collection();
+                (ok, err, source.token)
+            })
+        }
+    }
+
+    /// Information about each source that must be communicated between storage and compute layers.
+    pub struct SourceBoundary {
+        /// Captured `row` updates representing a differential collection.
+        pub ok: ActivatedEventPusher<
+            Rc<EventLink<mz_repr::Timestamp, (Row, mz_repr::Timestamp, mz_repr::Diff)>>,
+        >,
+        /// Captured error updates representing a differential collection.
+        pub err: ActivatedEventPusher<
+            Rc<EventLink<mz_repr::Timestamp, (DataflowError, mz_repr::Timestamp, mz_repr::Diff)>>,
+        >,
+        /// A token that should be dropped to terminate the source.
+        pub token: Rc<dyn std::any::Any>,
     }
 }
