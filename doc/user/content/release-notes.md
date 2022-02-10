@@ -166,6 +166,9 @@ changes that have not yet been documented.
   been migrated, however. See [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
   for more info.
 
+- Fix a big where too many columns were returned when both `*` and a
+  table function appeared in the `SELECT` list {{% gh 10363 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 
