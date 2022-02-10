@@ -40,9 +40,7 @@ body:
     attributes:
       label: Cost model
       description: |
-        If both the implementation and cost model are simple, this section can be skipped if the implementation section is filled in.
-
-        Each subsection is meant to be answered with formulae. Take into account memory, CPU, liveness, and skew. Approximations are ok if it is not possible to calculate exact numbers.
+        Take into account memory, CPU, liveness, and skew. If possible, each subsection can be answered with formulae.
 
         If the transformation is always good to have, you only have to fill out the first subsection.
       value: |
@@ -61,7 +59,7 @@ body:
     attributes:
       label: Proposed implementation
       description: |
-        Implementation details can be filled in only after the proposal was approved during a refinement session (in general this decision should be informed by the accompanying cost model).
+        Implementation details can be filled in after there is consensus that the proposed optimization is worthwhile. If you already have an idea for the implementation, feel free to provide details.
       value: |
         #### Describe the implementation.
 
