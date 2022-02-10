@@ -84,7 +84,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        compute_state: &mut crate::render::ComputeState,
+        compute_state: &mut crate::server::ComputeState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
