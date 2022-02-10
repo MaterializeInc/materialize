@@ -58,7 +58,7 @@ use crate::ast::{
     CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
     CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsvColumns,
-    DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
+    DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, ProtobufSchema, Raw,
     SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, UnresolvedObjectName, Value,
     ViewDefinition, WithOption,
@@ -68,15 +68,15 @@ use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::query::{resolve_names_data_type, QueryLifetime};
+use crate::plan::query::{resolve_names_data_type, QueryLifetime, ResolvedDataType};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    self, plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption,
-    IndexOptionName, Params, Plan, Sink, Source, Table, Type, TypeInner, View,
+    plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
+    Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -175,7 +175,7 @@ pub fn plan_create_table(
 
     for (i, c) in columns.into_iter().enumerate() {
         let (aug_data_type, ids) = resolve_names_data_type(scx, c.data_type.clone())?;
-        let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
+        let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {
@@ -2105,38 +2105,41 @@ pub fn plan_create_type(
 
     let mut ids = vec![];
     for key in option_keys {
-        let item_name = match with_options.remove(&key.to_string()) {
-            Some(SqlOption::DataType { data_type, .. }) => match data_type {
-                DataType::Other { name, typ_mod } => {
-                    if !typ_mod.is_empty() {
-                        bail!(
-                            "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
-                            {}, you must use the default type",
-                            as_type.to_string().quoted(),
-                            key,
-                            name
-                        )
+        let item = match with_options.remove(&key.to_string()) {
+            Some(SqlOption::DataType { data_type, .. }) => {
+                let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
+                ids.extend(dt_ids);
+                match data_type {
+                    ResolvedDataType::Named {
+                        name,
+                        id,
+                        modifiers,
+                        print_id: _,
+                    } => {
+                        if !modifiers.is_empty() {
+                            bail!(
+                                "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
+                                {}, you must use the default type",
+                                as_type.to_string().quoted(),
+                                key,
+                                name
+                            )
+                        }
+                        scx.catalog.get_item_by_id(&id)
                     }
-                    name
+                    d => bail!(
+                        "CREATE TYPE ... AS {}option {} can only use named data types, but \
+                        found unnamed data type {}. Use CREATE TYPE to create a named type first",
+                        as_type.to_string().quoted(),
+                        key,
+                        d.to_ast_string(),
+                    ),
                 }
-                d => bail!(
-                    "CREATE TYPE ... AS {}option {} can only use named data types, but \
-                    found unnamed data type {}. Use CREATE TYPE to create a named type first",
-                    as_type.to_string().quoted(),
-                    key,
-                    d.to_ast_string(),
-                ),
-            },
+            }
             Some(_) => bail!("{} must be a data type", key),
             None => bail!("{} parameter required", key),
         };
-        let item = scx
-            .catalog
-            .resolve_item(&normalize::unresolved_object_name(
-                item_name.name().clone(),
-            )?)?;
-        let item_id = item.id();
-        match scx.catalog.try_get_lossy_scalar_type_by_id(&item_id) {
+        match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
             None => bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
@@ -2148,7 +2151,6 @@ pub fn plan_create_type(
             }
             _ => {}
         }
-        ids.push(item_id);
     }
 
     normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;

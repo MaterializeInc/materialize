@@ -21,8 +21,8 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::ast::defs::AstInfo;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::RawName;
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -224,36 +224,36 @@ impl Default for IntervalValue {
 
 /// SQL data types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DataType<T: AstInfo> {
+pub enum UnresolvedDataType {
     /// Array
-    Array(Box<DataType<T>>),
+    Array(Box<UnresolvedDataType>),
     /// List
-    List(Box<DataType<T>>),
+    List(Box<UnresolvedDataType>),
     /// Map
     Map {
-        key_type: Box<DataType<T>>,
-        value_type: Box<DataType<T>>,
+        key_type: Box<UnresolvedDataType>,
+        value_type: Box<UnresolvedDataType>,
     },
     /// Types who don't embed other types, e.g. INT
     Other {
-        name: T::ObjectName,
+        name: RawName,
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
         typ_mod: Vec<u64>,
     },
 }
 
-impl<T: AstInfo> AstDisplay for DataType<T> {
+impl AstDisplay for UnresolvedDataType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            DataType::Array(ty) => {
+            UnresolvedDataType::Array(ty) => {
                 f.write_node(&ty);
                 f.write_str("[]");
             }
-            DataType::List(ty) => {
+            UnresolvedDataType::List(ty) => {
                 f.write_node(&ty);
                 f.write_str(" list");
             }
-            DataType::Map {
+            UnresolvedDataType::Map {
                 key_type,
                 value_type,
             } => {
@@ -263,7 +263,7 @@ impl<T: AstInfo> AstDisplay for DataType<T> {
                 f.write_node(&value_type);
                 f.write_str("]");
             }
-            DataType::Other { name, typ_mod } => {
+            UnresolvedDataType::Other { name, typ_mod } => {
                 f.write_node(name);
                 if typ_mod.len() > 0 {
                     f.write_str("(");
@@ -274,4 +274,4 @@ impl<T: AstInfo> AstDisplay for DataType<T> {
         }
     }
 }
-impl_display_t!(DataType);
+impl_display!(UnresolvedDataType);
