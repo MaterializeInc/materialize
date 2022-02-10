@@ -129,9 +129,8 @@ where
                     use timely::dataflow::operators::Map;
 
                     // Ensure this input is rendered, and extract its update stream.
-                    let (_key, val) = arrangements
-                        .iter()
-                        .find(|(key, _val)| key.0 == source_relation && key.1 == source_key)
+                    let val = arrangements
+                        .get(&(source_relation, source_key))
                         .expect("Arrangement promised by the planner is absent!");
                     let as_of = self.as_of_frontier.clone();
                     let update_stream = match val {
