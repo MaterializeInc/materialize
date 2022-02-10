@@ -30,8 +30,8 @@ sqlfunc!(
     fn cast_time_to_interval<'a>(t: NaiveTime) -> Result<Interval, EvalError> {
         Interval::new(
             0,
-            t.num_seconds_from_midnight() as i64,
-            t.nanosecond().into(),
+            0,
+            (t.num_seconds_from_midnight() * 1_000_000 + t.nanosecond() * 1_000).into(),
         )
         .map_err(|_| EvalError::IntervalOutOfRange)
     }

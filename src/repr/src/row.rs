@@ -356,8 +356,13 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::Interval => {
             let months = i32::from_le_bytes(read_byte_array(data, offset));
-            let duration = i128::from_le_bytes(read_byte_array(data, offset));
-            Datum::Interval(Interval { months, duration })
+            let days = i32::from_le_bytes(read_byte_array(data, offset));
+            let micros = i64::from_le_bytes(read_byte_array(data, offset));
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
         }
         Tag::BytesTiny
         | Tag::BytesShort
@@ -518,7 +523,8 @@ where
         Datum::Interval(i) => {
             data.push(Tag::Interval.into());
             data.extend_from_slice(&i.months.to_le_bytes());
-            data.extend_from_slice(&i.duration.to_le_bytes());
+            data.extend_from_slice(&i.days.to_le_bytes());
+            data.extend_from_slice(&i.micros.to_le_bytes());
         }
         Datum::Bytes(bytes) => {
             let tag = match bytes.len() {
@@ -642,7 +648,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Time(_) => 1 + 8,
         Datum::Timestamp(_) => 1 + 16,
         Datum::TimestampTz(_) => 1 + 16,
-        Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i128>(),
+        Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i32>() + size_of::<i64>(),
         Datum::Bytes(bytes) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match bytes.len() {

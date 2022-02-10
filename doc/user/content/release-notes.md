@@ -107,6 +107,22 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- **Breaking change.** Store days separately in [`interval`](/sql/types/interval). 
+  Unlike the previous version, Hours are never converted to days. This
+  means that an Interval of 24 hours will not be equal to an Interval 
+  of 1 day, you cannot subtract hours from days, and when ordering
+  Intervals d days > h hours for all d,h {{% gh 10708 %}}.
+
+- **Breaking change.** Print all negative [`interval`](/sql/types/interval)
+  units as plural. So `-1 days` will be  printed instead of `1 day`. This
+  matches the behavior of PostgreSQL.
+
+- **Breaking change.** Round microsecond field of
+  [`interval`](/sql/types/interval) to 6 places before applying the
+  given precision. For example `INTERVAL '1.2345649' SECOND(5)` will be
+  rounded to `00:00:01.23457` not `00:00:01.23456`. This matches the
+  behavior of PostgreSQL.
+
 - Support sequences of subscript operations on [`array`] values when
   indexing/accessing individual elements (as opposed to taking slices/ranges of
   values) {{% gh 9815 %}}.

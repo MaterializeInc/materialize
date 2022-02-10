@@ -106,13 +106,8 @@ message ProtoTimestamp {
 message ProtoInterval {
     // A possibly negative number of months.
     int32 months = 1;
-    // A 128-bit nanosecond count, represented as a 64-bit lo and hi.
-    //
-    // TODO: Why do our in-mem intervals use this representation? I've seen
-    // month/day/nanos in the past becuase a day is not always the same number
-    // of nanos.
-    int64 duration_lo = 2;
-    int64 duration_hi = 3;
+    int32 days = 2;
+    int64 micros = 3;
 }
 
 message ProtoArray {

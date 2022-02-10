@@ -94,17 +94,11 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                     is_tz: true,
                 })
             }
-            Datum::Interval(x) => {
-                let duration = x.duration.to_le_bytes();
-                let (mut duration_lo, mut duration_hi) = ([0u8; 8], [0u8; 8]);
-                duration_lo.copy_from_slice(&duration[..8]);
-                duration_hi.copy_from_slice(&duration[8..]);
-                DatumType::Interval(ProtoInterval {
-                    months: x.months,
-                    duration_lo: i64::from_le_bytes(duration_lo),
-                    duration_hi: i64::from_le_bytes(duration_hi),
-                })
-            }
+            Datum::Interval(x) => DatumType::Interval(ProtoInterval {
+                months: x.months,
+                days: x.days,
+                micros: x.micros,
+            }),
             Datum::Bytes(x) => DatumType::Bytes(x.to_vec()),
             Datum::String(x) => DatumType::String(x.to_owned()),
             Datum::Array(x) => DatumType::Array(ProtoArray {
@@ -224,16 +218,11 @@ impl Row {
                     self.push(Datum::Timestamp(datetime));
                 }
             }
-            Some(DatumType::Interval(x)) => {
-                let mut duration = [0u8; 16];
-                duration[..8].copy_from_slice(&x.duration_lo.to_le_bytes());
-                duration[8..].copy_from_slice(&x.duration_hi.to_le_bytes());
-                let duration = i128::from_le_bytes(duration);
-                self.push(Datum::Interval(Interval {
-                    months: x.months,
-                    duration,
-                }))
-            }
+            Some(DatumType::Interval(x)) => self.push(Datum::Interval(Interval {
+                months: x.months,
+                days: x.days,
+                micros: x.micros,
+            })),
             Some(DatumType::List(x)) => self.push_list_with(|row| -> Result<(), String> {
                 for d in x.datums.iter() {
                     row.try_push_proto(d)?;
@@ -331,7 +320,8 @@ mod tests {
             )),
             Datum::Interval(Interval {
                 months: 24,
-                duration: 25,
+                days: 42,
+                micros: 25,
             }),
             Datum::Bytes(&[26, 27]),
             Datum::String("28"),

@@ -26,13 +26,10 @@ sqlfunc!(
     #[sqlname = "ivtotime"]
     fn cast_interval_to_time(mut i: Interval) -> NaiveTime {
         // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
-        if i.duration < 0 {
-            i = Interval::new(0, 86400, 0)
+        if i.duration_as_chrono() < chrono::Duration::zero() {
+            i = Interval::new(0, 0, 86_400_000_000)
                 .unwrap()
-                .checked_add(
-                    &Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds().into())
-                        .unwrap(),
-                )
+                .checked_add(&Interval::new(0, 0, i.dur_as_microsecs()).unwrap())
                 .unwrap();
         }
 

@@ -230,13 +230,13 @@ SELECT INTERVAL '1:2:3.4 5-6 7' YEAR;
 query T
 SELECT INTERVAL '-1-2 -3 -4:5:6.7';
 ----
--1 year -2 months -3 days -04:05:06.7
+-1 years -2 months -3 days -04:05:06.7
 
 # Mixed signs
 query T
 SELECT INTERVAL '-1-2 3 -4:5:6.7';
 ----
--1 year -2 months +2 days +19:54:53.3
+-1 years -2 months +3 days -04:05:06.7
 
 # Allow skipping components.
 query T
@@ -248,12 +248,12 @@ SELECT INTERVAL '1-2 3 4::.5';
 query T
 SELECT INTERVAL '-1-2 -3 4::.5';
 ----
--1 year -2 months -2 days -19:59:59.5
+-1 years -2 months -3 days +04:00:00.5
 
 query T
 SELECT INTERVAL '-1-2 -3 -4::.5';
 ----
--1 year -2 months -3 days -04:00:00.5
+-1 years -2 months -3 days -04:00:00.5
 
 # Parse - and infer second value.
 query T
@@ -286,7 +286,7 @@ SELECT INTERVAL '-1 ::.27';
 query T
 SELECT INTERVAL '-1 -:.27';
 ----
--1 day -00:00:00.27
+-1 days -00:00:00.27
 
 # Positive total time with positive nanoseconds.
 query T
@@ -349,7 +349,7 @@ SELECT INTERVAL '6.7 seconds 5 minutes 3 days 4 hours 1 year 2 month';
 query T
 SELECT INTERVAL '-6.7 seconds 5 minutes -3 days 4 hours -1 year 2 month';
 ----
--10 months -2 days -19:55:06.7
+-10 months -3 days +04:04:53.3
 
 # Allow fractional components.
 query T
@@ -360,19 +360,19 @@ SELECT INTERVAL '1y 2.3mon 4.5d';
 query T
 SELECT INTERVAL '-6.7 seconds 5.6 minutes -3.4 days 4.5 hours -1.2 year 2.3 month';
 ----
--1 year +5 days +18:59:29.3
+-1 years +6 days -05:00:30.7
 
 # Positive total time with negative nanoseconds.
 query T
 SELECT INTERVAL '1 day -0.27 seconds';
 ----
-23:59:59.73
+1 day -00:00:00.27
 
 # Negative total time with positive nanoseconds.
 query T
 SELECT INTERVAL '-1 day 0.27 seconds';
 ----
--23:59:59.73
+-1 days +00:00:00.27
 
 # Fractional year expands down to months.
 query T
@@ -380,7 +380,7 @@ SELECT INTERVAL '10.333 years';
 ----
 10 years 3 months
 
-# Fractional part wtih ambiguity and range.
+# Fractional part with ambiguity and range.
 query T
 SELECT INTERVAL '10.333' years;
 ----
@@ -466,7 +466,7 @@ SELECT INTERVAL '01:02:03minute hour day year';
 query T
 SELECT INTERVAL '-13-10 15 -16::.27';
 ----
--13 years -10 months +14 days +07:59:59.73
+-13 years -10 months +15 days -16:00:00.27
 
 query T
 SELECT INTERVAL '-13-10 -15 -16::.27';
@@ -482,7 +482,7 @@ SELECT INTERVAL '-13 years -10 months -15 days -16:00:00.27';
 query T
 SELECT INTERVAL '-13 years -10 months +14 days +07:59:59.73';
 ----
--13 years -10 months +14 days +07:59:59.73
+-13 years -10 months +14 days 07:59:59.73
 
 # Commutative mixed expressions.
 query T
@@ -549,6 +549,18 @@ SELECT INTERVAL '1.23456789' SECOND(2);
 ----
 00:00:01.23
 
+# Postgres rounds micros to 6 digits before applying given precision
+query T
+SELECT INTERVAL '1.2345649' SECOND(5);
+----
+00:00:01.23457
+
+query T
+SELECT INTERVAL '-1.555555555 years 2.555555555 months -3.555555555 days 4.555555555 hours -5.555555555 minutes 6.555555555 seconds';
+----
+-1 years -4 months +13 days 07:07:53.220829
+
+
 # Allow precision as second element in range.
 query T
 SELECT INTERVAL '1:2:31.23456789' MINUTE TO SECOND(2);
@@ -604,7 +616,7 @@ SELECT interval '02!01!1~01:02:03';
 query T
 SELECT - INTERVAL '1-2 3 4:5:6.7';
 ----
--1 year -2 months -3 days -04:05:06.7
+-1 years -2 months -3 days -04:05:06.7
 
 query T
 SELECT - INTERVAL '-1 year -2 months -3 days -04:05:06.7';
@@ -614,7 +626,7 @@ SELECT - INTERVAL '-1 year -2 months -3 days -04:05:06.7';
 query T
 SELECT - INTERVAL '1 year 2 months -3 days -04:05:06.7';
 ----
--1 year -2 months +3 days +04:05:06.7
+-1 years -2 months +3 days 04:05:06.7
 
 query T
 SELECT - INTERVAL '-1 year -2 months 3 days 04:05:06.7';
@@ -630,17 +642,17 @@ SELECT INTERVAL '1-2 3 4:5:6.7' + INTERVAL '1-2 3 4:5:6.7';
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' - INTERVAL '7-6 5 4:3:2.1';
 ----
--6 years -4 months -1 day -23:57:55.4
+-6 years -4 months -2 days +00:02:04.6
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' + - INTERVAL '7-6 5 4:3:2.1';
 ----
--6 years -4 months -1 day -23:57:55.4
+-6 years -4 months -2 days +00:02:04.6
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' + INTERVAL '-7-6 -5 -4:3:2.1';
 ----
--6 years -4 months -1 day -23:57:55.4
+-6 years -4 months -2 days +00:02:04.6
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' - INTERVAL '-7-6 -5 -4:3:2.1';
@@ -694,7 +706,7 @@ SELECT INTERVAL '1' YEAR * 0.9999999
 query T
 SELECT INTERVAL '-1-2 -3 -4:5:6.7' * 999
 ----
--1165 years -6 months -3167 days -01:06:33.3
+-1165 years -6 months -2997 days -4081:06:33.3
 
 # Division by zero
 statement error division by zero
@@ -705,17 +717,17 @@ SELECT INTERVAL '1' YEAR / 0
 query T
 SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'
 ----
-2236962132 days 07:59:59.999999
+2147483647 days 2147483647:59:59.999999
 
 query T
 SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'
 ----
--2236962132 days -07:59:59.999999
+-2147483647 days -2147483647:59:59.999999
 
 query T
 SELECT INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds'
 ----
--2236962133 days -08:59:59.999999
+-2147483648 days -2147483648:59:59.999999
 
 statement error invalid input syntax for type interval: exceeds min/max interval duration
 SELECT INTERVAL '2147483647 days 2147483648 hours'
@@ -745,14 +757,14 @@ SELECT INTERVAL '-2147483647' MONTH * 1.01
 query T
 SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';
 ----
-31 days 01:01:00.997318
+29 days 49:01:00.997318
 
 ## Overflows
 
-statement error Overflows maximum months; cannot exceed 9223372036854775807 months
+statement error Overflows maximum months;
 SELECT INTERVAL '768614336404564651 year';
 
-statement error Overflows maximum months; cannot exceed 9223372036854775807 months
+statement error Overflows maximum months;
 SELECT INTERVAL '768614336404564650.7 year';
 
 statement error Unable to parse value as a number at index 19: number too large to fit in target type
@@ -761,25 +773,25 @@ SELECT INTERVAL '9223372036854775808 months';
 statement error Unable to parse value as a number at index 20: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 months';
 
-statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum days;
 SELECT INTERVAL '106751991167300 days .1 month';
 
-statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum days;
 SELECT INTERVAL '106751991167301 days';
 
-statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum days;
 SELECT INTERVAL '106751991167300.9 days';
 
-statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854775807 seconds 1 hour';
 
-statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854771807 seconds 1.9 hour';
 
-statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 
-statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
 statement error Unable to parse value as a number at index 19: number too large to fit in target type
@@ -889,3 +901,24 @@ query T
 SELECT INTERVAL '1 millenniums 2 centuries 3 decades 4 years'
 ----
 1234 years
+
+# Cast Interval to time
+query T
+SELECT INTERVAL '-1 hour -2 minutes -3.45 seconds'::time;
+----
+22:57:56.55
+
+query T
+SELECT INTERVAL '1 hour 2 minutes 3.45 seconds'::time;
+----
+01:02:03.45
+
+query T
+SELECT INTERVAL '6 days'::time;
+----
+00:00:00
+
+query T
+SELECT INTERVAL '7 months'::time;
+----
+00:00:00

@@ -149,9 +149,15 @@ fn arb_dict(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
 fn arb_interval() -> BoxedStrategy<Interval> {
     (
         any::<i32>(),
-        (-193_273_528_233_599_999_999_000_i128..193_273_528_233_599_999_999_000_i128),
+        any::<i32>(),
+        ((((i64::from(i32::MIN) * 60) - 59) * 60) * 1_000_000 - 59_999_999
+            ..(((i64::from(i32::MAX) * 60) + 59) * 60) * 1_000_000 + 59_999_999),
     )
-        .prop_map(|(months, duration)| Interval { months, duration })
+        .prop_map(|(months, days, micros)| Interval {
+            months,
+            days,
+            micros,
+        })
         .boxed()
 }
 

@@ -201,49 +201,21 @@ impl DateTimeField {
             .unwrap_or_else(|| panic!("Cannot get larger DateTimeField than {}", self))
     }
 
-    /// Returns the number of seconds in a single unit of `field`.
+    /// Returns the number of microseconds in a single unit of `field`.
     ///
     /// # Panics
     ///
-    /// Panics if called on a non-duration field or a field smaller than a second.
-    pub fn seconds_multiplier(self) -> i64 {
+    /// Panics if called on a non-duration field.
+    pub fn micros_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
-            Day => 60 * 60 * 24,
-            Hour => 60 * 60,
-            Minute => 60,
-            Second => 1,
-            _other => unreachable!(
-                "Do not call with a non-duration field or a field smaller than a second"
-            ),
-        }
-    }
-
-    /// Returns the number of 'fields' in a single second.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on a non-duration field or a field larger than or equal to a second.
-    pub fn seconds_divider(self) -> i64 {
-        use DateTimeField::*;
-        match self {
+            Day => 1_000_000 * 60 * 60 * 24,
+            Hour => 1_000_000 * 60 * 60,
+            Minute => 1_000_000 * 60,
+            Second => 1_000_000,
             Milliseconds => 1_000,
-            Microseconds => 1_000_000,
-            _other => unreachable!("Do not call with a field larger than or equal to a second"),
-        }
-    }
-
-    /// Returns the number of nanoseconds in a single unit of `field`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on a non-duration field or a field smaller than a nanosecond.
-    pub fn nanos_multiplier(self) -> i64 {
-        use DateTimeField::*;
-        match self {
-            Milliseconds => 1_000_000,
-            Microseconds => 1_000,
-            _ => self.seconds_multiplier() * 1_000_000_000,
+            Microseconds => 1,
+            _other => unreachable!("Do not call with a non-duration field"),
         }
     }
 
@@ -349,6 +321,8 @@ impl DateTimeFieldValue {
     pub fn new(unit: i64, fraction: i64) -> Self {
         DateTimeFieldValue { unit, fraction }
     }
+
+    const FRACTION_MULTIPLIER: i64 = 1_000_000_000;
 }
 
 /// Parsed timezone.
@@ -470,34 +444,24 @@ impl ParsedDateTime {
     /// - If any component overflows a parameter (i.e. i64).
     pub fn compute_interval(&self) -> Result<Interval, String> {
         use DateTimeField::*;
-        let mut months = 0i64;
-        let mut seconds = 0i64;
-        let mut nanos = 0i64;
+        let mut months = 0i32;
+        let mut days = 0i32;
+        let mut micros = 0i64;
 
         // Add all DateTimeFields, from Millennium to Microseconds.
-        self.add_field(Millennium, &mut months, &mut seconds, &mut nanos)?;
+        self.add_field(Millennium, &mut months, &mut days, &mut micros)?;
 
         for field in Millennium.into_iter().take_while(|f| *f <= Microseconds) {
-            self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
+            self.add_field(field, &mut months, &mut days, &mut micros)?;
         }
 
-        let months: i32 = match months.try_into() {
-            Ok(m) => m,
-            Err(_) => {
-                return Err(format!(
-                    "exceeds min/max months (+2147483647/-2147483648); have {}",
-                    months
-                ))
-            }
-        };
-
-        match Interval::new(months, seconds, nanos.into()) {
+        match Interval::new(months, days, micros) {
             Ok(i) => Ok(i),
             Err(e) => Err(e.to_string()),
         }
     }
     /// Adds the appropriate values from self's ParsedDateTime to `months`,
-    /// `seconds`, and `nanos`. These fields are then appropriate to construct
+    /// `days`, and `micros`. These fields are then appropriate to construct
     /// std::time::Duration, once accounting for their sign.
     ///
     /// # Errors
@@ -505,11 +469,21 @@ impl ParsedDateTime {
     fn add_field(
         &self,
         d: DateTimeField,
-        months: &mut i64,
-        seconds: &mut i64,
-        nanos: &mut i64,
+        months: &mut i32,
+        days: &mut i32,
+        micros: &mut i64,
     ) -> Result<(), String> {
         use DateTimeField::*;
+        fn div_and_round(i: i128, d: i64) -> Option<i64> {
+            let mut res = i / i128::from(d);
+            let round_digit = (i / (i128::from(d) / 10)) % 10;
+            if round_digit > 4 {
+                res += 1;
+            } else if round_digit < -4 {
+                res -= 1;
+            }
+            i64::try_from(res).ok()
+        }
         match d {
             Millennium | Century | Decade | Year => {
                 let (y, y_f) = match self.units_of(d) {
@@ -519,24 +493,27 @@ impl ParsedDateTime {
                 // months += y * month_multiplier(d)
                 *months = y
                     .checked_mul(d.month_multiplier())
+                    .and_then(|y_m| i32::try_from(y_m).ok())
                     .and_then(|y_m| months.checked_add(y_m))
                     .ok_or_else(|| {
                         format!(
-                            "Overflows maximum months; \
-                             cannot exceed {} months",
-                            std::i64::MAX
+                            "Overflows maximum months; cannot exceed {}/{} months",
+                            i32::MAX,
+                            i32::MIN,
                         )
                     })?;
 
-                // months += y_f * month_multiplier(d) / 1_000_000_000
+                // months += y_f * month_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
                 *months = y_f
                     .checked_mul(d.month_multiplier())
-                    .and_then(|y_f_m| months.checked_add(y_f_m / 1_000_000_000))
+                    .and_then(|y_f_m| y_f_m.checked_div(DateTimeFieldValue::FRACTION_MULTIPLIER))
+                    .and_then(|y_f_m| i32::try_from(y_f_m).ok())
+                    .and_then(|y_f_m| months.checked_add(y_f_m))
                     .ok_or_else(|| {
                         format!(
-                            "Overflows maximum months; \
-                             cannot exceed {} months",
-                            std::i64::MAX
+                            "Overflows maximum months; cannot exceed {}/{} months",
+                            i32::MAX,
+                            i32::MIN,
                         )
                     })?;
                 Ok(())
@@ -547,107 +524,121 @@ impl ParsedDateTime {
                     None => return Ok(()),
                 };
 
-                *months = m.checked_add(*months).ok_or_else(|| {
-                    format!(
-                        "Overflows maximum months; \
-                         cannot exceed {} months",
-                        std::i64::MAX
-                    )
-                })?;
+                // months += m
+                *months = i32::try_from(m)
+                    .ok()
+                    .and_then(|m_month| months.checked_add(m_month))
+                    .ok_or_else(|| {
+                        format!(
+                            "Overflows maximum months; cannot exceed {}/{} months",
+                            i32::MAX,
+                            i32::MIN,
+                        )
+                    })?;
 
-                let m_f_ns = m_f
-                    .checked_mul(30 * Day.seconds_multiplier())
+                let m_f_days = m_f
+                    .checked_mul(30)
                     .ok_or_else(|| "Intermediate overflow in MONTH fraction".to_owned())?;
+                // days += m_f * 30 / DateTimeFieldValue::FRACTION_MULTIPLIER
+                *days = m_f_days
+                    .checked_div(DateTimeFieldValue::FRACTION_MULTIPLIER)
+                    .and_then(|m_f_days| i32::try_from(m_f_days).ok())
+                    .and_then(|m_f_days| days.checked_add(m_f_days))
+                    .ok_or_else(|| {
+                        format!(
+                            "Overflows maximum seconds; cannot exceed {}/{} days",
+                            i32::MAX,
+                            i32::MIN,
+                        )
+                    })?;
 
-                // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000
-                *seconds = seconds.checked_add(m_f_ns / 1_000_000_000).ok_or_else(|| {
-                    format!(
-                        "Overflows maximum seconds; \
-                         cannot exceed {} seconds",
-                        std::i64::MAX
-                    )
-                })?;
+                // micros += m_f * 30 % DateTimeFieldValue::FRACTION_MULTIPLIER * micros_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
+                *micros = i128::from(m_f_days)
+                    .checked_rem(DateTimeFieldValue::FRACTION_MULTIPLIER.into())
+                    .and_then(|m_f_us| m_f_us.checked_mul(Day.micros_multiplier().into()))
+                    .and_then(|m_f_us| {
+                        div_and_round(m_f_us, DateTimeFieldValue::FRACTION_MULTIPLIER)
+                    })
+                    .and_then(|m_f_us| i64::try_from(m_f_us).ok())
+                    .and_then(|m_f_us| micros.checked_add(m_f_us))
+                    .ok_or_else(|| {
+                        format!(
+                            "Overflows maximum microseconds; cannot exceed {}/{} microseconds",
+                            i64::MAX,
+                            i64::MIN
+                        )
+                    })?;
 
-                *nanos += m_f_ns % 1_000_000_000;
                 Ok(())
             }
-            Day | Hour | Minute | Second => {
+            Day => {
                 let (t, t_f) = match self.units_of(d) {
                     Some(t) => (t.unit, t.fraction),
                     None => return Ok(()),
                 };
 
-                *seconds = t
-                    .checked_mul(d.seconds_multiplier())
-                    .and_then(|t_s| seconds.checked_add(t_s))
+                // days += t
+                *days = i32::try_from(t)
+                    .ok()
+                    .and_then(|t_day| days.checked_add(t_day))
                     .ok_or_else(|| {
                         format!(
-                            "Overflows maximum seconds; \
-                             cannot exceed {} seconds",
-                            std::i64::MAX
+                            "Overflows maximum days; cannot exceed {}/{} days",
+                            i32::MAX,
+                            i32::MIN,
                         )
                     })?;
 
-                let t_f_ns = t_f
-                    .checked_mul(d.seconds_multiplier())
-                    .ok_or_else(|| format!("Intermediate overflow in {} fraction", d))?;
+                // micros += t_f * micros_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
+                *micros = i128::from(t_f)
+                    .checked_mul(d.micros_multiplier().into())
+                    .and_then(|t_f_us| {
+                        div_and_round(t_f_us, DateTimeFieldValue::FRACTION_MULTIPLIER)
+                    })
+                    .and_then(|t_f_us| i64::try_from(t_f_us).ok())
+                    .and_then(|t_f_us| micros.checked_add(t_f_us))
+                    .ok_or_else(|| {
+                        format!(
+                            "Overflows maximum microseconds; cannot exceed {}/{} microseconds",
+                            i64::MAX,
+                            i64::MIN
+                        )
+                    })?;
 
-                // seconds += t_f * seconds_multiplier(d) / 1_000_000_000
-                *seconds = seconds.checked_add(t_f_ns / 1_000_000_000).ok_or_else(|| {
-                    format!(
-                        "Overflows maximum seconds; \
-                         cannot exceed {} seconds",
-                        std::i64::MAX
-                    )
-                })?;
-
-                *nanos += t_f_ns % 1_000_000_000;
                 Ok(())
             }
-            Milliseconds | Microseconds => {
+            Hour | Minute | Second | Milliseconds | Microseconds => {
                 let (t, t_f) = match self.units_of(d) {
                     Some(t) => (t.unit, t.fraction),
                     None => return Ok(()),
                 };
 
-                // seconds += t / seconds_multiplier(d)
-                *seconds = t
-                    .checked_div(d.seconds_divider())
-                    .and_then(|t_s| seconds.checked_add(t_s))
+                // micros += t * micros_multiplier(d)
+                *micros = t
+                    .checked_mul(d.micros_multiplier())
+                    .and_then(|t_s| micros.checked_add(t_s))
                     .ok_or_else(|| {
                         format!(
-                            "Overflows maximum seconds; \
-                             cannot exceed {} seconds",
-                            std::i64::MAX
+                            "Overflows maximum microseconds; cannot exceed {}/{} microseconds",
+                            i64::MAX,
+                            i64::MIN,
                         )
                     })?;
 
-                // nanos += t % seconds_divider(d) * nanos_multiplier(d)
-                *nanos = t
-                    .checked_rem(d.seconds_divider())
-                    .and_then(|t_s| t_s.checked_mul(d.nanos_multiplier()))
-                    .and_then(|t_s| nanos.checked_add(t_s))
+                // micros += t_f * micros_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
+                *micros = t_f
+                    .checked_mul(d.micros_multiplier())
+                    .and_then(|t_f_ns| {
+                        div_and_round(t_f_ns.into(), DateTimeFieldValue::FRACTION_MULTIPLIER)
+                    })
+                    .and_then(|t_f_ns| micros.checked_add(t_f_ns))
                     .ok_or_else(|| {
                         format!(
-                            "Overflows maximum nanoseconds; \
-                             cannot exceed {} nanoseconds",
-                            std::i64::MAX
+                            "Overflows maximum microseconds; cannot exceed {}/{} microseconds",
+                            i64::MAX,
+                            i64::MIN,
                         )
                     })?;
-
-                // nanos += t_f / seconds_divider(d) % 1_000_000_000
-                *nanos = t_f
-                    .checked_div(d.seconds_divider())
-                    .and_then(|t_s| t_s.checked_rem(1_000_000_000))
-                    .and_then(|t_s| nanos.checked_add(t_s))
-                    .ok_or_else(|| {
-                        format!(
-                            "Overflows maximum nanoseconds; \
-                             cannot exceed {} nanoseconds",
-                            std::i64::MAX
-                        )
-                    })?;
-
                 Ok(())
             }
         }
@@ -3826,12 +3817,12 @@ fn test_parseddatetime_add_field() {
     run_test_parseddatetime_add_field(pdt_unit.clone(), Decade, (10 * 12 * 10, 0, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Year, (12, 0, 0));
     run_test_parseddatetime_add_field(pdt_unit.clone(), Month, (2, 0, 0));
-    run_test_parseddatetime_add_field(pdt_unit.clone(), Day, (0, 2 * 60 * 60 * 24, 0));
-    run_test_parseddatetime_add_field(pdt_unit.clone(), Hour, (0, 3 * 60 * 60, 0));
-    run_test_parseddatetime_add_field(pdt_unit.clone(), Minute, (0, 4 * 60, 0));
-    run_test_parseddatetime_add_field(pdt_unit.clone(), Second, (0, 5, 0));
-    run_test_parseddatetime_add_field(pdt_unit.clone(), Milliseconds, (0, 0, 6 * 1_000_000));
-    run_test_parseddatetime_add_field(pdt_unit, Microseconds, (0, 0, 7 * 1_000));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Day, (0, 2, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Hour, (0, 0, 3 * 60 * 60 * 1_000_000));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Minute, (0, 0, 4 * 60 * 1_000_000));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Second, (0, 0, 5 * 1_000_000));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Milliseconds, (0, 0, 6 * 1_000));
+    run_test_parseddatetime_add_field(pdt_unit, Microseconds, (0, 0, 7));
     run_test_parseddatetime_add_field(pdt_frac.clone(), Millennium, (102_666, 0, 0));
     run_test_parseddatetime_add_field(pdt_frac.clone(), Century, (11466, 0, 0));
     run_test_parseddatetime_add_field(pdt_frac.clone(), Decade, (1266, 0, 0));
@@ -3841,9 +3832,9 @@ fn test_parseddatetime_add_field() {
         Month,
         (
             2,
-            // 16 days 15:59:59.99856
-            16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59,
-            998_560_000,
+            16,
+            // 15:59:59.99856
+            (15 * 60 * 60 * 1_000_000) + (59 * 60 * 1_000_000) + (59 * 1_000_000) + 998_560,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3851,9 +3842,9 @@ fn test_parseddatetime_add_field() {
         Day,
         (
             0,
-            // 2 days 13:19:59.999952
-            2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59,
-            999_952_000,
+            2,
+            // 13:19:59.999952
+            (13 * 60 * 60 * 1_000_000) + (19 * 60 * 1_000_000) + (59 * 1_000_000) + 999_952,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3861,9 +3852,9 @@ fn test_parseddatetime_add_field() {
         Hour,
         (
             0,
+            0,
             // 03:33:19.999998
-            3 * 60 * 60 + 33 * 60 + 19,
-            999_998_000,
+            (3 * 60 * 60 * 1_000_000) + (33 * 60 * 1_000_000) + (19 * 1_000_000) + 999_998,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3871,9 +3862,9 @@ fn test_parseddatetime_add_field() {
         Minute,
         (
             0,
+            0,
             // 00:04:33.333333
-            4 * 60 + 33,
-            333_333_300,
+            (4 * 60 * 1_000_000) + (33 * 1_000_000) + 333_333,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3881,9 +3872,9 @@ fn test_parseddatetime_add_field() {
         Second,
         (
             0,
+            0,
             // 00:00:05.555556
-            5,
-            555_555_555,
+            (5 * 1_000_000) + 555_556,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3891,7 +3882,7 @@ fn test_parseddatetime_add_field() {
         Milliseconds,
         (
             0, 0, // 00:00:00.006556
-            6_555_555,
+            6_556,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3899,7 +3890,7 @@ fn test_parseddatetime_add_field() {
         Microseconds,
         (
             0, 0, // 00:00:00.000008
-            7_555,
+            8,
         ),
     );
     run_test_parseddatetime_add_field(pdt_frac_neg.clone(), Year, (-18, 0, 0));
@@ -3908,9 +3899,9 @@ fn test_parseddatetime_add_field() {
         Month,
         (
             -2,
-            // -16 days -15:59:59.99856
-            -(16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59),
-            -998_560_000,
+            -16,
+            // -15:59:59.99856
+            (-15 * 60 * 60 * 1_000_000) + (-59 * 60 * 1_000_000) + (-59 * 1_000_000) + -998_560,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3918,9 +3909,9 @@ fn test_parseddatetime_add_field() {
         Day,
         (
             0,
-            // -2 days 13:19:59.999952
-            -(2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59),
-            -999_952_000,
+            -2,
+            // 13:19:59.999952
+            (-13 * 60 * 60 * 1_000_000) + (-19 * 60 * 1_000_000) + (-59 * 1_000_000) + -999_952,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3928,9 +3919,9 @@ fn test_parseddatetime_add_field() {
         Hour,
         (
             0,
+            0,
             // -03:33:19.999998
-            -(3 * 60 * 60 + 33 * 60 + 19),
-            -999_998_000,
+            (-3 * 60 * 60 * 1_000_000) + (-33 * 60 * 1_000_000) + (-19 * 1_000_000) + -999_998,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3938,9 +3929,9 @@ fn test_parseddatetime_add_field() {
         Minute,
         (
             0,
+            0,
             // -00:04:33.333333
-            -(4 * 60 + 33),
-            -333_333_300,
+            (-4 * 60 * 1_000_000) + (-33 * 1_000_000) + -333_333,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3948,9 +3939,9 @@ fn test_parseddatetime_add_field() {
         Second,
         (
             0,
+            0,
             // -00:00:05.555556
-            -5,
-            -555_555_555,
+            (-5 * 1_000_000) + -555_556,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3958,7 +3949,7 @@ fn test_parseddatetime_add_field() {
         Milliseconds,
         (
             0, 0, // -00:00:00.006556
-            -6_555_555,
+            -6_556,
         ),
     );
     run_test_parseddatetime_add_field(
@@ -3966,30 +3957,32 @@ fn test_parseddatetime_add_field() {
         Microseconds,
         (
             0, 0, // -00:00:00.000008
-            -7_555,
+            -8,
         ),
     );
     run_test_parseddatetime_add_field(
         pdt_s_rollover.clone(),
         Milliseconds,
         (
+            0,
             0, // 00:00:01.002667
-            1, 2_666_666,
+            (1 * 1_000_000) + 2_667,
         ),
     );
     run_test_parseddatetime_add_field(
         pdt_s_rollover,
         Microseconds,
         (
+            0,
             0, // 00:00:01.000004
-            1, 3_777,
+            (1 * 1_000_000) + 4,
         ),
     );
 
     fn run_test_parseddatetime_add_field(
         pdt: ParsedDateTime,
         f: DateTimeField,
-        expected: (i64, i64, i64),
+        expected: (i32, i32, i64),
     ) {
         let mut res = (0, 0, 0);
 
@@ -4048,8 +4041,13 @@ fn test_parseddatetime_compute_interval() {
             second: Some(DateTimeFieldValue::new(-4, -500_000_000)),
             ..Default::default()
         },
-        // 21:56:55.5
-        Interval::new(0, 21 * 60 * 60 + 56 * 60 + 55, 500_000_000).unwrap(),
+        // 1 day -2:03:04.5
+        Interval::new(
+            0,
+            1,
+            (-2 * 60 * 60 * 1_000_000) + (-3 * 60 * 1_000_000) + (-4 * 1_000_000) + -500_000,
+        )
+        .unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4059,8 +4057,13 @@ fn test_parseddatetime_compute_interval() {
             second: Some(DateTimeFieldValue::new(4, 500_000_000)),
             ..Default::default()
         },
-        // -21:56:55.5
-        Interval::new(0, -(21 * 60 * 60 + 56 * 60 + 55), -500_000_000).unwrap(),
+        // -1 day 02:03:04.5
+        Interval::new(
+            0,
+            -1,
+            (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
+        )
+        .unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4068,8 +4071,8 @@ fn test_parseddatetime_compute_interval() {
             second: Some(DateTimeFieldValue::new(0, -270_000_000)),
             ..Default::default()
         },
-        // 23:59:59.73
-        Interval::new(0, 23 * 60 * 60 + 59 * 60 + 59, 730_000_000).unwrap(),
+        // 1 day -00:00:00.27
+        Interval::new(0, 1, -270_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4077,8 +4080,8 @@ fn test_parseddatetime_compute_interval() {
             second: Some(DateTimeFieldValue::new(0, 270_000_000)),
             ..Default::default()
         },
-        // -23:59:59.73
-        Interval::new(0, -(23 * 60 * 60 + 59 * 60 + 59), -730_000_000).unwrap(),
+        // -1 day 00:00:00.27
+        Interval::new(0, -1, 270_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4090,29 +4093,11 @@ fn test_parseddatetime_compute_interval() {
             second: Some(DateTimeFieldValue::new(6, 555_555_555)),
             ..Default::default()
         },
-        // -1 year -4 months +13 days +07:07:53.220828
+        // -1 year -4 months +13 days +07:07:53.220829
         Interval::new(
             -16,
-            13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53,
-            220_828_255,
-        )
-        .unwrap(),
-    );
-    run_test_parseddatetime_compute_interval(
-        ParsedDateTime {
-            year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
-            month: Some(DateTimeFieldValue::new(2, 555_555_555)),
-            day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
-            hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
-            minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
-            second: Some(DateTimeFieldValue::new(6, 555_555_555)),
-            ..Default::default()
-        },
-        // -1 year -4 months +13 days +07:07:53.220828255
-        Interval::new(
-            -16,
-            13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53,
-            220_828_255,
+            13,
+            (7 * 60 * 60 * 1_000_000) + (7 * 60 * 1_000_000) + (53 * 1_000_000) + 220_829,
         )
         .unwrap(),
     );
@@ -4123,7 +4108,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:03.003
-        Interval::new(0, 3, 3_000_000).unwrap(),
+        Interval::new(0, 0, (3 * 1_000_000) + 3_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4132,7 +4117,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:03.000003
-        Interval::new(0, 3, 3_000).unwrap(),
+        Interval::new(0, 0, (3 * 1_000_000) + 3).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4141,7 +4126,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:00.0012034
-        Interval::new(0, 0, 1_203_400).unwrap(),
+        Interval::new(0, 0, 1_203).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {

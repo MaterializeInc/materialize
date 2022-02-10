@@ -674,14 +674,7 @@ impl<'a> From<Numeric> for Datum<'a> {
 
 impl<'a> From<chrono::Duration> for Datum<'a> {
     fn from(duration: chrono::Duration) -> Datum<'a> {
-        Datum::Interval(
-            Interval::new(
-                0,
-                duration.num_seconds(),
-                i128::from(duration.num_nanoseconds().unwrap_or(0)) % 1_000_000_000,
-            )
-            .unwrap(),
-        )
+        Datum::Interval(Interval::new(0, 0, duration.num_microseconds().unwrap_or(0)).unwrap())
     }
 }
 

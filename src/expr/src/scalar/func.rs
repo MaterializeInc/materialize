@@ -1917,12 +1917,12 @@ where
         Err(EvalError::DateBinOutOfRange(
             "timestamps cannot be binned into intervals containing months or years".to_string(),
         ))
-    } else if stride.duration <= 0 {
+    } else if stride.micros <= 0 {
         Err(EvalError::DateBinOutOfRange(
             "stride must be greater than zero".to_string(),
         ))
     } else {
-        i64::try_from(stride.duration).map_err(|_| {
+        i64::try_from(stride.micros).map_err(|_| {
             EvalError::DateBinOutOfRange("stride cannot exceed 2^63 nanoseconds".to_string())
         })
     }?;
