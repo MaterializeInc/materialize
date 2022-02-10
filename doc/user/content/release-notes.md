@@ -119,6 +119,9 @@ changes that have not yet been documented.
 - Fix a bug where too many columns were returned when both `*` and a
   table function appeared in the `SELECT` list {{% gh 10363 %}}.
 
+- Improve the clarity of any Avro schema resolution errors found when
+  creating materialized sources and views.
+
 {{< comment >}}
 Only add new release notes above this line.
 
@@ -196,6 +199,9 @@ boundary don't silently merge their release notes into the wrong place.
   Kafka topic has more than one partition {{% gh 10375 %}}. Previous versions of
   Materialize would lose data unless the `deduplication = 'full'` option was
   specified.
+
+{{< comment >}}
+Only add new release notes above this line.
 
 - Improve the performance of SQL `LIKE` expressions.
 
