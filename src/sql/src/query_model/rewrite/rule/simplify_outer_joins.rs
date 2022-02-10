@@ -29,7 +29,7 @@ use crate::query_model::{BoxId, Model, QuantifierId};
 pub(crate) struct SimplifyOuterJoins;
 
 impl Rule for SimplifyOuterJoins {
-    /// A (non-empty) sequence of ids corresponding to [Quantifier]s whose type
+    /// A (non-empty) sequence of ids corresponding to quantifiers whose type
     /// should be changed from [QuantifierType::PreservedForeach] to
     /// [QuantifierType::Foreach], and the box that the quantifiers belong to.
     type Match = (BoxId, Vec<QuantifierId>);
