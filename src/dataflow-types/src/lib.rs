@@ -26,4 +26,5 @@ pub use explain::DataflowGraphFormatter;
 pub use explain::Explanation;
 pub use explain::JsonViewFormatter;
 pub use plan::Plan;
+pub use types::sources::match_key_indices;
 pub use types::*;

@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. and contributors. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserve,
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -403,9 +403,9 @@ where
                         }
 
                         // render envelopes
+                        let source_arity = src.desc.typ().arity();
                         match &envelope {
                             SourceEnvelope::Debezium(dbz_envelope) => {
-                                let key_arity = key_desc.map(|kd| kd.arity());
                                 let (stream, errors) = super::debezium::render(
                                     dbz_envelope,
                                     &results,
@@ -413,10 +413,17 @@ where
                                     storage_state.metrics.clone(),
                                     src_id,
                                     dataflow_id,
-                                    as_of_frontier.clone(),
-                                    &mut linear_operators,
-                                    key_arity,
-                                    src.desc.typ().arity(),
+                                    super::debezium::DebeziumUpsertRenderContext {
+                                        upsert_operator_name: format!(
+                                            "{}-debezium-upsert",
+                                            source_name
+                                        ),
+                                        as_of_frontier: as_of_frontier.clone(),
+                                        operators: &mut linear_operators,
+                                        // TODO(guswynn): check with petros if `0` is fine here
+                                        key_indices: src.desc.typ().keys.get(0).cloned(),
+                                        source_arity,
+                                    },
                                 );
                                 (stream.as_collection(), Some(errors.as_collection()))
                             }
@@ -425,6 +432,7 @@ where
                                 // The opeator currently does it unconditionally
                                 let upsert_operator_name = format!("{}-upsert", source_name);
 
+                                // See https://github.com/MaterializeInc/materialize/blob/b87ecbf0973535d65a216d7c142baf52436733b5/src/sql/src/plan/statement/ddl.rs#L1013-L1020
                                 let key_arity = key_desc.expect("SourceEnvelope::Upsert to require SourceDataEncoding::KeyValue").arity();
 
                                 let (upsert_ok, upsert_err) = super::upsert::upsert(
@@ -432,13 +440,16 @@ where
                                     &results,
                                     as_of_frontier.clone(),
                                     &mut linear_operators,
-                                    key_arity,
                                     src.desc.typ().arity(),
                                     source_persist_config
                                         .as_ref()
                                         .map(|config| config.upsert_config().clone()),
-                                    |row, _| Some(row),
-                                    |_| {},
+                                    // Non-debezium upsert always has keys in order in front of
+                                    // values in evaluation.
+                                    super::upsert::OrderedUpserter {
+                                        key_arity,
+                                        source_arity,
+                                    },
                                 );
 
                                 // When persistence is enabled we need to seal up both the

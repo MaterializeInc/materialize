@@ -31,6 +31,83 @@ use tracing::error;
 use crate::operator::StreamExt;
 use crate::source::{DecodeResult, SourceData};
 
+/// An `Upserter` is a set of methods used to perform efficient unpacking and
+/// thinning of values.
+///
+/// Different [`Envelope`][`mz_dataflow_types::sources::SourceEnvelope`]'s have
+/// different guarantees about the shape and ordering of the decoded value
+/// [`Row`][`mz_repr::Row`], and this trait allows those envelopes to
+/// consider those contraints when thinning values to efficiently store
+/// key-value pairs in the core state used to implement the `upsert` logic.
+/// See <https://github.com/MaterializeInc/materialize/blob/b87ecbf0973535d65a216d7c142baf52436733b5/doc/user/layouts/partials/create-source/envelope/upsert/details.html>
+/// for more details about upsert.
+pub(crate) trait Upserter {
+    /// Given a decoded key and a decoded value (whose shape is _specific to
+    /// the current [`Envelope`][`mz_dataflow_types::sources::SourceEnvelope`] type),
+    /// create a vector of datums, that can borrow from those values, that represents
+    /// the ENTIRE row, as ordered and expected by the sql evaluation engine. This
+    /// is used to pre-evaluate predicates and skip values that cannot show up later.
+    ///
+    /// Returning a `None` means this value is `null`, and can be represented by
+    /// `Ok(None)` later down the pipeline.
+    // TODO(guswynn): Can we skip doing a full new vector, once
+    // TAIT's are landed in rustc?
+    fn make_output<'a>(&self, key: &'a Row, value: &'a Row) -> Option<Vec<Datum<'a>>>;
+
+    /// Remove the `key` values from the full row.
+    ///
+    /// After the `make_output` values are `evaluated` into a fully formed row,
+    /// we want to remove `keys`, to reduce a copy; the canonical storage for a key
+    /// is not in this row, but as the key in the upsert operator's state.
+    ///
+    /// `row_packer` should be used with [`mz_repr::Row::finish_and_reuse`] to efficiently
+    /// produce new rows.
+    fn thin(&self, value: &Row, row_packer: &mut Row) -> Row;
+
+    /// Re-construct a row from a key and the thinned row returned by [`Upserter::thin`].
+    /// This show should be functionally equivalent to the previous input of `thin` for
+    /// this key-value pair.
+    ///
+    /// `row_packer` should be used with [`mz_repr::Row::finish_and_reuse`] to efficiently
+    /// produce new rows.
+    fn rehydrate(&self, key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row;
+
+    /// `post_process` is a callback passed the current size of the data
+    /// `upsert_core` is tracking, allowing `Upserter` implementors
+    /// to set metrics, etc.
+    fn post_process(&self, _current_values_size: u64) {}
+}
+
+pub(crate) struct OrderedUpserter {
+    pub key_arity: usize,
+    pub source_arity: usize,
+}
+
+/// The `OrderedUpserter` is the simplest implementor of [`Upserter`]. It builds
+/// a key-then-value ordered list of datums for evaluations, then thins and rehydrate's
+/// the row by stripping and replacing _arity of the key` values from the front.
+impl Upserter for OrderedUpserter {
+    fn make_output<'a>(&self, key: &'a Row, value: &'a Row) -> Option<Vec<Datum<'a>>> {
+        let mut datums = Vec::with_capacity(self.source_arity);
+        datums.extend(key.iter());
+        datums.extend(value.iter());
+        Some(datums)
+    }
+
+    fn thin(&self, value: &Row, row_packer: &mut Row) -> Row {
+        row_packer.clear();
+        row_packer.extend(value.iter().skip(self.key_arity));
+        row_packer.finish_and_reuse()
+    }
+
+    fn rehydrate(&self, key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row {
+        row_packer.clear();
+        row_packer.extend(key.iter());
+        row_packer.extend(thinned_value.iter());
+        row_packer.finish_and_reuse()
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
     raw_data: SourceData,
@@ -47,12 +124,11 @@ struct UpsertSourceData {
 /// When `persist_config` is `Some` this will write upsert state to the configured persistent
 /// collection and restore state from it. This does now, however, seal the backing collection. It
 /// is the responsibility of the caller to ensure that the collection is sealed up.
-pub(crate) fn upsert<G, F, P>(
+pub(crate) fn upsert<G, U>(
     source_name: &str,
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
-    key_arity: usize,
     // Full arity, including the key columns
     source_arity: usize,
     persist_config: Option<
@@ -71,20 +147,14 @@ pub(crate) fn upsert<G, F, P>(
     //
     // TODO(guswynn): this is currently unused by `persistent_upsert`,
     // merge `persistent_upsert` and `upsert_core`
-    transform_value: F,
-    // `post_process` is a callback passed the current size of the data
-    // `upsert_core` is tracking, allowing callees to set metrics, etc.
-    // TODO(guswynn): this is currently unused by `persistent_upsert`,
-    // merge `persistent_upsert` and `upsert_core`
-    post_process: P,
+    upserter: U,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    F: FnMut(Row, &mut Row) -> Option<Row> + 'static,
-    P: Fn(u64) + 'static,
+    U: Upserter + 'static,
 {
     // Currently, the upsert-specific transformations run in the
     // following order:
@@ -166,16 +236,8 @@ where
 
     let (upsert_output, upsert_persist_errs) = match persist_config {
         None => {
-            let upsert_output = upsert_core(
-                stream,
-                key_arity,
-                source_arity,
-                predicates,
-                position_or,
-                as_of_frontier,
-                transform_value,
-                post_process,
-            );
+            let upsert_output =
+                upsert_core(stream, predicates, position_or, as_of_frontier, upserter);
 
             let upsert_errs = operator::empty(&stream.scope());
 
@@ -313,21 +375,17 @@ fn evaluate(
 }
 
 /// Internal core upsert logic.
-fn upsert_core<G, F, P>(
+fn upsert_core<G, U>(
     stream: &Stream<G, DecodeResult>,
-    key_arity: usize,
-    source_arity: usize,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
     // See the docs on `self::upsert`
-    mut transform_value: F,
-    post_process: P,
+    upserter: U,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
 where
     G: Scope<Timestamp = Timestamp>,
-    F: FnMut(Row, &mut Row) -> Option<Row> + 'static,
-    P: Fn(u64) + 'static,
+    U: Upserter + 'static,
 {
     let result_stream = stream.unary_frontier(
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
@@ -374,11 +432,6 @@ where
                             .entry(key)
                             .or_insert_with(Default::default);
 
-                        let new_value = match new_value {
-                            Some(Ok(row)) => transform_value(row, &mut row_packer).map(Ok),
-                            other => other,
-                        };
-
                         let new_entry = UpsertSourceData {
                             raw_data: SourceData {
                                 value: new_value.map(ResultExt::err_into),
@@ -423,23 +476,31 @@ where
                                     let decoded_value = match data.raw_data.value {
                                         None => Ok(None),
                                         Some(value) => {
-                                            value.and_then(|row| {
-                                                let mut datums = Vec::with_capacity(source_arity);
+                                            match value {
+                                                Ok(row) => {
+                                                    let envelope_value =
+                                                        upserter.make_output(&decoded_key, &row);
 
-                                                // The datums we send to `evaluate` contain the keys
-                                                // and the values in order, so indexing works
-                                                datums.extend(decoded_key.iter());
+                                                    /*
+                                                    let mut datums =
+                                                        Vec::with_capacity(source_arity);
+                                                        */
 
-                                                datums.extend(row.iter());
-                                                datums.extend(data.metadata.iter());
-                                                evaluate(
-                                                    &datums,
-                                                    &predicates,
-                                                    &position_or,
-                                                    &mut row_packer,
-                                                )
-                                                .map_err(DataflowError::from)
-                                            })
+                                                    if let Some(mut datums) = envelope_value {
+                                                        datums.extend(data.metadata.iter());
+                                                        evaluate(
+                                                            &datums,
+                                                            &predicates,
+                                                            &position_or,
+                                                            &mut row_packer,
+                                                        )
+                                                        .map_err(DataflowError::from)
+                                                    } else {
+                                                        Ok(None)
+                                                    }
+                                                }
+                                                Err(err) => Err(err),
+                                            }
                                         }
                                     };
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
@@ -447,6 +508,7 @@ where
                                     // retracted if new rows show up for the same key.
                                     let new_value = decoded_value.transpose();
 
+                                    /*
                                     let repack_value = |row: Row, row_packer: &mut Row| {
                                         // Re-use a `Row` to
                                         // rebuild a full `Row` with both keys and values, before we
@@ -455,7 +517,7 @@ where
                                         row_packer.extend(decoded_key.iter());
                                         row_packer.extend(row.iter());
                                         row_packer.finish_and_reuse()
-                                    };
+                                    };*/
 
                                     let old_value = if let Some(new_value) = &new_value {
                                         // Thin out the row to not contain a copy of the
@@ -463,19 +525,29 @@ where
                                         let thinned_value = new_value
                                             .as_ref()
                                             .map(|full_row| {
-                                                row_packer.clear();
-                                                row_packer.extend(full_row.iter().skip(key_arity));
-                                                row_packer.finish_and_reuse()
+                                                upserter.thin(&full_row, &mut row_packer)
                                             })
                                             .map_err(|e| e.clone());
                                         current_values
                                             .insert(decoded_key.clone(), thinned_value)
                                             .map(|res| {
-                                                res.map(|v| repack_value(v, &mut row_packer))
+                                                res.map(|v| {
+                                                    upserter.rehydrate(
+                                                        &decoded_key,
+                                                        &v,
+                                                        &mut row_packer,
+                                                    )
+                                                })
                                             })
                                     } else {
                                         current_values.remove(&decoded_key).map(|res| {
-                                            res.map(|v| repack_value(v, &mut row_packer))
+                                            res.map(|v| {
+                                                upserter.rehydrate(
+                                                    &decoded_key,
+                                                    &v,
+                                                    &mut row_packer,
+                                                )
+                                            })
                                         })
                                     };
 
@@ -508,7 +580,7 @@ where
                 for time in removed_times {
                     to_send.remove(&time);
                 }
-                post_process(current_values.len() as u64)
+                upserter.post_process(current_values.len() as u64)
             }
         },
     );

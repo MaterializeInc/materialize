@@ -868,7 +868,7 @@ pub mod sources {
     /// Returns an error if it detects a common columns between the two relations that has the same
     /// name but a different type, if a key column is missing from the value, and if the key relation
     /// has a column with no name.
-    fn match_key_indices(
+    pub fn match_key_indices(
         key_desc: &RelationDesc,
         value_desc: &RelationDesc,
     ) -> anyhow::Result<Vec<usize>> {
