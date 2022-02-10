@@ -160,7 +160,7 @@ fn unique_ancestor_chain(model: &Model, target: BoxId) -> Option<Vec<BoxId>> {
 
     // Traverse the graph starting from the top until `target` is reached.
     // If a box with more than one parent is found, do not go deeper.
-    let _: Result<(), ()> = ore::graph::try_nonrecursive_dft(
+    let _: Result<(), ()> = mz_ore::graph::try_nonrecursive_dft(
         model,
         model.top_box,
         &mut |model, box_id| {
