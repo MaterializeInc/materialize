@@ -982,7 +982,7 @@ pub mod partitioned {
                         TailResponse::Progress(frontier) => {
                             if let Some(new_frontier) = entry.record_progress(shard_id, frontier) {
                                 let data = entry.consolidate_up_to(new_frontier.clone());
-                                let progress_response = TailResponse::Progress(new_frontier.into());
+                                let progress_response = TailResponse::Progress(new_frontier);
                                 if data.is_empty() {
                                     Box::new(
                                         Some(Response::Compute(
