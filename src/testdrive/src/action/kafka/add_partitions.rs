@@ -19,7 +19,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct AddPartitionsAction {
@@ -44,7 +44,7 @@ impl Action for AddPartitionsAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
         println!(
             "Raising partition count of Kafka topic {} to {}",
@@ -109,6 +109,6 @@ impl Action for AddPartitionsAction {
             .await?;
 
         state.kafka_topics.insert(topic_name, self.partitions);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

@@ -13,10 +13,10 @@ use std::str::FromStr;
 use anyhow::bail;
 use async_compression::tokio::write::GzipEncoder;
 use async_trait::async_trait;
-use tokio::fs::OpenOptions;
+use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::format::bytes;
 use crate::parser::BuiltinCommand;
 
@@ -88,7 +88,7 @@ impl Action for AppendAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Appending to file {}", path.display());
         let file = OpenOptions::new()
@@ -103,9 +103,9 @@ impl Action for AppendAction {
         };
 
         file.write_all(&self.contents).await?;
-
         file.shutdown().await?;
-        Ok(())
+
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -125,10 +125,10 @@ impl Action for DeleteAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Deleting file {}", path.display());
-        tokio::fs::remove_file(&path).await?;
-        Ok(())
+        fs::remove_file(&path).await?;
+        Ok(ControlFlow::Continue)
     }
 }

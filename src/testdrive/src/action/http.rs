@@ -11,7 +11,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use reqwest::Method;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 use reqwest::header::CONTENT_TYPE;
@@ -38,7 +38,7 @@ impl Action for RequestAction {
         Ok(())
     }
 
-    async fn redo(&self, _: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
         println!("$ http-request {} {}\n{}", self.method, self.url, self.body);
 
         let client = reqwest::Client::new();
@@ -57,7 +57,7 @@ impl Action for RequestAction {
         println!("{}\n{}", status, response.text().await?);
 
         if status.is_success() {
-            Ok(())
+            Ok(ControlFlow::Continue)
         } else {
             bail!("http request returned failing status: {}", status)
         }

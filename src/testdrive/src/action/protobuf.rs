@@ -15,7 +15,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio::process::Command;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct CompileDescriptorsAction {
@@ -50,7 +50,7 @@ impl Action for CompileDescriptorsAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let protoc = match env::var_os("PROTOC") {
             None => protobuf_src::protoc(),
             Some(protoc) => PathBuf::from(protoc),
@@ -68,6 +68,6 @@ impl Action for CompileDescriptorsAction {
         if !status.success() {
             bail!("protoc exited unsuccessfully");
         }
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

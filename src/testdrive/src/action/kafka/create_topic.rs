@@ -16,7 +16,7 @@ use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::error::RDKafkaErrorCode;
 use rdkafka::producer::Producer;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct CreateTopicAction {
@@ -95,7 +95,7 @@ impl Action for CreateTopicAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         // NOTE(benesch): it is critical that we invent a new topic name on
         // every testdrive run. We previously tried to delete and recreate the
         // topic with a fixed name, but ran into serious race conditions in
@@ -182,6 +182,6 @@ impl Action for CreateTopicAction {
         mz_kafka_util::admin::ensure_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await?;
         state.kafka_topics.insert(topic_name, self.partitions);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
