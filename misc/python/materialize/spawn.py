@@ -85,7 +85,7 @@ def capture(
     *,
     cwd: Optional[Path] = None,
     env: Optional[Dict[str, str]] = None,
-    stdin: Union[None, int, IO[bytes], bytes] = None,
+    stdin: Union[None, int, IO[bytes], str] = None,
     stderr: Union[None, int, IO[bytes]] = None,
 ) -> str:
     """Capture the output of a subprocess.
@@ -117,7 +117,7 @@ def capture(
         whitespace.
     """
     input = None
-    if isinstance(stdin, bytes) or isinstance(stdin, str):
+    if isinstance(stdin, str):
         input = stdin
         stdin = None
 

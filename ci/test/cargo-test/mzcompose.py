@@ -47,7 +47,7 @@ def workflow_default(c: Composition) -> None:
         print("Analytics API key empty, skipping junit reporting")
         return
     with open(f"{ROOT.as_posix()}/results.json") as f:
-        junit_xml = spawn.capture(args=["cargo2junit"], stdin=f)
+        junit_xml = spawn.capture(args=["cargo2junit"], stdin=f.read())
         requests.post(
             "https://analytics-api.buildkite.com/v1/uploads",
             headers={"Authorization": f"Token {token}"},
