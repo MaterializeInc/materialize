@@ -485,7 +485,7 @@ impl ParsedDateTime {
             Ok(m) => m,
             Err(_) => {
                 return Err(format!(
-                    "exceeds min/max months (+/-2147483647); have {}",
+                    "exceeds min/max months (+2147483647/-2147483648); have {}",
                     months
                 ))
             }

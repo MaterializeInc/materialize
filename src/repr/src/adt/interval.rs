@@ -377,7 +377,8 @@ impl Interval {
 /// * 00:00:00
 impl fmt::Display for Interval {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut months = self.months;
+        // need i64 because i32::MIN.abs() causes a panic
+        let mut months = self.months as i64;
         let neg_mos = months < 0;
         months = months.abs();
         let years = months / 12;
