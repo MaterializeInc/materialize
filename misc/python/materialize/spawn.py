@@ -99,7 +99,7 @@ def capture(
             occurs wholesale, so use a construction like
             `env=dict(os.environ, KEY=VAL, ...)` to instead amend the existing
             environment.
-        stdin: An optional IO handle or byte string to use as the process's
+        stdin: An optional IO handle, byte string or string to use as the process's
             stdin stream.
         stderr: An optional IO handle to use as the process's stderr stream.
 
@@ -117,7 +117,7 @@ def capture(
         whitespace.
     """
     input = None
-    if isinstance(stdin, bytes):
+    if isinstance(stdin, bytes) or isinstance(stdin, str):
         input = stdin
         stdin = None
 

@@ -42,17 +42,15 @@ SERVICES = [
 def workflow_default(c: Composition) -> None:
     c.start_and_wait_for_tcp(["zookeeper", "kafka", "schema-registry"])
     c.run("ci-cargo-test", "run-tests")
-    token = os.environ['BUILDKITE_TEST_ANALYTICS_API_KEY_CARGO_TEST']
+    token = os.environ["BUILDKITE_TEST_ANALYTICS_API_KEY_CARGO_TEST"]
     if len(token) < 1:
         print("Analytics API key empty, skipping junit reporting")
         return
     with open(f"{ROOT.as_posix()}/results.json") as f:
-        junit_xml = spawn.capture(args=["cargo2junit"], stdin=f.read())
+        junit_xml = spawn.capture(args=["cargo2junit"], stdin=f)
         requests.post(
             "https://analytics-api.buildkite.com/v1/uploads",
-            headers={
-                "Authorization": f"Token {token}"
-            },
+            headers={"Authorization": f"Token {token}"},
             json={
                 "format": "junit",
                 "run_env": {
