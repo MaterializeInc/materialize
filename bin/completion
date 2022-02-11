@@ -30,6 +30,8 @@ directory="$(dirname "$0")"
 supported_shells=(bash zsh)
 python_autocompletions=(scratch)
 
+. misc/shlib/shlib.bash
+
 case "$cmd" in
     generate)
         for name in "${python_autocompletions[@]}"; do
@@ -40,6 +42,11 @@ case "$cmd" in
         done
         ;;
     check)
+        shasum=sha1sum
+        if ! command_exists "$shasum"; then
+            shasum=shasum
+        fi
+
         for name in "${python_autocompletions[@]}"; do
           for shell in "${supported_shells[@]}"; do
             if [ ! -f "$directory/../misc/completions/$shell/_$name" ]; then
@@ -47,8 +54,8 @@ case "$cmd" in
               exit 1
             fi
 
-            latest=$("$directory"/pyactivate --dev -m materialize.cli."$name" -c "$shell" | md5)
-            existing=$(md5 < "$directory"/../misc/completions/"$shell"/_"$name")
+            latest=$("$directory"/pyactivate --dev -m materialize.cli."$name" -c "$shell" | "$shasum")
+            existing=$("$shasum" < "$directory"/../misc/completions/"$shell"/_"$name")
 
             if [[ "$latest" != "$existing" ]]; then
               printf "shell completion scripts have uncommitted changes. \ntry running \`bin/completion generate\` and checking in the changes\n"
