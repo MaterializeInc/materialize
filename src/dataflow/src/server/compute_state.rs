@@ -560,6 +560,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(Response::Compute(response));
+        let _ = self.response_tx.send(Response::Compute(
+            response,
+            mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID,
+        ));
     }
 }

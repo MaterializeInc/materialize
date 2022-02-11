@@ -735,11 +735,6 @@ impl Coordinator {
             });
         }
 
-        // Create the default cluster so that subsequent default cluster commands succeed.
-        self.dataflow_client
-            .create_instance(DEFAULT_COMPUTE_INSTANCE_ID)
-            .await;
-
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
         loop {
@@ -856,7 +851,11 @@ impl Coordinator {
 
     async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            DataflowResponse::Compute(ComputeResponse::PeekResponse(conn_id, response)) => {
+            DataflowResponse::Compute(
+                ComputeResponse::PeekResponse(conn_id, response),
+                instance,
+            ) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We expect exactly one peek response, which we forward.
                 self.pending_peeks
                     .remove(&conn_id)
@@ -864,7 +863,11 @@ impl Coordinator {
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
-            DataflowResponse::Compute(ComputeResponse::TailResponse(sink_id, response)) => {
+            DataflowResponse::Compute(
+                ComputeResponse::TailResponse(sink_id, response),
+                instance,
+            ) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -875,7 +878,8 @@ impl Coordinator {
                     }
                 }
             }
-            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
+            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
@@ -4645,6 +4649,11 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
             };
+            handle.block_on(
+                coord
+                    .dataflow_client
+                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID),
+            );
             if let Some(config) = &logging {
                 handle.block_on(
                     coord.dataflow_client.enable_logging(
