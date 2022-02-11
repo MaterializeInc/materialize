@@ -42,6 +42,7 @@ use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use mz_coord::PersistConfig;
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use postgres_protocol::types;
@@ -549,7 +550,7 @@ impl Runner {
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),
             data_directory: temp_dir.path().to_path_buf(),
-            aws_external_id: None,
+            aws_external_id: AwsExternalId::NotProvided,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             experimental_mode: true,
@@ -997,12 +998,6 @@ pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcome
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
     run_string(config, &format!("{}", filename.display()), &input).await
-}
-
-pub async fn run_stdin(config: &RunConfig<'_>) -> Result<Outcomes, anyhow::Error> {
-    let mut input = String::new();
-    std::io::stdin().lock().read_to_string(&mut input)?;
-    run_string(config, "<stdin>", &input).await
 }
 
 pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {

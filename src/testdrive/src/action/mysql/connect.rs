@@ -11,7 +11,7 @@ use async_trait::async_trait;
 
 use anyhow::anyhow;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct ConnectAction {
@@ -41,7 +41,7 @@ impl Action for ConnectAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let opts_url = mysql_async::Opts::from_url(&self.url)
             .map_err(|_| anyhow!("Unable to parse MySQL URL {}", self.url))?;
         let opts = mysql_async::OptsBuilder::from_opts(opts_url).pass(self.password.clone());
@@ -52,6 +52,6 @@ impl Action for ConnectAction {
             .map_err(|_| anyhow!("Unable to connect to MySQL server at {}", self.url))?;
 
         state.mysql_clients.insert(self.name.clone(), conn);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

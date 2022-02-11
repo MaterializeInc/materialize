@@ -17,7 +17,7 @@ use tokio_postgres::NoTls;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct VerifySlotAction {
@@ -44,7 +44,7 @@ impl Action for VerifySlotAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let (client, conn) = tokio_postgres::connect(&self.connection, NoTls)
             .await
             .context("connecting to postgres")?;
@@ -90,6 +90,8 @@ impl Action for VerifySlotAction {
         conn_handle
             .await
             .unwrap()
-            .context("postgres connection error")
+            .context("postgres connection error")?;
+
+        Ok(ControlFlow::Continue)
     }
 }

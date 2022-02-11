@@ -9,13 +9,13 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, Context, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct PublishAction {
@@ -51,7 +51,7 @@ impl Action for PublishAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let mut references = vec![];
         for reference in &self.references {
             let subject = state
@@ -70,22 +70,18 @@ impl Action for PublishAction {
             .publish_schema(&self.subject, &self.schema, self.schema_type, &references)
             .await
             .context("publishing schema")?;
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
 pub struct WaitSchemaAction {
     schema: String,
-    context: Context,
 }
 
-pub fn build_wait(
-    mut cmd: BuiltinCommand,
-    context: Context,
-) -> Result<WaitSchemaAction, anyhow::Error> {
+pub fn build_wait(mut cmd: BuiltinCommand) -> Result<WaitSchemaAction, anyhow::Error> {
     let schema = cmd.args.string("schema")?;
     cmd.args.done()?;
-    Ok(WaitSchemaAction { schema, context })
+    Ok(WaitSchemaAction { schema })
 }
 
 #[async_trait]
@@ -94,11 +90,11 @@ impl Action for WaitSchemaAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)
-            .max_duration(self.context.timeout)
+            .max_duration(state.timeout)
             .retry_async(|_| async {
                 state
                     .ccsr_client
@@ -107,6 +103,7 @@ impl Action for WaitSchemaAction {
                     .context("fetching schema")
                     .and(Ok(()))
             })
-            .await
+            .await?;
+        Ok(ControlFlow::Continue)
     }
 }

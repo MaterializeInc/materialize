@@ -10,6 +10,7 @@
 //! Types related to the creation of dataflow sources.
 
 use mz_avro::types::Value;
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
 use mz_persist::indexed::Snapshot;
@@ -123,6 +124,8 @@ pub struct SourceConfig<'a, G> {
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
     pub base_metrics: &'a SourceBaseMetrics,
+    /// An external ID to use for all AWS AssumeRole operations.
+    pub aws_external_id: AwsExternalId,
 }
 
 /// A record produced by a source
@@ -367,6 +370,7 @@ pub(crate) trait SourceReader {
         worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        aws_external_id: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         logger: Option<Logger>,
@@ -906,6 +910,7 @@ pub(crate) fn create_source<G, S: 'static>(
     config: SourceConfig<G>,
     source_connector: &ExternalSourceConnector,
     persist_config: Option<PersistentTimestampBindingsConfig<SourceTimestamp, AssignedTimestamp>>,
+    aws_external_id: AwsExternalId,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
@@ -1118,6 +1123,7 @@ where
                 worker_count,
                 scope.sync_activator_for(&info.address[..]),
                 source_connector.clone(),
+                aws_external_id.clone(),
                 restored_offsets,
                 encoding,
                 logger,

@@ -616,10 +616,6 @@ Instructs Mz to sleep for the specified number of seconds. `mz_sleep()` returns 
 
 Adjusts the SQL timeout for tests that contain queries that may take a long time to run. Alternatively, the `--default-timeout` setting can be passed to `testdrive`.
 
-#### "$ set-execution-count count=N"
-
-Will run the test N times.
-
 ## Actions on Avro OCF files
 
 #### `$ avro-ocf-write path=... schema=... codec=(snapy|null)`

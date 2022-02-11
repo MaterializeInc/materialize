@@ -13,12 +13,12 @@ use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, Context, State, SyncAction};
+use crate::action::{Action, ControlFlow, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
 
@@ -55,7 +55,7 @@ impl SyncAction for WriteAction {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Writing to {}", path.display());
         let mut file = File::create(&path)
@@ -65,7 +65,7 @@ impl SyncAction for WriteAction {
         write_records(&mut writer, &self.records)?;
         file.sync_all()
             .with_context(|| format!("syncing Avro OCF file: {}", path.display()))?;
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -90,13 +90,13 @@ impl SyncAction for AppendAction {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Appending to {}", path.display());
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut writer = Writer::append_to(file)?;
         write_records(&mut writer, &self.records)?;
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -119,13 +119,9 @@ where
 pub struct VerifyAction {
     sink: String,
     expected: Vec<String>,
-    context: Context,
 }
 
-pub fn build_verify(
-    mut cmd: BuiltinCommand,
-    context: Context,
-) -> Result<VerifyAction, anyhow::Error> {
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
     let sink = cmd.args.string("sink")?;
     let expected = cmd.input;
     cmd.args.done()?;
@@ -133,11 +129,7 @@ pub fn build_verify(
         // The goal isn't security, but preventing mistakes.
         bail!("separators in file sink names are forbidden");
     }
-    Ok(VerifyAction {
-        sink,
-        expected,
-        context,
-    })
+    Ok(VerifyAction { sink, expected })
 }
 
 #[async_trait]
@@ -146,7 +138,7 @@ impl Action for VerifyAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = Retry::default()
             .max_duration(state.default_timeout)
             .retry_async(|_| async {
@@ -184,9 +176,11 @@ impl Action for VerifyAction {
                 &schema,
                 &self.expected,
                 &actual,
-                &self.context.regex,
-                &self.context.regex_replacement,
+                &state.regex,
+                &state.regex_replacement,
             )
-        })
+        })?;
+
+        Ok(ControlFlow::Continue)
     }
 }

@@ -84,7 +84,7 @@ class RepositoryDetails:
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
-        return self.root / "target" / xcompile.target(self.arch)
+        return self.root / "target-xcompile" / xcompile.target(self.arch)
 
 
 def docker_images() -> Set[str]:

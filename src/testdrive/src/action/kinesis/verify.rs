@@ -18,7 +18,7 @@ use itertools::Itertools;
 
 use mz_aws_util::kinesis;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct VerifyAction {
@@ -41,7 +41,7 @@ impl Action for VerifyAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
 
         let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;
@@ -90,7 +90,7 @@ impl Action for VerifyAction {
             );
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 

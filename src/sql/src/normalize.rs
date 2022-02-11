@@ -500,7 +500,6 @@ macro_rules! with_options {
 pub fn aws_config(
     options: &mut BTreeMap<String, Value>,
     region: Option<String>,
-    external_id: Option<String>,
 ) -> Result<AwsConfig, anyhow::Error> {
     let mut extract = |key| match options.remove(key) {
         Some(Value::String(key)) => {
@@ -567,7 +566,7 @@ pub fn aws_config(
         credentials,
         region,
         endpoint,
-        role: arn.map(|arn| AwsAssumeRole { arn, external_id }),
+        role: arn.map(|arn| AwsAssumeRole { arn }),
     })
 }
 

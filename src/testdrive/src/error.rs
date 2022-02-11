@@ -16,7 +16,7 @@
 //! that is not human-readable, so `PosError`s are upgraded to `Error`s before
 //! they are returned externally.
 
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -74,6 +74,12 @@ impl Error {
                 Ok(())
             }
         }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:#}", self.source)
     }
 }
 

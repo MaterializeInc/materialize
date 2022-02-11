@@ -23,6 +23,7 @@ use anyhow::anyhow;
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use mz_coord::PersistConfig;
+use mz_dataflow_types::sources::AwsExternalId;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -124,7 +125,7 @@ pub struct Config {
     /// An [external ID] to be supplied to all AWS AssumeRole operations.
     ///
     /// [external id]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
-    pub aws_external_id: Option<String>,
+    pub aws_external_id: AwsExternalId,
 
     // === Mode switches. ===
     /// Whether to permit usage of experimental features.
@@ -272,6 +273,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         metrics_registry: config.metrics_registry.clone(),
         persister: persister.runtime.clone(),
+        aws_external_id: config.aws_external_id.clone(),
     })?;
 
     // Initialize coordinator.

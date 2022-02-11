@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use time::Instant;
 use url::Url;
 use walkdir::WalkDir;
 
@@ -40,115 +42,121 @@ macro_rules! die {
 /// Integration test driver for Materialize.
 #[derive(clap::Parser)]
 struct Args {
+    // === Testdrive options. ===
+    /// Variables to make available to the testdrive script.
+    ///
+    /// Passing `--var foo=bar` will create a variable named `arg.foo` with the
+    /// value `bar`. Can be specified multiple times to set multiple variables.
+    #[clap(long, value_name = "NAME=VALUE")]
+    var: Vec<String>,
+    /// A random number to distinguish each testdrive run.
+    #[clap(long, value_name = "N")]
+    seed: Option<u32>,
+    /// Whether to reset Materialize state before executing each script and
+    /// to clean up AWS state after each script.
+    #[clap(long)]
+    no_reset: bool,
+    /// Force the use of the specfied temporary directory.
+    ///
+    /// If unspecified, testdrive creates a temporary directory with a random
+    /// name.
+    #[clap(long, value_name = "PATH")]
+    temp_dir: Option<String>,
+    /// Default timeout for cancellable operations.
+    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "10s", value_name = "DURATION")]
+    default_timeout: Duration,
+    /// Initial backoff interval for retry operations.
+    ///
+    /// Set to 0 to retry immediately on failure.
+    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "50ms", value_name = "DURATION")]
+    initial_backoff: Duration,
+    /// Backoff factor when retrying.
+    ///
+    /// Set to 1 to retry at a steady pace.
+    #[clap(long, default_value = "1.5", value_name = "FACTOR")]
+    backoff_factor: f64,
+    /// Maximum number of errors to accumulate before aborting.
+    #[clap(long, default_value = "10", value_name = "N")]
+    max_errors: usize,
+    /// Maximum number of tests to run before terminating.
+    #[clap(long, default_value = "18446744073709551615", value_name = "N")]
+    max_tests: usize,
+    /// Shuffle tests.
+    ///
+    /// The shuffled order reflects the seed specified by --seed, if any.
+    #[clap(long)]
+    shuffle_tests: bool,
+    /// Divide the test files into shards and run only the test files in this
+    /// shard.
+    #[clap(long, requires = "shard-count", value_name = "N")]
+    shard: Option<usize>,
+    /// Total number of shards in use.
+    #[clap(long, requires = "shard", value_name = "N")]
+    shard_count: Option<usize>,
+    /// Generate a JUnit-compatible XML report to the specified file.
+    #[clap(long, value_name = "FILE")]
+    junit_report: Option<PathBuf>,
+    /// Glob patterns of testdrive scripts to run.
+    globs: Vec<String>,
+
+    // === Materialize options. ===
+    /// materialized connection string.
+    #[clap(
+        long,
+        default_value = "postgres://materialize@localhost:6875",
+        value_name = "URL"
+    )]
+    materialized_url: tokio_postgres::Config,
+    /// Validate the on-disk state of the specified materialized catalog.
+    ///
+    /// If present, testdrive will periodically verify that the on-disk catalog
+    /// matches its expectations.
+    #[clap(long, value_name = "PATH")]
+    validate_catalog: Option<PathBuf>,
+
     // === Confluent options. ===
-    /// Kafka bootstrap address.
+    /// Address of the Kafka broker that testdrive will interact with.
     #[clap(
         long,
         value_name = "ENCRYPTION://HOST:PORT",
         default_value = "localhost:9092"
     )]
     kafka_addr: String,
-    /// Kafka configuration option.
+    /// Arbitrary rdkafka options for testdrive to use when connecting to the
+    /// Kafka broker.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     kafka_option: Vec<(String, String)>,
-    /// Schema registry URL.
+    /// URL of the schema registry that testdrive will connect to.
     #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
     schema_registry_url: Url,
-
-    // === TLS options. ===
-    /// Path to TLS certificate keystore.
+    /// Path to a TLS certificate that testdrive will present when performing
+    /// client authentication.
     ///
     /// The keystore must be in the PKCS#12 format.
     #[clap(long, value_name = "PATH")]
     cert: Option<String>,
-    /// Password for the TLS certificate keystore.
+    /// Password for the TLS certificate.
     #[clap(long, value_name = "PASSWORD")]
     cert_password: Option<String>,
-
-    // === CCSR-specific options. ===
-    /// An optional username for the basic auth for the Confluent Schema Registry
-    #[clap(long, value_name = "CCSR_USERNAME")]
+    /// Username for basic authentication with the Confluent Schema Registry.
+    #[clap(long, value_name = "USERNAME")]
     ccsr_username: Option<String>,
-    /// An optional password for the basic auth for the Confluent Schema Registry
-    #[clap(long, value_name = "CCSR_PASSWORD")]
+    /// Password for basic authentication with the Confluent Schema Registry.
+    #[clap(long, value_name = "PASSWORD")]
     ccsr_password: Option<String>,
 
     // === AWS options. ===
     /// Named AWS region to target for AWS API requests.
     ///
-    /// Cannot be specified is --aws-endpoint is specified.
-    #[clap(long, conflicts_with = "aws-endpoint")]
+    /// Cannot be specified if --aws-endpoint is specified.
+    #[clap(long, conflicts_with = "aws-endpoint", value_name = "REGION")]
     aws_region: Option<String>,
     /// Custom AWS endpoint.
     ///
     /// Defaults to http://localhost:4566 unless --aws-region is specified.
     /// Cannot be specified if --aws-region is specified.
-    #[clap(long, conflicts_with = "aws-region")]
+    #[clap(long, conflicts_with = "aws-region", value_name = "URL")]
     aws_endpoint: Option<Uri>,
-
-    // === Materialize options. ===
-    /// materialized connection string.
-    #[clap(long, default_value = "postgres://materialize@localhost:6875")]
-    materialized_url: tokio_postgres::Config,
-    /// Validate the on-disk state of the materialized catalog.
-    #[clap(long)]
-    validate_catalog: Option<PathBuf>,
-    /// Don't reset materialized state before executing each script.
-    #[clap(long)]
-    no_reset: bool,
-
-    // === Testdrive options. ===
-    /// Default timeout in seconds.
-    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "10s")]
-    default_timeout: Duration,
-
-    /// Initial backoff interval. Set to 0 to retry immediately on failure
-    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "50ms")]
-    initial_backoff: Duration,
-
-    /// Backoff factor when retrying. Set to 1 to retry at a steady pace
-    #[clap(long, default_value = "1.5")]
-    backoff_factor: f64,
-
-    /// A random number to distinguish each TestDrive run.
-    #[clap(long)]
-    seed: Option<u32>,
-
-    /// Divide the test files into shards and run only the test files in this
-    /// shard.
-    #[clap(long, requires = "shard-count")]
-    shard: Option<usize>,
-
-    /// The total number of shards to use.
-    #[clap(long, requires = "shard")]
-    shard_count: Option<usize>,
-
-    /// Maximum number of errors before aborting
-    #[clap(long, default_value = "10")]
-    max_errors: usize,
-
-    /// Max number of tests to run before terminating
-    #[clap(long, default_value = "18446744073709551615")]
-    max_tests: usize,
-
-    /// Shuffle tests (using the value from --seed, if any)
-    #[clap(long)]
-    shuffle_tests: bool,
-
-    /// Force the use of the specfied temporary directory rather than creating one with a random name
-    #[clap(long)]
-    temp_dir: Option<String>,
-
-    /// CLI arguments that are converted to testdrive variables.
-    ///
-    /// Passing: `--var foo=bar` will create a variable named 'arg.foo' with the value 'bar'.
-    /// Can be specified multiple times to set multiple variables.
-    #[clap(long, value_name = "NAME=VALUE")]
-    var: Vec<String>,
-
-    // === Positional arguments. ===
-    /// Glob patterns of testdrive scripts to run.
-    globs: Vec<String>,
 }
 
 #[tokio::main]
@@ -204,14 +212,14 @@ async fn main() {
     Kafka address: {}
     Schema registry URL: {}
     materialized host: {:?}
-    error limit: {}",
+    Error limit: {}",
         args.kafka_addr,
         args.schema_registry_url,
         args.materialized_url.get_hosts()[0],
         args.max_errors
     );
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
-        println!("    shard: {}/{}", shard + 1, shard_count);
+        println!("    Shard: {}/{}", shard + 1, shard_count);
     }
 
     let mut arg_vars = BTreeMap::new();
@@ -229,24 +237,31 @@ async fn main() {
     }
 
     let config = Config {
+        // === Testdrive options. ===
+        arg_vars,
+        seed: args.seed,
+        reset: !args.no_reset,
+        temp_dir: args.temp_dir,
+        default_timeout: args.default_timeout,
+        initial_backoff: args.initial_backoff,
+        backoff_factor: args.backoff_factor,
+
+        // === Materialize options. ===
+        materialized_pgconfig: args.materialized_url,
+        materialized_catalog_path: args.validate_catalog,
+
+        // === Confluent options. ===
         kafka_addr: args.kafka_addr,
         kafka_opts: args.kafka_option,
         schema_registry_url: args.schema_registry_url,
         cert_path: args.cert,
-        cert_pass: args.cert_password,
+        cert_password: args.cert_password,
         ccsr_password: args.ccsr_password,
         ccsr_username: args.ccsr_username,
+
+        // === AWS options. ===
         aws_config,
         aws_account,
-        materialized_pgconfig: args.materialized_url,
-        materialized_catalog_path: args.validate_catalog,
-        reset: !args.no_reset,
-        default_timeout: args.default_timeout,
-        initial_backoff: args.initial_backoff,
-        backoff_factor: args.backoff_factor,
-        arg_vars,
-        seed: args.seed,
-        temp_dir: args.temp_dir,
     };
 
     // Build the list of files to test.
@@ -305,21 +320,57 @@ async fn main() {
 
     let mut error_count = 0;
     let mut error_files = HashSet::new();
+    let mut junit = match args.junit_report {
+        Some(filename) => match File::create(&filename) {
+            Ok(file) => Some((file, junit_report::TestSuite::new("testdrive"))),
+            Err(err) => die!("creating {}: {}", filename.display(), err),
+        },
+        None => None,
+    };
 
     for file in files.into_iter().take(args.max_tests) {
+        let start_time = Instant::now();
         let res = if file == Path::new("-") {
             mz_testdrive::run_stdin(&config).await
         } else {
             mz_testdrive::run_file(&config, &file).await
         };
-        if let Err(error) = res {
-            let _ = error.print_stderr();
-            error_count += 1;
-            error_files.insert(file);
-            if error_count >= args.max_errors {
-                eprintln!("testdrive: maximum number of errors reached; giving up");
-                break;
+        match res {
+            Ok(()) => {
+                if let Some((_, junit_suite)) = &mut junit {
+                    junit_suite.add_testcase(junit_report::TestCase::success(
+                        &file.to_string_lossy(),
+                        start_time.elapsed(),
+                    ));
+                }
             }
+            Err(error) => {
+                if let Some((_, junit_suite)) = &mut junit {
+                    junit_suite.add_testcase(junit_report::TestCase::failure(
+                        &file.to_string_lossy(),
+                        start_time.elapsed(),
+                        "failure",
+                        &error.to_string(),
+                    ));
+                }
+                let _ = error.print_stderr();
+                error_count += 1;
+                error_files.insert(file);
+                if error_count >= args.max_errors {
+                    eprintln!("testdrive: maximum number of errors reached; giving up");
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some((mut junit_file, junit_suite)) = junit {
+        let report = junit_report::ReportBuilder::new()
+            .add_testsuite(junit_suite)
+            .build();
+        match report.write_xml(&mut junit_file) {
+            Ok(()) => (),
+            Err(e) => die!("error: unable to write junit report: {}", e),
         }
     }
 

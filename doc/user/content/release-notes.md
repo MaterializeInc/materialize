@@ -128,6 +128,11 @@ changes that have not yet been documented.
   no elements (e.g. the beginning of the slice's range exceeds the length of the
   list); previously Materialize returned NULL.
 
+- **Breaking change.** Decrease minimum [`interval`](/sql/types/interval) value
+  from '-2147483647 months -2147483647 days -2147483647 hours -59 minutes
+  -59.999999 seconds' to '-2147483648 months -2147483648 days -2147483648 hours
+  -59 minutes -59.999999 seconds' to match PostgreSQL's behavior {{% gh 10598 %}}.
+
 - Add `microsecond`, `month`, `decade`, `century`, `millennium` units
   to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
   format {{% gh 10532 %}}.
@@ -165,6 +170,9 @@ changes that have not yet been documented.
   their SSL parameters to the kafka ones. Existing source definitions have
   been migrated, however. See [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
   for more info.
+
+- Fix a big where too many columns were returned when both `*` and a
+  table function appeared in the `SELECT` list {{% gh 10363 %}}.
 
 {{< comment >}}
 Only add new release notes above this line.
