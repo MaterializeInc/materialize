@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use time::Instant;
 use url::Url;
 use walkdir::WalkDir;
 
@@ -91,6 +93,9 @@ struct Args {
     /// Total number of shards in use.
     #[clap(long, requires = "shard", value_name = "N")]
     shard_count: Option<usize>,
+    /// Generate a JUnit-compatible XML report to the specified file.
+    #[clap(long, value_name = "FILE")]
+    junit_report: Option<PathBuf>,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
 
@@ -315,21 +320,57 @@ async fn main() {
 
     let mut error_count = 0;
     let mut error_files = HashSet::new();
+    let mut junit = match args.junit_report {
+        Some(filename) => match File::create(&filename) {
+            Ok(file) => Some((file, junit_report::TestSuite::new("testdrive"))),
+            Err(err) => die!("creating {}: {}", filename.display(), err),
+        },
+        None => None,
+    };
 
     for file in files.into_iter().take(args.max_tests) {
+        let start_time = Instant::now();
         let res = if file == Path::new("-") {
             mz_testdrive::run_stdin(&config).await
         } else {
             mz_testdrive::run_file(&config, &file).await
         };
-        if let Err(error) = res {
-            let _ = error.print_stderr();
-            error_count += 1;
-            error_files.insert(file);
-            if error_count >= args.max_errors {
-                eprintln!("testdrive: maximum number of errors reached; giving up");
-                break;
+        match res {
+            Ok(()) => {
+                if let Some((_, junit_suite)) = &mut junit {
+                    junit_suite.add_testcase(junit_report::TestCase::success(
+                        &file.to_string_lossy(),
+                        start_time.elapsed(),
+                    ));
+                }
             }
+            Err(error) => {
+                if let Some((_, junit_suite)) = &mut junit {
+                    junit_suite.add_testcase(junit_report::TestCase::failure(
+                        &file.to_string_lossy(),
+                        start_time.elapsed(),
+                        "failure",
+                        &error.to_string(),
+                    ));
+                }
+                let _ = error.print_stderr();
+                error_count += 1;
+                error_files.insert(file);
+                if error_count >= args.max_errors {
+                    eprintln!("testdrive: maximum number of errors reached; giving up");
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some((mut junit_file, junit_suite)) = junit {
+        let report = junit_report::ReportBuilder::new()
+            .add_testsuite(junit_suite)
+            .build();
+        match report.write_xml(&mut junit_file) {
+            Ok(()) => (),
+            Err(e) => die!("error: unable to write junit report: {}", e),
         }
     }
 

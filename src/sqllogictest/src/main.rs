@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::process;
 
 use chrono::Utc;
+use time::Instant;
 use walkdir::WalkDir;
 
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
@@ -39,9 +40,9 @@ struct Args {
     /// Rewrite expected output based on actual output.
     #[clap(long)]
     rewrite_results: bool,
-    /// Save a JSON-formatted summary to FILE.
+    /// Generate a JUnit-compatible XML report to the specified file.
     #[clap(long, value_name = "FILE")]
-    json_summary_file: Option<PathBuf>,
+    junit_report: Option<PathBuf>,
     /// Run with N materialized workers.
     #[clap(long, value_name = "N", default_value = "3")]
     workers: usize,
@@ -73,9 +74,9 @@ async fn main() {
         return rewrite(&config, args).await;
     }
 
-    let json_summary_file = match args.json_summary_file {
+    let mut junit = match args.junit_report {
         Some(filename) => match File::create(&filename) {
-            Ok(file) => Some(file),
+            Ok(file) => Some((file, junit_report::TestSuite::new("sqllogictest"))),
             Err(err) => {
                 writeln!(config.stderr, "creating {}: {}", filename.display(), err);
                 process::exit(1);
@@ -86,40 +87,46 @@ async fn main() {
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
     for path in &args.paths {
-        if path == "-" {
-            match mz_sqllogictest::runner::run_stdin(&config).await {
-                Ok(o) => outcomes += o,
-                Err(err) => {
-                    writeln!(config.stderr, "error: parsing stdin: {}", err);
-                    bad_file = true;
-                }
-            }
-        } else {
-            for entry in WalkDir::new(path) {
-                match entry {
-                    Ok(entry) if entry.file_type().is_file() => {
-                        match runner::run_file(&config, entry.path()).await {
-                            Ok(o) => {
-                                if o.any_failed() || config.verbosity >= 1 {
-                                    writeln!(
-                                        config.stdout,
-                                        "{}",
-                                        util::indent(&o.display(config.no_fail).to_string(), 4)
-                                    );
+        for entry in WalkDir::new(path) {
+            match entry {
+                Ok(entry) if entry.file_type().is_file() => {
+                    let start_time = Instant::now();
+                    match runner::run_file(&config, entry.path()).await {
+                        Ok(o) => {
+                            if o.any_failed() || config.verbosity >= 1 {
+                                writeln!(
+                                    config.stdout,
+                                    "{}",
+                                    util::indent(&o.display(config.no_fail).to_string(), 4)
+                                );
+                            }
+                            if let Some((_, junit_suite)) = &mut junit {
+                                if o.any_failed() {
+                                    junit_suite.add_testcase(junit_report::TestCase::failure(
+                                        &entry.path().to_string_lossy(),
+                                        start_time.elapsed(),
+                                        "failure",
+                                        &o.display(false).to_string(),
+                                    ));
+                                } else {
+                                    junit_suite.add_testcase(junit_report::TestCase::success(
+                                        &entry.path().to_string_lossy(),
+                                        start_time.elapsed(),
+                                    ));
                                 }
-                                outcomes += o;
                             }
-                            Err(err) => {
-                                writeln!(config.stderr, "error: parsing file: {}", err);
-                                bad_file = true;
-                            }
+                            outcomes += o;
+                        }
+                        Err(err) => {
+                            writeln!(config.stderr, "error: parsing file: {}", err);
+                            bad_file = true;
                         }
                     }
-                    Ok(_) => (),
-                    Err(err) => {
-                        writeln!(config.stderr, "error: reading directory entry: {}", err);
-                        bad_file = true;
-                    }
+                }
+                Ok(_) => (),
+                Err(err) => {
+                    writeln!(config.stderr, "error: reading directory entry: {}", err);
+                    bad_file = true;
                 }
             }
         }
@@ -130,13 +137,16 @@ async fn main() {
 
     writeln!(config.stdout, "{}", outcomes.display(config.no_fail));
 
-    if let Some(json_summary_file) = json_summary_file {
-        match serde_json::to_writer(json_summary_file, &outcomes.as_json()) {
+    if let Some((mut junit_file, junit_suite)) = junit {
+        let report = junit_report::ReportBuilder::new()
+            .add_testsuite(junit_suite)
+            .build();
+        match report.write_xml(&mut junit_file) {
             Ok(()) => (),
             Err(err) => {
                 writeln!(
                     config.stderr,
-                    "error: unable to write summary file: {}",
+                    "error: unable to write junit report: {}",
                     err
                 );
                 process::exit(2);
@@ -150,10 +160,10 @@ async fn main() {
 }
 
 async fn rewrite(config: &RunConfig<'_>, args: Args) {
-    if args.json_summary_file.is_some() {
+    if args.junit_report.is_some() {
         writeln!(
             config.stderr,
-            "--rewrite-results is not compatible with --json-summary-file"
+            "--rewrite-results is not compatible with --junit-report"
         );
         process::exit(1);
     }
