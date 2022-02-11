@@ -101,19 +101,21 @@ async fn main() {
                                 );
                             }
                             if let Some((_, junit_suite)) = &mut junit {
-                                if o.any_failed() {
-                                    junit_suite.add_testcase(junit_report::TestCase::failure(
+                                let mut test_case = if o.any_failed() {
+                                    junit_report::TestCase::failure(
                                         &entry.path().to_string_lossy(),
                                         start_time.elapsed(),
                                         "failure",
                                         &o.display(false).to_string(),
-                                    ));
+                                    )
                                 } else {
-                                    junit_suite.add_testcase(junit_report::TestCase::success(
+                                    junit_report::TestCase::success(
                                         &entry.path().to_string_lossy(),
                                         start_time.elapsed(),
-                                    ));
-                                }
+                                    )
+                                };
+                                test_case.set_classname("sqllogictest");
+                                junit_suite.add_testcase(test_case);
                             }
                             outcomes += o;
                         }

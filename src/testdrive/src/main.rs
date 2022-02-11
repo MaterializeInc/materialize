@@ -335,31 +335,28 @@ async fn main() {
         } else {
             mz_testdrive::run_file(&config, &file).await
         };
-        match res {
-            Ok(()) => {
-                if let Some((_, junit_suite)) = &mut junit {
-                    junit_suite.add_testcase(junit_report::TestCase::success(
-                        &file.to_string_lossy(),
-                        start_time.elapsed(),
-                    ));
+        if let Some((_, junit_suite)) = &mut junit {
+            let mut test_case = match &res {
+                Ok(()) => {
+                    junit_report::TestCase::success(&file.to_string_lossy(), start_time.elapsed())
                 }
-            }
-            Err(error) => {
-                if let Some((_, junit_suite)) = &mut junit {
-                    junit_suite.add_testcase(junit_report::TestCase::failure(
-                        &file.to_string_lossy(),
-                        start_time.elapsed(),
-                        "failure",
-                        &error.to_string(),
-                    ));
-                }
-                let _ = error.print_stderr();
-                error_count += 1;
-                error_files.insert(file);
-                if error_count >= args.max_errors {
-                    eprintln!("testdrive: maximum number of errors reached; giving up");
-                    break;
-                }
+                Err(error) => junit_report::TestCase::failure(
+                    &file.to_string_lossy(),
+                    start_time.elapsed(),
+                    "failure",
+                    &error.to_string(),
+                ),
+            };
+            test_case.set_classname("testdrive");
+            junit_suite.add_testcase(test_case);
+        }
+        if let Err(error) = res {
+            let _ = error.print_stderr();
+            error_count += 1;
+            error_files.insert(file);
+            if error_count >= args.max_errors {
+                eprintln!("testdrive: maximum number of errors reached; giving up");
+                break;
             }
         }
     }
