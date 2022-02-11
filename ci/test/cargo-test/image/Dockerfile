@@ -11,7 +11,7 @@ MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install \
     ca-certificates \
-    wait-for-it
+    jq
 
 COPY tests /tests/
 COPY run-tests /usr/local/bin
