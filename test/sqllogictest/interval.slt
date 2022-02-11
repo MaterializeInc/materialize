@@ -725,10 +725,10 @@ statement error invalid input syntax for type interval: exceeds min/max interval
 SELECT INTERVAL '-2147483648 days -2147483649 hours'
 
 statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483648 hours 60 min'
+SELECT INTERVAL '-2147483648 days -2147483648 hours -60 min'
 
 statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483648 hours 59 min 60 sec'
+SELECT INTERVAL '-2147483648 days -2147483648 hours -59 min -60 sec'
 
 statement error interval out of range
 SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds' + INTERVAL '1';
