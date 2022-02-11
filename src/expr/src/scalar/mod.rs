@@ -350,7 +350,7 @@ impl MirScalarExpr {
                                 *e = match like_pattern::compile(
                                     &pattern,
                                     *case_insensitive,
-                                    like_pattern::DEFAULT_ESCAPE,
+                                    like_pattern::EscapeBehavior::default(),
                                 ) {
                                     Ok(matcher) => expr1
                                         .take()

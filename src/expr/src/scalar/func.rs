@@ -4750,7 +4750,7 @@ fn is_like_pattern_match_dynamic<'a>(
     let needle = like_pattern::compile(
         b.unwrap_str(),
         case_insensitive,
-        like_pattern::DEFAULT_ESCAPE,
+        like_pattern::EscapeBehavior::default(),
     )?;
     Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }

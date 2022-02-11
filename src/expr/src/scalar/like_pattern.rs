@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt::Write;
 use std::mem;
+use std::str::FromStr;
 
 use derivative::Derivative;
 use regex::{Regex, RegexBuilder};
@@ -16,50 +16,72 @@ use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
 use mz_lowertest::MzReflect;
+use mz_ore::fmt::FormatBuffer;
 
-/// The escape string to use by default in LIKE patterns.
-pub const DEFAULT_ESCAPE: &str = "\\";
+/// The number of subpatterns after which using regexes would be more efficient.
+const MAX_SUBPATTERNS: usize = 5;
+
+/// The escape character to use by default in LIKE patterns.
+const DEFAULT_ESCAPE: char = '\\';
+const DOUBLED_ESCAPE: &str = "\\\\";
+
+/// Specifies escape behavior for the LIKE pattern.
+#[derive(Clone, Copy, Debug)]
+pub enum EscapeBehavior {
+    /// No escape character.
+    Disabled,
+    /// Use a custom escape character.
+    Char(char),
+}
+
+impl Default for EscapeBehavior {
+    fn default() -> EscapeBehavior {
+        EscapeBehavior::Char(DEFAULT_ESCAPE)
+    }
+}
+
+impl FromStr for EscapeBehavior {
+    type Err = EvalError;
+
+    fn from_str(s: &str) -> Result<EscapeBehavior, EvalError> {
+        let mut chars = s.chars();
+        match chars.next() {
+            None => Ok(EscapeBehavior::Disabled),
+            Some(c) => match chars.next() {
+                None => Ok(EscapeBehavior::Char(c)),
+                Some(_) => Err(EvalError::LikeEscapeTooLong),
+            },
+        }
+    }
+}
 
 /// Converts a pattern string that uses a custom escape character to one that uses the default.
-fn normalize_pattern(pattern: &str, escape: &str) -> Result<String, EvalError> {
-    if escape.eq(DEFAULT_ESCAPE) {
-        return Ok(String::from(pattern));
-    }
-    let default_escape_char: char = DEFAULT_ESCAPE.chars().next().unwrap();
-    let mut p = String::with_capacity(2 * pattern.len());
-    if escape.is_empty() {
-        for c in pattern.chars() {
-            if c == default_escape_char {
-                p.push(c);
-            }
-            p.push(c);
-        }
-    } else {
-        let mut ecs = escape.chars();
-        let custom_escape_char: char = ecs.next().unwrap();
-        if !ecs.next().is_none() {
-            return Err(EvalError::LikeEscapeTooLong);
-        }
-        let mut cs = pattern.chars();
-        while let Some(c) = cs.next() {
-            if c == custom_escape_char {
-                match cs.next() {
-                    Some(c2) => {
-                        p.push(default_escape_char);
-                        p.push(c2);
+fn normalize_pattern(pattern: &str, escape: EscapeBehavior) -> Result<String, EvalError> {
+    match escape {
+        EscapeBehavior::Disabled => Ok(pattern.replace(DEFAULT_ESCAPE, DOUBLED_ESCAPE)),
+        EscapeBehavior::Char(DEFAULT_ESCAPE) => Ok(pattern.into()),
+        EscapeBehavior::Char(custom_escape_char) => {
+            let mut p = String::with_capacity(2 * pattern.len());
+            let mut cs = pattern.chars();
+            while let Some(c) = cs.next() {
+                if c == custom_escape_char {
+                    match cs.next() {
+                        Some(c2) => {
+                            p.push(DEFAULT_ESCAPE);
+                            p.push(c2);
+                        }
+                        None => return Err(EvalError::UnterminatedLikeEscapeSequence),
                     }
-                    None => return Err(EvalError::UnterminatedLikeEscapeSequence),
+                } else if c == DEFAULT_ESCAPE {
+                    p.push_str(DOUBLED_ESCAPE);
+                } else {
+                    p.push(c);
                 }
-                continue;
             }
-            if c == default_escape_char {
-                p.push(c);
-            }
-            p.push(c);
+            p.shrink_to_fit();
+            Ok(p)
         }
     }
-    p.shrink_to_fit();
-    Ok(p)
 }
 
 // This implementation supports a couple of different methods of matching
@@ -104,7 +126,11 @@ enum MatcherImpl {
 }
 
 /// Builds a Matcher that matches a SQL LIKE pattern.
-pub fn compile(pattern: &str, case_insensitive: bool, escape: &str) -> Result<Matcher, EvalError> {
+pub fn compile(
+    pattern: &str,
+    case_insensitive: bool,
+    escape: EscapeBehavior,
+) -> Result<Matcher, EvalError> {
     // We would like to have a consistent, documented limit to the size of
     // supported LIKE patterns. The real limiting factor is the number of states
     // that can be handled by the Regex library. In testing, I was able to
@@ -127,7 +153,7 @@ pub fn compile(pattern: &str, case_insensitive: bool, escape: &str) -> Result<Ma
     let p = normalize_pattern(pattern, escape)?;
 
     let subpatterns = build_subpatterns(&p)?;
-    let matcher_impl = match case_insensitive || subpatterns.len() > 5 {
+    let matcher_impl = match case_insensitive || subpatterns.len() > MAX_SUBPATTERNS {
         false => MatcherImpl::String(subpatterns),
         true => MatcherImpl::Regex(build_regex(&subpatterns, case_insensitive)?),
     };
@@ -171,6 +197,34 @@ struct Subpattern {
     many: bool,
     /// A string literal that is expected after the wildcards.
     suffix: String,
+}
+
+impl Subpattern {
+    /// Converts a Subpattern to an equivalent regular expression and writes it to a given string.
+    fn write_regex_to(&self, r: &mut String) {
+        match self.consume {
+            0 => {
+                if self.many {
+                    r.push_str(".*");
+                }
+            }
+            1 => {
+                r.push('.');
+                if self.many {
+                    r.push('+');
+                }
+            }
+            n => {
+                r.push_str(".{");
+                write!(r, "{}", n);
+                if self.many {
+                    r.push(',');
+                }
+                r.push('}');
+            }
+        }
+        regex_syntax::escape_into(&self.suffix, r);
+    }
 }
 
 fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
@@ -238,19 +292,19 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
 
 /// Breaks a LIKE pattern into a chain of sub-patterns.
 fn build_subpatterns(pattern: &str) -> Result<Vec<Subpattern>, EvalError> {
-    let mut subpatterns = vec![];
+    let mut subpatterns = Vec::with_capacity(MAX_SUBPATTERNS);
     let mut current = Subpattern::default();
     let mut in_wildcard = true;
     let mut in_escape = false;
-    let escape_char: char = DEFAULT_ESCAPE.chars().next().unwrap();
     for c in pattern.chars() {
         match c {
-            c if !in_escape && c == escape_char => {
+            c if !in_escape && c == DEFAULT_ESCAPE => {
                 in_escape = true;
                 in_wildcard = false;
             }
             '_' if !in_escape => {
                 if !in_wildcard {
+                    current.suffix.shrink_to_fit();
                     subpatterns.push(mem::take(&mut current));
                     in_wildcard = true;
                 }
@@ -258,6 +312,7 @@ fn build_subpatterns(pattern: &str) -> Result<Vec<Subpattern>, EvalError> {
             }
             '%' if !in_escape => {
                 if !in_wildcard {
+                    current.suffix.shrink_to_fit();
                     subpatterns.push(mem::take(&mut current));
                     in_wildcard = true;
                 }
@@ -273,7 +328,9 @@ fn build_subpatterns(pattern: &str) -> Result<Vec<Subpattern>, EvalError> {
     if in_escape {
         return Err(EvalError::UnterminatedLikeEscapeSequence);
     }
-    subpatterns.push(mem::take(&mut current));
+    current.suffix.shrink_to_fit();
+    subpatterns.push(current);
+    subpatterns.shrink_to_fit();
     Ok(subpatterns)
 }
 
@@ -281,22 +338,7 @@ fn build_subpatterns(pattern: &str) -> Result<Vec<Subpattern>, EvalError> {
 fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Regex, EvalError> {
     let mut r = String::from("^");
     for sp in subpatterns {
-        if sp.consume == 0 && sp.many {
-            r.push_str(".*");
-        } else if sp.consume == 1 {
-            r.push('.');
-            if sp.many {
-                r.push('+');
-            }
-        } else if sp.consume > 1 {
-            r.push_str(".{");
-            write!(&mut r, "{}", sp.consume).unwrap();
-            if sp.many {
-                r.push(',');
-            }
-            r.push('}');
-        }
-        regex_syntax::escape_into(&sp.suffix, &mut r);
+        sp.write_regex_to(&mut r);
     }
     r.push('$');
     let mut rb = RegexBuilder::new(&r);
@@ -323,59 +365,58 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
 #[cfg(test)]
 mod test {
     use super::*;
-    use mz_ore::str::StrExt;
 
     #[test]
     fn test_normalize_pattern() {
         struct TestCase<'a> {
             pattern: &'a str,
-            escape: &'a str,
+            escape: EscapeBehavior,
             expected: &'a str,
         }
         let test_cases = vec![
             TestCase {
                 pattern: "",
-                escape: "",
+                escape: EscapeBehavior::Disabled,
                 expected: "",
             },
             TestCase {
                 pattern: "ban%na!",
-                escape: "\\",
+                escape: EscapeBehavior::default(),
                 expected: "ban%na!",
             },
             TestCase {
                 pattern: "ban%%%na!",
-                escape: "%",
+                escape: EscapeBehavior::Char('%'),
                 expected: "ban\\%\\na!",
             },
             TestCase {
                 pattern: "ban%na\\!",
-                escape: "n",
+                escape: EscapeBehavior::Char('n'),
                 expected: "ba\\%\\a\\\\!",
             },
             TestCase {
                 pattern: "ban%na\\!",
-                escape: "",
+                escape: EscapeBehavior::Disabled,
                 expected: "ban%na\\\\!",
             },
             TestCase {
                 pattern: "ban\\na!",
-                escape: "n",
+                escape: EscapeBehavior::Char('n'),
                 expected: "ba\\\\\\a!",
             },
             TestCase {
                 pattern: "ban\\\\na!",
-                escape: "n",
+                escape: EscapeBehavior::Char('n'),
                 expected: "ba\\\\\\\\\\a!",
             },
             TestCase {
                 pattern: "food",
-                escape: "o",
+                escape: EscapeBehavior::Char('o'),
                 expected: "f\\od",
             },
             TestCase {
                 pattern: "漢漢",
-                escape: "漢",
+                escape: EscapeBehavior::Char('漢'),
                 expected: "\\漢",
             },
         ];
@@ -384,18 +425,18 @@ mod test {
             let actual = normalize_pattern(input.pattern, input.escape).unwrap();
             assert!(
                 actual == input.expected,
-                "normalize_pattern({}, {}):\n\tactual: {}\n\texpected: {}\n",
-                input.pattern.quoted(),
-                input.escape.quoted(),
-                actual.quoted(),
-                input.expected.quoted(),
+                "normalize_pattern({:?}, {:?}):\n\tactual: {:?}\n\texpected: {:?}\n",
+                input.pattern,
+                input.escape,
+                actual,
+                input.expected,
             );
         }
     }
 
     #[test]
     fn test_escape_too_long() {
-        match compile("foo", false, "foo") {
+        match EscapeBehavior::from_str("foo") {
             Err(EvalError::LikeEscapeTooLong) => {}
             _ => {
                 panic!("expected error when using escape string with >1 character");
@@ -413,32 +454,32 @@ mod test {
         struct Pattern<'a> {
             needle: &'a str,
             case_insensitive: bool,
-            escape: &'a str,
+            escape: EscapeBehavior,
             inputs: Vec<Input<'a>>,
         }
         let test_cases = vec![
             Pattern {
                 needle: "ban%na!",
                 case_insensitive: false,
-                escape: "\\",
+                escape: EscapeBehavior::default(),
                 inputs: vec![input("banana!", true)],
             },
             Pattern {
                 needle: "ban%na!",
                 case_insensitive: false,
-                escape: "n",
+                escape: EscapeBehavior::Char('n'),
                 inputs: vec![input("banana!", false), input("ba%a!", true)],
             },
             Pattern {
                 needle: "ban%%%na!",
                 case_insensitive: false,
-                escape: "%",
+                escape: EscapeBehavior::Char('%'),
                 inputs: vec![input("banana!", false), input("ban%na!", true)],
             },
             Pattern {
                 needle: "foo",
                 case_insensitive: true,
-                escape: "\\",
+                escape: EscapeBehavior::default(),
                 inputs: vec![
                     input("", false),
                     input("f", false),
@@ -458,13 +499,13 @@ mod test {
                 let actual = matcher.is_match(input.haystack);
                 assert!(
                     actual == input.matches,
-                    "{} {} {}:\n\tactual: {}\n\texpected: {}\n",
-                    input.haystack.quoted(),
+                    "{:?} {} {:?}:\n\tactual: {:?}\n\texpected: {:?}\n",
+                    input.haystack,
                     match tc.case_insensitive {
                         true => "ILIKE",
                         false => "LIKE",
                     },
-                    tc.needle.quoted(),
+                    tc.needle,
                     actual,
                     input.matches,
                 );
