@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use mz_dataflow_types::client::{
     Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::now::NowFn;
@@ -65,6 +66,8 @@ pub struct StorageState {
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
     pub source_metrics: SourceBaseMetrics,
+    /// An external ID to use for all AWS AssumeRole operations.
+    pub aws_external_id: AwsExternalId,
     /// Index of the associated timely dataflow worker.
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.

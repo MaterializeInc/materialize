@@ -142,7 +142,6 @@ pub(crate) fn import_source<G>(
     scope: &mut G,
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
-    aws_external_id: AwsExternalId,
 ) -> (
     (Collection<G, Row>, Collection<G, DataflowError>),
     Rc<dyn std::any::Any>,
@@ -243,7 +242,7 @@ where
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
-                aws_external_id: aws_external_id.clone(),
+                aws_external_id: storage_state.aws_external_id.clone(),
             };
 
             let (mut collection, capability) = if let ExternalSourceConnector::PubNub(
@@ -289,7 +288,7 @@ where
                             source_persist_config
                                 .as_ref()
                                 .map(|config| config.bindings_config.clone()),
-                            aws_external_id,
+                            storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::Delimited(ok), ts, err), cap)
                     }
@@ -300,7 +299,7 @@ where
                             source_persist_config
                                 .as_ref()
                                 .map(|config| config.bindings_config.clone()),
-                            aws_external_id,
+                            storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::Delimited(ok), ts, err), cap)
                     }
@@ -311,7 +310,7 @@ where
                             source_persist_config
                                 .as_ref()
                                 .map(|config| config.bindings_config.clone()),
-                            aws_external_id,
+                            storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::ByteStream(ok), ts, err), cap)
                     }
@@ -322,7 +321,7 @@ where
                             source_persist_config
                                 .as_ref()
                                 .map(|config| config.bindings_config.clone()),
-                            aws_external_id,
+                            storage_state.aws_external_id.clone(),
                         );
                         ((SourceType::ByteStream(ok), ts, err), cap)
                     }

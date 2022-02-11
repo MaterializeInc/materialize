@@ -150,13 +150,13 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 last_bindings_feedback: Instant::now(),
                 now: now.clone(),
                 source_metrics,
+                aws_external_id: aws_external_id.clone(),
                 timely_worker_index,
                 timely_worker_peers,
             },
             command_rx,
             response_tx,
             command_metrics: server_metrics.for_worker_id(worker_idx),
-            aws_external_id: aws_external_id.clone(),
         }
         .run()
     })
@@ -196,8 +196,6 @@ where
     response_tx: mpsc::UnboundedSender<Response>,
     /// Metrics bundle.
     command_metrics: WorkerMetrics,
-    /// An external ID to use for all AWS AssumeRole operations.
-    aws_external_id: AwsExternalId,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -299,7 +297,6 @@ where
                         &mut self.storage_state,
                         &dataflow,
                         &mut boundary,
-                        self.aws_external_id.clone(),
                     );
 
                     crate::render::build_compute_dataflow(
