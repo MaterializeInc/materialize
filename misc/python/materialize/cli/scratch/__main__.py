@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+
 import shtab
 
 from materialize.cli.scratch import create, destroy, login, mine, push, sftp, ssh
@@ -15,15 +16,37 @@ from materialize.cli.scratch import create, destroy, login, mine, push, sftp, ss
 
 def main() -> None:
     parser = argparse.ArgumentParser("scratch")
-    subparsers = parser.add_subparsers(dest="subcommand", required=True, description="", help="subparsers")
+    subparsers = parser.add_subparsers(
+        dest="subcommand", required=True, description="", help="subparsers"
+    )
     for name, configure, run, description in [
         ("login", login.configure_parser, login.run, "Log in to AWS SSO"),
-        ("create", create.configure_parser, create.run, "Create a new scratch instance"),
+        (
+            "create",
+            create.configure_parser,
+            create.run,
+            "Create a new scratch instance",
+        ),
         ("mine", mine.configure_parser, mine.run, "Show active scratch instance"),
         ("ssh", ssh.configure_parser, ssh.run, "Connect to scratch instance via ssh"),
-        ("sftp", sftp.configure_parser, sftp.run, "Connect to scratch instance via sftp"),
-        ("destroy", destroy.configure_parser, destroy.run, "Destroy a scratch instance"),
-        ("push", push.configure_parser, push.run, "Push current HEAD (or a specific git commit) to scratch instance"),
+        (
+            "sftp",
+            sftp.configure_parser,
+            sftp.run,
+            "Connect to scratch instance via sftp",
+        ),
+        (
+            "destroy",
+            destroy.configure_parser,
+            destroy.run,
+            "Destroy a scratch instance",
+        ),
+        (
+            "push",
+            push.configure_parser,
+            push.run,
+            "Push current HEAD (or a specific git commit) to scratch instance",
+        ),
     ]:
         s = subparsers.add_parser(name, description=description, help=description)
         configure(s)
