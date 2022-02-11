@@ -42,6 +42,7 @@ use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use mz_coord::PersistConfig;
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use postgres_protocol::types;
@@ -549,7 +550,7 @@ impl Runner {
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),
             data_directory: temp_dir.path().to_path_buf(),
-            aws_external_id: None,
+            aws_external_id: AwsExternalId::NotProvided,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             experimental_mode: true,

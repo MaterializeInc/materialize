@@ -17,6 +17,7 @@ use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
+use mz_dataflow_types::sources::AwsExternalId;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
@@ -67,6 +68,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// A handle to a persistence runtime, if persistence is enabled.
     pub persister: Option<mz_persist::client::RuntimeClient>,
+    /// An external ID to use for all AWS AssumeRole operations.
+    pub aws_external_id: AwsExternalId,
 }
 
 /// A handle to a running dataflow server.
@@ -109,6 +112,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let now = config.now;
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
+    let aws_external_id = config.aws_external_id.clone();
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let _tokio_guard = tokio_executor.enter();
         let (response_tx, command_rx) = channels.lock().unwrap()
@@ -152,6 +156,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
             command_rx,
             response_tx,
             command_metrics: server_metrics.for_worker_id(worker_idx),
+            aws_external_id: aws_external_id.clone(),
         }
         .run()
     })
@@ -191,6 +196,8 @@ where
     response_tx: mpsc::UnboundedSender<Response>,
     /// Metrics bundle.
     command_metrics: WorkerMetrics,
+    /// An external ID to use for all AWS AssumeRole operations.
+    aws_external_id: AwsExternalId,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -292,6 +299,7 @@ where
                         &mut self.storage_state,
                         &dataflow,
                         &mut boundary,
+                        self.aws_external_id.clone(),
                     );
 
                     crate::render::build_compute_dataflow(

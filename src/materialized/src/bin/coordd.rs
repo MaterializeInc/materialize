@@ -12,6 +12,7 @@ use std::process;
 use std::time::Duration;
 
 use futures::StreamExt;
+use mz_dataflow_types::sources::AwsExternalId;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tracing::info;
@@ -59,7 +60,7 @@ struct Args {
     )]
     data_directory: PathBuf,
 
-    /// An AWS External ID to be supplied to all AssumeRole operations.
+    /// An external ID to use for all AWS AssumeRole operations.
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
 }
@@ -113,7 +114,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         disable_user_indexes: false,
         safe_mode: false,
         build_info: &materialized::BUILD_INFO,
-        aws_external_id: args.aws_external_id,
+        aws_external_id: args
+            .aws_external_id
+            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
+            .unwrap_or(AwsExternalId::NotProvided),
         metrics_registry: metrics_registry.clone(),
         persister,
         now: SYSTEM_TIME.clone(),

@@ -104,6 +104,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
+use mz_dataflow_types::sources::AwsExternalId;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
@@ -142,6 +143,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     storage_state: &mut StorageState,
     dataflow: &DataflowDescription<mz_dataflow_types::plan::Plan>,
     boundary: &mut B,
+    aws_external_id: AwsExternalId,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -168,6 +170,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                     region,
                     materialized_logging.clone(),
                     src_id.clone(),
+                    aws_external_id.clone(),
                 );
 
                 boundary.capture(*src_id, ok, err, token, &debug_name);

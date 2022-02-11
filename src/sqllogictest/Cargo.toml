@@ -22,6 +22,7 @@ junit-report = "0.7.0"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
 md-5 = "0.10.0"
+mz-dataflow-types = { path = "../dataflow-types" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgrepr = { path = "../pgrepr" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

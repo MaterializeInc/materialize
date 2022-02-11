@@ -17,6 +17,7 @@ use anyhow::{Context, Error};
 use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{EventMask, Inotify, WatchMask};
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 use tracing::error;
@@ -72,6 +73,7 @@ impl SourceReader for FileSourceReader {
         _worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        _: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         _: Option<Logger>,
