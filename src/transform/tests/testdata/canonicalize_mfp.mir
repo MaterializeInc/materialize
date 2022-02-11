@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+cat
+(defsource x [int64 int64 int64])
+----
+ok
+
+# regression test for #8235
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_binary add_int64 #1 #2)])
+        [(call_binary add_int64 null #3)])
+     [#1])
+----
+%0 =
+| Get x (u0)
+| Filter false
+| Project (#1)
+
+cat
+(defsource t1 ([(Int32 true) (Int32 true)] []))
+----
+ok
+
+cat
+(defsource t2 ([(Int32 true) (Int32 true)] []))
+----
+ok
+
+build apply=CanonicalizeMfp
+(Project
+    (Filter
+        (Project
+            (Join
+                [(get t1) (get t2)]
+                [[#0 #2]])
+            [0])
+        [
+            (CallBinary Or (CallBinary Eq #0 (5 Int32)) (CallBinary Eq #0 (1337 Int32)))
+            (CallBinary Or (CallBinary Eq #0 (5 Int32)) (CallBinary Eq #0 (1337 Int32)))
+            (CallUnary (Not ) (CallUnary (IsNull ) #0))
+        ])
+    [0 0+0])
+----
+----
+%0 =
+| Get t1 (u1)
+
+%1 =
+| Get t2 (u2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0))
+| Filter ((#0 = 5) || (#0 = 1337))
+| Project (#0)
+----
+----
