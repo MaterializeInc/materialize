@@ -4649,26 +4649,19 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
             };
+            let logging = logging.map(|config| DataflowLoggingConfig {
+                granularity_ns: config.granularity.as_nanos(),
+                active_logs: BUILTINS
+                    .logs()
+                    .map(|src| (src.variant.clone(), src.index_id))
+                    .collect(),
+                log_logging: config.log_logging,
+            });
             handle.block_on(
                 coord
                     .dataflow_client
-                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID),
+                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
             );
-            if let Some(config) = &logging {
-                handle.block_on(
-                    coord.dataflow_client.enable_logging(
-                        DEFAULT_COMPUTE_INSTANCE_ID,
-                        DataflowLoggingConfig {
-                            granularity_ns: config.granularity.as_nanos(),
-                            active_logs: BUILTINS
-                                .logs()
-                                .map(|src| (src.variant.clone(), src.index_id))
-                                .collect(),
-                            log_logging: config.log_logging,
-                        },
-                    ),
-                );
-            }
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();

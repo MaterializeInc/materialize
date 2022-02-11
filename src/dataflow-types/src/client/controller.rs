@@ -44,9 +44,18 @@ impl<C: Client> Client for Controller<C> {
 impl<C: Client> Controller<C> {
     pub async fn send(&mut self, cmd: Command) {
         match &cmd {
-            Command::Compute(ComputeCommand::CreateInstance, instance) => {
+            Command::Compute(ComputeCommand::CreateInstance(logging), instance) => {
                 self.compute_since_uppers
                     .insert(*instance, Default::default());
+
+                if let Some(logging_config) = logging {
+                    for id in logging_config.log_identifiers() {
+                        self.compute_since_uppers
+                            .get_mut(instance)
+                            .expect("Reference to absent instance")
+                            .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
+                    }
+                }
             }
             Command::Compute(ComputeCommand::DropInstance, instance) => {
                 self.compute_since_uppers.remove(instance);
@@ -89,14 +98,6 @@ impl<C: Client> Controller<C> {
                     } else {
                         self.source_descriptions.insert(*id, None);
                     }
-                }
-            }
-            Command::Compute(ComputeCommand::EnableLogging(logging_config), instance) => {
-                for id in logging_config.log_identifiers() {
-                    self.compute_since_uppers
-                        .get_mut(instance)
-                        .expect("Reference to absent instance")
-                        .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
                 }
             }
             Command::Compute(ComputeCommand::CreateDataflows(dataflows), instance) => {
