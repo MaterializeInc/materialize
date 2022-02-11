@@ -77,11 +77,12 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
     pub(crate) fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
-            ComputeCommand::CreateInstance | ComputeCommand::DropInstance => {
-                // Can be ignored for the moment.
-                // Should eventually be filtered outside of this method,
-                // as we are already deep in a specific instance.
+            ComputeCommand::CreateInstance(logging) => {
+                if let Some(logging) = logging {
+                    self.initialize_logging(&logging);
+                }
             }
+            ComputeCommand::DropInstance => {}
             ComputeCommand::CreateDataflows(_dataflows) => {
                 unreachable!("CreateDataflows should not be issued directly to compute state")
             }
@@ -176,9 +177,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                         .traces
                         .allow_compaction(id, frontier.borrow());
                 }
-            }
-            ComputeCommand::EnableLogging(config) => {
-                self.initialize_logging(&config);
             }
         }
     }
@@ -560,6 +558,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(Response::Compute(response));
+        let _ = self.response_tx.send(Response::Compute(
+            response,
+            mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID,
+        ));
     }
 }
