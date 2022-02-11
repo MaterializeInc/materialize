@@ -21,4 +21,5 @@ COPY shlib /usr/local/share/shlib/
 COPY protobuf-install /usr/local/
 ENV PROTOC /usr/local/bin/protoc
 
+
 WORKDIR /workdir
