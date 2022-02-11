@@ -170,7 +170,8 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                     src_id.clone(),
                 );
 
-                boundary.capture(*src_id, ok, err, token, &debug_name);
+                let source_key = source.with_id(*src_id);
+                boundary.capture(source_key, ok, err, token, &debug_name);
             }
         })
     });
@@ -203,20 +204,18 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
             let mut tokens = BTreeMap::new();
 
             // Import declared sources into the rendering context.
-            for source_id in dataflow.source_imports.keys() {
-                if let Some((ok, err, token)) =
-                    boundary.replay(*source_id, region, &format!("{name}-{source_id}"))
-                {
-                    // Associate collection bundle with the source identifier.
-                    context.insert_id(
-                        mz_expr::Id::Global(*source_id),
-                        crate::render::CollectionBundle::from_collections(ok, err),
-                    );
-                    // Associate returned tokens with the source identifier.
-                    tokens.insert(*source_id, token);
-                } else {
-                    panic!("Unable to replay source: {source_id}");
-                }
+            for (source_id, source) in dataflow.source_imports.iter() {
+                let source_key = source.with_id(*source_id);
+                let (ok, err, token) =
+                    boundary.replay(source_key, region, &format!("{name}-{source_id}"));
+
+                // Associate collection bundle with the source identifier.
+                context.insert_id(
+                    mz_expr::Id::Global(*source_id),
+                    crate::render::CollectionBundle::from_collections(ok, err),
+                );
+                // Associate returned tokens with the source identifier.
+                tokens.insert(*source_id, token);
             }
 
             // Import declared indexes into the rendering context.

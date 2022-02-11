@@ -32,6 +32,7 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
+use crate::server::boundary::ComputeReplay;
 use crate::server::PendingPeek;
 use crate::sink::SinkBaseMetrics;
 
@@ -64,16 +65,18 @@ pub struct ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub struct ActiveComputeState<'a, A: Allocate> {
+pub struct ActiveComputeState<'a, A: Allocate, B: ComputeReplay> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<Response>,
+    /// The boundary with the Storage layer
+    pub boundary: &'a mut B,
 }
 
-impl<'a, A: Allocate> ActiveComputeState<'a, A> {
+impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
     /// Entrypoint for applying a compute command.
     pub(crate) fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
@@ -83,8 +86,36 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 }
             }
             ComputeCommand::DropInstance => {}
-            ComputeCommand::CreateDataflows(_dataflows) => {
-                unreachable!("CreateDataflows should not be issued directly to compute state")
+            ComputeCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.into_iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        self.compute_state
+                            .reported_frontiers
+                            .insert(*sink_id, Antichain::from_elem(0));
+                    }
+                    for (idx_id, idx, _) in dataflow.index_exports.iter() {
+                        self.compute_state
+                            .reported_frontiers
+                            .insert(*idx_id, Antichain::from_elem(0));
+                        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+                            logger.log(MaterializedEvent::Dataflow(*idx_id, true));
+                            logger.log(MaterializedEvent::Frontier(*idx_id, 0, 1));
+                            for import_id in dataflow.get_imports(&idx.on_id) {
+                                logger.log(MaterializedEvent::DataflowDependency {
+                                    dataflow: *idx_id,
+                                    source: import_id,
+                                })
+                            }
+                        }
+                    }
+
+                    crate::render::build_compute_dataflow(
+                        self.timely_worker,
+                        &mut self.compute_state,
+                        dataflow,
+                        self.boundary,
+                    );
+                }
             }
 
             ComputeCommand::DropSinks(ids) => {

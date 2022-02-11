@@ -17,8 +17,10 @@ use tokio::sync::mpsc;
 use mz_dataflow_types::client::{
     Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
+use mz_dataflow_types::plan;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::DataflowDescription;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
@@ -26,6 +28,7 @@ use mz_repr::Timestamp;
 
 use crate::metrics::Metrics;
 use crate::render::sources::PersistedSourceManager;
+use crate::server::boundary::StorageCapture;
 use crate::server::LocalInput;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
@@ -75,21 +78,28 @@ pub struct StorageState {
 }
 
 /// A wrapper around [StorageState] with a live timely worker and response channel.
-pub struct ActiveStorageState<'a, A: Allocate> {
+pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The storage state itself.
     pub storage_state: &'a mut StorageState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<Response>,
+    /// The boundary with the Compute layer.
+    pub boundary: &'a mut B,
 }
 
-impl<'a, A: Allocate> ActiveStorageState<'a, A> {
+impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     /// Entry point for applying a storage command.
     pub(crate) fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::CreateSources(_sources) => {
+            StorageCommand::CreateSources(sources) => {
                 // Nothing to do at the moment, but in the future prepare source ingestion.
+                for (id, (description, _since)) in sources.into_iter() {
+                    self.storage_state
+                        .source_descriptions
+                        .insert(id, description);
+                }
             }
             StorageCommand::DropSources(names) => {
                 for name in names {
@@ -228,6 +238,23 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
 
                 self.storage_state.reported_bindings_frontiers.remove(&id);
             }
+        }
+    }
+
+    pub(crate) fn build_storage_dataflow(&mut self, dataflows: &[DataflowDescription<plan::Plan>]) {
+        for dataflow in dataflows.iter() {
+            for (source_id, instance) in dataflow.source_imports.iter() {
+                assert_eq!(
+                    self.storage_state.source_descriptions[source_id],
+                    instance.description
+                );
+            }
+            crate::render::build_storage_dataflow(
+                self.timely_worker,
+                &mut self.storage_state,
+                &dataflow,
+                self.boundary,
+            );
         }
     }
     /// Send information about new timestamp bindings created by dataflow workers back to

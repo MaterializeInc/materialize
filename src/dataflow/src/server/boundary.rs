@@ -11,7 +11,7 @@ use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
 use mz_dataflow_types::DataflowError;
-use mz_expr::GlobalId;
+use mz_dataflow_types::SourceInstanceKey;
 use mz_repr::{Diff, Row};
 
 /// A type that can capture a specific source.
@@ -19,7 +19,7 @@ pub trait StorageCapture {
     /// Captures the source and binds to `id`.
     fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
         &mut self,
-        id: GlobalId,
+        id: SourceInstanceKey,
         ok: Collection<G, Row, Diff>,
         err: Collection<G, DataflowError, Diff>,
         token: Rc<dyn Any>,
@@ -36,14 +36,14 @@ pub trait ComputeReplay {
     /// case is likely an error.
     fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
         &mut self,
-        id: GlobalId,
+        id: SourceInstanceKey,
         scope: &mut G,
         name: &str,
-    ) -> Option<(
+    ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
         Rc<dyn Any>,
-    )>;
+    );
 }
 
 pub use event_link::EventLinkBoundary;
@@ -61,7 +61,7 @@ mod event_link {
     use timely::dataflow::Scope;
 
     use mz_dataflow_types::DataflowError;
-    use mz_expr::GlobalId;
+    use mz_dataflow_types::SourceInstanceKey;
     use mz_repr::{Diff, Row};
 
     use crate::activator::RcActivator;
@@ -72,13 +72,15 @@ mod event_link {
 
     /// A simple boundary that uses activated event linked lists.
     pub struct EventLinkBoundary {
-        sources: BTreeMap<GlobalId, SourceBoundary>,
+        send: BTreeMap<SourceInstanceKey, crossbeam_channel::Sender<SourceBoundary>>,
+        recv: BTreeMap<SourceInstanceKey, crossbeam_channel::Receiver<SourceBoundary>>,
     }
 
     impl EventLinkBoundary {
         pub fn new() -> Self {
             Self {
-                sources: BTreeMap::new(),
+                send: BTreeMap::new(),
+                recv: BTreeMap::new(),
             }
         }
     }
@@ -86,67 +88,74 @@ mod event_link {
     impl StorageCapture for EventLinkBoundary {
         fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
             &mut self,
-            id: GlobalId,
+            id: SourceInstanceKey,
             ok: Collection<G, Row, Diff>,
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
             name: &str,
         ) {
-            let ok_activator = RcActivator::new(format!("{name}-ok"), 1);
-            let err_activator = RcActivator::new(format!("{name}-err"), 1);
+            let boundary = SourceBoundary::new(name, token);
 
-            let ok_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator);
-            let err_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator);
+            // Ensure that a channel pair exists.
+            if !self.send.contains_key(&id) {
+                let (send, recv) = crossbeam_channel::unbounded();
+                self.send.insert(id.clone(), send);
+                self.recv.insert(id.clone(), recv);
+            }
 
-            self.sources.insert(
-                id,
-                SourceBoundary {
-                    ok: ActivatedEventPusher::<_>::clone(&ok_handle),
-                    err: ActivatedEventPusher::<_>::clone(&err_handle),
-                    token,
-                },
-            );
+            self.send[&id]
+                .send(boundary.clone())
+                .expect("Failed to transmit source");
 
             use timely::dataflow::operators::Capture;
-            ok.inner.capture_into(ok_handle);
-            err.inner.capture_into(err_handle);
+            ok.inner.capture_into(boundary.ok);
+            err.inner.capture_into(boundary.err);
         }
     }
 
     impl ComputeReplay for EventLinkBoundary {
         fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
             &mut self,
-            id: GlobalId,
+            id: SourceInstanceKey,
             scope: &mut G,
             name: &str,
-        ) -> Option<(
+        ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,
             Rc<dyn Any>,
-        )> {
-            self.sources.remove(&id).map(|source| {
-                let ok = Some(source.ok.inner)
-                    .mz_replay(
-                        scope,
-                        &format!("{name}-ok"),
-                        Duration::MAX,
-                        source.ok.activator,
-                    )
-                    .as_collection();
-                let err = Some(source.err.inner)
-                    .mz_replay(
-                        scope,
-                        &format!("{name}-err"),
-                        Duration::MAX,
-                        source.err.activator,
-                    )
-                    .as_collection();
-                (ok, err, source.token)
-            })
+        ) {
+            // Ensure that a channel pair exists.
+            if !self.send.contains_key(&id) {
+                let (send, recv) = crossbeam_channel::unbounded();
+                self.send.insert(id.clone(), send);
+                self.recv.insert(id.clone(), recv);
+            }
+
+            let source = self.recv[&id].recv().expect("Unable to acquire source");
+
+            let ok = Some(source.ok.inner)
+                .mz_replay(
+                    scope,
+                    &format!("{name}-ok"),
+                    Duration::MAX,
+                    source.ok.activator,
+                )
+                .as_collection();
+            let err = Some(source.err.inner)
+                .mz_replay(
+                    scope,
+                    &format!("{name}-err"),
+                    Duration::MAX,
+                    source.err.activator,
+                )
+                .as_collection();
+
+            (ok, err, source.token)
         }
     }
 
     /// Information about each source that must be communicated between storage and compute layers.
+    #[derive(Clone)]
     pub struct SourceBoundary {
         /// Captured `row` updates representing a differential collection.
         pub ok: ActivatedEventPusher<
@@ -158,5 +167,20 @@ mod event_link {
         >,
         /// A token that should be dropped to terminate the source.
         pub token: Rc<dyn std::any::Any>,
+    }
+
+    impl SourceBoundary {
+        /// Create a new boundary, from a name and a token.
+        fn new(name: &str, token: Rc<dyn Any>) -> Self {
+            let ok_activator = RcActivator::new(format!("{name}-ok"), 1);
+            let err_activator = RcActivator::new(format!("{name}-err"), 1);
+            let ok_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), ok_activator);
+            let err_handle = ActivatedEventPusher::new(Rc::new(EventLink::new()), err_activator);
+            SourceBoundary {
+                ok: ActivatedEventPusher::<_>::clone(&ok_handle),
+                err: ActivatedEventPusher::<_>::clone(&err_handle),
+                token,
+            }
+        }
     }
 }
