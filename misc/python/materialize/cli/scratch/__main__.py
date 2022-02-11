@@ -52,7 +52,7 @@ def main() -> None:
         configure(s)
         s.set_defaults(run=run)
 
-    shtab.add_argument_to(parser, ["-c", "--generate-completion"], parent=parser)
+    shtab.add_argument_to(parser, ["-c", "--generate-completion"], parent=parser)  # type: ignore[no-untyped-call]
 
     args = parser.parse_args()
     args.run(args)
