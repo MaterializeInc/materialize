@@ -366,7 +366,8 @@ class CargoTest(CargoPreImage):
                     [*self.rd.tool("strip"), self.path / "tests" / slug],
                     cwd=self.rd.root,
                 )
-                manifest.write(f"{slug} {crate_path}\n")
+                package = slug.replace(".", "::")
+                manifest.write(f"{slug} {package} {crate_path}\n")
         shutil.move(str(self.path / "materialized"), self.path / "tests")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
