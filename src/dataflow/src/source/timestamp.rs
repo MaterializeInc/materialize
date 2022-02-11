@@ -79,9 +79,9 @@ impl TimestampProposer {
     /// a binding for an offset greater than `offset`. The only exception here is if
     /// `time` is 0, which is accepted to bootstrap the timestamp proposal.
     fn propose_binding(&mut self, partition: PartitionId, offset: MzOffset) -> Timestamp {
-        let current_max = self.bindings.entry(partition).or_insert(offset);
-        if offset > *current_max {
-            *current_max = offset;
+        let next_offset = self.bindings.entry(partition).or_insert(offset + 1);
+        if offset + 1 > *next_offset {
+            *next_offset = offset + 1;
         }
         self.timestamp
     }
