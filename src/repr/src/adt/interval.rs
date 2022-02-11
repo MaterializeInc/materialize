@@ -92,7 +92,7 @@ impl Interval {
         match Self::new(
             months,
             seconds,
-            i128::from(self.nanoseconds() + other.nanoseconds()),
+            (self.nanoseconds() + other.nanoseconds()).into(),
         ) {
             Ok(i) => Some(i),
             Err(_) => None,
