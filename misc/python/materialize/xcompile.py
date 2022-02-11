@@ -169,7 +169,6 @@ def _bootstrap_darwin(arch: Arch) -> None:
         return
 
     spawn.runv(["brew", "install", f"materializeinc/crosstools/{target(arch)}"])
-    spawn.runv(["cargo", "clean", "--target", target(arch)], cwd=ROOT)
     spawn.runv(["rustup", "target", "add", target(arch)])
 
     BOOTSTRAP_FILE.parent.mkdir(parents=True, exist_ok=True)
