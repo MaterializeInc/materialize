@@ -130,7 +130,7 @@ changes that have not yet been documented.
 
 - **Breaking change.** Decrease minimum [`interval`](/sql/types/interval) value
   from '-2147483647 months -2147483647 days -2147483647 hours -59 minutes
-  -59.999999 seconds' to '-2147483647 months -2147483648 days -2147483648 hours
+  -59.999999 seconds' to '-2147483648 months -2147483648 days -2147483648 hours
   -59 minutes -59.999999 seconds' to match PostgreSQL's behavior {{% gh 10598 %}}.
 
 - Add `microsecond`, `month`, `decade`, `century`, `millennium` units
