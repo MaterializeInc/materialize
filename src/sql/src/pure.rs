@@ -112,10 +112,7 @@ pub fn purify(
                     let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
                         .await
                         .map_err(|e| {
-                            anyhow!(
-                                "Cannot create Kafka Consumer for determining start offsets: {}",
-                                e
-                            )
+                            anyhow!("Failed to create and connect Kafka consumer: {}", e)
                         })?;
 
                     // Translate `kafka_time_offset` to `start_offset`.
