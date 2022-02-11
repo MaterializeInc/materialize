@@ -49,8 +49,8 @@ test_cases = [
     ),
     TestCase(
         name="proxy-failure",
-        env=["ALL_PROXY=http://squid:3128"],
-        files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
+        env=["ALL_PROXY=http://localhost:1234"],
+        files=["proxy-failure.td"],
     ),
     TestCase(
         name="no-proxy",
