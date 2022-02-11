@@ -157,4 +157,4 @@ tests=(
     test/sqllogictest/postgres/pgcrypto/*.slt
 )
 
-sqllogictest -v "${tests[@]}"
+sqllogictest -v "${tests[@]}" "$@"
