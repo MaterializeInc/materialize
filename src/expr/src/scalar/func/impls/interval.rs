@@ -30,7 +30,7 @@ sqlfunc!(
             i = Interval::new(0, 86400, 0)
                 .unwrap()
                 .checked_add(
-                    &Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64)
+                    &Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i128)
                         .unwrap(),
                 )
                 .unwrap();
