@@ -999,12 +999,6 @@ pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcome
     run_string(config, &format!("{}", filename.display()), &input).await
 }
 
-pub async fn run_stdin(config: &RunConfig<'_>) -> Result<Outcomes, anyhow::Error> {
-    let mut input = String::new();
-    std::io::stdin().lock().read_to_string(&mut input)?;
-    run_string(config, "<stdin>", &input).await
-}
-
 pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 

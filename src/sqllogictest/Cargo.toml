@@ -18,6 +18,7 @@ mz-coord = { path = "../coord" }
 mz-expr = { path = "../expr" }
 fallible-iterator = "0.2.0"
 futures = "0.3.21"
+junit-report = "0.7.0"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
 md-5 = "0.10.0"
@@ -29,6 +30,7 @@ mz-repr = { path = "../repr" }
 serde_json = "1.0.78"
 mz-sql = { path = "../sql" }
 tempfile = "3.2.0"
+time = "0.3.7"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.16.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8", "with-serde_json-1"] }
