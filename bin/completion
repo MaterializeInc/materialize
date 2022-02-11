@@ -58,7 +58,7 @@ case "$cmd" in
             existing=$("$shasum" < "$directory"/../misc/completions/"$shell"/_"$name")
 
             if [[ "$latest" != "$existing" ]]; then
-              printf "shell completion scripts have uncommitted changes. \ntry running \`bin/completion generate\` and checking in the changes\n"
+              printf "shell completion scripts have uncommitted changes. try running \`bin/completion generate\` and checking in the changes\n"
               exit 1
             fi
           done
