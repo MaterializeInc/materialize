@@ -31,7 +31,7 @@ sqlfunc!(
         Interval::new(
             0,
             t.num_seconds_from_midnight() as i64,
-            t.nanosecond() as i128,
+            t.nanosecond().into(),
         )
         .map_err(|_| EvalError::IntervalOutOfRange)
     }

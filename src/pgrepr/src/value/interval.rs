@@ -70,7 +70,12 @@ impl<'a> FromSql<'a> for Interval {
         let days = raw.read_i32::<NetworkEndian>()?;
         let months = raw.read_i32::<NetworkEndian>()?;
         Ok(Interval(
-            ReprInterval::new(months, days as i64 * 24 * 60 * 60, micros as i128 * 1000).unwrap(),
+            ReprInterval::new(
+                months,
+                days as i64 * 24 * 60 * 60,
+                i128::from(micros) * 1000,
+            )
+            .unwrap(),
         ))
     }
 
