@@ -42,8 +42,23 @@ def acquire_materialized(repo: mzbuild.Repository, out: Path) -> None:
     mzbuild.chmod_x(out)
 
 
-def upload_test_report(suite: str, junit_xml: str) -> None:
-    """Upload a test report to Buildkite Test Analytics.
+def junit_report_filename(suite: str) -> Path:
+    """Compute the JUnit report filename for the specified test suite.
+
+    See also `upload_test_report`. In CI, the filename will include the
+    Buildkite job ID.
+
+    Args:
+        suite: The identifier for the test suite in Buildkite Test Analytics.
+    """
+    filename = f"junit_{suite}"
+    if "BUILDKITE_JOB_ID" in os.environ:
+        filename += "_" + os.environ["BUILDKITE_JOB_ID"]
+    return Path(f"{filename}.xml")
+
+
+def upload_junit_report(suite: str, junit_report: Path) -> None:
+    """Upload a JUnit report to Buildkite Test Analytics.
 
     Outside of CI, this function does nothing. Inside of CI, the API key for
     Buildkite Test Analytics is expected to be in the environment variable
@@ -52,7 +67,7 @@ def upload_test_report(suite: str, junit_xml: str) -> None:
 
     Args:
         suite: The identifier for the test suite in Buildkite Test Analytics.
-        junit_xml: The test report encoded as JUnit XML.
+        junit_report: The path to the JUnit XML-formatted report file.
     """
     if "CI" not in os.environ:
         return
@@ -74,7 +89,7 @@ def upload_test_report(suite: str, junit_xml: str) -> None:
                 "message": os.environ["BUILDKITE_MESSAGE"],
                 "url": os.environ["BUILDKITE_BUILD_URL"],
             },
-            "data": junit_xml,
+            "data": junit_report.read_text(),
         },
     )
     print(res.status_code, res.json())

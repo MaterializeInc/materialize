@@ -92,10 +92,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
         try:
-            c.run("testdrive-svc", "--junit-report=junit-report.xml", *args.files)
+            junit_report = ci_util.junit_report_filename(c.name)
+            c.run("testdrive-svc", f"--junit-report={junit_report}", *args.files)
         finally:
-            ci_util.upload_test_report(
-                "testdrive", (Path(__file__).parent / "junit-report.xml").read_text()
+            ci_util.upload_junit_report(
+                "testdrive", Path(__file__).parent / junit_report
             )
         c.kill("materialized")
 

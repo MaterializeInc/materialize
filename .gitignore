@@ -22,4 +22,4 @@ node_modules
 coverage
 **/*.swp
 test/feature-benchmark/tmp/*.td
-junit-report.xml
+junit_*.xml

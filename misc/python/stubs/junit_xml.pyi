@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional
+from typing import List, Optional, TextIO
 
 class TestCase:
     def __init__(
@@ -23,3 +23,4 @@ class TestSuite:
     def __init__(self, name: str): ...
 
 def to_xml_report_string(test_suites: List[TestSuite]) -> str: ...
+def to_xml_report_file(f: TextIO, test_suites: List[TestSuite]) -> None: ...

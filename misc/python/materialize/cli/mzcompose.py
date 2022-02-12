@@ -589,10 +589,10 @@ To see the available workflows, run:
                 if result.error:
                     test_case.add_error_info(message=result.error)
                 junit_suite.test_cases.append(test_case)
-            ci_util.upload_test_report(
-                "mzcompose",
-                junit_xml.to_xml_report_string([junit_suite]),
-            )
+            junit_report = ci_util.junit_report_filename("mzcompose")
+            with junit_report.open("w") as f:
+                junit_xml.to_xml_report_file(f, [junit_suite])
+            ci_util.upload_junit_report("mzcompose", junit_report)
 
             if any(result.error for result in composition.test_results.values()):
                 raise UIError("at least one test case failed")
