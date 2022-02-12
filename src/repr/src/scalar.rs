@@ -22,11 +22,11 @@ use uuid::Uuid;
 use mz_lowertest::MzReflect;
 
 use crate::adt::array::Array;
-use crate::adt::char::Char;
+use crate::adt::char::{Char, CharLength};
 use crate::adt::interval::Interval;
-use crate::adt::numeric::Numeric;
+use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, RegClass, RegProc, RegType};
-use crate::adt::varchar::VarChar;
+use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
 
@@ -849,13 +849,11 @@ pub enum ScalarType {
     /// `Numeric` values cannot exceed [`NUMERIC_DATUM_MAX_PRECISION`] digits of
     /// precision.
     ///
-    /// This type additionally specifies the scale of the decimal. The scale
-    /// specifies the number of digits after the decimal point. The scale must
-    /// be less than or equal to the maximum precision.
+    /// This type additionally specifies the maximum scale of the decimal. The
+    /// scale specifies the number of digits after the decimal point.
     ///
-    /// [`NUMERIC_DATUM_MAX_PRECISION`]:
-    /// crate::adt::numeric::NUMERIC_DATUM_MAX_PRECISION
-    Numeric { scale: Option<u8> },
+    /// [`NUMERIC_DATUM_MAX_PRECISION`]: crate::adt::numeric::NUMERIC_DATUM_MAX_PRECISION
+    Numeric { max_scale: Option<NumericMaxScale> },
     /// The type of [`Datum::Date`].
     Date,
     /// The type of [`Datum::Time`].
@@ -875,9 +873,12 @@ pub enum ScalarType {
     ///
     /// Note that a `length` of `None` is used in special cases, such as
     /// creating lists.
-    Char { length: Option<usize> },
-    /// Stored as [`Datum::String`], but can optionally express a limit on the string's length.
-    VarChar { length: Option<usize> },
+    Char { length: Option<CharLength> },
+    /// Stored as [`Datum::String`], but can optionally express a limit on the
+    /// string's length.
+    VarChar {
+        max_length: Option<VarCharMaxLength>,
+    },
     /// The type of a datum that may represent any valid JSON value.
     ///
     /// Valid datum variants for this type are:
@@ -1167,7 +1168,7 @@ impl<'a, E> DatumType<'a, E> for Vec<u8> {
 
 impl AsColumnType for Numeric {
     fn as_column_type() -> ColumnType {
-        ScalarType::Numeric { scale: None }.nullable(false)
+        ScalarType::Numeric { max_scale: None }.nullable(false)
     }
 }
 
@@ -1349,14 +1350,14 @@ impl<'a, E> DatumType<'a, E> for VarChar<String> {
 }
 
 impl<'a> ScalarType {
-    /// Returns the contained numeric scale.
+    /// Returns the contained numeric maximum scale.
     ///
     /// # Panics
     ///
     /// Panics if the scalar type is not [`ScalarType::Numeric`].
-    pub fn unwrap_numeric_scale(&self) -> Option<u8> {
+    pub fn unwrap_numeric_max_scale(&self) -> Option<NumericMaxScale> {
         match self {
-            ScalarType::Numeric { scale } => *scale,
+            ScalarType::Numeric { max_scale } => *max_scale,
             _ => panic!("ScalarType::unwrap_numeric_scale called on {:?}", self),
         }
     }
@@ -1412,11 +1413,11 @@ impl<'a> ScalarType {
                 custom_oid: None,
             },
             Array(a) => Array(Box::new(a.default_embedded_value())),
-            Numeric { .. } => Numeric { scale: None },
+            Numeric { .. } => Numeric { max_scale: None },
             // Char's default length should not be `Some(1)`, but instead `None`
             // to support Char values of different lengths in e.g. lists.
             Char { .. } => Char { length: None },
-            VarChar { .. } => VarChar { length: None },
+            VarChar { .. } => VarChar { max_length: None },
             v => v.clone(),
         }
     }
@@ -1445,18 +1446,27 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns the length of a [`ScalarType::Char`] or [`ScalarType::VarChar`].
+    /// Returns the length of a [`ScalarType::Char`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Char`] or [`ScalarType::VarChar`].
-    pub fn unwrap_char_varchar_length(&self) -> Option<usize> {
+    /// Panics if called on anything other than a [`ScalarType::Char`].
+    pub fn unwrap_char_length(&self) -> Option<CharLength> {
         match self {
-            ScalarType::Char { length, .. } | ScalarType::VarChar { length } => *length,
-            _ => panic!(
-                "ScalarType::unwrap_char_varchar_length called on {:?}",
-                self
-            ),
+            ScalarType::Char { length, .. } => *length,
+            _ => panic!("ScalarType::unwrap_char_length called on {:?}", self),
+        }
+    }
+
+    /// Returns the max length of a [`ScalarType::VarChar`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::VarChar`].
+    pub fn unwrap_varchar_max_length(&self) -> Option<VarCharMaxLength> {
+        match self {
+            ScalarType::VarChar { max_length, .. } => *max_length,
+            _ => panic!("ScalarType::unwrap_varchar_max_length called on {:?}", self),
         }
     }
 

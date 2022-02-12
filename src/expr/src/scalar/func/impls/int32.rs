@@ -12,7 +12,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_repr::adt::numeric::{self, Numeric};
+use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
 use mz_repr::{strconv, ColumnType, ScalarType};
 
@@ -89,7 +89,7 @@ sqlfunc!(
 );
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct CastInt32ToNumeric(pub Option<u8>);
+pub struct CastInt32ToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastInt32ToNumeric {
     type Input = i32;
@@ -98,7 +98,7 @@ impl<'a> EagerUnaryFunc<'a> for CastInt32ToNumeric {
     fn call(&self, a: i32) -> Result<Numeric, EvalError> {
         let mut a = Numeric::from(a);
         if let Some(scale) = self.0 {
-            if numeric::rescale(&mut a, scale).is_err() {
+            if numeric::rescale(&mut a, scale.into_u8()).is_err() {
                 return Err(EvalError::NumericFieldOverflow);
             }
         }
@@ -107,7 +107,7 @@ impl<'a> EagerUnaryFunc<'a> for CastInt32ToNumeric {
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Numeric { scale: self.0 }.nullable(input.nullable)
+        ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 }
 

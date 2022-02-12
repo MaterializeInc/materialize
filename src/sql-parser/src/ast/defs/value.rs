@@ -238,7 +238,7 @@ pub enum UnresolvedDataType {
     Other {
         name: RawName,
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
-        typ_mod: Vec<u64>,
+        typ_mod: Vec<i64>,
     },
 }
 

@@ -20,7 +20,7 @@ use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_ore::cast::CastFrom;
 use mz_ore::retry::Retry;
-use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 
 use super::is_null;
@@ -160,7 +160,7 @@ fn validate_schema_2(
                 )
             }
             ScalarType::Numeric {
-                scale: Some(u8::try_from(*scale).unwrap()),
+                max_scale: Some(NumericMaxScale::try_from(*scale)?),
             }
         }
         SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,

@@ -34,7 +34,9 @@ use mz_expr::{func as expr_func, GlobalId, Id, LocalId, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
-use mz_repr::adt::numeric;
+use mz_repr::adt::char::CharLength;
+use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
     Timestamp,
@@ -3879,10 +3881,10 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
                 } else if let Ok(n) = d.0.try_into() {
                     (Datum::Int64(n), ScalarType::Int64)
                 } else {
-                    (Datum::Numeric(d), ScalarType::Numeric { scale: None })
+                    (Datum::Numeric(d), ScalarType::Numeric { max_scale: None })
                 }
             } else {
-                (Datum::Numeric(d), ScalarType::Numeric { scale: None })
+                (Datum::Numeric(d), ScalarType::Numeric { max_scale: None })
             }
         }
         Value::HexString(_) => bail_unsupported!(3114, "hex string literals"),
@@ -3990,16 +3992,57 @@ pub fn scalar_type_from_sql(
             print_id: _,
         } => match scx.catalog.try_get_lossy_scalar_type_by_id(&id) {
             Some(ScalarType::Numeric { .. }) => {
-                let scale = numeric::extract_typ_mod(modifiers)?;
-                ScalarType::Numeric { scale }
+                let mut modifiers = modifiers.iter().fuse();
+                let precision = match modifiers.next() {
+                    Some(p) if *p < 1 || *p > i64::from(NUMERIC_DATUM_MAX_PRECISION) => {
+                        sql_bail!(
+                            "precision for type numeric must be between 1 and {}",
+                            NUMERIC_DATUM_MAX_PRECISION,
+                        );
+                    }
+                    Some(p) => Some(*p),
+                    None => None,
+                };
+                let scale = match modifiers.next() {
+                    Some(scale) => {
+                        if let Some(precision) = precision {
+                            if *scale > precision {
+                                sql_bail!(
+                                    "scale for type numeric must be between 0 and precision {}",
+                                    precision
+                                );
+                            }
+                        }
+                        Some(NumericMaxScale::try_from(*scale)?)
+                    }
+                    None => None,
+                };
+                if modifiers.next().is_some() {
+                    sql_bail!("type numeric supports at most two type modifiers");
+                }
+                ScalarType::Numeric { max_scale: scale }
             }
             Some(ScalarType::Char { .. }) => {
-                let length = mz_repr::adt::char::extract_typ_mod(&modifiers)?;
+                let mut modifiers = modifiers.iter().fuse();
+                let length = match modifiers.next() {
+                    Some(l) => Some(CharLength::try_from(*l)?),
+                    None => Some(CharLength::ONE),
+                };
+                if modifiers.next().is_some() {
+                    sql_bail!("type character supports at most one type modifier");
+                }
                 ScalarType::Char { length }
             }
             Some(ScalarType::VarChar { .. }) => {
-                let length = mz_repr::adt::varchar::extract_typ_mod(&modifiers)?;
-                ScalarType::VarChar { length }
+                let mut modifiers = modifiers.iter().fuse();
+                let length = match modifiers.next() {
+                    Some(l) => Some(VarCharMaxLength::try_from(*l)?),
+                    None => None,
+                };
+                if modifiers.next().is_some() {
+                    sql_bail!("type character varying supports at most one type modifier");
+                }
+                ScalarType::VarChar { max_length: length }
             }
             Some(t) => {
                 if !modifiers.is_empty() {

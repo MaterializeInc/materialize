@@ -15,11 +15,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
-use mz_repr::adt::char::{format_str_trim, Char};
+use mz_repr::adt::char::{format_str_trim, Char, CharLength};
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{self, Numeric};
-use mz_repr::adt::varchar::VarChar;
+use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
 use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
@@ -76,7 +77,7 @@ sqlfunc!(
 );
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct CastStringToNumeric(pub Option<u8>);
+pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
     type Input = &'a str;
@@ -85,7 +86,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
     fn call(&self, a: &'a str) -> Result<Numeric, EvalError> {
         let mut d = strconv::parse_numeric(a)?;
         if let Some(scale) = self.0 {
-            if numeric::rescale(&mut d.0, scale).is_err() {
+            if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
                 return Err(EvalError::NumericFieldOverflow);
             }
         }
@@ -93,7 +94,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Numeric { scale: self.0 }.nullable(input.nullable)
+        ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 }
 
@@ -351,7 +352,7 @@ impl fmt::Display for CastStringToMap {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToChar {
-    pub length: Option<usize>,
+    pub length: Option<CharLength>,
     pub fail_on_len: bool,
 }
 
@@ -364,7 +365,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
             assert!(self.fail_on_len);
             EvalError::StringValueTooLong {
                 target_type: "character".to_string(),
-                length: self.length.unwrap(),
+                length: usize::cast_from(self.length.unwrap().into_u32()),
             }
         })?;
 
@@ -387,7 +388,7 @@ impl fmt::Display for CastStringToChar {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToVarChar {
-    pub length: Option<usize>,
+    pub length: Option<VarCharMaxLength>,
     pub fail_on_len: bool,
 }
 
@@ -401,7 +402,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
                 assert!(self.fail_on_len);
                 EvalError::StringValueTooLong {
                     target_type: "character varying".to_string(),
-                    length: self.length.unwrap(),
+                    length: usize::cast_from(self.length.unwrap().into_u32()),
                 }
             })?;
 
@@ -410,7 +411,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::VarChar {
-            length: self.length,
+            max_length: self.length,
         }
         .nullable(input.nullable)
     }

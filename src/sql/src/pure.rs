@@ -21,28 +21,27 @@ use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
 use itertools::Itertools;
-use mz_ccsr::Client;
-use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, Op};
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
+use protobuf_native::MessageLite;
 use reqwest::Url;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
+use mz_ccsr::Client;
 use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
 };
 use mz_repr::strconv;
-use mz_sql_parser::parser::parse_columns;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
-use protobuf_native::MessageLite;
+use mz_sql_parser::parser::parse_data_type;
 
 use crate::ast::{
-    display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
-    CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding,
-    CsvColumns, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema, Query, Raw, RawName,
+    AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
+    CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
+    CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
+    CsvColumns, DbzMode, Envelope, Expr, Format, Ident, Op, ProtobufSchema, Query, Raw, RawName,
     Select, SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption,
     Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
     WithOption, WithOptionValue,
@@ -305,17 +304,15 @@ pub fn purify(
                             let view_name =
                                 target.alias.clone().unwrap_or_else(|| target.name.clone());
 
-                            let col_schema = table_info
-                                .schema
-                                .iter()
-                                .map(|c| c.to_ast_string())
-                                .collect::<Vec<String>>()
-                                .join(", ");
-                            let (columns, _constraints) =
-                                parse_columns(&format!("({})", col_schema))?;
-
                             let mut projection = vec![];
-                            for (i, column) in columns.iter().enumerate() {
+                            for (i, column) in table_info.schema.iter().enumerate() {
+                                // NOTE(benesch): this *looks* gross, but it is
+                                // safe enough. The `fmt::Display`
+                                // representation on `pgrepr::Type` promises to
+                                // produce an unqualified type name that does
+                                // not require quoting.
+                                let data_type =
+                                    parse_data_type(&format!("pg_catalog.{}", column.ty))?;
                                 projection.push(SelectItem::Expr {
                                     expr: Expr::Cast {
                                         expr: Box::new(Expr::SubscriptScalar {
@@ -327,9 +324,9 @@ pub fn purify(
                                                 (i + 1).to_string(),
                                             ))),
                                         }),
-                                        data_type: column.data_type.clone(),
+                                        data_type,
                                     },
-                                    alias: Some(column.name.clone()),
+                                    alias: Some(Ident::new(column.name.clone())),
                                 });
                             }
 
@@ -363,7 +360,11 @@ pub fn purify(
 
                             views.push(ViewDefinition {
                                 name: view_name,
-                                columns: columns.iter().map(|c| c.name.clone()).collect(),
+                                columns: table_info
+                                    .schema
+                                    .iter()
+                                    .map(|c| Ident::new(c.name.clone()))
+                                    .collect(),
                                 with_options: vec![],
                                 query,
                             });

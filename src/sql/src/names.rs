@@ -225,7 +225,7 @@ pub enum ResolvedDataType {
     Named {
         id: GlobalId,
         name: PartialName,
-        modifiers: Vec<u64>,
+        modifiers: Vec<i64>,
         print_id: bool,
     },
 }

@@ -338,9 +338,9 @@ fn build_row_schema_field<F: FnMut() -> String>(
                 })
             }
         }
-        ScalarType::Numeric { scale } => {
-            let (p, s) = match scale {
-                Some(scale) => (NUMERIC_DATUM_MAX_PRECISION, *scale),
+        ScalarType::Numeric { max_scale } => {
+            let (p, s) = match max_scale {
+                Some(max_scale) => (NUMERIC_DATUM_MAX_PRECISION, max_scale.into_u8()),
                 None => (NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION),
             };
             json!({

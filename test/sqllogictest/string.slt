@@ -962,28 +962,28 @@ true
 
 # Invalid type mods
 
-query error length for type character varying must be within \[1-10485760\], have 0
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::VARCHAR(0)
 
-query error length for type character varying must be within \[1-10485760\], have 10485761
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::VARCHAR(10485761)
 
-query error length for type character must be within \[1-10485760\], have 0
+query error length for type character must be between 1 and 10485760
 SELECT ''::CHAR(0)
 
-query error length for type character must be within \[1-10485760\], have 10485761
+query error length for type character must be between 1 and 10485760
 SELECT ''::CHAR(10485761)
 
-query error length for type character varying must be within \[1-10485760\], have 0
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::pg_catalog.VARCHAR(0)
 
-query error length for type character varying must be within \[1-10485760\], have 10485761
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::pg_catalog.VARCHAR(10485761)
 
-query error length for type character must be within \[1-10485760\], have 0
+query error length for type character must be between 1 and 10485760
 SELECT ''::pg_catalog.CHAR(0)
 
-query error length for type character must be within \[1-10485760\], have 10485761
+query error length for type character must be between 1 and 10485760
 SELECT ''::pg_catalog.CHAR(10485761)
 
 ### position ###

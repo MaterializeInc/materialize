@@ -19,9 +19,8 @@ use uuid::Uuid;
 
 use mz_ore::fmt::FormatBuffer;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::char as adt_char;
+use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::numeric::{self as adt_numeric};
 use mz_repr::strconv::{self, Nestable};
 use mz_repr::{Datum, RelationType, Row, RowArena, ScalarType};
 
@@ -105,12 +104,7 @@ impl Value {
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
-            (Datum::Numeric(mut d), ScalarType::Numeric { scale }) => {
-                if let Some(scale) = scale {
-                    adt_numeric::rescale(&mut d.0, *scale).unwrap();
-                }
-                Some(Value::Numeric(Numeric(d)))
-            }
+            (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
@@ -120,7 +114,7 @@ impl Value {
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (Datum::String(s), ScalarType::VarChar { .. }) => Some(Value::VarChar(s.to_owned())),
             (Datum::String(s), ScalarType::Char { length }) => {
-                Some(Value::Char(adt_char::format_str_pad(s, *length)))
+                Some(Value::Char(char::format_str_pad(s, *length)))
             }
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
@@ -218,14 +212,7 @@ impl Value {
             Value::TimestampTz(ts) => Datum::TimestampTz(ts),
             Value::Interval(iv) => Datum::Interval(iv.0),
             Value::Text(s) => Datum::String(buf.push_string(s)),
-            Value::Char(s) => {
-                let length = match typ {
-                    Type::Char { length } => length,
-                    _ => panic!("Value::Char should have type Type::Char. Found {:?}", typ),
-                };
-                let s = adt_char::format_str_trim(&s, *length, false).unwrap();
-                Datum::String(buf.push_string(s))
-            }
+            Value::Char(s) => Datum::String(buf.push_string(s.trim_end().into())),
             Value::VarChar(s) => Datum::String(buf.push_string(s)),
             Value::Uuid(u) => Datum::Uuid(u),
             Value::Numeric(n) => Datum::Numeric(n.0),

@@ -12,7 +12,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_repr::adt::char::{format_str_pad, Char};
+use mz_repr::adt::char::{format_str_pad, Char, CharLength};
 use mz_repr::{ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -22,7 +22,7 @@ use crate::scalar::func::EagerUnaryFunc;
 /// removed padding.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct PadChar {
-    pub length: Option<usize>,
+    pub length: Option<CharLength>,
 }
 
 impl<'a> EagerUnaryFunc<'a> for PadChar {

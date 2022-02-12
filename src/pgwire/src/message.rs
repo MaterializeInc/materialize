@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 
 use itertools::Itertools;
 use postgres::error::SqlState;
@@ -16,8 +15,7 @@ use postgres::error::SqlState;
 use mz_coord::session::TransactionStatus as CoordTransactionStatus;
 use mz_coord::{CoordError, StartupMessage};
 use mz_pgcopy::CopyErrorNotSupportedResponse;
-use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use mz_repr::{ColumnName, NotNullViolation, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -451,7 +449,6 @@ pub struct FieldDescription {
     pub column_id: u16,
     pub type_oid: u32,
     pub type_len: i16,
-    // https://github.com/cockroachdb/cockroach/blob/3e8553e249a842e206aa9f4f8be416b896201f10/pkg/sql/pgwire/conn.go#L1115-L1123
     pub type_mod: i32,
     pub format: mz_pgrepr::Format,
 }
@@ -470,23 +467,7 @@ pub fn encode_row_description(
                 column_id: 0,
                 type_oid: pg_type.oid(),
                 type_len: pg_type.typlen(),
-                type_mod: match &typ.scalar_type {
-                    // NUMERIC types pack their precision and size into the
-                    // type_mod field. The high order bits store the precision
-                    // while the low order bits store the scale + 4 (!).
-                    //
-                    // https://github.com/postgres/postgres/blob/e435c1e7d/src/backend/utils/adt/numeric.c#L6364-L6367
-                    ScalarType::Numeric { scale } => match scale {
-                        // -1 represents default typemod, which allows values of differing scales
-                        None => -1i32,
-                        Some(scale) => {
-                            ((i32::try_from(NUMERIC_DATUM_MAX_PRECISION).unwrap() << 16)
-                                | i32::from(*scale))
-                                + 4
-                        }
-                    },
-                    _ => -1,
-                },
+                type_mod: pg_type.typmod(),
                 format: *format,
             }
         })
