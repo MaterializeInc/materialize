@@ -38,8 +38,12 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.start_and_wait_for_tcp(["zookeeper", "kafka", "schema-registry"])
-    c.run("ci-cargo-test", "run-tests")
-    ci_util.upload_test_report(
-        "cargo-test",
-        spawn.capture(args=["cargo2junit"], stdin=(ROOT / "results.json").read_text()),
-    )
+    try:
+        c.run("ci-cargo-test", "run-tests")
+    finally:
+        ci_util.upload_test_report(
+            "cargo-test",
+            spawn.capture(
+                args=["cargo2junit"], stdin=(ROOT / "results.json").read_text()
+            ),
+        )
