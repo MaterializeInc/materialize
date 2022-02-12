@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize import ROOT, ci_util
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Postgres, SqlLogicTest
 
@@ -26,4 +27,5 @@ def workflow_sqllogictest(c: Composition) -> None:
 def run_sqllogictest(c: Composition, command: str) -> None:
     c.up("postgres")
     c.wait_for_postgres(dbname="postgres")
-    c.run("sqllogictest-svc", command)
+    c.run("sqllogictest-svc", command, "--junit-report=junit-report.xml")
+    ci_util.upload_test_report("sqllogictest", (ROOT / "junit-report.xml").read_text())

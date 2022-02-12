@@ -9,7 +9,7 @@
 
 from pathlib import Path
 
-from materialize import spawn, ui
+from materialize import ci_util, spawn, ui
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
@@ -91,7 +91,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(materialized, testdrive):
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
-        c.run("testdrive-svc", *args.files)
+        c.run("testdrive-svc", "--junit-report=junit-report.xml", *args.files)
+        ci_util.upload_test_report(
+            "testdrive", (Path(__file__).parent / "junit-report.xml").read_text()
+        )
         c.kill("materialized")
 
 

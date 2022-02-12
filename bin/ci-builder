@@ -140,25 +140,14 @@ case "$cmd" in
             --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
-            --env BUILDKITE
-            --env BUILDKITE_AGENT_ACCESS_TOKEN
-            --env BUILDKITE_BRANCH
-            --env BUILDKITE_BUILD_ID
-            --env BUILDKITE_BUILD_NUMBER
-            --env BUILDKITE_BUILD_URL
-            --env BUILDKITE_COMMIT
-            --env BUILDKITE_MESSAGE
-            --env BUILDKITE_JOB_ID
-            --env BUILDKITE_PARALLEL_JOB
-            --env BUILDKITE_PARALLEL_JOB_COUNT
-            --env BUILDKITE_PULL_REQUEST
-            --env BUILDKITE_TAG
-            --env BUILDKITE_TEST_ANALYTICS_API_KEY_CARGO_TEST
             --env CI
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env PYPI_TOKEN
         )
+        for env in $(printenv | grep '^BUILDKITE' | sed 's/=.*//'); do
+            args+=(--env "$env")
+        done
         if [[ -t 1 ]]; then
             args+=(--tty)
         fi

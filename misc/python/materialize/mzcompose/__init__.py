@@ -26,7 +26,9 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from contextlib import contextmanager
+from dataclasses import dataclass
 from inspect import getmembers, isfunction
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -39,6 +41,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    OrderedDict,
     Sequence,
     Tuple,
     TypedDict,
@@ -175,6 +178,11 @@ def _lint_materialized_service(
 class Composition:
     """A parsed mzcompose.yml with a loaded mzcompose.py file."""
 
+    @dataclass
+    class TestResult:
+        duration: float
+        error: Optional[str]
+
     def __init__(
         self, repo: mzbuild.Repository, name: str, preserve_ports: bool = False
     ):
@@ -182,6 +190,7 @@ class Composition:
         self.repo = repo
         self.preserve_ports = preserve_ports
         self.workflows: Dict[str, Callable[..., None]] = {}
+        self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -442,6 +451,55 @@ class Composition:
             # Restore the old composition.
             self.compose = old_compose
             self._write_compose()
+
+    @contextmanager
+    def test_case(self, name: str) -> Iterator[None]:
+        """Execute a test case.
+
+        This context manager provides a very lightweight testing framework. If
+        the body of the context manager raises an exception, the test case is
+        considered to have failed; otherwise it is considered to have succeeded.
+        In either case the execution time and status of the test are recorded in
+        `test_results`.
+
+        Example:
+            A simple workflow that executes a table-driven test:
+
+            ```
+            @dataclass
+            class TestCase:
+                name: str
+                files: list[str]
+
+            test_cases = [
+                TestCase(name="short", files=["quicktests.td"]),
+                TestCase(name="long", files=["longtest1.td", "longtest2.td"]),
+            ]
+
+            def workflow_default(c: Composition):
+                for tc in test_cases:
+                    with c.test_case(tc.name):
+                        c.run("testdrive", *tc.files)
+            ```
+
+        Args:
+            name: The name of the test case. Must be unique across the lifetime
+                of a composition.
+        """
+        if name in self.test_results:
+            raise UIError(f"test case {name} executed twice")
+        ui.header(f"Running test case {name}")
+        error = None
+        start_time = time.time()
+        try:
+            yield
+            ui.header(f"Test case {name} succeeded")
+        except Exception as e:
+            error = str(e)
+            traceback.print_exc()
+            ui.header(f"Test case {name} failed")
+        elapsed = time.time() - start_time
+        self.test_results[name] = Composition.TestResult(elapsed, error)
 
     def sql_cursor(self) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
