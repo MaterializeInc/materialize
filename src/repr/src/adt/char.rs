@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::ops::Deref;
-
 use anyhow::bail;
 
 use super::util;
@@ -16,16 +14,10 @@ use super::util;
 // https://github.com/postgres/postgres/blob/REL_14_0/src/include/access/htup_details.h#L577-L584
 pub const MAX_LENGTH: i32 = 10_485_760;
 
-/// A rust type representing a PostgreSQL char type
+/// A marker type indicating that a Rust string should be interpreted as a
+/// [`ScalarType::Char`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Char<S: AsRef<str>>(pub S);
-
-impl<S: AsRef<str>> Deref for Char<S> {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
 
 pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<usize>, anyhow::Error> {
     let typ_mod = util::extract_typ_mod::<usize>(
