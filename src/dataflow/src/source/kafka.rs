@@ -139,12 +139,13 @@ impl KafkaSourceReader {
             .expect("Failed to create Kafka Consumer");
         let consumer = Arc::new(consumer);
 
-        let mut start_offsets: HashMap<_, _> = kc
-            .start_offsets
-            .into_iter()
-            .map(|(pid, offset)| (pid, offset - 1))
-            .collect();
+        // Start offsets is a map from pid -> next 0-indexed offset to read from,
+        // which is equivalent to 1 + the last 0-indexed offset read.
+        let mut start_offsets: HashMap<_, _> = kc.start_offsets.into_iter().collect();
 
+        // Restored offsets are 1-indexed, so convert to 0-indexed offsets by
+        // subtracting 1. The bindings in sqlite already encode 1 offset past the
+        // last read offset.
         for (pid, offset) in restored_offsets {
             let pid = match pid {
                 PartitionId::Kafka(id) => id,
@@ -225,16 +226,15 @@ impl KafkaSourceReader {
             return;
         }
 
-        // Indicate a last offset of -1 if we have not been instructed to have a specific start
-        // offset for this topic.
         let start_offset = match self.start_offsets.get(&pid) {
-            // Seek to the *next* offset (aka start_offset + 1) that we have not yet processed
-            Some(offset) => *offset + 1,
+            Some(offset) => *offset,
             None => 0,
         };
 
         self.create_partition_queue(pid, Offset::Offset(start_offset));
 
+        // Indicate a last offset of -1 if we have not been instructed to have a specific start
+        // offset for this topic.
         let prev = self.last_offsets.insert(pid, start_offset - 1);
 
         assert!(prev.is_none());
@@ -491,7 +491,7 @@ impl KafkaSourceReader {
                 offset,
                 last_offset + 1,
             );
-            // Seek to the *next* offset (aka last_offset + 1) that we have not yet processed
+            // Seek to the *next* 0 indexed offset that we have not yet processed
             self.fast_forward_consumer(partition, last_offset + 1);
             // We explicitly should not consume the message as we have already processed it
             // However, we make sure to activate the source to make sure that we get a chance
