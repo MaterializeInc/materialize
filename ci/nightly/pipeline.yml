@@ -79,15 +79,6 @@
         composition: testdrive
         args: [--aws-region=us-east-2, --workers=1]
 
-- id: testdrive_workers_32
-  label: ":racing_car: testdrive with --workers 32"
-  timeout_in_minutes: 30
-  plugins:
-    - ./ci/plugins/scratch-aws-access: ~
-    - ./ci/plugins/mzcompose:
-        composition: testdrive
-        args: [--aws-region=us-east-2, --workers=32]
-
 - id: persistence_testdrive
   label: ":racing_car: testdrive with --persistent-user-tables"
   timeout_in_minutes: 30

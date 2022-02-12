@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use lazy_static::lazy_static;
 use mz_coord::PersistConfig;
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use postgres::error::DbError;
@@ -37,7 +38,7 @@ lazy_static! {
 #[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
-    aws_external_id: Option<String>,
+    aws_external_id: AwsExternalId,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     experimental_mode: bool,
@@ -50,7 +51,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             data_directory: None,
-            aws_external_id: None,
+            aws_external_id: AwsExternalId::NotProvided,
             logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
             experimental_mode: false,

@@ -40,7 +40,7 @@ pub enum Command {
 }
 
 /// An abstraction allowing us to name difference compute instances.
-type ComputeInstanceId = usize;
+pub type ComputeInstanceId = usize;
 /// A default value whose use we can track down and remove later.
 pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
 
@@ -53,7 +53,9 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
 )]
 pub enum ComputeCommand {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
-    CreateInstance,
+    ///
+    /// Optionally, request that the logging sources in the contained configuration are installed.
+    CreateInstance(Option<LoggingConfig>),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
     /// Create a sequence of dataflows.
@@ -110,9 +112,6 @@ pub enum ComputeCommand {
     /// the corresponding maintained traces up through that frontier.
     // TODO: Could be called `AllowTraceCompaction` or `AllowArrangementCompaction`?
     AllowIndexCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
-    /// Request that the logging sources in the contained configuration are
-    /// installed.
-    EnableLogging(LoggingConfig),
 }
 
 impl ComputeCommandKind {
@@ -129,7 +128,6 @@ impl ComputeCommandKind {
             ComputeCommandKind::CreateDataflows => "create_dataflows",
             ComputeCommandKind::DropIndexes => "drop_indexes",
             ComputeCommandKind::DropSinks => "drop_sinks",
-            ComputeCommandKind::EnableLogging => "enable_logging",
             ComputeCommandKind::Peek => "peek",
         }
     }
@@ -312,8 +310,10 @@ impl Command {
             Command::Storage(StorageCommand::DropSourceTimestamping { id }) => {
                 cease.push(*id);
             }
-            Command::Compute(ComputeCommand::EnableLogging(logging_config), _instance) => {
-                start.extend(logging_config.log_identifiers());
+            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
+                if let Some(logging_config) = logging {
+                    start.extend(logging_config.log_identifiers());
+                }
             }
             _ => {
                 // Other commands have no known impact on frontier tracking.
@@ -334,9 +334,16 @@ impl Command {
 /// Methods that reflect actions that can be performed against a compute instance.
 #[async_trait::async_trait]
 pub trait ComputeClient: Client {
-    async fn create_instance(&mut self, instance: ComputeInstanceId) {
-        self.send(Command::Compute(ComputeCommand::CreateInstance, instance))
-            .await;
+    async fn create_instance(
+        &mut self,
+        instance: ComputeInstanceId,
+        logging: Option<LoggingConfig>,
+    ) {
+        self.send(Command::Compute(
+            ComputeCommand::CreateInstance(logging),
+            instance,
+        ))
+        .await;
     }
     async fn drop_instance(&mut self, instance: ComputeInstanceId) {
         self.send(Command::Compute(ComputeCommand::DropInstance, instance))
@@ -408,13 +415,6 @@ pub trait ComputeClient: Client {
     ) {
         self.send(Command::Compute(
             ComputeCommand::AllowIndexCompaction(frontiers),
-            instance,
-        ))
-        .await
-    }
-    async fn enable_logging(&mut self, instance: ComputeInstanceId, logging_config: LoggingConfig) {
-        self.send(Command::Compute(
-            ComputeCommand::EnableLogging(logging_config),
             instance,
         ))
         .await
@@ -501,7 +501,7 @@ pub struct TimestampBindingFeedback {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     /// A compute response.
-    Compute(ComputeResponse),
+    Compute(ComputeResponse, ComputeInstanceId),
     /// A storage response.
     Storage(StorageResponse),
 }
@@ -755,7 +755,8 @@ pub mod partitioned {
         /// Absorbs a response, and produces response that should be emitted.
         pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
             match message {
-                Response::Compute(ComputeResponse::FrontierUppers(mut list)) => {
+                Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
+                    assert_eq!(instance, super::DEFAULT_COMPUTE_INSTANCE_ID);
                     for (id, changes) in list.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(id) {
                             let iter = frontier.update_iter(changes.drain());
@@ -777,7 +778,10 @@ pub mod partitioned {
                         }
                     }
 
-                    Some(Response::Compute(ComputeResponse::FrontierUppers(list)))
+                    Some(Response::Compute(
+                        ComputeResponse::FrontierUppers(list),
+                        instance,
+                    ))
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
@@ -793,7 +797,10 @@ pub mod partitioned {
                         feedback,
                     )))
                 }
-                Response::Compute(ComputeResponse::PeekResponse(connection, response)) => {
+                Response::Compute(
+                    ComputeResponse::PeekResponse(connection, response),
+                    instance,
+                ) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -817,9 +824,10 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&connection);
-                        Some(Response::Compute(ComputeResponse::PeekResponse(
-                            connection, response,
-                        )))
+                        Some(Response::Compute(
+                            ComputeResponse::PeekResponse(connection, response),
+                            instance,
+                        ))
                     } else {
                         None
                     }

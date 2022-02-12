@@ -47,6 +47,8 @@ This subcommand expects a series of JSON objects on standard input, each of whic
 }
 ```
 
+See [Grafana Integration](#grafana-integration), below, for some details about the tags.
+
 `bin/scratch create` takes in configs from stdin, or by passing a name as a positional arg, like:
 
 ```
@@ -123,6 +125,85 @@ bin/scratch destroy --all-mine
 
 Pass `--dry-run` if you want to see what instances `bin/scratch destroy` would
 destroy without actually destroyin them.
+
+### Grafana integration
+
+The `materialized` process always exposes metrics at its primary port's HTTP server on the
+prometheus-standard `/metrics` path, but the scratch instance needs to be configured correctly for
+our Prometheus server to actually scrape the metrics and thereby expose them to Grafana.
+
+The tl;dr is that you must configure mzcompose with `--preserve-ports` and the EC2 instance with
+the `"scrape_benchmark_numbers": "true"` tag. Thus a bare-minimum Grafana-integrated config looks
+like:
+
+```javascript
+{
+    "launch_script": "bin/mzcompose --preserve-ports ..<remainder of args>"
+    // .. snip config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true"
+    }
+}
+```
+
+Read on for more details and some other items that can be configured.
+
+#### Prometheus config
+
+There are three tags on the EC2 instance that configure our Prometheus integration:
+
+* `scrape_benchmark_numbers`: must be set to exactly the string `"true"` in order for Prometheus
+  to observe the instance.
+* `purpose`: is used as a filter in the Grafana UI. You can use this to group all your instances
+  (e.g. set it to `myname-debugging`) or set it to `load-test` or `benchmark`.
+* `test` displays as an additional filter inside of the Grafana UI.
+
+So the minimum scratch config to get metrics into Grafana looks like:
+
+```javascript
+{
+    // .. snip general config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true"
+    }
+}
+```
+
+And a slightly more complete one could be:
+
+```javascript
+{
+    // .. snip general config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "purpose": "bwm-debugging",
+        "test": "chbench"
+    }
+}
+
+{
+    // .. snip general config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "purpose": "bwm-debugging",
+        "test": "billing"
+    }
+}
+```
+
+#### mzcompose config
+
+Prometheus only looks for Materialize metrics on port 6875. The canonical way to ensure that
+Materialize is available on port 6875 on a host is to pass the `--preserve-ports` argument to
+mzcompose. (Without this flag, mzcompose chooses a random host port for Materialize, which
+will be unknown to Prometheus.)
+
+```javascript
+{
+    "launch_script": "bin/mzcompose --preserve-ports ..<remainder of args>"
+    // .. snip config ..
+}
+```
 
 [EC2 instance connect]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Connect-using-EC2-Instance-Connect.html
 [ec2instanceconnectcli]: https://github.com/aws/aws-ec2-instance-connect-cli

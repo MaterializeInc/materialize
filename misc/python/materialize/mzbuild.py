@@ -84,7 +84,7 @@ class RepositoryDetails:
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
-        return self.root / "target" / xcompile.target(self.arch)
+        return self.root / "target-xcompile" / xcompile.target(self.arch)
 
 
 def docker_images() -> Set[str]:
@@ -366,7 +366,8 @@ class CargoTest(CargoPreImage):
                     [*self.rd.tool("strip"), self.path / "tests" / slug],
                     cwd=self.rd.root,
                 )
-                manifest.write(f"{slug} {crate_path}\n")
+                package = slug.replace(".", "::")
+                manifest.write(f"{slug} {package} {crate_path}\n")
         shutil.move(str(self.path / "materialized"), self.path / "tests")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")

@@ -22,9 +22,9 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, DataType,
-    Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, Envelope,
+    Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -1412,7 +1412,7 @@ pub enum SqlOption<T: AstInfo> {
     },
     DataType {
         name: Ident,
-        data_type: DataType<T>,
+        data_type: T::DataType,
     },
 }
 

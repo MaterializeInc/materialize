@@ -20,6 +20,7 @@ use itertools::Itertools;
 
 use mz_ore::display::DisplayExt;
 
+use self::action::ControlFlow;
 use self::error::{ErrorLocation, PosError};
 use self::parser::LineReader;
 
@@ -79,75 +80,53 @@ async fn run_line_reader(
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
     let cmds = parser::parse(line_reader)?;
-    let mut cmds_exec = cmds.clone();
-    // Extract number of executions
-    let mut execution_count = 1;
-    if let Some(command) = cmds_exec.iter_mut().find(|el| {
-        if let parser::Command::Builtin(c) = &el.command {
-            if c.name == "set-execution-count" {
-                return true;
-            }
+    let (mut state, state_cleanup) = action::create_state(config).await?;
+    let actions = action::build(cmds, &state).await?;
+
+    if config.reset {
+        state.reset_materialized().await?;
+
+        for a in actions.iter().rev() {
+            let undo = a.action.undo(&mut state);
+            undo.await.map_err(|e| PosError::new(e, a.pos))?
         }
-        false
-    }) {
-        if let parser::Command::Builtin(c) = &mut command.command {
-            let count = c.args.string("count").unwrap_or_default();
-            execution_count = count.parse::<u32>().unwrap_or(1);
+    }
+
+    for a in &actions {
+        let redo = a.action.redo(&mut state);
+        match redo.await.map_err(|e| PosError::new(e, a.pos))? {
+            ControlFlow::Continue => (),
+            ControlFlow::Break => break,
         }
-    };
-    println!("Running test {} time(s) ... ", execution_count);
-    for _ in 1..execution_count + 1 {
-        println!("Run {} ...", execution_count);
-        cmds_exec = cmds.clone();
-        let (mut state, state_cleanup) = action::create_state(config).await?;
+    }
 
-        let actions = action::build(cmds_exec, &state).await?;
+    if config.reset {
+        let mut errors = Vec::new();
 
-        if config.reset {
-            state.reset_materialized().await?;
-
-            for a in actions.iter().rev() {
-                let undo = a.action.undo(&mut state);
-                undo.await.map_err(|e| PosError::new(e, a.pos))?
-            }
+        if let Err(e) = state.reset_s3().await {
+            errors.push(e);
         }
 
-        for a in &actions {
-            let redo = a.action.redo(&mut state);
-            redo.await.map_err(|e| PosError::new(e, a.pos))?;
-            if state.skip_rest {
-                break;
-            }
+        if let Err(e) = state.reset_sqs().await {
+            errors.push(e);
         }
 
-        if config.reset {
-            let mut errors = Vec::new();
+        if let Err(e) = state.reset_kinesis().await {
+            errors.push(e);
+        }
 
-            if let Err(e) = state.reset_s3().await {
-                errors.push(e);
-            }
+        drop(state);
+        if let Err(e) = state_cleanup.await {
+            errors.push(e);
+        }
 
-            if let Err(e) = state.reset_sqs().await {
-                errors.push(e);
-            }
-
-            if let Err(e) = state.reset_kinesis().await {
-                errors.push(e);
-            }
-
-            drop(state);
-            if let Err(e) = state_cleanup.await {
-                errors.push(e);
-            }
-
-            if !errors.is_empty() {
-                return Err(anyhow!(
-                    "cleanup failed: {} errors: {}",
-                    errors.len(),
-                    errors.into_iter().map(|e| e.to_string_alt()).join("\n"),
-                )
-                .into());
-            }
+        if !errors.is_empty() {
+            return Err(anyhow!(
+                "cleanup failed: {} errors: {}",
+                errors.len(),
+                errors.into_iter().map(|e| e.to_string_alt()).join("\n"),
+            )
+            .into());
         }
     }
     Ok(())

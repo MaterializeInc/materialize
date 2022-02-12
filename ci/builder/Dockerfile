@@ -141,7 +141,8 @@ RUN mkdir rust \
     esac \
     && rm -rf rust \
     && cargo install --root /usr/local --version "=1.33.1" cargo-deb \
-    && cargo install --root /usr/local --version "=0.9.1" cargo-deny
+    && cargo install --root /usr/local --version "=0.9.1" cargo-deny \
+    && cargo install --root /usr/local --version "=0.1.10" cargo2junit
 
 # Link the system lld into the cross-compiling sysroot.
 

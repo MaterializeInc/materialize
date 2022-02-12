@@ -13,7 +13,7 @@ use tiberius::{Client, Config};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct ConnectAction {
@@ -38,7 +38,7 @@ impl Action for ConnectAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let tcp = TcpStream::connect(self.config.get_addr())
             .await
             .context("connecting to SQL Server: {}")?;
@@ -54,6 +54,6 @@ impl Action for ConnectAction {
             .context("connecting to SQL Server")?;
 
         state.sql_server_clients.insert(self.name.clone(), client);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

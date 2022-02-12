@@ -22,7 +22,7 @@ use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 use tokio::fs;
 
-use crate::action::{substitute_vars, Action, State};
+use crate::action::{self, Action, ControlFlow, State};
 use crate::format::avro::{self, Schema};
 use crate::format::bytes;
 use crate::parser::BuiltinCommand;
@@ -272,7 +272,7 @@ impl Action for IngestAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic_name = &format!("{}-{}", self.topic_prefix, state.seed);
         println!(
             "Ingesting data into Kafka topic {} with repeat {}",
@@ -353,7 +353,7 @@ impl Action for IngestAction {
 
         for iteration in self.start_iteration..(self.start_iteration + self.repeat) {
             for row in &self.rows {
-                let row = substitute_vars(
+                let row = action::substitute_vars(
                     row,
                     &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
                     &None,
@@ -397,6 +397,6 @@ impl Action for IngestAction {
                 }
             }
         }
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

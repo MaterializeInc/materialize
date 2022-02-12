@@ -23,7 +23,7 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedObjectName};
+use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedDataType, UnresolvedObjectName};
 
 // This represents the metadata that lives next to an AST, as we take it through
 // various stages in the planning process.
@@ -43,6 +43,8 @@ use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedObjectName};
 pub trait AstInfo: Clone {
     // The type used for table references.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
+    // The type used for data types.
+    type DataType: AstDisplay + Clone + Hash + Debug + Eq;
     // The type stored next to CTEs for their assigned ID.
     type Id: Clone + Hash + Debug + Eq;
 }
@@ -81,6 +83,7 @@ impl_display!(RawName);
 
 impl AstInfo for Raw {
     type ObjectName = RawName;
+    type DataType = UnresolvedDataType;
     type Id = ();
 }
 

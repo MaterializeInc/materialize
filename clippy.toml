@@ -1,11 +1,11 @@
 disallowed-methods = [
     # We have better wrappers for tokio task spawning
-    { path = "tokio::spawn", reason = "use the spawn wrappers in `ore::task` instead" },
-    { path = "tokio::task::spawn", reason = "use the spawn wrappers in `ore::task` instead" },
-    { path = "tokio::task::spawn_blocking", reason = "use the spawn wrappers in `ore::task` instead" },
+    { path = "tokio::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
+    { path = "tokio::task::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
+    { path = "tokio::task::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     # as well as an extention trait for inherent methods
-    { path = "tokio::runtime::Handle::spawn", reason = "use the spawn wrappers in `ore::task` instead" },
-    { path = "tokio::runtime::Handle::spawn_blocking", reason = "use the spawn wrappers in `ore::task` instead" },
-    { path = "tokio::runtime::Runtime::spawn", reason = "use the spawn wrappers in `ore::task` instead" },
-    { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use the spawn wrappers in `ore::task` instead" },
+    { path = "tokio::runtime::Handle::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
+    { path = "tokio::runtime::Handle::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
+    { path = "tokio::runtime::Runtime::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
+    { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
 ]

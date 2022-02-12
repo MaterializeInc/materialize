@@ -12,6 +12,7 @@ use std::process;
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use mz_dataflow_types::sources::AwsExternalId;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
@@ -62,6 +63,12 @@ struct Args {
     /// The hostnames of all dataflowd processes in the cluster.
     #[clap()]
     hosts: Vec<String>,
+
+    /// An external ID to be supplied to all AWS AssumeRole operations.
+    ///
+    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[clap(long, value_name = "ID")]
+    aws_external_id: Option<String>,
 }
 
 #[tokio::main]
@@ -157,6 +164,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
         persister: None,
+        aws_external_id: args
+            .aws_external_id
+            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
+            .unwrap_or(AwsExternalId::NotProvided),
     })?;
 
     let mut conn = mz_dataflowd::tcp::framed_server(conn);

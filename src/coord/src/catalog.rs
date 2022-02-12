@@ -34,7 +34,7 @@ use tracing::{info, trace};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::{
     sinks::{SinkConnector, SinkConnectorBuilder},
-    sources::{SourceConnector, Timeline},
+    sources::{AwsExternalId, SourceConnector, Timeline},
 };
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_repr::{RelationDesc, ScalarType};
@@ -489,6 +489,15 @@ pub struct Source {
     pub connector: SourceConnector,
     pub persist_details: Option<SerializedSourcePersistDetails>,
     pub desc: RelationDesc,
+}
+
+impl Source {
+    pub fn requires_single_materialization(&self) -> bool {
+        // Persisted sources must only be persisted once because we use the source ID to derive the
+        // names of the persistent collections that back it. If we allowed multiple instances,
+        // those would clash when trying to write to those collections.
+        self.connector.requires_single_materialization() || self.persist_details.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1195,7 +1204,7 @@ impl Catalog {
             experimental_mode,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
-            aws_external_id: None,
+            aws_external_id: AwsExternalId::NotProvided,
             timestamp_frequency: Duration::from_secs(1),
             now,
             skip_migrations: true,

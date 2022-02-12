@@ -114,7 +114,7 @@ use mz_dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
-    ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
+    AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
 use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
 use mz_expr::{
@@ -256,7 +256,7 @@ pub struct Config {
     pub disable_user_indexes: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
-    pub aws_external_id: Option<String>,
+    pub aws_external_id: AwsExternalId,
     pub metrics_registry: MetricsRegistry,
     pub persister: PersisterWithConfig,
     pub now: NowFn,
@@ -735,11 +735,6 @@ impl Coordinator {
             });
         }
 
-        // Create the default cluster so that subsequent default cluster commands succeed.
-        self.dataflow_client
-            .create_instance(DEFAULT_COMPUTE_INSTANCE_ID)
-            .await;
-
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
         loop {
@@ -856,7 +851,11 @@ impl Coordinator {
 
     async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            DataflowResponse::Compute(ComputeResponse::PeekResponse(conn_id, response)) => {
+            DataflowResponse::Compute(
+                ComputeResponse::PeekResponse(conn_id, response),
+                instance,
+            ) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We expect exactly one peek response, which we forward.
                 self.pending_peeks
                     .remove(&conn_id)
@@ -864,7 +863,11 @@ impl Coordinator {
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
-            DataflowResponse::Compute(ComputeResponse::TailResponse(sink_id, response)) => {
+            DataflowResponse::Compute(
+                ComputeResponse::TailResponse(sink_id, response),
+                instance,
+            ) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -875,7 +878,8 @@ impl Coordinator {
                     }
                 }
             }
-            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates)) => {
+            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
@@ -4645,21 +4649,19 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
             };
-            if let Some(config) = &logging {
-                handle.block_on(
-                    coord.dataflow_client.enable_logging(
-                        DEFAULT_COMPUTE_INSTANCE_ID,
-                        DataflowLoggingConfig {
-                            granularity_ns: config.granularity.as_nanos(),
-                            active_logs: BUILTINS
-                                .logs()
-                                .map(|src| (src.variant.clone(), src.index_id))
-                                .collect(),
-                            log_logging: config.log_logging,
-                        },
-                    ),
-                );
-            }
+            let logging = logging.map(|config| DataflowLoggingConfig {
+                granularity_ns: config.granularity.as_nanos(),
+                active_logs: BUILTINS
+                    .logs()
+                    .map(|src| (src.variant.clone(), src.index_id))
+                    .collect(),
+                log_logging: config.log_logging,
+            });
+            handle.block_on(
+                coord
+                    .dataflow_client
+                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
+            );
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();

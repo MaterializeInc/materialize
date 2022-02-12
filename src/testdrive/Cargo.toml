@@ -34,6 +34,7 @@ http = "0.2.6"
 mz-interchange = { path = "../interchange" }
 itertools = "0.10.3"
 mz-kafka-util = { path = "../kafka-util" }
+junit-report = "0.7.0"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 maplit = "1.0.2"
@@ -56,6 +57,7 @@ reqwest = { version = "0.11.9", features = ["native-tls-vendored"] }
 serde = "1.0.136"
 serde_json = { version = "1.0.78", features = ["raw_value"] }
 similar = "2.1.0"
+time = "0.3.7"
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"

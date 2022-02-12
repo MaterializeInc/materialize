@@ -6,12 +6,6 @@ such as TPC-H.
 
 # Running
 
-First, make sure your python environment is up to speed:
-
-```
-bin/pyactivate --dev
-```
-
 The `--help` option can be used to show supported options:
 
 ```
@@ -22,6 +16,12 @@ To run the default benchmark scenarios:
 ```
 cd test/feature-benchmark
 ./mzcompose run default --other-tag unstable
+```
+
+Or, from the root of the repository:
+
+```
+bin/mzcompose --dev --find feature-benchmark run default --other-tag unstable
 ```
 
 This is going to benchmark the current source against the `materialize/materialized:unstable` container from DockerHub.

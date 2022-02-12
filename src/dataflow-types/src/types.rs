@@ -1398,16 +1398,40 @@ pub mod sources {
     pub struct AwsAssumeRole {
         /// The Amazon Resource Name of the role to assume.
         pub arn: String,
-        /// The External ID for this customer Materialize provides during role assumption.
-        ///
-        /// <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-        pub external_id: Option<String>,
+    }
+
+    /// An external ID to use for all AWS AssumeRole operations.
+    ///
+    /// Note that it is critical for security that this ID can **not** be provided by users running
+    /// in Materialize Cloud, it must be provided by Materialize. Currently this guarantee is
+    /// satisfied by only making this accessible from the CLI, which users do not have access to.
+    ///
+    /// <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub enum AwsExternalId {
+        NotProvided,
+        ISwearThisCameFromACliArgOrEnvVariable(String),
+    }
+
+    impl Default for AwsExternalId {
+        fn default() -> Self {
+            AwsExternalId::NotProvided
+        }
+    }
+
+    impl AwsExternalId {
+        fn get(&self) -> Option<&str> {
+            match self {
+                AwsExternalId::NotProvided => None,
+                AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable(v) => Some(v),
+            }
+        }
     }
 
     impl AwsConfig {
         /// Loads the AWS SDK configuration object from the environment, then
         /// applies the overrides from this object.
-        pub async fn load(&self) -> mz_aws_util::config::AwsConfig {
+        pub async fn load(&self, external_id: AwsExternalId) -> mz_aws_util::config::AwsConfig {
             use aws_config::default_provider::credentials::DefaultCredentialsChain;
             use aws_config::default_provider::region::DefaultRegionChain;
             use aws_config::sts::AssumeRoleProvider;
@@ -1455,14 +1479,14 @@ pub mod sources {
                 )),
             };
 
-            if let Some(AwsAssumeRole { arn, external_id }) = &self.role {
+            if let Some(AwsAssumeRole { arn }) = &self.role {
                 let mut role = AssumeRoleProvider::builder(arn).session_name("materialized");
                 // This affects which region to perform STS on, not where
                 // anything else happens.
                 if let Some(region) = &region {
                     role = role.region(region.clone());
                 }
-                if let Some(external_id) = &external_id {
+                if let Some(external_id) = external_id.get() {
                     role = role.external_id(external_id);
                 }
                 cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
@@ -1485,6 +1509,7 @@ pub mod sinks {
 
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
     use timely::progress::frontier::Antichain;
@@ -1647,8 +1672,8 @@ pub mod sinks {
 
     #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
     pub struct KafkaSinkConnectorRetention {
-        pub retention_ms: Option<i64>,
-        pub retention_bytes: Option<i64>,
+        pub duration: Option<Option<Duration>>,
+        pub bytes: Option<i64>,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

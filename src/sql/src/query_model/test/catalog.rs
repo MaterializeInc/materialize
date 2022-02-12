@@ -18,7 +18,7 @@ use crate::plan::StatementDesc;
 use chrono::MIN_DATETIME;
 use lazy_static::lazy_static;
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::sources::SourceConnector;
+use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
@@ -38,7 +38,7 @@ lazy_static! {
         experimental_mode: false,
         safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
-        aws_external_id: None,
+        aws_external_id: AwsExternalId::NotProvided,
         timestamp_frequency: Duration::from_secs(1),
         now: NOW_ZERO.clone(),
         disable_user_indexes: false,

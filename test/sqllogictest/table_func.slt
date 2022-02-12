@@ -1307,3 +1307,10 @@ SELECT * FROM generate_series(1, 3) as foo(a), ROWS FROM (generate_series(foo.a,
 # Regression test for #9657
 statement ok
 create view bar as select * from y, rows from (generate_series(1, 2), jsonb_array_elements(y.a));
+
+# Regression for #10363
+query IT
+WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY generate_series
+----
+1 a
+2 a

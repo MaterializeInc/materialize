@@ -13,7 +13,7 @@ use std::fmt::{self, Write as _};
 use std::io::{self, Write};
 use std::time::SystemTime;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use md5::{Digest, Md5};
 use postgres_array::Array;
@@ -32,16 +32,15 @@ use mz_sql_parser::ast::{
     CreateViewStatement, Raw, Statement, ViewDefinition,
 };
 
-use crate::action::{Action, Context, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
-    context: Context,
 }
 
-pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, anyhow::Error> {
+pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
@@ -54,7 +53,6 @@ pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, any
     Ok(SqlAction {
         cmd,
         stmt: stmts.into_element(),
-        context,
     })
 }
 
@@ -104,7 +102,7 @@ impl Action for SqlAction {
         }
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::*;
 
         let query = &self.cmd.query;
@@ -125,17 +123,16 @@ impl Action for SqlAction {
             _ => true,
         };
 
-        let pgclient = &state.pgclient;
-
+        let state = &state;
         match should_retry {
             true => Retry::default()
-                .initial_backoff(self.context.initial_backoff)
-                .factor(self.context.backoff_factor)
-                .max_duration(self.context.timeout),
+                .initial_backoff(state.initial_backoff)
+                .factor(state.backoff_factor)
+                .max_duration(state.timeout),
             false => Retry::default().max_tries(1),
         }
         .retry_async(|retry_state| async move {
-            match self.try_redo(pgclient, &query).await {
+            match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -199,7 +196,7 @@ impl Action for SqlAction {
             }
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -214,21 +211,19 @@ impl SqlAction {
         Ok(())
     }
 
-    async fn try_redo(
-        &self,
-        pgclient: &tokio_postgres::Client,
-        query: &str,
-    ) -> Result<(), anyhow::Error> {
-        let stmt = pgclient
+    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+        let stmt = state
+            .pgclient
             .prepare(query)
             .await
             .context("preparing query failed")?;
-        let mut actual: Vec<_> = pgclient
+        let mut actual: Vec<_> = state
+            .pgclient
             .query(&stmt, &[])
             .await
             .context("executing query failed")?
             .into_iter()
-            .map(|row| decode_row(row, self.context.clone()))
+            .map(|row| decode_row(state, row))
             .collect::<Result<_, _>>()?;
         actual.sort();
 
@@ -314,7 +309,6 @@ pub struct FailSqlAction {
     query: String,
     expected_error: ErrorMatcher,
     stmt: Option<Statement<Raw>>,
-    context: Context,
 }
 
 enum ErrorMatcher {
@@ -332,10 +326,7 @@ impl ErrorMatcher {
     }
 }
 
-pub fn build_fail_sql(
-    cmd: FailSqlCommand,
-    context: Context,
-) -> Result<FailSqlAction, anyhow::Error> {
+pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
 
@@ -361,7 +352,6 @@ pub fn build_fail_sql(
         query: cmd.query,
         expected_error,
         stmt,
-        context,
     })
 }
 
@@ -371,7 +361,7 @@ impl Action for FailSqlAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::{Commit, Rollback};
 
         let query = &self.query;
@@ -387,16 +377,15 @@ impl Action for FailSqlAction {
             Some(_) => true,
         };
 
-        let pgclient = &state.pgclient;
-
+        let state = &state;
         match should_retry {
             true => Retry::default()
-                .initial_backoff(self.context.initial_backoff)
-                .factor(self.context.backoff_factor)
-                .max_duration(self.context.timeout),
+                .initial_backoff(state.initial_backoff)
+                .factor(state.backoff_factor)
+                .max_duration(state.timeout),
             false => Retry::default().max_tries(1),
         }.retry_async(|retry_state| async move {
-            match self.try_redo(pgclient, &query).await {
+            match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -417,17 +406,14 @@ impl Action for FailSqlAction {
                     Err(e)
                 }
             }
-        }).await
+        }).await?;
+        Ok(ControlFlow::Continue)
     }
 }
 
 impl FailSqlAction {
-    async fn try_redo(
-        &self,
-        pgclient: &tokio_postgres::Client,
-        query: &str,
-    ) -> Result<(), anyhow::Error> {
-        match pgclient.query(query, &[]).await {
+    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+        match state.pgclient.query(query, &[]).await {
             Ok(_) => bail!(
                 "query succeeded, but expected error '{}'",
                 self.expected_error.as_str()
@@ -436,9 +422,9 @@ impl FailSqlAction {
                 Some(err) => {
                     let mut err_string = err.message().to_string();
 
-                    if let Some(regex) = &self.context.regex {
+                    if let Some(regex) = &state.regex {
                         err_string = regex
-                            .replace_all(&err_string, self.context.regex_replacement.as_str())
+                            .replace_all(&err_string, state.regex_replacement.as_str())
                             .to_string();
                     }
 
@@ -480,7 +466,7 @@ pub fn print_query(query: &str) {
     println!("> {}", query);
 }
 
-pub fn decode_row(row: Row, context: Context) -> Result<Vec<String>, anyhow::Error> {
+pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -559,9 +545,9 @@ pub fn decode_row(row: Row, context: Context) -> Result<Vec<String>, anyhow::Err
         }
         .unwrap_or_else(|| "<null>".into());
 
-        if let Some(regex) = &context.regex {
+        if let Some(regex) = &state.regex {
             value = regex
-                .replace_all(&value, context.regex_replacement.as_str())
+                .replace_all(&value, state.regex_replacement.as_str())
                 .to_string();
         }
 

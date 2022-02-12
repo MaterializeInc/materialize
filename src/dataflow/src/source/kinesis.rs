@@ -16,6 +16,7 @@ use aws_sdk_kinesis::error::GetRecordsError;
 use aws_sdk_kinesis::output::GetRecordsOutput;
 use aws_sdk_kinesis::{Client as KinesisClient, SdkError};
 use futures::executor::block_on;
+use mz_dataflow_types::sources::AwsExternalId;
 use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
@@ -122,6 +123,7 @@ impl SourceReader for KinesisSourceReader {
         _worker_count: usize,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
@@ -132,7 +134,7 @@ impl SourceReader for KinesisSourceReader {
             _ => unreachable!(),
         };
 
-        let state = block_on(create_state(&base_metrics.kinesis, kc));
+        let state = block_on(create_state(&base_metrics.kinesis, kc, aws_external_id));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
                 KinesisSourceReader {
@@ -253,6 +255,7 @@ impl SourceReader for KinesisSourceReader {
 async fn create_state(
     base_metrics: &KinesisMetrics,
     c: KinesisSourceConnector,
+    aws_external_id: AwsExternalId,
 ) -> Result<
     (
         KinesisClient,
@@ -262,7 +265,7 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let config = c.aws.load().await;
+    let config = c.aws.load(aws_external_id).await;
     let kinesis_client = kinesis::client(&config);
 
     let shard_set = kinesis::get_shard_ids(&kinesis_client, &c.stream_name).await?;

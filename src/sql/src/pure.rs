@@ -29,7 +29,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
-use mz_dataflow_types::sources::AwsConfig;
+use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
 };
@@ -112,10 +112,7 @@ pub fn purify(
                     let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
                         .await
                         .map_err(|e| {
-                            anyhow!(
-                                "Cannot create Kafka Consumer for determining start offsets: {}",
-                                e
-                            )
+                            anyhow!("Failed to create and connect Kafka consumer: {}", e)
                         })?;
 
                     // Translate `kafka_time_offset` to `start_offset`.
@@ -176,9 +173,8 @@ pub fn purify(
                     file = Some(f);
                 }
                 CreateSourceConnector::S3 { .. } => {
-                    let aws_config =
-                        normalize::aws_config(&mut with_options_map, None, aws_external_id)?;
-                    validate_aws_credentials(&aws_config).await?;
+                    let aws_config = normalize::aws_config(&mut with_options_map, None)?;
+                    validate_aws_credentials(&aws_config, aws_external_id).await?;
                 }
                 CreateSourceConnector::Kinesis { arn } => {
                     let region = arn
@@ -187,12 +183,9 @@ pub fn purify(
                         .region
                         .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-                    let aws_config = normalize::aws_config(
-                        &mut with_options_map,
-                        Some(region.into()),
-                        aws_external_id,
-                    )?;
-                    validate_aws_credentials(&aws_config).await?;
+                    let aws_config =
+                        normalize::aws_config(&mut with_options_map, Some(region.into()))?;
+                    validate_aws_credentials(&aws_config, aws_external_id).await?;
                 }
                 CreateSourceConnector::Postgres {
                     conn,
@@ -835,8 +828,11 @@ async fn compile_proto(
 
 /// Makes an always-valid AWS API call to perform a basic sanity check of
 /// whether the specified AWS configuration is valid.
-async fn validate_aws_credentials(config: &AwsConfig) -> Result<(), anyhow::Error> {
-    let config = config.load().await;
+async fn validate_aws_credentials(
+    config: &AwsConfig,
+    external_id: AwsExternalId,
+) -> Result<(), anyhow::Error> {
+    let config = config.load(external_id).await;
     let sts_client = mz_aws_util::sts::client(&config);
     let _ = sts_client
         .get_caller_identity()

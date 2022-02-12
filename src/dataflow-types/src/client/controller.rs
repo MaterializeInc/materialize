@@ -8,8 +8,11 @@
 // by the Apache License, Version 2.0.
 
 //! A client that maintains summaries of the involved objects.
+use std::collections::BTreeMap;
 
-use crate::client::{Client, Command, ComputeCommand, ComputeResponse, Response, StorageCommand};
+use crate::client::{
+    Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response, StorageCommand,
+};
 use mz_expr::GlobalId;
 use mz_repr::Timestamp;
 use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
@@ -23,7 +26,7 @@ pub struct Controller<C> {
     /// A `None` variant means that the source was dropped before it was first created.
     source_descriptions: std::collections::BTreeMap<GlobalId, Option<crate::sources::SourceDesc>>,
     /// Tracks `since` and `upper` frontiers for indexes and sinks.
-    compute_since_uppers: SinceUpperMap,
+    compute_since_uppers: BTreeMap<ComputeInstanceId, SinceUpperMap>,
     /// Tracks `since` and `upper` frontiers for sources and tables.
     storage_since_uppers: SinceUpperMap,
 }
@@ -41,6 +44,22 @@ impl<C: Client> Client for Controller<C> {
 impl<C: Client> Controller<C> {
     pub async fn send(&mut self, cmd: Command) {
         match &cmd {
+            Command::Compute(ComputeCommand::CreateInstance(logging), instance) => {
+                self.compute_since_uppers
+                    .insert(*instance, Default::default());
+
+                if let Some(logging_config) = logging {
+                    for id in logging_config.log_identifiers() {
+                        self.compute_since_uppers
+                            .get_mut(instance)
+                            .expect("Reference to absent instance")
+                            .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
+                    }
+                }
+            }
+            Command::Compute(ComputeCommand::DropInstance, instance) => {
+                self.compute_since_uppers.remove(instance);
+            }
             Command::Storage(StorageCommand::CreateSources(bindings)) => {
                 // Maintain the list of bindings, and complain if one attempts to either
                 // 1. create a dropped source identifier, or
@@ -81,13 +100,7 @@ impl<C: Client> Controller<C> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::EnableLogging(logging_config), _instance) => {
-                for id in logging_config.log_identifiers() {
-                    self.compute_since_uppers
-                        .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
-                }
-            }
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
+            Command::Compute(ComputeCommand::CreateDataflows(dataflows), instance) => {
                 // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
                 // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
                 for dataflow in dataflows.iter() {
@@ -112,7 +125,10 @@ impl<C: Client> Controller<C> {
                     // TODO(mcsherry): Instead, return an error from the constructing method.
                     for (index_id, _) in dataflow.index_imports.iter() {
                         let (since, _upper) = self
-                            .index_since_upper_for(*index_id)
+                            .compute_since_uppers
+                            .get_mut(instance)
+                            .expect("Reference to absent instance")
+                            .get(index_id)
                             .expect("Index frontiers absent in dataflow construction");
                         assert!(<_ as timely::order::PartialOrder>::less_equal(
                             &since,
@@ -123,18 +139,25 @@ impl<C: Client> Controller<C> {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
                         self.compute_since_uppers
+                            .get_mut(instance)
+                            .expect("Reference to absent instance")
                             .insert(*sink_id, (as_of.clone(), Antichain::from_elem(0)));
                     }
                     for (index_id, _, _) in dataflow.index_exports.iter() {
                         // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
                         self.compute_since_uppers
+                            .get_mut(instance)
+                            .expect("Reference to absent instance")
                             .insert(*index_id, (as_of.clone(), Antichain::from_elem(0)));
                     }
                 }
             }
-            Command::Compute(ComputeCommand::AllowIndexCompaction(frontiers), _instance) => {
+            Command::Compute(ComputeCommand::AllowIndexCompaction(frontiers), instance) => {
                 for (id, frontier) in frontiers.iter() {
-                    self.compute_since_uppers.advance_since_for(*id, frontier);
+                    self.compute_since_uppers
+                        .get_mut(instance)
+                        .expect("Reference to absent instance")
+                        .advance_since_for(*id, frontier);
                 }
             }
             Command::Storage(StorageCommand::AllowSourceCompaction(frontiers)) => {
@@ -153,9 +176,12 @@ impl<C: Client> Controller<C> {
 
         if let Some(response) = response.as_ref() {
             match response {
-                Response::Compute(ComputeResponse::FrontierUppers(updates)) => {
+                Response::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
                     for (id, changes) in updates.iter() {
-                        self.compute_since_uppers.update_upper_for(*id, changes);
+                        self.compute_since_uppers
+                            .get_mut(instance)
+                            .expect("Reference to absent instance")
+                            .update_upper_for(*id, changes);
                     }
                 }
                 _ => {}
@@ -184,22 +210,6 @@ impl<C> Controller<C> {
     /// this information if we had a use for it.
     pub fn source_description_for(&self, id: GlobalId) -> Option<&crate::sources::SourceDesc> {
         self.source_descriptions.get(&id).unwrap_or(&None).as_ref()
-    }
-
-    /// Returns the pair of `since` and `upper` for a maintained index, if it exists.
-    ///
-    /// The `since` frontier indicates that the maintained data are certainly valid for times greater
-    /// or equal to the frontier, but they may not be for other times. Attempting to create a dataflow
-    /// using this `id` with an `as_of` that is not at least `since` will result in an error.
-    ///
-    /// The `upper` frontier indicates that the data are reported available for all times not greater
-    /// or equal to the frontier. Dataflows with an `as_of` greater or equal to this frontier may not
-    /// immediately produce results.
-    pub fn index_since_upper_for(
-        &self,
-        id: GlobalId,
-    ) -> Option<(AntichainRef<Timestamp>, AntichainRef<Timestamp>)> {
-        self.compute_since_uppers.get(&id)
     }
 
     /// Returns the pair of `since` and `upper` for a source, if it exists.

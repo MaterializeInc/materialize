@@ -340,7 +340,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             .map_err(DecodeError::Custom)?;
 
         if n.is_special()
-            || numeric::get_precision(&n) > numeric::NUMERIC_DATUM_MAX_PRECISION as u32
+            || numeric::get_precision(&n) > u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
         {
             return Err(AvroError::Decode(DecodeError::Custom(format!(
                 "Error decoding numeric: exceeds maximum precision {}",

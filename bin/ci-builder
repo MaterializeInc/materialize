@@ -147,11 +147,13 @@ case "$cmd" in
             --env BUILDKITE_BUILD_NUMBER
             --env BUILDKITE_BUILD_URL
             --env BUILDKITE_COMMIT
+            --env BUILDKITE_MESSAGE
             --env BUILDKITE_JOB_ID
             --env BUILDKITE_PARALLEL_JOB
             --env BUILDKITE_PARALLEL_JOB_COUNT
             --env BUILDKITE_PULL_REQUEST
             --env BUILDKITE_TAG
+            --env BUILDKITE_TEST_ANALYTICS_API_KEY_CARGO_TEST
             --env CI
             --env GITHUB_TOKEN
             --env GPG_KEY

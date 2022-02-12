@@ -16,7 +16,7 @@ use aws_sdk_kinesis::model::{ScalingType, StreamStatus};
 
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct UpdateShardCountAction {
@@ -43,7 +43,7 @@ impl Action for UpdateShardCountAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!(
             "Updating Kinesis stream {} to have {} shards",
@@ -107,6 +107,7 @@ impl Action for UpdateShardCountAction {
                 }
                 Ok(())
             })
-            .await
+            .await?;
+        Ok(ControlFlow::Continue)
     }
 }

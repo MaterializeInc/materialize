@@ -63,11 +63,7 @@ pub use self::expr::{HirRelationExpr, HirScalarExpr};
 pub use error::PlanError;
 pub use explain::Explanation;
 pub use optimize::OptimizerConfig;
-// This is used by sqllogictest to turn SQL values into `Datum`s.
-pub use query::{
-    plan_default_expr, resolve_names, resolve_names_data_type, resolve_names_stmt,
-    scalar_type_from_sql, Aug, QueryContext, QueryLifetime,
-};
+pub use query::{resolve_names, resolve_names_stmt, QueryContext, QueryLifetime};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.

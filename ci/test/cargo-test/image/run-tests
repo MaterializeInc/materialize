@@ -18,10 +18,13 @@ set -euo pipefail
 
 ci_init
 
-while read -r binary cwd; do
-    cd "$cwd"
-    ci_try "/tests/$binary" --nocapture
-    cd "$OLDPWD"
+while read -r binary package cwd; do
+    # Run tests, generating a JSON event stream. The jq in the pipeline below
+    # prefixes each event's name field, if present, with the package name, so
+    # that we can distinguish tests with the same names in different packages.
+    (cd "$cwd" && ci_try "/tests/$binary" -Z unstable-options --format json --report-time) \
+        | jq -c --arg package "$package" 'if .name then .name = "\($package)::\(.name)" else . end' \
+        | tee -a results.json
 done < /tests/manifest
 
 ci_status_report
