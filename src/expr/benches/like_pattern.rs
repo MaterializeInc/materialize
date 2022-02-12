@@ -43,7 +43,7 @@ where
 
     // Test how long it takes to compile a pattern.
     group.bench_function(format!("{}_compile", name), |b| {
-        b.iter(|| compile_fn(black_box("a%b_c%d_e%f_g%h_i%j_k%l_")))
+        b.iter(|| compile_fn(black_box("a%b_c%d_e")))
     });
 
     // Test some search scenarios:
@@ -71,21 +71,21 @@ where
     group.bench_function(format!("{}_search_ends_with", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
-    matcher = compile_fn("%e%e%e%e%e%e?");
-    group.bench_function(format!("{}_search_expensive", name), |b| {
+    matcher = compile_fn("%e%e%e%e%e?");
+    group.bench_function(format!("{}_search_adversarial", name), |b| {
         b.iter(|| matcher.is_match(black_box("wheeeeeeeeeeeeeeeeeeeeee!")))
     });
 }
 
 pub fn bench_ilike(c: &mut Criterion) {
     bench_op(c, "ilike", |pattern| {
-        like_pattern::compile(pattern, true, '\\').unwrap()
+        like_pattern::compile(pattern, true, like_pattern::EscapeBehavior::default()).unwrap()
     });
 }
 
 pub fn bench_like(c: &mut Criterion) {
     bench_op(c, "like", |pattern| {
-        like_pattern::compile(pattern, false, '\\').unwrap()
+        like_pattern::compile(pattern, false, like_pattern::EscapeBehavior::default()).unwrap()
     });
 }
 
