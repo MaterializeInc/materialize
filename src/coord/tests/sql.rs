@@ -26,8 +26,8 @@ use mz_expr::GlobalId;
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
-use mz_sql::names::{DatabaseSpecifier, FullName};
-use mz_sql::plan::{resolve_names, PlanContext, QueryContext, QueryLifetime, StatementContext};
+use mz_sql::names::{resolve_names, DatabaseSpecifier, FullName};
+use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.

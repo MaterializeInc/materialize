@@ -63,7 +63,7 @@ pub use self::expr::{HirRelationExpr, HirScalarExpr};
 pub use error::PlanError;
 pub use explain::Explanation;
 pub use optimize::OptimizerConfig;
-pub use query::{resolve_names, resolve_names_stmt, QueryContext, QueryLifetime};
+pub use query::{QueryContext, QueryLifetime};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.

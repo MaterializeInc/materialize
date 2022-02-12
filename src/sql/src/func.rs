@@ -23,7 +23,7 @@ use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 
 use crate::ast::{SelectStatement, Statement};
-use crate::names::PartialName;
+use crate::names::{resolve_names, resolve_names_expr, PartialName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
@@ -289,7 +289,7 @@ pub fn sql_impl(
         let mut expr = expr.clone();
         transform_ast::transform_expr(&scx, &mut expr)?;
 
-        let expr = query::resolve_names_expr(&mut qcx, expr)?;
+        let expr = resolve_names_expr(&mut qcx, expr)?;
 
         let ecx = ExprContext {
             qcx: &qcx,
@@ -368,7 +368,7 @@ fn sql_impl_table_func_inner(
         let mut query = query.clone();
         transform_ast::transform_query(&scx, &mut query)?;
 
-        let query = query::resolve_names(&mut qcx, query)?;
+        let query = resolve_names(&mut qcx, query)?;
 
         query::plan_nested_query(&mut qcx, &query)
     };

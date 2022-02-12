@@ -29,7 +29,7 @@ use mz_sql::ast::{
     ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFunction, UnresolvedDataType,
     UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
-use mz_sql::plan::resolve_names_stmt;
+use mz_sql::names::resolve_names_stmt;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
