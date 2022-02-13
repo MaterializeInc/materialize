@@ -79,13 +79,13 @@ where
 
 pub fn bench_ilike(c: &mut Criterion) {
     bench_op(c, "ilike", |pattern| {
-        like_pattern::compile(pattern, true, like_pattern::EscapeBehavior::default()).unwrap()
+        like_pattern::compile(pattern, true).unwrap()
     });
 }
 
 pub fn bench_like(c: &mut Criterion) {
     bench_op(c, "like", |pattern| {
-        like_pattern::compile(pattern, false, like_pattern::EscapeBehavior::default()).unwrap()
+        like_pattern::compile(pattern, false).unwrap()
     });
 }
 
