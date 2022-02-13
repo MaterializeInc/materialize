@@ -81,6 +81,7 @@ steps:
     label: Cargo test
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    artifact_paths: junit_cargo-test_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -100,6 +101,7 @@ steps:
     timeout_in_minutes: 30
     inputs: [test/testdrive]
     parallelism: 4
+    artifact_paths: test/testdrive/junit_testdrive_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -148,6 +150,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/sqllogictest]
+    artifact_paths: junit_sqllogictest_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -218,6 +221,7 @@ steps:
     label: dbt-materialize tests
     depends_on: build-x86_64
     timeout_in_minutes: 10
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
@@ -324,6 +328,15 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: python
           run: python
+
+  - wait: ~
+    continue_on_failure: true
+
+  - label: Analyze tests
+    plugins:
+      - junit-annotate#v2.0.2:
+          artifacts: "*junit_*.xml"
+          job-uuid-file-pattern: _([^_]*).xml
 
   - wait: ~
 

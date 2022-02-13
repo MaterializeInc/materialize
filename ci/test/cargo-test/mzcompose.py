@@ -41,9 +41,10 @@ def workflow_default(c: Composition) -> None:
     try:
         c.run("ci-cargo-test", "run-tests")
     finally:
-        ci_util.upload_test_report(
-            "cargo-test",
-            spawn.capture(
-                args=["cargo2junit"], stdin=(ROOT / "results.json").read_text()
-            ),
-        )
+        junit_report = ci_util.junit_report_filename("cargo-test")
+        spawn.runv(
+            ["cargo2junit"],
+            stdin=(ROOT / "results.json").open("rb"),
+            stdout=junit_report.open("wb"),
+        ),
+        ci_util.upload_junit_report("cargo-test", junit_report)
