@@ -4749,16 +4749,16 @@ dependencies = [
 
 [[package]]
 name = "prost-reflect"
-version = "0.5.3"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3deba7b331019d2f629de4ec8240f0d3aa230f981c850b5d77eaf913eaf7466"
+checksum = "d2c59a186b1edc4d5df9c1b7a3583892088382818efad45be72e0b79f0d618cf"
 dependencies = [
  "base64",
- "chrono",
  "prost",
  "prost-types",
  "serde",
  "serde-value",
+ "time",
 ]
 
 [[package]]
