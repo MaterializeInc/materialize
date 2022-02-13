@@ -21,7 +21,7 @@ use crate::oid;
 
 /// Mirror of PostgreSQL's [`VARHDRSZ`] constant.
 ///
-/// [`VARHDRSZ`]: https://github.com/postgres/postgres/blob/REL_14_0/src/include/c.h#L627)
+/// [`VARHDRSZ`]: https://github.com/postgres/postgres/blob/REL_14_0/src/include/c.h#L627
 const VARHDRSZ: i32 = 4;
 
 /// The type of a [`Value`](crate::Value).
@@ -50,6 +50,8 @@ pub enum Type {
     Int8,
     /// A time interval.
     Interval,
+    /// A textual JSON blob.
+    Json,
     /// A binary JSON blob.
     Jsonb,
     /// A sequence of homogeneous values.
@@ -84,6 +86,8 @@ pub enum Type {
     },
     /// A time of day without a day.
     Time,
+    /// A time with a time zone.
+    TimeTz,
     /// A date and time, without a timezone.
     Timestamp,
     /// A date and time, with a timezone.
@@ -234,6 +238,7 @@ impl Type {
             postgres_types::Type::INT4 => Type::Int4,
             postgres_types::Type::INT8 => Type::Int8,
             postgres_types::Type::INTERVAL => Type::Interval,
+            postgres_types::Type::JSON => Type::Json,
             postgres_types::Type::JSONB => Type::Jsonb,
             postgres_types::Type::NUMERIC => Type::Numeric {
                 constraints: NumericConstraints::from_typmod(typmod),
@@ -247,6 +252,7 @@ impl Type {
                 max_length: CharLength::from_typmod(typmod),
             },
             postgres_types::Type::TIME => Type::Time,
+            postgres_types::Type::TIMETZ => Type::TimeTz,
             postgres_types::Type::TIMESTAMP => Type::Timestamp,
             postgres_types::Type::TIMESTAMPTZ => Type::TimestampTz,
             postgres_types::Type::UUID => Type::Uuid,
@@ -265,6 +271,7 @@ impl Type {
             postgres_types::Type::INT4_ARRAY => Type::Array(Box::new(Type::Int4)),
             postgres_types::Type::INT8_ARRAY => Type::Array(Box::new(Type::Int8)),
             postgres_types::Type::INTERVAL_ARRAY => Type::Array(Box::new(Type::Interval)),
+            postgres_types::Type::JSON_ARRAY => Type::Array(Box::new(Type::Json)),
             postgres_types::Type::JSONB_ARRAY => Type::Array(Box::new(Type::Jsonb)),
             postgres_types::Type::NUMERIC_ARRAY => Type::Array(Box::new(Type::Numeric {
                 constraints: NumericConstraints::from_typmod(typmod),
@@ -272,6 +279,7 @@ impl Type {
             postgres_types::Type::OID_ARRAY => Type::Array(Box::new(Type::Oid)),
             postgres_types::Type::TEXT_ARRAY => Type::Array(Box::new(Type::Text)),
             postgres_types::Type::TIME_ARRAY => Type::Array(Box::new(Type::Time)),
+            postgres_types::Type::TIMETZ_ARRAY => Type::Array(Box::new(Type::TimeTz)),
             postgres_types::Type::TIMESTAMP_ARRAY => Type::Array(Box::new(Type::Timestamp)),
             postgres_types::Type::TIMESTAMPTZ_ARRAY => Type::Array(Box::new(Type::TimestampTz)),
             postgres_types::Type::UUID_ARRAY => Type::Array(Box::new(Type::Uuid)),
@@ -298,6 +306,7 @@ impl Type {
                 Type::Int4 => &postgres_types::Type::INT4_ARRAY,
                 Type::Int8 => &postgres_types::Type::INT8_ARRAY,
                 Type::Interval => &postgres_types::Type::INTERVAL_ARRAY,
+                Type::Json => &postgres_types::Type::JSON_ARRAY,
                 Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
                 Type::List(_) => unreachable!(),
                 Type::Map { .. } => unreachable!(),
@@ -308,6 +317,7 @@ impl Type {
                 Type::Char { .. } => &postgres_types::Type::BPCHAR_ARRAY,
                 Type::VarChar { .. } => &postgres_types::Type::VARCHAR_ARRAY,
                 Type::Time => &postgres_types::Type::TIME_ARRAY,
+                Type::TimeTz => &postgres_types::Type::TIMETZ_ARRAY,
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
@@ -324,6 +334,7 @@ impl Type {
             Type::Int4 => &postgres_types::Type::INT4,
             Type::Int8 => &postgres_types::Type::INT8,
             Type::Interval => &postgres_types::Type::INTERVAL,
+            Type::Json => &postgres_types::Type::JSON,
             Type::Jsonb => &postgres_types::Type::JSONB,
             Type::List(_) => &LIST,
             Type::Map { .. } => &MAP,
@@ -334,6 +345,7 @@ impl Type {
             Type::Char { .. } => &postgres_types::Type::BPCHAR,
             Type::VarChar { .. } => &postgres_types::Type::VARCHAR,
             Type::Time => &postgres_types::Type::TIME,
+            Type::TimeTz => &postgres_types::Type::TIMETZ,
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
@@ -405,6 +417,7 @@ impl Type {
             Type::Int4 => 4,
             Type::Int8 => 8,
             Type::Interval => 16,
+            Type::Json => -1,
             Type::Jsonb => -1,
             Type::List(_) => -1,
             Type::Map { .. } => -1,
@@ -415,6 +428,7 @@ impl Type {
             Type::Char { .. } => -1,
             Type::VarChar { .. } => -1,
             Type::Time => 4,
+            Type::TimeTz => 4,
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::Uuid => 16,
@@ -454,6 +468,7 @@ impl Type {
             | Type::Int4
             | Type::Int8
             | Type::Interval
+            | Type::Json
             | Type::Jsonb
             | Type::List(_)
             | Type::Map { .. }
@@ -465,56 +480,11 @@ impl Type {
             | Type::RegType
             | Type::Text
             | Type::Time
+            | Type::TimeTz
             | Type::Timestamp
             | Type::TimestampTz
             | Type::Uuid
             | Type::VarChar { max_length: None } => -1,
-        }
-    }
-
-    /// Provides a [`ScalarType`] from `self`, but without necessarily
-    /// associating any meaningful values within the returned type.
-    ///
-    /// For example `Type::Numeric` returns `SScalarType::Numeric { scale: None }`,
-    /// meaning that its scale might need values from elsewhere.
-    pub fn to_scalar_type_lossy(&self) -> ScalarType {
-        match self {
-            Type::Array(t) => ScalarType::Array(Box::new(t.to_scalar_type_lossy())),
-            Type::Bool => ScalarType::Bool,
-            Type::Bytea => ScalarType::Bytes,
-            Type::Date => ScalarType::Date,
-            Type::Float4 => ScalarType::Float32,
-            Type::Float8 => ScalarType::Float64,
-            Type::Int2 => ScalarType::Int16,
-            Type::Int4 => ScalarType::Int32,
-            Type::Int8 => ScalarType::Int64,
-            Type::Interval => ScalarType::Interval,
-            Type::Jsonb => ScalarType::Jsonb,
-            Type::List(t) => ScalarType::List {
-                element_type: Box::new(t.to_scalar_type_lossy()),
-                custom_oid: None,
-            },
-            Type::Map { value_type } => ScalarType::Map {
-                value_type: Box::new(value_type.to_scalar_type_lossy()),
-                custom_oid: None,
-            },
-            Type::Numeric { .. } => ScalarType::Numeric { max_scale: None },
-            Type::Oid => ScalarType::Oid,
-            Type::Record(_) => ScalarType::Record {
-                fields: vec![],
-                custom_oid: None,
-                custom_name: None,
-            },
-            Type::Text => ScalarType::String,
-            Type::Time => ScalarType::Time,
-            Type::Char { .. } => ScalarType::Char { length: None },
-            Type::VarChar { .. } => ScalarType::VarChar { max_length: None },
-            Type::Timestamp => ScalarType::Timestamp,
-            Type::TimestampTz => ScalarType::TimestampTz,
-            Type::Uuid => ScalarType::Uuid,
-            Type::RegClass => ScalarType::RegClass,
-            Type::RegProc => ScalarType::RegProc,
-            Type::RegType => ScalarType::RegType,
         }
     }
 }
@@ -552,6 +522,7 @@ impl TryFrom<&Type> for ScalarType {
             Type::Int4 => ScalarType::Int32,
             Type::Int8 => ScalarType::Int64,
             Type::Interval => ScalarType::Interval,
+            Type::Json => bail!("type json not supported"),
             Type::Jsonb => ScalarType::Jsonb,
             Type::List(t) => ScalarType::List {
                 element_type: Box::new(TryFrom::try_from(&**t)?),
@@ -590,6 +561,7 @@ impl TryFrom<&Type> for ScalarType {
             },
             Type::Text => ScalarType::String,
             Type::Time => ScalarType::Time,
+            Type::TimeTz => bail!("type timetz not supported"),
             Type::Char { length } => ScalarType::Char {
                 length: match length {
                     Some(length) => Some(AdtCharLength::try_from(i64::from(length.into_i32()))?),

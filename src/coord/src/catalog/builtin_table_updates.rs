@@ -15,6 +15,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
+use mz_sql::catalog::CatalogType;
 use mz_sql::names::DatabaseSpecifier;
 use mz_sql_parser::ast::display::AstDisplay;
 
@@ -25,7 +26,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
-    Type, TypeInner, SYSTEM_CONN_ID,
+    Type, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -362,21 +363,21 @@ impl CatalogState {
             diff,
         };
 
-        let (index_id, update) = match typ.inner {
-            TypeInner::Array { element_id } => (
+        let (index_id, update) = match typ.details.typ {
+            CatalogType::Array { element_id } => (
                 MZ_ARRAY_TYPES.id,
                 vec![id.to_string(), element_id.to_string()],
             ),
-            TypeInner::Base => (MZ_BASE_TYPES.id, vec![id.to_string()]),
-            TypeInner::List { element_id } => (
+            CatalogType::List { element_id } => (
                 MZ_LIST_TYPES.id,
                 vec![id.to_string(), element_id.to_string()],
             ),
-            TypeInner::Map { key_id, value_id } => (
+            CatalogType::Map { key_id, value_id } => (
                 MZ_MAP_TYPES.id,
                 vec![id.to_string(), key_id.to_string(), value_id.to_string()],
             ),
-            TypeInner::Pseudo => (MZ_PSEUDO_TYPES.id, vec![id.to_string()]),
+            CatalogType::Pseudo => (MZ_PSEUDO_TYPES.id, vec![id.to_string()]),
+            _ => (MZ_BASE_TYPES.id, vec![id.to_string()]),
         };
         let specific_update = BuiltinTableUpdate {
             id: index_id,

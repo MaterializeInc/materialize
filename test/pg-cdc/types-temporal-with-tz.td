@@ -56,4 +56,4 @@ INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 
 # Mz does not support TIME WITH TIME ZOINE
 ! CREATE VIEWS FROM SOURCE mz_source (time_table);
-contains:unknown catalog item 'timetz'
+contains:unknown catalog item 'pg_catalog.timetz'

@@ -311,8 +311,15 @@ pub fn purify(
                                 // representation on `pgrepr::Type` promises to
                                 // produce an unqualified type name that does
                                 // not require quoting.
-                                let data_type =
-                                    parse_data_type(&format!("pg_catalog.{}", column.ty))?;
+                                //
+                                // TODO(benesch): converting `json` to `jsonb`
+                                // is wrong. We ought to support the `json` type
+                                // directly.
+                                let mut ty = format!("pg_catalog.{}", column.ty);
+                                if ty == "pg_catalog.json" {
+                                    ty = "pg_catalog.jsonb".into();
+                                }
+                                let data_type = parse_data_type(&ty)?;
                                 projection.push(SelectItem::Expr {
                                     expr: Expr::Cast {
                                         expr: Box::new(Expr::SubscriptScalar {

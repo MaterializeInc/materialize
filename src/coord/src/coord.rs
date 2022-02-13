@@ -134,7 +134,7 @@ use mz_sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
-use mz_sql::catalog::{CatalogError, SessionCatalog as _};
+use mz_sql::catalog::{CatalogError, CatalogTypeDetails, SessionCatalog as _};
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -2726,7 +2726,10 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
-            inner: plan.typ.inner.into(),
+            details: CatalogTypeDetails {
+                array_id: None,
+                typ: plan.typ.inner,
+            },
             depends_on: plan.typ.depends_on,
         };
         let id = self.catalog.allocate_id()?;

@@ -405,6 +405,7 @@ impl Value {
             }
             Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
             Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
+            Type::Json => return Err("input of json types is not implemented".into()),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
             Type::List(elem_type) => Value::List(strconv::parse_list(
                 raw,
@@ -425,6 +426,7 @@ impl Value {
             Type::Char { .. } => Value::Char(raw.to_owned()),
             Type::VarChar { .. } => Value::VarChar(raw.to_owned()),
             Type::Time => Value::Time(strconv::parse_time(raw)?),
+            Type::TimeTz => return Err("input of timetz types is not implemented".into()),
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
@@ -447,6 +449,7 @@ impl Value {
             }
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
             Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
+            Type::Json => return Err("input of json types is not implemented".into()),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
@@ -456,6 +459,7 @@ impl Value {
             Type::Char { .. } => String::from_sql(ty.inner(), raw).map(Value::Char),
             Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
+            Type::TimeTz => return Err("input of timetz types is not implemented".into()),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),

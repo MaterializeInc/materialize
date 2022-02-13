@@ -52,7 +52,7 @@ use mz_sql_parser::ast::{
     Values,
 };
 
-use crate::catalog::{CatalogItemType, SessionCatalog};
+use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::{
     resolve_names, resolve_names_expr, resolve_names_extend_qcx_ids, Aug, NameResolver,
@@ -3947,26 +3947,16 @@ pub fn scalar_type_from_sql(
     scx: &StatementContext,
     data_type: &ResolvedDataType,
 ) -> Result<ScalarType, PlanError> {
-    Ok(match data_type {
-        ResolvedDataType::AnonymousArray(elem_type) => {
-            let elem_type = scalar_type_from_sql(scx, &elem_type)?;
-            if matches!(
-                elem_type,
-                ScalarType::Char { .. } | ScalarType::List { .. } | ScalarType::Map { .. }
-            ) {
-                bail_unsupported!(format!("{}[]", scx.humanize_scalar_type(&elem_type)));
-            }
-            ScalarType::Array(Box::new(elem_type))
-        }
+    match data_type {
         ResolvedDataType::AnonymousList(elem_type) => {
             let elem_type = scalar_type_from_sql(scx, &elem_type)?;
             if matches!(elem_type, ScalarType::Char { .. }) {
                 bail_unsupported!("char list");
             }
-            ScalarType::List {
+            Ok(ScalarType::List {
                 element_type: Box::new(elem_type),
                 custom_oid: None,
-            }
+            })
         }
         ResolvedDataType::AnonymousMap {
             key_type,
@@ -3980,79 +3970,140 @@ pub fn scalar_type_from_sql(
                     scx.humanize_scalar_type(&other)
                 ),
             }
-            ScalarType::Map {
+            Ok(ScalarType::Map {
                 value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
                 custom_oid: None,
-            }
+            })
         }
         ResolvedDataType::Named {
             id,
-            name,
             modifiers,
+            name: _,
             print_id: _,
-        } => match scx.catalog.try_get_lossy_scalar_type_by_id(&id) {
-            Some(ScalarType::Numeric { .. }) => {
-                let mut modifiers = modifiers.iter().fuse();
-                let precision = match modifiers.next() {
-                    Some(p) if *p < 1 || *p > i64::from(NUMERIC_DATUM_MAX_PRECISION) => {
-                        sql_bail!(
-                            "precision for type numeric must be between 1 and {}",
-                            NUMERIC_DATUM_MAX_PRECISION,
-                        );
-                    }
-                    Some(p) => Some(*p),
-                    None => None,
-                };
-                let scale = match modifiers.next() {
-                    Some(scale) => {
-                        if let Some(precision) = precision {
-                            if *scale > precision {
-                                sql_bail!(
-                                    "scale for type numeric must be between 0 and precision {}",
-                                    precision
-                                );
-                            }
+        } => scalar_type_from_catalog(scx, *id, modifiers),
+    }
+}
+
+fn scalar_type_from_catalog(
+    scx: &StatementContext,
+    id: GlobalId,
+    modifiers: &[i64],
+) -> Result<ScalarType, PlanError> {
+    let entry = scx.catalog.get_item_by_id(&id);
+    let type_details = match entry.type_details() {
+        Some(type_details) => type_details,
+        None => sql_bail!(
+            "{} does not refer to a type",
+            entry.name().to_string().quoted()
+        ),
+    };
+    match &type_details.typ {
+        CatalogType::Numeric => {
+            let mut modifiers = modifiers.iter().fuse();
+            let precision = match modifiers.next() {
+                Some(p) if *p < 1 || *p > i64::from(NUMERIC_DATUM_MAX_PRECISION) => {
+                    sql_bail!(
+                        "precision for type numeric must be between 1 and {}",
+                        NUMERIC_DATUM_MAX_PRECISION,
+                    );
+                }
+                Some(p) => Some(*p),
+                None => None,
+            };
+            let scale = match modifiers.next() {
+                Some(scale) => {
+                    if let Some(precision) = precision {
+                        if *scale > precision {
+                            sql_bail!(
+                                "scale for type numeric must be between 0 and precision {}",
+                                precision
+                            );
                         }
-                        Some(NumericMaxScale::try_from(*scale)?)
                     }
-                    None => None,
-                };
-                if modifiers.next().is_some() {
-                    sql_bail!("type numeric supports at most two type modifiers");
+                    Some(NumericMaxScale::try_from(*scale)?)
                 }
-                ScalarType::Numeric { max_scale: scale }
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type numeric supports at most two type modifiers");
             }
-            Some(ScalarType::Char { .. }) => {
-                let mut modifiers = modifiers.iter().fuse();
-                let length = match modifiers.next() {
-                    Some(l) => Some(CharLength::try_from(*l)?),
-                    None => Some(CharLength::ONE),
-                };
-                if modifiers.next().is_some() {
-                    sql_bail!("type character supports at most one type modifier");
+            Ok(ScalarType::Numeric { max_scale: scale })
+        }
+        CatalogType::Char => {
+            let mut modifiers = modifiers.iter().fuse();
+            let length = match modifiers.next() {
+                Some(l) => Some(CharLength::try_from(*l)?),
+                None => Some(CharLength::ONE),
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type character supports at most one type modifier");
+            }
+            Ok(ScalarType::Char { length })
+        }
+        CatalogType::VarChar => {
+            let mut modifiers = modifiers.iter().fuse();
+            let length = match modifiers.next() {
+                Some(l) => Some(VarCharMaxLength::try_from(*l)?),
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type character varying supports at most one type modifier");
+            }
+            Ok(ScalarType::VarChar { max_length: length })
+        }
+        t => {
+            if !modifiers.is_empty() {
+                sql_bail!(
+                    "{} does not support type modifiers",
+                    &entry.name().to_string()
+                );
+            }
+            match t {
+                CatalogType::Array { element_id } => Ok(ScalarType::Array(Box::new(
+                    scalar_type_from_catalog(scx, *element_id, modifiers)?,
+                ))),
+                CatalogType::List { element_id } => Ok(ScalarType::List {
+                    element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
+                    custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
+                }),
+                CatalogType::Map {
+                    key_id: _,
+                    value_id,
+                } => Ok(ScalarType::Map {
+                    value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
+                    custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
+                }),
+                CatalogType::Bool => Ok(ScalarType::Bool),
+                CatalogType::Bytes => Ok(ScalarType::Bytes),
+                CatalogType::Char1 => Ok(ScalarType::Char {
+                    length: Some(CharLength::ONE),
+                }),
+                CatalogType::Date => Ok(ScalarType::Date),
+                CatalogType::Float32 => Ok(ScalarType::Float32),
+                CatalogType::Float64 => Ok(ScalarType::Float64),
+                CatalogType::Int16 => Ok(ScalarType::Int16),
+                CatalogType::Int32 => Ok(ScalarType::Int32),
+                CatalogType::Int64 => Ok(ScalarType::Int64),
+                CatalogType::Interval => Ok(ScalarType::Interval),
+                CatalogType::Jsonb => Ok(ScalarType::Jsonb),
+                CatalogType::Oid => Ok(ScalarType::Oid),
+                CatalogType::Pseudo => {
+                    sql_bail!("cannot reference pseudo type {}", entry.name().to_string())
                 }
-                ScalarType::Char { length }
+                CatalogType::RegClass => Ok(ScalarType::RegClass),
+                CatalogType::RegProc => Ok(ScalarType::RegProc),
+                CatalogType::RegType => Ok(ScalarType::RegType),
+                CatalogType::String => Ok(ScalarType::String),
+                CatalogType::Time => Ok(ScalarType::Time),
+                CatalogType::Timestamp => Ok(ScalarType::Timestamp),
+                CatalogType::TimestampTz => Ok(ScalarType::TimestampTz),
+                CatalogType::Uuid => Ok(ScalarType::Uuid),
+                CatalogType::Numeric => unreachable!("handled above"),
+                CatalogType::Char => unreachable!("handled above"),
+                CatalogType::VarChar => unreachable!("handled above"),
             }
-            Some(ScalarType::VarChar { .. }) => {
-                let mut modifiers = modifiers.iter().fuse();
-                let length = match modifiers.next() {
-                    Some(l) => Some(VarCharMaxLength::try_from(*l)?),
-                    None => None,
-                };
-                if modifiers.next().is_some() {
-                    sql_bail!("type character varying supports at most one type modifier");
-                }
-                ScalarType::VarChar { max_length: length }
-            }
-            Some(t) => {
-                if !modifiers.is_empty() {
-                    sql_bail!("{} does not support type modifiers", &name.to_string());
-                }
-                t
-            }
-            None => sql_bail!("type {} does not exist", name.to_string().quoted()),
-        },
-    })
+        }
+    }
 }
 
 /// This is used to collect aggregates and table functions from within an `Expr`.
