@@ -50,11 +50,10 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::ColumnName;
 
 use crate::ast::Expr;
-use crate::names::PartialName;
+use crate::names::{Aug, PartialName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::plan_utils::JoinSide;
-use crate::plan::query::Aug;
 
 #[derive(Debug, Clone)]
 pub struct ScopeItem {

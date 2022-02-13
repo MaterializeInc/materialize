@@ -30,9 +30,8 @@ use mz_sql_parser::ast::{
     UnresolvedObjectName, Value, ViewDefinition,
 };
 
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{resolve_names_stmt, Aug, DatabaseSpecifier, FullName, PartialName};
 use crate::plan::error::PlanError;
-use crate::plan::query::{resolve_names_stmt, Aug};
 use crate::plan::statement::StatementContext;
 
 /// Normalizes a single identifier.

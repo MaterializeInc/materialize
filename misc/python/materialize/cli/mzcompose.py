@@ -31,9 +31,10 @@ import webbrowser
 from pathlib import Path
 from typing import IO, Any, List, Optional, Sequence, Text, Tuple, Union
 
+import junit_xml
 from humanize import naturalsize
 
-from materialize import ROOT, mzbuild, mzcompose, spawn, ui
+from materialize import ROOT, ci_util, mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
 
 MIN_COMPOSE_VERSION = (1, 24, 0)
@@ -574,7 +575,27 @@ To see the available workflows, run:
                     f"it can't be used when running {args.workflow!r}, because {args.workflow!r} "
                     "is a custom mzcompose workflow, not a Docker Compose service",
                 )
-            composition.workflow(args.workflow, *args.unknown_subargs[1:])
+
+            # Run the workflow inside of a test case so that we get some basic
+            # test analytics, even if the workflow doesn't define more granular
+            # test cases.
+            with composition.test_case(f"workflow-{args.workflow}"):
+                composition.workflow(args.workflow, *args.unknown_subargs[1:])
+
+            # Upload test report to Buildkite Test Analytics.
+            junit_suite = junit_xml.TestSuite(composition.name)
+            for (name, result) in composition.test_results.items():
+                test_case = junit_xml.TestCase(name, composition.name, result.duration)
+                if result.error:
+                    test_case.add_error_info(message=result.error)
+                junit_suite.test_cases.append(test_case)
+            junit_report = ci_util.junit_report_filename("mzcompose")
+            with junit_report.open("w") as f:
+                junit_xml.to_xml_report_file(f, [junit_suite])
+            ci_util.upload_junit_report("mzcompose", junit_report)
+
+            if any(result.error for result in composition.test_results.values()):
+                raise UIError("at least one test case failed")
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")

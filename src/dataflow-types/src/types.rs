@@ -93,6 +93,17 @@ pub struct SourceInstanceDesc {
     pub persist: Option<sources::persistence::SourcePersistDesc>,
 }
 
+/// A representation of `SourceInstanceDesc` which elides the source details.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+pub struct SourceInstanceKey {
+    /// The globally unique identifier of the source.
+    pub identifier: GlobalId,
+    /// Optional linear operators that can be applied record-by-record.
+    pub operators: Option<crate::types::LinearOperator>,
+    /// A description of how to persist the source.
+    pub persist: Option<sources::persistence::SourcePersistDesc>,
+}
+
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DataflowDescription<View> {
@@ -302,6 +313,17 @@ impl<View> DataflowDescription<View> {
         }
         result.retain(|id| self.dependent_objects.get(id).is_none());
         result
+    }
+}
+
+impl SourceInstanceDesc {
+    /// Converts the description to an instance key.
+    pub fn with_id(&self, identifier: GlobalId) -> SourceInstanceKey {
+        SourceInstanceKey {
+            identifier,
+            operators: self.operators.clone(),
+            persist: self.persist.clone(),
+        }
     }
 }
 
@@ -562,7 +584,7 @@ pub mod sources {
         use mz_expr::PartitionId;
 
         /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
         pub struct SourcePersistDesc {
             /// The _current_ upper seal timestamp of all involved streams.
             ///
@@ -617,7 +639,7 @@ pub mod sources {
         /// also because there is already a `NONE` envelope.
         ///
         /// Some envelopes will require additional streams, which should be listed in the variant.
-        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
         pub enum EnvelopePersistDesc {
             Upsert,
             None,
@@ -1711,7 +1733,7 @@ pub struct IndexDesc {
 /// applied, and columns not in projection can then be overwritten with
 /// default values. This allows the projection to avoid capturing columns
 /// used by the predicates but not otherwise required.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub struct LinearOperator {
     /// Rows that do not pass all predicates may be discarded.
     pub predicates: Vec<MirScalarExpr>,

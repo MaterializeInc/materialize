@@ -82,12 +82,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 volumes=["secrets:/secrets"],
             )
 
-            with c.override(materialized):
-                c.up("materialized")
-                c.wait_for_tcp(host="materialized", port=6875)
-                c.run(
-                    "dbt-test",
-                    "pytest",
-                    "dbt-materialize/test",
-                    env_extra=test_case.dbt_env,
-                )
+            with c.test_case(test_case.name):
+                with c.override(materialized):
+                    c.up("materialized")
+                    c.wait_for_tcp(host="materialized", port=6875)
+                    c.run(
+                        "dbt-test",
+                        "pytest",
+                        "dbt-materialize/test",
+                        env_extra=test_case.dbt_env,
+                    )

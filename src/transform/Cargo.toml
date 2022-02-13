@@ -3,22 +3,22 @@ name = "mz-transform"
 description = "Transformations of Materialize expressions."
 version = "0.0.0"
 edition = "2021"
-publish = false
 rust-version = "1.58.0"
+publish = false
 
 [dependencies]
-mz-dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-mz-expr = { path = "../expr" }
 itertools = "0.10.3"
-mz-ore = { path = "../../src/ore" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 
 [dev-dependencies]
 anyhow = "1.0.52"
 datadriven = "0.6.0"
-mz-expr_test_util = {path = "../expr-test-util"}
-mz-lowertest = {path = "../lowertest"}
-mz-ore = { path = "../ore"}
+mz-expr_test_util = { path = "../expr-test-util" }
+mz-lowertest = { path = "../lowertest" }
+mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.36"
 serde_json = "1.0.78"

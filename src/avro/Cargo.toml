@@ -9,8 +9,8 @@ authors = [
 license = "Apache-2.0"
 repository = "https://github.com/MaterializeInc/materialize"
 edition = "2021"
-autobenches = false
 rust-version = "1.58.0"
+autobenches = false
 
 [dependencies]
 anyhow = "1.0.52"
@@ -21,13 +21,13 @@ digest = "0.10.0"
 enum-kinds = "0.5.1"
 flate2 = "1.0.22"
 itertools = "0.10.3"
-tracing = "0.1.29"
 rand = "0.8.4"
 regex = "1.5.4"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 sha2 = "0.10.1"
 snap = { version = "1.0.5", optional = true }
+tracing = "0.1.29"
 uuid = "0.8.2"
 
 [dev-dependencies]

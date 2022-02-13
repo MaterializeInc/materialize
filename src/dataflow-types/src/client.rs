@@ -150,7 +150,6 @@ pub enum StorageCommand {
             (crate::types::sources::SourceDesc, Antichain<Timestamp>),
         )>,
     ),
-
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
 

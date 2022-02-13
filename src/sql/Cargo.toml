@@ -3,52 +3,52 @@ name = "mz-sql"
 description = "SQL–dataflow translation."
 version = "0.0.0"
 edition = "2021"
-publish = false
 rust-version = "1.58.0"
+publish = false
 
 [dependencies]
 anyhow = "1.0.52"
 aws-arn = "0.2.0"
-mz-build-info = { path = "../build-info" }
-mz-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
-mz-dataflow-types = { path = "../dataflow-types" }
 dec = "0.4.8"
 enum-kinds = "0.5.1"
-mz-expr = { path = "../expr" }
 futures = "0.3.21"
 globset = "0.4.8"
-mz-interchange = { path = "../interchange" }
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
-mz-aws-util = { path = "../aws-util", features = [ "sts" ] }
+mz-aws-util = { path = "../aws-util", features = ["sts"] }
+mz-build-info = { path = "../build-info" }
+mz-ccsr = { path = "../ccsr" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-expr = { path = "../expr" }
+mz-interchange = { path = "../interchange" }
+mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgrepr = { path = "../pgrepr" }
+mz-postgres-util = { path = "../postgres-util" }
+mz-repr = { path = "../repr" }
+mz-sql-parser = { path = "../sql-parser" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
-mz-postgres-util = { path = "../postgres-util" }
-protobuf-native = "0.2.1"
 prost-build = "0.9.1"
+protobuf-native = "0.2.1"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
-mz-kafka-util = { path = "../kafka-util" }
 regex = "1.5.4"
-mz-repr = { path = "../repr" }
 reqwest = "0.11.9"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
-mz-sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
 tokio = { version = "1.16.1", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-typemap_rev = { version= "0.1.5"}
+tracing = "0.1.29"
+typemap_rev = "0.1.5"
 uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [dev-dependencies]
 datadriven = "0.6.0"
-mz-expr_test_util = { path = "../expr-test-util"}
-mz-lowertest = { path = "../lowertest"}
+mz-expr_test_util = { path = "../expr-test-util" }
+mz-lowertest = { path = "../lowertest" }

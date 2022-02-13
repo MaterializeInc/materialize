@@ -38,7 +38,6 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, Timestamp};
 use self::metrics::{ServerMetrics, WorkerMetrics};
 use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 use crate::event::ActivatedEventPusher;
-use crate::logging::materialized::MaterializedEvent;
 use crate::metrics::Metrics;
 use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
@@ -49,6 +48,7 @@ mod compute_state;
 mod metrics;
 mod storage_state;
 
+use boundary::{ComputeReplay, StorageCapture};
 use compute_state::ActiveComputeState;
 pub(crate) use compute_state::ComputeState;
 use storage_state::ActiveStorageState;
@@ -154,6 +154,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 timely_worker_index,
                 timely_worker_peers,
             },
+            boundary: boundary::EventLinkBoundary::new(),
             command_rx,
             response_tx,
             command_metrics: server_metrics.for_worker_id(worker_idx),
@@ -180,9 +181,10 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A>
+struct Worker<'w, A, B>
 where
     A: Allocate,
+    B: StorageCapture + ComputeReplay,
 {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
@@ -190,6 +192,8 @@ where
     compute_state: ComputeState,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
+    /// The boundary between storage and compute layers.
+    boundary: B,
     /// The channel from which commands are drawn.
     command_rx: crossbeam_channel::Receiver<Command>,
     /// The channel over which frontier information is reported.
@@ -198,9 +202,10 @@ where
     command_metrics: WorkerMetrics,
 }
 
-impl<'w, A> Worker<'w, A>
+impl<'w, A, B> Worker<'w, A, B>
 where
     A: Allocate + 'w,
+    B: StorageCapture + ComputeReplay,
 {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
@@ -249,64 +254,31 @@ where
         self.activate_compute().shutdown_logging();
     }
 
-    fn activate_compute(&mut self) -> ActiveComputeState<A> {
+    fn activate_compute(&mut self) -> ActiveComputeState<A, B> {
         ActiveComputeState {
             timely_worker: &mut *self.timely_worker,
             compute_state: &mut self.compute_state,
             response_tx: &mut self.response_tx,
+            boundary: &mut self.boundary,
         }
     }
-    fn activate_storage(&mut self) -> ActiveStorageState<A> {
+    fn activate_storage(&mut self) -> ActiveStorageState<A, B> {
         ActiveStorageState {
             timely_worker: &mut *self.timely_worker,
             storage_state: &mut self.storage_state,
             response_tx: &mut self.response_tx,
+            boundary: &mut self.boundary,
         }
     }
 
     fn handle_command(&mut self, cmd: Command) {
+        // If we construct a dataflow, we must prepare the source implementations separately.
+        if let Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) = &cmd {
+            self.activate_storage()
+                .build_storage_dataflow(&dataflows[..]);
+        }
+
         match cmd {
-            // Dataflow creation requires source instantiation, and is both storage and compute.
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
-                for dataflow in dataflows.into_iter() {
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
-                        self.compute_state
-                            .reported_frontiers
-                            .insert(*sink_id, Antichain::from_elem(0));
-                    }
-                    for (idx_id, idx, _) in dataflow.index_exports.iter() {
-                        self.compute_state
-                            .reported_frontiers
-                            .insert(*idx_id, Antichain::from_elem(0));
-                        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(*idx_id, true));
-                            logger.log(MaterializedEvent::Frontier(*idx_id, 0, 1));
-                            for import_id in dataflow.get_imports(&idx.on_id) {
-                                logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: *idx_id,
-                                    source: import_id,
-                                })
-                            }
-                        }
-                    }
-
-                    let mut boundary = boundary::EventLinkBoundary::new();
-
-                    crate::render::build_storage_dataflow(
-                        self.timely_worker,
-                        &mut self.storage_state,
-                        &dataflow,
-                        &mut boundary,
-                    );
-
-                    crate::render::build_compute_dataflow(
-                        self.timely_worker,
-                        &mut self.compute_state,
-                        dataflow,
-                        &mut boundary,
-                    );
-                }
-            }
             Command::Compute(cmd, _instance) => self.activate_compute().handle_compute_command(cmd),
             Command::Storage(cmd) => self.activate_storage().handle_storage_command(cmd),
         }

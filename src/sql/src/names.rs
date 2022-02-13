@@ -9,11 +9,23 @@
 
 //! Structured name types for SQL objects.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use mz_sql_parser::ast::{Ident, UnresolvedObjectName};
+use mz_expr::{GlobalId, Id, LocalId};
+
+use crate::ast::display::{AstDisplay, AstFormatter};
+use crate::ast::fold::Fold;
+use crate::ast::visit_mut::VisitMut;
+use crate::ast::{
+    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawName, Statement, UnresolvedDataType,
+    UnresolvedObjectName,
+};
+use crate::catalog::{CatalogItemType, SessionCatalog};
+use crate::normalize;
+use crate::plan::{PlanError, QueryContext, StatementContext};
 
 /// A fully-qualified name of an item in the catalog.
 ///
@@ -146,6 +158,441 @@ impl From<FullName> for PartialName {
             },
             schema: Some(n.schema),
             item: n.item,
+        }
+    }
+}
+
+// Aug is the type variable assigned to an AST that has already been
+// name-resolved. An AST in this state has global IDs populated next to table
+// names, and local IDs assigned to CTE definitions and references.
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
+pub struct Aug;
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ResolvedObjectName {
+    pub id: Id,
+    pub raw_name: PartialName,
+    // Whether this object, when printed out, should use [id AS name] syntax. We
+    // want this for things like tables and sources, but not for things like
+    // types.
+    pub print_id: bool,
+}
+
+impl AstDisplay for ResolvedObjectName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if self.print_id {
+            f.write_str(format!("[{} AS ", self.id));
+        }
+        let n = self.raw_name();
+        if let Some(database) = n.database {
+            f.write_node(&Ident::new(database));
+            f.write_str(".");
+        }
+        if let Some(schema) = n.schema {
+            f.write_node(&Ident::new(schema));
+            f.write_str(".");
+        }
+        f.write_node(&Ident::new(n.item));
+        if self.print_id {
+            f.write_str("]");
+        }
+    }
+}
+
+impl std::fmt::Display for ResolvedObjectName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.to_ast_string().as_str())
+    }
+}
+
+impl ResolvedObjectName {
+    pub fn raw_name(&self) -> PartialName {
+        self.raw_name.clone()
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ResolvedDataType {
+    // TODO(benesch): `AnonymousArray` should not exist because that concept
+    // does not exist in PostgreSQL. Array types exist properly in the catalog
+    // and should be resolved into `Named` types during name resolution.
+    AnonymousArray(Box<ResolvedDataType>),
+    AnonymousList(Box<ResolvedDataType>),
+    AnonymousMap {
+        key_type: Box<ResolvedDataType>,
+        value_type: Box<ResolvedDataType>,
+    },
+    Named {
+        id: GlobalId,
+        name: PartialName,
+        modifiers: Vec<u64>,
+        print_id: bool,
+    },
+}
+
+impl AstDisplay for ResolvedDataType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedDataType::AnonymousArray(element_type) => {
+                element_type.fmt(f);
+                f.write_str("[]");
+            }
+            ResolvedDataType::AnonymousList(element_type) => {
+                element_type.fmt(f);
+                f.write_str(" list");
+            }
+            ResolvedDataType::AnonymousMap {
+                key_type,
+                value_type,
+            } => {
+                f.write_str("map[");
+                key_type.fmt(f);
+                f.write_str("=>");
+                value_type.fmt(f);
+                f.write_str("]");
+            }
+            ResolvedDataType::Named {
+                id,
+                name,
+                modifiers,
+                print_id,
+            } => {
+                if *print_id {
+                    f.write_str(format!("[{} AS ", id));
+                }
+                if let Some(database) = &name.database {
+                    f.write_node(&Ident::new(database));
+                    f.write_str(".");
+                }
+                if let Some(schema) = &name.schema {
+                    f.write_node(&Ident::new(schema));
+                    f.write_str(".");
+                }
+                f.write_node(&Ident::new(&name.item));
+                if *print_id {
+                    f.write_str("]");
+                }
+                if modifiers.len() > 0 {
+                    f.write_str("(");
+                    f.write_node(&ast::display::comma_separated(modifiers));
+                    f.write_str(")");
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for ResolvedDataType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.to_ast_string().as_str())
+    }
+}
+
+impl AstInfo for Aug {
+    type ObjectName = ResolvedObjectName;
+    type DataType = ResolvedDataType;
+    type Id = Id;
+}
+
+#[derive(Debug)]
+pub struct NameResolver<'a> {
+    catalog: &'a dyn SessionCatalog,
+    ctes: HashMap<String, LocalId>,
+    status: Result<(), PlanError>,
+    ids: HashSet<GlobalId>,
+}
+
+impl<'a> NameResolver<'a> {
+    pub fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
+        NameResolver {
+            catalog,
+            ctes: HashMap::new(),
+            status: Ok(()),
+            ids: HashSet::new(),
+        }
+    }
+
+    fn fold_data_type_internal(
+        &mut self,
+        data_type: <Raw as AstInfo>::DataType,
+    ) -> Result<<Aug as AstInfo>::DataType, PlanError> {
+        match data_type {
+            UnresolvedDataType::Array(elem_type) => {
+                let elem_type = self.fold_data_type_internal(*elem_type)?;
+                Ok(ResolvedDataType::AnonymousArray(Box::new(elem_type)))
+            }
+            UnresolvedDataType::List(elem_type) => {
+                let elem_type = self.fold_data_type_internal(*elem_type)?;
+                Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
+            }
+            UnresolvedDataType::Map {
+                key_type,
+                value_type,
+            } => {
+                let key_type = self.fold_data_type_internal(*key_type)?;
+                let value_type = self.fold_data_type_internal(*value_type)?;
+                Ok(ResolvedDataType::AnonymousMap {
+                    key_type: Box::new(key_type),
+                    value_type: Box::new(value_type),
+                })
+            }
+            UnresolvedDataType::Other { name, typ_mod } => {
+                let (name, item) = match name {
+                    RawName::Name(name) => {
+                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let item = self.catalog.resolve_item(&name)?;
+                        (item.name().clone().into(), item)
+                    }
+                    RawName::Id(id, name) => {
+                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let gid: GlobalId = id.parse()?;
+                        let item = self.catalog.get_item_by_id(&gid);
+                        (name, item)
+                    }
+                };
+                self.ids.insert(item.id());
+                Ok(ResolvedDataType::Named {
+                    id: item.id(),
+                    name,
+                    modifiers: typ_mod,
+                    print_id: true,
+                })
+            }
+        }
+    }
+}
+
+impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
+    fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {
+        // Retain the old values of various CTE names so that we can restore them after we're done
+        // planning this SELECT.
+        let mut old_cte_values = Vec::new();
+        // A single WITH block cannot use the same name multiple times.
+        let mut used_names = HashSet::new();
+        let mut ctes = Vec::new();
+        for cte in q.ctes {
+            let cte_name = normalize::ident(cte.alias.name.clone());
+
+            if used_names.contains(&cte_name) {
+                self.status = Err(PlanError::Unstructured(format!(
+                    "WITH query name \"{}\" specified more than once",
+                    cte_name
+                )));
+            }
+            used_names.insert(cte_name.clone());
+
+            let id = LocalId::new(self.ctes.len() as u64);
+            ctes.push(Cte {
+                alias: cte.alias,
+                id: Id::Local(id),
+                query: self.fold_query(cte.query),
+            });
+            let old_val = self.ctes.insert(cte_name.clone(), id);
+            old_cte_values.push((cte_name, old_val));
+        }
+        let result = Query {
+            ctes,
+            body: self.fold_set_expr(q.body),
+            limit: q.limit.map(|l| self.fold_limit(l)),
+            offset: q.offset.map(|l| self.fold_expr(l)),
+            order_by: q
+                .order_by
+                .into_iter()
+                .map(|c| self.fold_order_by_expr(c))
+                .collect(),
+        };
+
+        // Restore the old values of the CTEs.
+        for (name, value) in old_cte_values.iter() {
+            match value {
+                Some(value) => {
+                    self.ctes.insert(name.to_string(), value.clone());
+                }
+                None => {
+                    self.ctes.remove(name);
+                }
+            };
+        }
+
+        result
+    }
+
+    fn fold_id(&mut self, _id: <Raw as AstInfo>::Id) -> <Aug as AstInfo>::Id {
+        panic!("this should have been handled when walking the CTE");
+    }
+
+    fn fold_object_name(
+        &mut self,
+        object_name: <Raw as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
+        match object_name {
+            RawName::Name(raw_name) => {
+                // Check if unqualified name refers to a CTE.
+                if raw_name.0.len() == 1 {
+                    let norm_name = normalize::ident(raw_name.0[0].clone());
+                    if let Some(id) = self.ctes.get(&norm_name) {
+                        return ResolvedObjectName {
+                            id: Id::Local(*id),
+                            raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                            print_id: false,
+                        };
+                    }
+                }
+
+                let name = normalize::unresolved_object_name(raw_name).unwrap();
+                match self.catalog.resolve_item(&name) {
+                    Ok(item) => {
+                        self.ids.insert(item.id());
+                        let print_id = !matches!(
+                            item.item_type(),
+                            CatalogItemType::Func | CatalogItemType::Type
+                        );
+                        ResolvedObjectName {
+                            id: Id::Global(item.id()),
+                            raw_name: item.name().clone().into(),
+                            print_id,
+                        }
+                    }
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
+                        ResolvedObjectName {
+                            id: Id::Local(LocalId::new(0)),
+                            raw_name: name,
+                            print_id: false,
+                        }
+                    }
+                }
+            }
+            RawName::Id(id, raw_name) => {
+                let gid: GlobalId = match id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        self.status = Err(e.into());
+                        GlobalId::User(0)
+                    }
+                };
+                if self.status.is_ok() && self.catalog.try_get_item_by_id(&gid).is_none() {
+                    self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                }
+                self.ids.insert(gid.clone());
+                ResolvedObjectName {
+                    id: Id::Global(gid),
+                    raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                    print_id: true,
+                }
+            }
+        }
+    }
+
+    fn fold_data_type(
+        &mut self,
+        data_type: <Raw as AstInfo>::DataType,
+    ) -> <Aug as AstInfo>::DataType {
+        match self.fold_data_type_internal(data_type) {
+            Ok(data_type) => data_type,
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e);
+                }
+                ResolvedDataType::Named {
+                    id: GlobalId::User(0),
+                    name: PartialName {
+                        database: None,
+                        schema: None,
+                        item: "ignored".into(),
+                    },
+                    modifiers: vec![],
+                    print_id: false,
+                }
+            }
+        }
+    }
+}
+
+pub fn resolve_names_stmt(
+    catalog: &dyn SessionCatalog,
+    stmt: Statement<Raw>,
+) -> Result<Statement<Aug>, PlanError> {
+    let mut n = NameResolver::new(catalog);
+    let result = n.fold_statement(stmt);
+    n.status?;
+    Ok(result)
+}
+
+// Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
+// resolving names and (aspirationally) performing semantic analysis such as
+// type-checking.
+pub fn resolve_names(qcx: &mut QueryContext, query: Query<Raw>) -> Result<Query<Aug>, PlanError> {
+    let mut n = NameResolver::new(qcx.scx.catalog);
+    let result = n.fold_query(query);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
+}
+
+pub fn resolve_names_expr(qcx: &mut QueryContext, expr: Expr<Raw>) -> Result<Expr<Aug>, PlanError> {
+    let mut n = NameResolver::new(qcx.scx.catalog);
+    let result = n.fold_expr(expr);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
+}
+
+pub fn resolve_names_data_type(
+    scx: &StatementContext,
+    data_type: UnresolvedDataType,
+) -> Result<(ResolvedDataType, HashSet<GlobalId>), PlanError> {
+    let mut n = NameResolver::new(scx.catalog);
+    let result = n.fold_data_type(data_type);
+    n.status?;
+    Ok((result, n.ids))
+}
+
+/// A general implementation for name resolution on AST elements.
+///
+/// This implementation is appropriate Whenever:
+/// - You don't need to export the name resolution outside the `sql` crate and
+///   the extra typing isn't too onerous.
+/// - Discovered dependencies should extend `qcx.ids`.
+pub fn resolve_names_extend_qcx_ids<F, T>(qcx: &mut QueryContext, f: F) -> Result<T, PlanError>
+where
+    F: FnOnce(&mut NameResolver) -> T,
+{
+    let mut n = NameResolver::new(qcx.scx.catalog);
+    let result = f(&mut n);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
+}
+
+// Used when displaying a view's source for human creation. If the name
+// specified is the same as the name in the catalog, we don't use the ID format.
+#[derive(Debug)]
+pub struct NameSimplifier<'a> {
+    pub catalog: &'a dyn SessionCatalog,
+}
+
+impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
+    fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
+        if let Id::Global(id) = name.id {
+            let item = self.catalog.get_item_by_id(&id);
+            if PartialName::from(item.name().clone()) == name.raw_name() {
+                name.print_id = false;
+            }
+        }
+    }
+
+    fn visit_data_type_mut(&mut self, name: &mut ResolvedDataType) {
+        if let ResolvedDataType::Named {
+            id, name, print_id, ..
+        } = name
+        {
+            let item = self.catalog.get_item_by_id(id);
+            if PartialName::from(item.name().clone()) == *name {
+                *print_id = false;
+            }
         }
     }
 }

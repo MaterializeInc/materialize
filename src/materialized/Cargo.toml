@@ -5,10 +5,10 @@ version = "0.20.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2021"
+rust-version = "1.58.0"
 publish = false
 default-run = "materialized"
 build = "build/main.rs"
-rust-version = "1.58.0"
 
 [package.metadata.deb]
 assets = [
@@ -33,17 +33,12 @@ askama = { version = "0.11.0", default-features = false, features = ["config", "
 async-trait = "0.1.52"
 atty = "0.2.14"
 backtrace = "0.3.64"
-mz-build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.0.14", features = ["wrap_help", "env", "derive"] }
 compile-time-run = "0.2.12"
 console-subscriber = { version = "0.1.1", optional = true }
-mz-coord = { path = "../coord" }
 crossbeam-channel = "0.5.2"
-mz-dataflow = { path = "../dataflow" }
-mz-dataflowd = { path = "../dataflowd" }
-mz-dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
@@ -55,27 +50,32 @@ itertools = "0.10.3"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 libc = "0.2.117"
+mz-build-info = { path = "../build-info" }
+mz-coord = { path = "../coord" }
+mz-dataflow = { path = "../dataflow" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-dataflowd = { path = "../dataflowd" }
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
+mz-ore = { path = "../ore", features = ["task"] }
+mz-pgwire = { path = "../pgwire" }
+mz-pid-file = { path = "../pid-file" }
 mz-process-collector = { path = "../mz-process-collector" }
+mz-prof = { path = "../prof" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }
 nix = "0.23.1"
 num_cpus = "1.13.1"
 openssl = { version = "0.10.38", features = ["vendored"] }
 openssl-sys = { version = "0.9.72", features = ["vendored"] }
-mz-ore = { path = "../ore", features = ["task"] }
 os_info = "3.2.0"
-mz-pid-file = { path = "../pid-file" }
-mz-pgwire = { path = "../pgwire" }
-mz-prof = { path = "../prof" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-mz-repr = { path = "../repr" }
 reqwest = { version = "0.11.9", features = ["json"] }
 rlimit = "0.6.2"
 semver = "1.0.5"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 shell-words = "1.1.0"
-mz-sql = { path = "../sql" }
 sysctl = "0.4.3"
 sysinfo = "0.23.0"
 tempfile = "3.2.0"
@@ -100,20 +100,20 @@ tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unpr
 [dev-dependencies]
 assert_cmd = "2.0.4"
 bytes = "1.1.0"
-mz-coordtest = { path = "../coordtest" }
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.3"
+mz-coordtest = { path = "../coordtest" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
+mz-repr = { path = "../repr" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 predicates = "2.1.1"
 rand = "0.8.4"
-mz-repr = { path = "../repr" }
 reqwest = { version = "0.11.9", features = ["blocking"] }
 serde_json = "1.0.78"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }

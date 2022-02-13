@@ -49,8 +49,8 @@ test_cases = [
     ),
     TestCase(
         name="proxy-failure",
-        env=["ALL_PROXY=http://squid:3128"],
-        files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
+        env=["ALL_PROXY=http://localhost:1234"],
+        files=["proxy-failure.td"],
     ),
     TestCase(
         name="no-proxy",
@@ -92,8 +92,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     for test_case in test_cases:
-        print(f"Running test case {test_case.name!r}")
-        with c.override(Materialized(environment_extra=test_case.env)):
-            c.up("materialized")
-            c.wait_for_materialized("materialized")
-            c.run("testdrive-svc", aws_arg, *test_case.files)
+        with c.test_case(test_case.name):
+            with c.override(Materialized(environment_extra=test_case.env)):
+                c.up("materialized")
+                c.wait_for_materialized("materialized")
+                c.run("testdrive-svc", aws_arg, *test_case.files)

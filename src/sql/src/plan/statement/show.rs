@@ -15,7 +15,6 @@
 
 use anyhow::bail;
 
-use mz_expr::Id;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -27,10 +26,9 @@ use crate::ast::{
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, UnresolvedObjectName, Value,
 };
-use crate::catalog::{CatalogItemType, SessionCatalog};
-use crate::names::PartialName;
+use crate::catalog::CatalogItemType;
+use crate::names::{resolve_names_stmt, NameSimplifier};
 use crate::parse;
-use crate::plan::query::{resolve_names_stmt, Aug, ResolvedDataType, ResolvedObjectName};
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{Params, Plan, SendRowsPlan};
 
@@ -43,36 +41,6 @@ pub fn describe_show_create_view(
             .with_column("View", ScalarType::String.nullable(false))
             .with_column("Create View", ScalarType::String.nullable(false)),
     )))
-}
-
-// Used when displaying a view's source for human creation. If the name
-// specified is the same as the name in the catalog, we don't use the ID format.
-#[derive(Debug)]
-struct NameSimplifier<'a> {
-    catalog: &'a dyn SessionCatalog,
-}
-
-impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
-    fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
-        if let Id::Global(id) = name.id {
-            let item = self.catalog.get_item_by_id(&id);
-            if PartialName::from(item.name().clone()) == name.raw_name() {
-                name.print_id = false;
-            }
-        }
-    }
-
-    fn visit_data_type_mut(&mut self, name: &mut ResolvedDataType) {
-        if let ResolvedDataType::Named {
-            id, name, print_id, ..
-        } = name
-        {
-            let item = self.catalog.get_item_by_id(id);
-            if PartialName::from(item.name().clone()) == *name {
-                *print_id = false;
-            }
-        }
-    }
 }
 
 pub fn plan_show_create_view(

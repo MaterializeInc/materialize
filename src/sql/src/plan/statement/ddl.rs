@@ -65,10 +65,12 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
-use crate::names::{DatabaseSpecifier, FullName, SchemaName};
+use crate::names::{
+    resolve_names_data_type, DatabaseSpecifier, FullName, ResolvedDataType, SchemaName,
+};
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::query::{resolve_names_data_type, QueryLifetime, ResolvedDataType};
+use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,

@@ -27,6 +27,7 @@ def main() -> None:
     # so they are accessible to other build agents.
     print("--- Acquiring mzbuild images")
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
+    annotate_buildkite_with_tags(deps)
     deps.ensure()
 
     print("--- Staging Debian package")
@@ -81,6 +82,18 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
         Filename=str(deb_path),
         Bucket=APT_BUCKET,
         Key=apt_materialized_path(repo.rd.arch, version),
+    )
+
+
+def annotate_buildkite_with_tags(deps: mzbuild.DependencySet) -> None:
+    tags = "\n".join([f"* `{dep.spec()}`" for dep in deps])
+    markdown = f"""<details><summary>Docker tags produced in this build</summary>
+
+{tags}
+</details>"""
+    spawn.runv(
+        ["buildkite-agent", "annotate", "--style", "info"],
+        stdin=markdown.encode(),
     )
 
 
