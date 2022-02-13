@@ -14,6 +14,9 @@
 
 dag: true
 
+env:
+  CI_BUILDER_SCCACHE: 1
+
 steps:
   - id: build-x86_64
     label: Build x86_64
