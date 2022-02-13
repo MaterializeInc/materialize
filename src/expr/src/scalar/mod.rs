@@ -343,18 +343,14 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(&relation_type).scalar_type,
                             );
-                        } else if let BinaryFunc::IsLikePatternMatch { case_insensitive } = func {
+                        } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(
-                                    &pattern,
-                                    *case_insensitive,
-                                    like_pattern::EscapeBehavior::default(),
-                                ) {
-                                    Ok(matcher) => expr1
-                                        .take()
-                                        .call_unary(UnaryFunc::IsLikePatternMatch(matcher)),
+                                *e = match like_pattern::compile(&pattern, *case_insensitive) {
+                                    Ok(matcher) => {
+                                        expr1.take().call_unary(UnaryFunc::IsLikeMatch(matcher))
+                                    }
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
                                         e.typ(&relation_type).scalar_type,
