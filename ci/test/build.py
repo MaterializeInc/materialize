@@ -15,6 +15,7 @@ from pathlib import Path
 import boto3
 
 from materialize import cargo, ci_util, deb, mzbuild, spawn
+from materialize.xcompile import Arch
 
 from ..deploy.deploy_util import APT_BUCKET, apt_materialized_path
 
@@ -27,8 +28,8 @@ def main() -> None:
     # so they are accessible to other build agents.
     print("--- Acquiring mzbuild images")
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
-    annotate_buildkite_with_tags(deps)
     deps.ensure()
+    annotate_buildkite_with_tags(repo.rd.arch, deps)
 
     print("--- Staging Debian package")
     if os.environ["BUILDKITE_BRANCH"] == "main":
@@ -85,14 +86,14 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     )
 
 
-def annotate_buildkite_with_tags(deps: mzbuild.DependencySet) -> None:
+def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> None:
     tags = "\n".join([f"* `{dep.spec()}`" for dep in deps])
-    markdown = f"""<details><summary>Docker tags produced in this build</summary>
+    markdown = f"""<details><summary>{arch} Docker tags produced in this build</summary>
 
 {tags}
 </details>"""
     spawn.runv(
-        ["buildkite-agent", "annotate", "--style", "info"],
+        ["buildkite-agent", "annotate", "--style=info", f"--context=build-{arch}"],
         stdin=markdown.encode(),
     )
 
