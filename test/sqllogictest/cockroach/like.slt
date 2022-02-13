@@ -859,10 +859,50 @@ SELECT 'TEST' NOT LIKE 'TE_'
 ----
 true
 
+# Test custom escape characters
+
+query B
+SELECT 'banana!' LIKE 'ban%na!' ESCAPE 'n'
+----
+false
+
+query B
+SELECT 'ba%a!' LIKE 'ban%na!' ESCAPE 'n'
+----
+true
+
+query B
+SELECT 'banana!' LIKE 'ban\ana!' ESCAPE ''
+----
+false
+
+query B
+SELECT 'ban\ana!' LIKE 'ban\ana!' ESCAPE ''
+----
+true
+
+query B
+SELECT 'banana!' LIKE 'ban%%%na!' ESCAPE '%'
+----
+false
+
+query B
+SELECT 'ban%na!' LIKE 'ban%%%na!' ESCAPE '%'
+----
+true
+
+query B
+SELECT 'banana!' LIKE 'ba\n%na!' ESCAPE '\'
+----
+true
+
 # Test bad escaping.
 
 query error unterminated escape sequence in LIKE
 SELECT 'a' LIKE '\'
+
+query error invalid escape string
+SELECT 'a' LIKE 'a' ESCAPE 'foo'
 
 # Test massive LIKE patterns:
 
