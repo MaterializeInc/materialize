@@ -6,7 +6,7 @@
 
 click==8.0.3
 colored==1.4.3
-humanize==3.14.0
+humanize==4.0.0
 pg8000==1.24.0
 prettytable==3.0.0
 PyMySQL==1.0.2
