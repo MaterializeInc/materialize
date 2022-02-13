@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use mz_ore::fmt::FormatBuffer;
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::char as adt_char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self as adt_numeric};
 use mz_repr::strconv::{self, Nestable};
@@ -78,12 +79,7 @@ pub enum Value {
     /// A variable-length string.
     Text(String),
     /// A fixed-length string.
-    Char {
-        /// The inner string; note that this is potentially trimmed
-        inner: String,
-        /// The fixed length of the string
-        length: Option<usize>,
-    },
+    Char(String),
     /// A variable-length string with an optional limit.
     VarChar(String),
     /// A universally unique identifier.
@@ -123,10 +119,9 @@ impl Value {
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (Datum::String(s), ScalarType::VarChar { .. }) => Some(Value::VarChar(s.to_owned())),
-            (Datum::String(s), ScalarType::Char { length }) => Some(Value::Char {
-                inner: s.to_owned(),
-                length: *length,
-            }),
+            (Datum::String(s), ScalarType::Char { length }) => {
+                Some(Value::Char(adt_char::format_str_pad(s, *length)))
+            }
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
@@ -223,7 +218,14 @@ impl Value {
             Value::TimestampTz(ts) => Datum::TimestampTz(ts),
             Value::Interval(iv) => Datum::Interval(iv.0),
             Value::Text(s) => Datum::String(buf.push_string(s)),
-            Value::Char { inner, .. } => Datum::String(buf.push_string(inner)),
+            Value::Char(s) => {
+                let length = match typ {
+                    Type::Char { length } => length,
+                    _ => panic!("Value::Char should have type Type::Char. Found {:?}", typ),
+                };
+                let s = adt_char::format_str_trim(&s, *length, false).unwrap();
+                Datum::String(buf.push_string(s))
+            }
             Value::VarChar(s) => Datum::String(buf.push_string(s)),
             Value::Uuid(u) => Datum::Uuid(u),
             Value::Numeric(n) => Datum::Numeric(n.0),
@@ -276,10 +278,7 @@ impl Value {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
             }),
-            Value::Text(s) | Value::VarChar(s) => strconv::format_string(buf, s),
-            Value::Char { inner, length } => {
-                strconv::format_string(buf, &mz_repr::adt::char::format_str_pad(&inner, *length))
-            }
+            Value::Text(s) | Value::VarChar(s) | Value::Char(s) => strconv::format_string(buf, s),
             Value::Time(t) => strconv::format_time(buf, *t),
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
@@ -374,9 +373,7 @@ impl Value {
                 Ok(postgres_types::IsNull::No)
             }
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
-            Value::Char { inner, length } => {
-                mz_repr::adt::char::format_str_pad(&inner, *length).to_sql(&PgType::BPCHAR, buf)
-            }
+            Value::Char(s) => s.to_sql(&PgType::BPCHAR, buf),
             Value::VarChar(s) => s.to_sql(&PgType::VARCHAR, buf),
             Value::Time(t) => t.to_sql(&PgType::TIME, buf),
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
@@ -438,15 +435,7 @@ impl Value {
                 return Err("input of anonymous composite types is not implemented".into())
             }
             Type::Text => Value::Text(raw.to_owned()),
-            Type::Char { .. } => {
-                let inner = raw.to_owned();
-                let length = Some(inner.chars().count());
-
-                Value::Char {
-                    inner: raw.to_owned(),
-                    length,
-                }
-            }
+            Type::Char { .. } => Value::Char(raw.to_owned()),
             Type::VarChar { .. } => Value::VarChar(raw.to_owned()),
             Type::Time => Value::Time(strconv::parse_time(raw)?),
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
@@ -477,10 +466,7 @@ impl Value {
             Type::Numeric { .. } => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
-            Type::Char { .. } => String::from_sql(ty.inner(), raw).map(|inner| {
-                let length = Some(inner.len());
-                Value::Char { inner, length }
-            }),
+            Type::Char { .. } => String::from_sql(ty.inner(), raw).map(Value::Char),
             Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
