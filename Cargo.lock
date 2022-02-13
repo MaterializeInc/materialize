@@ -3378,7 +3378,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-mbta-to-mtrlz"
+name = "mz-mbta"
 version = "0.0.0"
 dependencies = [
  "anyhow",
