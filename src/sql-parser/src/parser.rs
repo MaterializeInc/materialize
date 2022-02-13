@@ -1227,8 +1227,13 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses `LIKE <pattern> [ ESCAPE <char> ]`, assuming the `LIKE` keyword was already consumed
-    fn parse_like(&mut self, expr: Expr<Raw>, case_insensitive: bool, negated: bool) -> Result<Expr<Raw>, ParserError> {
-        let pattern = self.parse_subexpr(Precedence::Like)?;        
+    fn parse_like(
+        &mut self,
+        expr: Expr<Raw>,
+        case_insensitive: bool,
+        negated: bool,
+    ) -> Result<Expr<Raw>, ParserError> {
+        let pattern = self.parse_subexpr(Precedence::Like)?;
         let escape = if self.parse_keyword(ESCAPE) {
             Some(Box::new(self.parse_subexpr(Precedence::Like)?))
         } else {
