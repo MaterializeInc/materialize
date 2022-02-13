@@ -868,3 +868,127 @@ SELECT 'a' LIKE '\'
 
 query error LIKE pattern exceeds maximum length
 SELECT 'x' LIKE repeat('x', 367416)
+
+# Test nullability
+
+query B
+SELECT ('foo' LIKE 'f%') IS NULL;
+----
+false
+
+query B
+SELECT ('foo' LIKE 'f%' ESCAPE '~') IS NULL;
+----
+false
+
+query B
+SELECT (NULL LIKE 'f%') IS NULL;
+----
+true
+
+query B
+SELECT (NULL LIKE 'f%' ESCAPE '~') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' LIKE NULL) IS NULL;
+----
+true
+
+query B
+SELECT ('foo' LIKE NULL ESCAPE '~') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' LIKE 'f%' ESCAPE NULL) IS NULL;
+----
+true
+
+# Verify that the PostgreSQL operators work
+
+query B
+SELECT 'foo' ~~ 'f%';
+----
+true
+
+query B
+SELECT 'foo' !~~ 'f%';
+----
+false
+
+query B
+SELECT 'foo' ~~ 'F%';
+----
+false
+
+query B
+SELECT 'foo' !~~ 'f%';
+----
+false
+
+query B
+SELECT 'foo' !~~ 'g%';
+----
+true
+
+query B
+SELECT 'foo' ~~* 'F%';
+----
+true
+
+query B
+SELECT 'foo' ~~* 'G%';
+----
+false
+
+query B
+SELECT 'foo' !~~* 'G%';
+----
+true
+
+query B
+SELECT 'foo' !~~* 'f%';
+----
+false
+
+query B
+SELECT (NULL ~~ 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' ~~ NULL) IS NULL;
+----
+true
+
+query B
+SELECT (NULL ~~* 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' ~~* NULL) IS NULL;
+----
+true
+
+query B
+SELECT (NULL !~~ 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' !~~ NULL) IS NULL;
+----
+true
+
+query B
+SELECT (NULL !~~* 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' !~~* NULL) IS NULL;
+----
+true
