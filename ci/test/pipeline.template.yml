@@ -332,7 +332,9 @@ steps:
   - wait: ~
     continue_on_failure: true
 
-  - label: Analyze tests
+  - id: analyze
+    label: Analyze tests
+    inputs: ["*"]
     plugins:
       - junit-annotate#v2.0.2:
           artifacts: "*junit_*.xml"
