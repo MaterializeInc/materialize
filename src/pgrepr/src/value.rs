@@ -14,7 +14,6 @@ use std::str;
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use mz_repr::ColumnType;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
@@ -23,7 +22,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self as adt_numeric};
 use mz_repr::strconv::{self, Nestable};
-use mz_repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{Format, Interval, Jsonb, Numeric, Type};
 
@@ -167,98 +166,67 @@ impl Value {
         }
     }
 
-    /// Converts a Materialize datum and type from this value.
-    ///
-    /// To construct a null datum, see the [`null_datum`] function.
-    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, ScalarType) {
+    /// Converts a Materialize datum from this value.
+    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> Datum<'a> {
         match self {
             Value::Array { .. } => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
                 unreachable!("into_datum cannot be called on Value::Array");
             }
-            Value::Bool(true) => (Datum::True, ScalarType::Bool),
-            Value::Bool(false) => (Datum::False, ScalarType::Bool),
-            Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
-            Value::Date(d) => (Datum::Date(d), ScalarType::Date),
-            Value::Float4(f) => (Datum::Float32(f.into()), ScalarType::Float32),
-            Value::Float8(f) => (Datum::Float64(f.into()), ScalarType::Float64),
-            Value::Int2(i) => (Datum::Int16(i), ScalarType::Int16),
-            Value::Int4(i) => match typ {
-                Type::Oid => (Datum::Int32(i), ScalarType::Int32),
-                Type::Int4 => (Datum::Int32(i), ScalarType::Int32),
-                _ => unreachable!(),
-            },
-            Value::Int8(i) => (Datum::Int64(i), ScalarType::Int64),
-            Value::Jsonb(js) => (buf.push_unary_row(js.0.into_row()), ScalarType::Jsonb),
+            Value::Bool(true) => Datum::True,
+            Value::Bool(false) => Datum::False,
+            Value::Bytea(b) => Datum::Bytes(buf.push_bytes(b)),
+            Value::Date(d) => Datum::Date(d),
+            Value::Float4(f) => Datum::Float32(f.into()),
+            Value::Float8(f) => Datum::Float64(f.into()),
+            Value::Int2(i) => Datum::Int16(i),
+            Value::Int4(i) => Datum::Int32(i),
+            Value::Int8(i) => Datum::Int64(i),
+            Value::Jsonb(js) => buf.push_unary_row(js.0.into_row()),
             Value::List(elems) => {
                 let elem_pg_type = match typ {
                     Type::List(t) => &*t,
                     _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
                 };
-                let (_, elem_type) = null_datum(&elem_pg_type);
                 let mut row = Row::default();
                 row.push_list(elems.into_iter().map(|elem| match elem {
-                    Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
+                    Some(elem) => elem.into_datum(buf, &elem_pg_type),
                     None => Datum::Null,
                 }));
-                (
-                    buf.push_unary_row(row),
-                    ScalarType::List {
-                        element_type: Box::new(elem_type),
-                        custom_oid: None,
-                    },
-                )
+                buf.push_unary_row(row)
             }
             Value::Map(map) => {
                 let elem_pg_type = match typ {
                     Type::Map { value_type } => &*value_type,
                     _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
                 };
-                let (_, elem_type) = null_datum(&elem_pg_type);
                 let mut row = Row::default();
                 row.push_dict_with(|row| {
                     for (k, v) in map {
                         row.push(Datum::String(&k));
                         row.push(match v {
-                            Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
+                            Some(elem) => elem.into_datum(buf, &elem_pg_type),
                             None => Datum::Null,
                         });
                     }
                 });
-                (
-                    buf.push_unary_row(row),
-                    ScalarType::Map {
-                        value_type: Box::new(elem_type),
-                        custom_oid: None,
-                    },
-                )
+                buf.push_unary_row(row)
             }
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
                 unreachable!("into_datum cannot be called on Value::Record");
             }
-            Value::Time(t) => (Datum::Time(t), ScalarType::Time),
-            Value::Timestamp(ts) => (Datum::Timestamp(ts), ScalarType::Timestamp),
-            Value::TimestampTz(ts) => (Datum::TimestampTz(ts), ScalarType::TimestampTz),
-            Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
-            Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
-            Value::Char { inner, length } => (
-                Datum::String(buf.push_string(inner)),
-                ScalarType::Char { length },
-            ),
-            Value::VarChar(s) => (
-                Datum::String(buf.push_string(s)),
-                ScalarType::VarChar { length: None },
-            ),
-            Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
-            Value::Numeric(n) => (
-                Datum::Numeric(n.0),
-                ScalarType::Numeric {
-                    scale: Some(adt_numeric::get_scale(&n.0 .0)),
-                },
-            ),
+            Value::Time(t) => Datum::Time(t),
+            Value::Timestamp(ts) => Datum::Timestamp(ts),
+            Value::TimestampTz(ts) => Datum::TimestampTz(ts),
+            Value::Interval(iv) => Datum::Interval(iv.0),
+            Value::Text(s) => Datum::String(buf.push_string(s)),
+            Value::Char { inner, .. } => Datum::String(buf.push_string(inner)),
+            Value::VarChar(s) => Datum::String(buf.push_string(s)),
+            Value::Uuid(u) => Datum::Uuid(u),
+            Value::Numeric(n) => Datum::Numeric(n.0),
         }
     }
 
@@ -543,74 +511,6 @@ fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
             format!("{} does not fit into an i32", what),
         )
     })
-}
-
-/// Constructs a null datum of the specified type.
-pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
-    let ty = match ty {
-        Type::Array(t) => {
-            let (_, elem_type) = null_datum(t);
-            ScalarType::Array(Box::new(elem_type))
-        }
-        Type::Bool => ScalarType::Bool,
-        Type::Bytea => ScalarType::Bytes,
-        Type::Date => ScalarType::Date,
-        Type::Float4 => ScalarType::Float32,
-        Type::Float8 => ScalarType::Float64,
-        Type::Int2 => ScalarType::Int16,
-        Type::Int4 => ScalarType::Int32,
-        Type::Int8 => ScalarType::Int64,
-        Type::Interval => ScalarType::Interval,
-        Type::Jsonb => ScalarType::Jsonb,
-        Type::List(t) => {
-            let (_, elem_type) = null_datum(t);
-            ScalarType::List {
-                element_type: Box::new(elem_type),
-                custom_oid: None,
-            }
-        }
-        Type::Numeric { .. } => ScalarType::Numeric { scale: None },
-        Type::Oid => ScalarType::Oid,
-        Type::Text => ScalarType::String,
-        Type::Char { .. } => ScalarType::Char { length: None },
-        Type::VarChar { .. } => ScalarType::VarChar { length: None },
-        Type::Time => ScalarType::Time,
-        Type::Timestamp => ScalarType::Timestamp,
-        Type::TimestampTz => ScalarType::TimestampTz,
-        Type::Uuid => ScalarType::Uuid,
-        Type::Record(fields) => {
-            let fields = fields
-                .iter()
-                .enumerate()
-                .map(|(i, ty)| {
-                    let name = ColumnName::from(format!("f{}", i + 1));
-                    (
-                        name,
-                        ColumnType {
-                            nullable: true,
-                            scalar_type: null_datum(ty).1,
-                        },
-                    )
-                })
-                .collect();
-            ScalarType::Record {
-                fields,
-                custom_oid: None,
-                custom_name: None,
-            }
-        }
-        Type::Map { value_type } => {
-            let (_, value_type) = null_datum(value_type);
-            ScalarType::Map {
-                value_type: Box::new(value_type),
-                custom_oid: None,
-            }
-        }
-        Type::RegClass => ScalarType::RegClass,
-        Type::RegProc => ScalarType::RegProc,
-        Type::RegType => ScalarType::RegType,
-    };
-    (Datum::Null, ty)
 }
 
 /// Converts a Materialize row into a vector of PostgreSQL values.

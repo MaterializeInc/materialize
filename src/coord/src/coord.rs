@@ -128,7 +128,7 @@ use mz_ore::soft_assert_eq;
 use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
 use mz_repr::adt::numeric;
-use mz_repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
@@ -1605,7 +1605,7 @@ impl Coordinator {
         session: &mut Session,
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<mz_pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
         let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
@@ -1619,7 +1619,7 @@ impl Coordinator {
         session: &mut Session,
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<mz_pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
         let desc = self.describe(session, stmt.clone(), param_types)?;
         session.set_prepared_statement(
@@ -1633,7 +1633,7 @@ impl Coordinator {
         &self,
         session: &Session,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<mz_pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<StatementDesc, CoordError> {
         if let Some(stmt) = stmt {
             describe(&self.catalog, stmt, &param_types, session)
@@ -4779,7 +4779,7 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 pub fn describe(
     catalog: &Catalog,
     stmt: Statement<Raw>,
-    param_types: &[Option<mz_pgrepr::Type>],
+    param_types: &[Option<ScalarType>],
     session: &Session,
 ) -> Result<StatementDesc, CoordError> {
     match stmt {

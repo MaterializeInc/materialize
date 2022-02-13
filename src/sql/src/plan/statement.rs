@@ -43,7 +43,7 @@ pub struct StatementDesc {
     /// produces rows.
     pub relation_desc: Option<RelationDesc>,
     /// The determined types of the parameters in the statement, if any.
-    pub param_types: Vec<mz_pgrepr::Type>,
+    pub param_types: Vec<ScalarType>,
     /// Whether the statement is a `COPY` statement.
     pub is_copy: bool,
 }
@@ -67,11 +67,6 @@ impl StatementDesc {
     }
 
     fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
-        self.param_types = param_types.iter().map(mz_pgrepr::Type::from).collect();
-        self
-    }
-
-    fn with_pgrepr_params(mut self, param_types: Vec<mz_pgrepr::Type>) -> Self {
         self.param_types = param_types;
         self
     }
@@ -89,12 +84,12 @@ pub fn describe(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
-    param_types_in: &[Option<mz_pgrepr::Type>],
+    param_types_in: &[Option<ScalarType>],
 ) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
-            param_types.insert(i + 1, ty.to_scalar_type_lossy());
+            param_types.insert(i + 1, ty.clone());
         }
     }
 
