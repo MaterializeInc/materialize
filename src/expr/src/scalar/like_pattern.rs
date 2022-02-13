@@ -447,19 +447,6 @@ mod test {
                 case_insensitive: false,
                 inputs: vec![input("banana!", true)],
             },
-            // Pattern {
-            //     needle: normalize_pattern("ban%na!", EscapeBehavior::Char('n')).unwrap(),
-            //     case_insensitive: false,
-            //     inputs: vec![input("banana!", false), input("ba%a!", true)],
-            // },
-            // Pattern {
-            //     needle: normalize_pattern("ban%%%na!", EscapeBehavior::Char('%')).unwrap(),
-            //     case_insensitive: false,
-            //     inputs: vec![
-            //         input("banana!", false),
-            //         input("ban%na!", true),
-            //     ],
-            // },
             Pattern {
                 needle: "foo",
                 case_insensitive: true,
