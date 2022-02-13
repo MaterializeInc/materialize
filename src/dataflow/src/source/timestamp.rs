@@ -71,17 +71,21 @@ impl TimestampProposer {
         }
     }
 
-    /// Attempt to propose that `(partition, offset)` be bound to `time`, which means
-    /// that all offsets < `offset` get bound to `time` for `partition`.
+    /// Propose that `(partition, offset)` be bound to whatever timestamp we are
+    /// currently assigning data to.
     ///
-    /// This proposal will be ignored if the `time` does not match the current `time`
-    /// this proposer is operating at, and also if another reader has already proposed
-    /// a binding for an offset greater than `offset`. The only exception here is if
-    /// `time` is 0, which is accepted to bootstrap the timestamp proposal.
+    /// This proposal is ignored if there is already a proposed binding for this
+    /// partition to an offset > 'offset'.
     fn propose_binding(&mut self, partition: PartitionId, offset: MzOffset) -> Timestamp {
-        let next_offset = self.bindings.entry(partition).or_insert(offset + 1);
-        if offset + 1 > *next_offset {
-            *next_offset = offset + 1;
+        // Propose one past the current offset, as bindings store one past the
+        // maximum offset bound to that time..
+        let next_offset = offset + 1;
+
+        // Only use the proposal if it further ahead than any existing proposals
+        // for that partition.
+        let current_proposal = self.bindings.entry(partition).or_insert(next_offset);
+        if next_offset > *current_proposal {
+            *current_proposal = next_offset;
         }
         self.timestamp
     }
