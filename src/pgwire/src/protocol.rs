@@ -465,7 +465,7 @@ where
         let mut param_types = vec![];
         for oid in param_oids {
             match mz_pgrepr::Type::from_oid(oid) {
-                Some(ty) => param_types.push(Some(ty)),
+                Some(ty) => param_types.push(Some(ty.to_scalar_type_lossy())),
                 None if oid == 0 => param_types.push(None),
                 None => {
                     return self
@@ -586,12 +586,13 @@ where
             return self.aborted_txn_error().await;
         }
         let buf = RowArena::new();
-        let mut params: Vec<(Datum, mz_repr::ScalarType)> = Vec::new();
-        for (raw_param, typ, format) in izip!(raw_params, param_types, param_formats) {
-            match raw_param {
-                None => params.push(mz_pgrepr::null_datum(typ)),
-                Some(bytes) => match mz_pgrepr::Value::decode(format, typ, &bytes) {
-                    Ok(param) => params.push(param.into_datum(&buf, typ)),
+        let mut params = vec![];
+        for (raw_param, mz_typ, format) in izip!(raw_params, param_types, param_formats) {
+            let pg_typ = mz_pgrepr::Type::from(mz_typ);
+            let datum = match raw_param {
+                None => Datum::Null,
+                Some(bytes) => match mz_pgrepr::Value::decode(format, &pg_typ, &bytes) {
+                    Ok(param) => param.into_datum(&buf, &pg_typ),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
                         return self
@@ -599,7 +600,8 @@ where
                             .await;
                     }
                 },
-            }
+            };
+            params.push((datum, mz_typ.clone()))
         }
 
         let result_formats = match pad_formats(
@@ -774,7 +776,11 @@ where
         };
         self.conn
             .send(BackendMessage::ParameterDescription(
-                stmt.desc().param_types.clone(),
+                stmt.desc()
+                    .param_types
+                    .iter()
+                    .map(mz_pgrepr::Type::from)
+                    .collect(),
             ))
             .await?;
         // Claim that all results will be output in text format, even

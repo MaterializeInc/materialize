@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 use mz_dataflow_types::PeekResponse;
 use mz_expr::GlobalId;
 use mz_ore::str::StrExt;
-use mz_repr::Row;
+use mz_repr::{Row, ScalarType};
 use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 use tokio::sync::watch;
@@ -38,7 +38,7 @@ pub enum Command {
     Declare {
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<mz_pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
     },
@@ -46,7 +46,7 @@ pub enum Command {
     Describe {
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<mz_pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
     },

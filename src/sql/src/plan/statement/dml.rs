@@ -181,7 +181,7 @@ pub fn describe_explain(
         },
         ScalarType::String.nullable(false),
     )))
-    .with_pgrepr_params(match explainee {
+    .with_params(match explainee {
         Explainee::Query(q) => {
             describe_select(
                 scx,

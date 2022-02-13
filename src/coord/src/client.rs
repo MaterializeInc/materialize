@@ -18,7 +18,7 @@ use mz_dataflow_types::PeekResponse;
 use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::command::{
@@ -273,7 +273,7 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<mz_pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Describe {
             name,
@@ -290,7 +290,7 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<mz_pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Declare {
             name,

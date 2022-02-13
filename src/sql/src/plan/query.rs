@@ -830,11 +830,11 @@ pub fn plan_params<'a>(
         };
         let ex = plan_expr(ecx, &expr)?.type_as_any(ecx)?;
         let st = ecx.scalar_type(&ex);
-        if mz_pgrepr::Type::from(&st) != *ty {
+        if st != *ty {
             sql_bail!(
                 "mismatched parameter type: expected {}, got {}",
-                ty.name(),
-                mz_pgrepr::Type::from(&st).name()
+                ecx.humanize_scalar_type(&ty),
+                ecx.humanize_scalar_type(&st),
             );
         }
         let ex = ex.lower_uncorrelated()?;
