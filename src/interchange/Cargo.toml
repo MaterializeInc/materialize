@@ -3,8 +3,8 @@ name = "mz-interchange"
 description = "Translations for various data serialization formats."
 version = "0.0.0"
 edition = "2021"
-publish = false
 rust-version = "1.58.0"
+publish = false
 
 [[bench]]
 name = "mz-interchange-bench"
@@ -13,10 +13,8 @@ harness = false
 
 [dependencies]
 anyhow = "1.0.52"
-mz-avro-derive = { path = "../avro-derive" }
 base64 = "0.13.0"
 byteorder = "1.4.3"
-mz-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -24,22 +22,24 @@ futures = "0.3.21"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz-avro-derive = { path = "../avro-derive" }
+mz-ccsr = { path = "../ccsr" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
 num-traits = "0.2.14"
 ordered-float = { version = "2.10.0", features = ["serde"] }
-mz-ore = { path = "../ore" }
 prost = "0.9.0"
 prost-reflect = "0.5.2"
 regex = "1.5.4"
-mz-repr = { path = "../repr" }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 sha2 = "0.10.1"
 smallvec = "1.8.0"
 tempfile = "3.2.0"
-tokio = { version = "1.16.1", features = ["fs"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = { version = "1.16.1", features = ["fs"] }
+tracing = "0.1.29"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde"] }
 

@@ -4,17 +4,17 @@ description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.0.0"
 exclude = ["tests/testdata"]
 edition = "2021"
-publish = false
 rust-version = "1.58.0"
+publish = false
 
 [dependencies]
 enum-kinds = "0.5.1"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-tracing = "0.1.29"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.10.1", features = ["uncased"] }
+tracing = "0.1.29"
 uncased = "0.9.6"
 
 [dev-dependencies]
@@ -24,7 +24,7 @@ unicode-width = "0.1.9"
 [build-dependencies]
 anyhow = "1.0.52"
 mz-ore = { path = "../ore", default-features = false }
-phf = { version = "0.10.1", features = ["uncased"] }
-phf_codegen = { version = "0.10.0" }
-uncased = "0.9.6"
 mz-walkabout = { path = "../walkabout" }
+phf = { version = "0.10.1", features = ["uncased"] }
+phf_codegen = "0.10.0"
+uncased = "0.9.6"
