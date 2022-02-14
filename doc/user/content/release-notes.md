@@ -119,6 +119,9 @@ changes that have not yet been documented.
 - Fix a bug where too many columns were returned when both `*` and a
   table function appeared in the `SELECT` list {{% gh 10363 %}}.
 
+- Improve the clarity of any Avro schema resolution errors found when
+  creating materialized sources and views. {{% gh 8415 %}}
+
 {{< comment >}}
 Only add new release notes above this line.
 

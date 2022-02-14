@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::Context;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -63,7 +64,7 @@ impl Decoder {
 
     /// Decodes Avro-encoded `bytes` into a `Row`.
     pub async fn decode(&mut self, bytes: &mut &[u8]) -> anyhow::Result<Row> {
-        let (bytes2, resolved_schema) = self.csr_avro.resolve(bytes).await?;
+        let (bytes2, resolved_schema, csr_schema_id) = self.csr_avro.resolve(bytes).await?;
         *bytes = bytes2;
         let dec = AvroFlatDecoder {
             packer: &mut self.packer,
@@ -73,7 +74,15 @@ impl Decoder {
         let dsr = GeneralDeserializer {
             schema: resolved_schema.top_node(),
         };
-        dsr.deserialize(bytes, dec)?;
+        dsr.deserialize(bytes, dec).with_context(|| {
+            format!(
+                "unable to decode row {}",
+                match csr_schema_id {
+                    Some(id) => format!("(Avro schema id = {:?})", id),
+                    None => "".to_string(),
+                }
+            )
+        })?;
         let result = self.packer.finish_and_reuse();
         tracing::trace!(
             "[customer-data] Decoded row {:?} in {}",
