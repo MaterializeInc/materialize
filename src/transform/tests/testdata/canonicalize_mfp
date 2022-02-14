@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
 cat
 (defsource x [int64 int64 int64])
 ----
@@ -76,6 +75,20 @@ build apply=CanonicalizeMfp
 | Map hmac(#0, #1, #2)
 | Filter isnull(#3)
 | Project (#0, #3)
+
+# multiple retained filters with a map
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_variadic hmac_string [#0 #1 #2]) (call_variadic hmac_string [#0 #1])])
+        [(call_unary is_null #3) (call_unary is_null #4)])
+     [0 3 4])
+----
+%0 =
+| Get x (u0)
+| Map hmac(#0, #1, #2), hmac(#0, #1)
+| Filter isnull(#3), isnull(#4)
+| Project (#0, #3, #4)
 
 # both pushdown and retained filters with a map
 build apply=CanonicalizeMfp
