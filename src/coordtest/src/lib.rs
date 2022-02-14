@@ -76,7 +76,7 @@ use tokio::sync::Mutex as TokioMutex;
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_coord::session::{EndTransactionAction, Session};
 use mz_coord::{ExecuteResponse, PersistConfig, SessionClient, StartupResponse};
-use mz_dataflow_types::{PeekResponse, PeekResponseUnary};
+use mz_dataflow_types::PeekResponseUnary;
 use mz_expr::GlobalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;

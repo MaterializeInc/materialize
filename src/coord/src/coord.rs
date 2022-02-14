@@ -117,7 +117,9 @@ use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnec
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
-use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update, PeekResponseUnary};
+use mz_dataflow_types::{
+    DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary, Update,
+};
 use mz_expr::{
     permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,

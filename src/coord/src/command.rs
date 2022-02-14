@@ -16,7 +16,7 @@ use derivative::Derivative;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
-use mz_dataflow_types::{PeekResponse, PeekResponseUnary};
+use mz_dataflow_types::PeekResponseUnary;
 use mz_expr::GlobalId;
 use mz_ore::str::StrExt;
 use mz_repr::{Row, ScalarType};

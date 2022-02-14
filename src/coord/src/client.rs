@@ -14,7 +14,7 @@ use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use mz_dataflow_types::{PeekResponse, PeekResponseUnary};
+use mz_dataflow_types::PeekResponseUnary;
 use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::thread::JoinOnDropHandle;

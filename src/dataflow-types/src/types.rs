@@ -53,7 +53,7 @@ impl From<PeekResponse> for PeekResponseUnary {
                 let mut result = Vec::with_capacity(rows.len());
                 for (row, n) in rows {
                     if n > 0 {
-                        for _ in 0..(n-1) {
+                        for _ in 0..(n - 1) {
                             result.push(row.clone());
                         }
                         result.push(row)
@@ -66,7 +66,6 @@ impl From<PeekResponse> for PeekResponseUnary {
         }
     }
 }
-
 
 impl PeekResponse {
     pub fn unwrap_rows(self) -> Vec<(Row, usize)> {
