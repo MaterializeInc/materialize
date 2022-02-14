@@ -117,7 +117,7 @@ use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnec
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
-use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
+use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update, PeekResponseUnary};
 use mz_expr::{
     permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -3958,7 +3958,7 @@ impl Coordinator {
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows(batch) => match batch.await {
-                    PeekResponse::Rows(rows) => {
+                    PeekResponseUnary::Rows(rows) => {
                         |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
                             // Use 2x row len incase there's some assignments.
                             let mut diffs = Vec::with_capacity(rows.len() * 2);
@@ -4000,10 +4000,10 @@ impl Coordinator {
                             Ok(diffs)
                         }(rows)
                     }
-                    PeekResponse::Canceled => {
+                    PeekResponseUnary::Canceled => {
                         Err(CoordError::Unstructured(anyhow!("execution canceled")))
                     }
-                    PeekResponse::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
+                    PeekResponseUnary::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
                 },
                 _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
             };
@@ -4774,7 +4774,7 @@ enum ExprPrepStyle {
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows(Box::pin(async { PeekResponse::Rows(rows) }))
+    ExecuteResponse::SendingRows(Box::pin(async { PeekResponseUnary::Rows(rows) }))
 }
 
 fn auto_generate_primary_idx(
@@ -4942,6 +4942,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
+    use mz_dataflow_types::PeekResponseUnary;
     use std::collections::HashMap;
 
     use crate::CoordError;
@@ -5194,8 +5195,9 @@ pub mod fast_path_peek {
                         }
                     }
                 })
-                .map(move |mut resp| {
-                    if let PeekResponse::Rows(rows) = &mut resp {
+                .map(move |resp| {
+                    let mut resp = resp.into();
+                    if let PeekResponseUnary::Rows(rows) = &mut resp {
                         finishing.finish(rows)
                     }
                     resp

@@ -30,13 +30,46 @@ use crate::types::sources::SourceDesc;
 /// we expect a 1:1 contract between `Peek` and `PeekResponse`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
+    Rows(Vec<(Row, usize)>),
+    Error(String),
+    Canceled,
+}
+
+/// The response from a `Peek`, with row multiplicities represented in unary.
+///
+/// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
+/// we expect a 1:1 contract between `Peek` and `PeekResponseUnary`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum PeekResponseUnary {
     Rows(Vec<Row>),
     Error(String),
     Canceled,
 }
 
+impl From<PeekResponse> for PeekResponseUnary {
+    fn from(other: PeekResponse) -> Self {
+        match other {
+            PeekResponse::Rows(rows) => {
+                let mut result = Vec::with_capacity(rows.len());
+                for (row, n) in rows {
+                    if n > 0 {
+                        for _ in 0..(n-1) {
+                            result.push(row.clone());
+                        }
+                        result.push(row)
+                    }
+                }
+                PeekResponseUnary::Rows(result)
+            }
+            PeekResponse::Error(s) => PeekResponseUnary::Error(s),
+            PeekResponse::Canceled => PeekResponseUnary::Canceled,
+        }
+    }
+}
+
+
 impl PeekResponse {
-    pub fn unwrap_rows(self) -> Vec<Row> {
+    pub fn unwrap_rows(self) -> Vec<(Row, usize)> {
         match self {
             PeekResponse::Rows(rows) => rows,
             PeekResponse::Error(_) | PeekResponse::Canceled => {

@@ -341,7 +341,7 @@ impl PendingPeek {
     }
 
     /// Collects data for a known-complete peek.
-    fn collect_finished_data(&mut self) -> Result<Vec<Row>, String> {
+    fn collect_finished_data(&mut self) -> Result<Vec<(Row, usize)>, String> {
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -411,27 +411,16 @@ impl PendingPeek {
                             copies += diff;
                         }
                     });
-                    if copies < 0 {
+                    let copies: usize = if copies < 0 {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
                             copies * -1,
                             &*borrow,
                         ));
-                    }
-
-                    // When we have a LIMIT we can restrict the number of copies we make.
-                    // This protects us when we have many copies of the same records, as
-                    // the DD representation uses a binary count and may not exhaust our
-                    // memory in situtations where this copying might.
-                    if let Some(limit) = max_results {
-                        let limit = std::convert::TryInto::<Diff>::try_into(limit);
-                        if let Ok(limit) = limit {
-                            copies = std::cmp::min(copies, limit);
-                        }
-                    }
-                    for _ in 0..copies {
-                        results.push(result.clone());
-                    }
+                    } else {
+                        copies.try_into().unwrap()
+                    };
+                    results.push((result, copies));
 
                     // If we hold many more than `max_results` records, we can thin down
                     // `results` using `self.finishing.ordering`.
@@ -453,13 +442,13 @@ impl PendingPeek {
                                 // inner test (as we prefer not to maintain `Vec<Datum>`
                                 // in the other case).
                                 results.sort_by(|left, right| {
-                                    let left_datums = l_datum_vec.borrow_with(left);
-                                    let right_datums = r_datum_vec.borrow_with(right);
+                                    let left_datums = l_datum_vec.borrow_with(&left.0);
+                                    let right_datums = r_datum_vec.borrow_with(&right.0);
                                     mz_expr::compare_columns(
                                         &self.finishing.order_by,
                                         &left_datums,
                                         &right_datums,
-                                        || left.cmp(&right),
+                                        || left.0.cmp(&right.0),
                                     )
                                 });
                                 results.truncate(max_results);
