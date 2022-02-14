@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# this can't be run if the version is > 19, as v20 is when the behavior changed, requiring the migration
+# this test is checking
+$ skip-if
+select split_part(ltrim('${arg.upgrade-from-version}', 'v'), '.', 1)::int = 0 and split_part(ltrim('${arg.upgrade-from-version}', 'v'), '.', 2)::int > 19;
+
 > SELECT * FROM data
 a
 ---
