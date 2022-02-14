@@ -5876,9 +5876,13 @@ impl VariadicFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
+        // NOTE: The following is a list of the variadic functions
+        // that **DO NOT** propagate nulls.
         !matches!(
             self,
             VariadicFunc::Coalesce
+                | VariadicFunc::Greatest
+                | VariadicFunc::Least
                 | VariadicFunc::Concat
                 | VariadicFunc::JsonbBuildArray
                 | VariadicFunc::JsonbBuildObject
@@ -5886,6 +5890,7 @@ impl VariadicFunc {
                 | VariadicFunc::RecordCreate { .. }
                 | VariadicFunc::ArrayCreate { .. }
                 | VariadicFunc::ArrayToString { .. }
+                | VariadicFunc::ErrorIfNull
         )
     }
 }
