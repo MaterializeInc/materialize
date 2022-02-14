@@ -161,6 +161,8 @@ changes that have not yet been documented.
 
 - Support casting [`array`] types to [`list`] types.
 
+- Add support for `ESCAPE` clauses in `LIKE` & `ILIKE` expressions.
+
 - Improve the performance of SQL `LIKE` expressions.
 
 - Add `SELECT` statement support to [`TAIL`](/sql/tail).
