@@ -11,6 +11,8 @@
 //!
 //! The public interface consists of the [`Model::optimize`] method.
 
+mod rule;
+
 use std::collections::HashSet;
 
 use super::attribute::core::{
@@ -124,7 +126,10 @@ impl Default for VisitOrder {
 
 /// Apply all available rewrite rules to the model.
 pub fn rewrite_model(model: &mut Model) {
-    let rules: Vec<Box<dyn ApplyRule>> = vec![];
+    let rules: Vec<Box<dyn ApplyRule>> = vec![
+        // simplify outer joins first
+        Box::new(rule::simplify_outer_joins::SimplifyOuterJoins),
+    ];
     apply_rules_to_model(model, rules);
     model.garbage_collect();
 
