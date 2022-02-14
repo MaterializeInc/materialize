@@ -21,7 +21,7 @@ cd test/feature-benchmark
 Or, from the root of the repository:
 
 ```
-bin/mzcompose --dev --find feature-benchmark run default --other-tag unstable
+bin/mzcompose --find feature-benchmark run default --other-tag unstable
 ```
 
 This is going to benchmark the current source against the `materialize/materialized:unstable` container from DockerHub.
