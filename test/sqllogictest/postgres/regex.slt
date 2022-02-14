@@ -54,3 +54,35 @@ select regexp_match(s, '^.(.)')[1] FROM strings
 ----
 2
 b
+
+# Test nullability
+
+query B
+SELECT regexp_match('a', 'a') IS NULL
+----
+false
+
+query B
+SELECT regexp_match(NULL, 'a') IS NULL
+----
+true
+
+query B
+SELECT regexp_match('a', NULL) IS NULL
+----
+true
+
+query B
+SELECT regexp_match(NULL, 'a', 'i') IS NULL
+----
+true
+
+query B
+SELECT regexp_match('a', NULL, 'i') IS NULL
+----
+true
+
+query B
+SELECT regexp_match('a', 'a', NULL) IS NULL
+----
+true
