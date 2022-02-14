@@ -2501,7 +2501,7 @@ lazy_static! {
                         pg_catalog.array_lower($1, 1),
                         pg_catalog.array_upper($1, 1),
                         1) as g(s)
-                ") => ReturnType::set_of(RecordAny), 13395;
+                ") => ReturnType::set_of(RecordAny), oid::FUNC_PG_EXPAND_ARRAY;
             }
         }
     };

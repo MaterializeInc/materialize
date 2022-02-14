@@ -2232,108 +2232,243 @@ impl BUILTINS {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::env;
 
     use tokio_postgres::NoTls;
 
     use mz_ore::task;
+    use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
 
     use super::*;
 
-    // Connect to a running Postgres server and verify that our builtin functions
-    // match it, in addition to some other things. Ignored because we don't have a
-    // postgres server running during normal tests.
+    // Connect to a running Postgres server and verify that our builtin
+    // types and functions match it, in addition to some other things.
     #[tokio::test]
-    #[ignore]
-    async fn verify_function_sanity() -> Result<(), anyhow::Error> {
+    async fn compare_builtins_postgres() -> Result<(), anyhow::Error> {
         // Verify that all builtin functions:
         // - have a unique OID
         // - if they have a postgres counterpart (same oid) then they have matching name
         // Note: Use Postgres 13 when testing because older version don't have all
         // functions.
-        let (client, connection) =
-            tokio_postgres::connect("host=localhost user=postgres", NoTls).await?;
+        let (client, connection) = tokio_postgres::connect(
+            &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
+            NoTls,
+        )
+        .await?;
 
-        task::spawn(|| "verify_function_sanity", async move {
+        task::spawn(|| "compare_builtin_postgres", async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                panic!("connection error: {}", e);
             }
         });
 
-        let rows = client
-            .query(
-                "SELECT oid, proname, proargtypes, prorettype, proretset FROM pg_proc",
-                &[],
-            )
-            .await?;
-
         struct PgProc {
             name: String,
+            schema: String,
             arg_oids: Vec<u32>,
             ret_oid: Option<u32>,
             ret_set: bool,
         }
 
-        let mut pg_proc = HashMap::new();
-        for row in rows {
-            let oid: u32 = row.get("oid");
-            pg_proc.insert(
-                oid,
-                PgProc {
+        struct PgType {
+            name: String,
+            ty: String,
+            elem: u32,
+            array: u32,
+        }
+
+        let pg_proc: HashMap<_, _> = client
+            .query(
+                "SELECT
+                    p.oid,
+                    proname,
+                    nspname,
+                    proargtypes,
+                    prorettype,
+                    proretset
+                FROM pg_proc p
+                JOIN pg_namespace n ON p.pronamespace = n.oid",
+                &[],
+            )
+            .await?
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_proc = PgProc {
                     name: row.get("proname"),
+                    schema: row.get("nspname"),
                     arg_oids: row.get("proargtypes"),
                     ret_oid: row.get("prorettype"),
                     ret_set: row.get("proretset"),
-                },
-            );
-        }
+                };
+                (oid, pg_proc)
+            })
+            .collect();
 
-        let mut oids = HashSet::new();
+        let pg_proc_by_name: HashMap<_, _> = pg_proc
+            .iter()
+            .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
+            .collect();
+
+        let pg_type: HashMap<_, _> = client
+            .query(
+                "SELECT oid, typname, typtype::text, typelem, typarray FROM pg_type",
+                &[],
+            )
+            .await?
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_type = PgType {
+                    name: row.get("typname"),
+                    ty: row.get("typtype"),
+                    elem: row.get("typelem"),
+                    array: row.get("typarray"),
+                };
+                (oid, pg_type)
+            })
+            .collect();
+
+        let mut proc_oids = HashSet::new();
+        let mut type_oids = HashSet::new();
 
         for builtin in BUILTINS.values() {
-            if let Builtin::Func(func) = builtin {
-                for imp in func.inner.func_impls() {
-                    // Verify that all function OIDs are unique.
-                    assert!(oids.insert(imp.oid), "{} reused oid {}", func.name, imp.oid);
+            match builtin {
+                Builtin::Type(ty) => {
+                    // Verify that all type OIDs are unique.
+                    assert!(
+                        type_oids.insert(ty.oid),
+                        "{} reused oid {}",
+                        ty.name,
+                        ty.oid
+                    );
 
-                    if imp.oid > 16_000 {
-                        // High OIDS are reserved in materialize and don't have postgres counterparts.
+                    if ty.oid >= FIRST_MATERIALIZE_OID {
+                        // High OIDs are reserved in Materialize and don't have
+                        // PostgreSQL counterparts.
                         continue;
                     }
 
-                    // For functions that have a postgres counterpart, verify that the name and
-                    // oid match.
-                    let pg_fn = pg_proc.get(&imp.oid).unwrap_or_else(|| {
-                        panic!("pg_proc missing function {}: oid {}", func.name, imp.oid)
+                    // For types that have a PostgreSQL counterpart, verify that
+                    // the name and oid match.
+                    let pg_ty = pg_type.get(&ty.oid).unwrap_or_else(|| {
+                        panic!("pg_proc missing type {}: oid {}", ty.name, ty.oid)
                     });
                     assert_eq!(
-                        func.name, pg_fn.name,
-                        "funcs with oid {} don't match names: {} in mz, {} in pg",
-                        imp.oid, func.name, pg_fn.name
+                        ty.name, pg_ty.name,
+                        "oid {} has name {} in postgres; expected {}",
+                        ty.oid, pg_ty.name, ty.name,
                     );
 
-                    // Complain, but don't fail, if argument oids don't match.
-                    // TODO: make these match.
-                    if imp.arg_oids != pg_fn.arg_oids {
-                        println!(
-                            "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
-                            imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
-                        );
+                    // Ensure the type matches.
+                    match ty.details.typ {
+                        CatalogType::Array { element_id } => {
+                            let elem_ty = match BUILTINS.get(&element_id) {
+                                Some(Builtin::Type(ty)) => ty,
+                                _ => panic!("{} is unexpectedly not a type", element_id),
+                            };
+                            assert_eq!(
+                                pg_ty.elem, elem_ty.oid,
+                                "type {} has mismatched element OIDs",
+                                ty.name
+                            )
+                        }
+                        CatalogType::Pseudo => {
+                            assert_eq!(
+                                pg_ty.ty, "p",
+                                "type {} is not a pseudo type as expected",
+                                ty.name
+                            )
+                        }
+                        _ => {
+                            assert_eq!(
+                                pg_ty.ty, "b",
+                                "type {} is not a base type as expected",
+                                ty.name
+                            )
+                        }
                     }
 
-                    if imp.return_oid != pg_fn.ret_oid {
-                        println!(
-                            "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
-                            imp.oid, func.name, imp.return_oid, pg_fn.ret_oid
-                        );
-                    }
-
-                    if imp.return_is_set != pg_fn.ret_set {
-                        println!(
-                            "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
-                            imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
-                        );
+                    // Ensure the array type reference is correct.
+                    match ty.details.array_id {
+                        Some(array_id) => {
+                            let array_ty = match BUILTINS.get(&array_id) {
+                                Some(Builtin::Type(ty)) => ty,
+                                _ => panic!("{} is unexpectedly not a type", array_id),
+                            };
+                            assert_eq!(
+                                pg_ty.array, array_ty.oid,
+                                "type {} has mismatched array OIDs",
+                                ty.name,
+                            );
+                        }
+                        None => assert_eq!(
+                            pg_ty.array, 0,
+                            "type {} does not have an array type in mz but does in pg",
+                            ty.name,
+                        ),
                     }
                 }
+                Builtin::Func(func) => {
+                    for imp in func.inner.func_impls() {
+                        // Verify that all function OIDs are unique.
+                        assert!(
+                            proc_oids.insert(imp.oid),
+                            "{} reused oid {}",
+                            func.name,
+                            imp.oid
+                        );
+
+                        if imp.oid >= FIRST_MATERIALIZE_OID {
+                            // High OIDs are reserved in Materialize and don't have
+                            // postgres counterparts.
+                            continue;
+                        }
+
+                        // For functions that have a postgres counterpart, verify that the name and
+                        // oid match.
+                        let pg_fn = if imp.oid >= FIRST_UNPINNED_OID {
+                            pg_proc_by_name
+                                .get(&(func.schema, func.name))
+                                .unwrap_or_else(|| {
+                                    panic!("pg_proc missing function {}.{}", func.schema, func.name)
+                                })
+                        } else {
+                            pg_proc.get(&imp.oid).unwrap_or_else(|| {
+                                panic!("pg_proc missing function {}: oid {}", func.name, imp.oid)
+                            })
+                        };
+                        assert_eq!(
+                            func.name, pg_fn.name,
+                            "funcs with oid {} don't match names: {} in mz, {} in pg",
+                            imp.oid, func.name, pg_fn.name
+                        );
+
+                        // Complain, but don't fail, if argument oids don't match.
+                        // TODO: make these match.
+                        if imp.arg_oids != pg_fn.arg_oids {
+                            println!(
+                                "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
+                                imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
+                            );
+                        }
+
+                        if imp.return_oid != pg_fn.ret_oid {
+                            println!(
+                                "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
+                                imp.oid, func.name, imp.return_oid, pg_fn.ret_oid
+                            );
+                        }
+
+                        if imp.return_is_set != pg_fn.ret_set {
+                            println!(
+                                "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
+                                imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
+                            );
+                        }
+                    }
+                }
+                _ => (),
             }
         }
 

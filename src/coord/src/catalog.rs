@@ -37,6 +37,7 @@ use mz_dataflow_types::{
     sources::{AwsExternalId, SourceConnector, Timeline},
 };
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw};
@@ -75,10 +76,6 @@ pub use crate::catalog::error::ErrorKind;
 
 const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
-
-// TODO@jldlaughlin: Better assignment strategy for system type OIDs.
-// https://github.com/MaterializeInc/materialize/pull/4316#discussion_r496238962
-pub const FIRST_USER_OID: u32 = 20_000;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///

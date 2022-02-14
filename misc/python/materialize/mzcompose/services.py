@@ -397,19 +397,21 @@ class Postgres(Service):
         self,
         name: str = "postgres",
         mzbuild: str = "postgres",
+        image: Optional[str] = None,
         port: int = 5432,
         command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20",
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
     ) -> None:
-        super().__init__(
-            name=name,
-            config={
+        config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
+        config.update(
+            {
                 "mzbuild": mzbuild,
                 "command": command,
                 "ports": [port],
                 "environment": environment,
-            },
+            }
         )
+        super().__init__(name=name, config=config)
 
 
 class SqlServer(Service):
