@@ -72,6 +72,11 @@ def main() -> int:
         print("--- Trimming unchanged steps from pipeline")
         trim_pipeline(pipeline)
 
+    # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
+    # if we trim away all the JUnit report-generating steps.
+    Path("junit-dummy.xml").write_text("")
+    spawn.runv(["buildkite-agent", "artifact", "upload", "junit-dummy.xml"])
+
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline.
     for step in pipeline["steps"]:
