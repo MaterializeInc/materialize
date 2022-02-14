@@ -3093,40 +3093,25 @@ fn plan_like(
     case_insensitive: bool,
     not: bool,
 ) -> Result<HirScalarExpr, PlanError> {
+    use CastContext::Implicit;
     let ecx = ecx.with_name("LIKE argument");
     let expr = plan_expr(&ecx, expr)?;
-    let haystack_type = ecx.scalar_type(&expr);
-    let haystack = match haystack_type {
-        Some(ScalarType::Char { length }) => HirScalarExpr::CallUnary {
-            func: UnaryFunc::PadChar(expr_func::PadChar { length }),
-            expr: Box::new(expr.type_as(&ecx, &haystack_type.unwrap())?),
-        },
+    let haystack = match ecx.scalar_type(&expr) {
+        Some(ref ty @ ScalarType::Char { length }) => expr
+            .type_as(&ecx, ty)?
+            .call_unary(UnaryFunc::PadChar(expr_func::PadChar { length })),
         _ => expr.type_as(&ecx, &ScalarType::String)?,
     };
-    let pattern_raw =
-        plan_expr(&ecx, pattern)?.cast_to(&ecx, CastContext::Implicit, &ScalarType::String)?;
-    let pattern = match escape {
-        Some(expr) => HirScalarExpr::CallBinary {
-            func: BinaryFunc::LikeEscape,
-            expr1: Box::new(pattern_raw),
-            expr2: Box::new(plan_expr(&ecx, expr)?.cast_to(
-                &ecx,
-                CastContext::Implicit,
-                &ScalarType::String,
-            )?),
-        },
-        None => pattern_raw,
-    };
-    let like = HirScalarExpr::CallBinary {
-        func: BinaryFunc::IsLikeMatch { case_insensitive },
-        expr1: Box::new(haystack),
-        expr2: Box::new(pattern),
-    };
+    let mut pattern = plan_expr(&ecx, pattern)?.cast_to(&ecx, Implicit, &ScalarType::String)?;
+    if let Some(escape) = escape {
+        pattern = pattern.call_binary(
+            plan_expr(&ecx, escape)?.cast_to(&ecx, Implicit, &ScalarType::String)?,
+            BinaryFunc::LikeEscape,
+        );
+    }
+    let like = haystack.call_binary(pattern, BinaryFunc::IsLikeMatch { case_insensitive });
     if not {
-        Ok(HirScalarExpr::CallUnary {
-            func: UnaryFunc::Not(expr_func::Not),
-            expr: Box::new(like),
-        })
+        Ok(like.call_unary(UnaryFunc::Not(expr_func::Not)))
     } else {
         Ok(like)
     }
