@@ -71,12 +71,9 @@ impl CanonicalizeMfp {
                 let all_errors = filter.iter().all(|p| p.is_literal_err());
                 let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown::default()
                     .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
-                println!("pushdown: {:?}", pushdown);
-                println!("retained: {:?}", retained);
                 if !pushdown.is_empty() {
                     *relation = relation.take_dangerous().filter(pushdown);
-                    println!("Relation after pushdown: {}", relation.json());
-                    // crate::fusion::filter::Filter.action(relation);
+                    crate::fusion::filter::Filter.action(relation);
                 }
                 mfp = mz_expr::MapFilterProject::new(mfp.input_arity)
                     .map(map)
@@ -92,7 +89,7 @@ impl CanonicalizeMfp {
                 }
                 if !filter.is_empty() {
                     *relation = relation.take_dangerous().filter(filter);
-                    // crate::fusion::filter::Filter.action(relation);
+                    crate::fusion::filter::Filter.action(relation);
                 }
                 if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
