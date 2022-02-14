@@ -286,12 +286,9 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str(" LIKE ");
                 }
                 f.write_node(&pattern);
-                match escape {
-                    Some(x) => {
-                        f.write_str(" ESCAPE ");
-                        f.write_node(x);
-                    }
-                    _ => {}
+                if let Some(escape) = escape {
+                    f.write_str(" ESCAPE ");
+                    f.write_node(escape);
                 }
             }
             Expr::Between {
