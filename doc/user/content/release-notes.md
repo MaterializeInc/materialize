@@ -199,6 +199,8 @@ boundary don't silently merge their release notes into the wrong place.
 
 - Add support for `ESCAPE` clauses in `LIKE` & `ILIKE` expressions.
 
+- Add support for `ESCAPE` clauses in `LIKE` & `ILIKE` expressions.
+
 - Improve the performance of SQL `LIKE` expressions.
 
 {{% version-header v0.19.0 %}}
