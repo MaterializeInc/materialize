@@ -678,7 +678,7 @@ impl<'a> From<chrono::Duration> for Datum<'a> {
             Interval::new(
                 0,
                 duration.num_seconds(),
-                duration.num_nanoseconds().unwrap_or(0) % 1_000_000_000,
+                i128::from(duration.num_nanoseconds().unwrap_or(0)) % 1_000_000_000,
             )
             .unwrap(),
         )

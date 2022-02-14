@@ -491,7 +491,7 @@ impl ParsedDateTime {
             }
         };
 
-        match Interval::new(months, seconds, nanos) {
+        match Interval::new(months, seconds, nanos.into()) {
             Ok(i) => Ok(i),
             Err(e) => Err(e.to_string()),
         }

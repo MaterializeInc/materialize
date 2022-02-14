@@ -55,10 +55,10 @@ impl Interval {
     /// Constructs a new `Interval` with the specified units of time.
     ///
     /// `nanos` in excess of `999_999_999` are carried over into seconds.
-    pub fn new(months: i32, seconds: i64, nanos: i64) -> Result<Interval, anyhow::Error> {
+    pub fn new(months: i32, seconds: i64, nanos: i128) -> Result<Interval, anyhow::Error> {
         let i = Interval {
             months,
-            duration: i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
+            duration: i128::from(seconds) * 1_000_000_000 + nanos,
         };
         // Don't let our duration exceed Postgres' min/max for those same fields,
         // equivalent to:
@@ -92,7 +92,7 @@ impl Interval {
         match Self::new(
             months,
             seconds,
-            i64::from(self.nanoseconds() + other.nanoseconds()),
+            (self.nanoseconds() + other.nanoseconds()).into(),
         ) {
             Ok(i) => Some(i),
             Err(_) => None,
@@ -116,7 +116,7 @@ impl Interval {
             return None;
         }
 
-        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+        Self::new(months as i32, seconds as i64, nanos as i128).ok()
     }
 
     pub fn checked_div(&self, other: f64) -> Option<Self> {
@@ -136,7 +136,7 @@ impl Interval {
             return None;
         }
 
-        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+        Self::new(months as i32, seconds as i64, nanos as i128).ok()
     }
 
     /// Returns the total number of whole seconds in the `Interval`'s duration.
