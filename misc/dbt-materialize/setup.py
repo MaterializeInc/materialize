@@ -26,7 +26,7 @@ setup(
     # dbt-postgres version, change version_suffix to ".post1", ".post2", etc.
     #
     # If you bump this version, bump it in __version__.py too.
-    version="1.0.1",
+    version="1.0.1.post1",
     description="The Materialize adapter plugin for dbt (data build tool).",
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
