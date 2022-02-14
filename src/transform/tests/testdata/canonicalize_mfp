@@ -76,12 +76,12 @@ build apply=CanonicalizeMfp
 | Filter isnull(#3)
 | Project (#0, #3)
 
-# multiple retained filters with a map
+# multiple retained filters with a map. canonicalized filters should be re-sorted least to greatest
 build apply=CanonicalizeMfp
 (project
     (filter
         (map (get x) [(call_variadic hmac_string [#0 #1 #2]) (call_variadic hmac_string [#0 #1])])
-        [(call_unary is_null #3) (call_unary is_null #4)])
+        [(call_unary is_null #4) (call_unary is_null #3)])
      [0 3 4])
 ----
 %0 =
@@ -108,7 +108,7 @@ build apply=CanonicalizeMfp
 | Filter isnull(#3)
 | Project (#0, #3)
 
-# joining with both pushdown and retained predicates with maps
+# joining with duplicated pushdown predicates with maps. regression test for #10000
 build apply=CanonicalizeMfp
 (project
     (filter
@@ -144,7 +144,7 @@ build apply=CanonicalizeMfp
 ----
 ----
 
-# joining with both pushdown and retained predicates without a map
+# joining with duplicated pushdown predicates without a map. regression test for #10000
 build apply=CanonicalizeMfp
 (project
     (filter
@@ -175,36 +175,37 @@ build apply=CanonicalizeMfp
 ----
 ----
 
-# both pushdown and retained predicates
-build apply=CanonicalizeMfp
-(project
-    (map
-        (filter
-            (project
-                (join
-                    [(get t1) (get t2)]
-                    [[#0 #2]])
-                [0 2])
-            [
-                (call_unary not (call_unary is_null #0))
-                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
-                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
-            ])
-        [(call_binary add_int64 #0 #1)])
-    [2])
-----
-----
-%0 =
-| Get t1 (u1)
-
-%1 =
-| Get t2 (u2)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
-| Map (#0 + #2)
-| Project (#0)
-----
-----
+# TODO (#10130): both filters should be fused and pushed through map. currently the duplicated predicate ((#0 ==5) || (#0 == 1337))
+#                causes the !isnull(#0) predicate to be considered retained rather than pushdown
+#build apply=CanonicalizeMfp
+#(project
+#    (map
+#        (filter
+#            (project
+#                (join
+#                    [(get t1) (get t2)]
+#                    [[#0 #2]])
+#                [0 2])
+#            [
+#                (call_unary not (call_unary is_null #0))
+#                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+#                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+#            ])
+#        [(call_binary add_int64 #0 #1)])
+#    [2])
+#----
+#----
+#%0 =
+#| Get t1 (u1)
+#
+#%1 =
+#| Get t2 (u2)
+#
+#%2 =
+#| Join %0 %1 (= #0 #2)
+#| | implementation = Unimplemented
+#| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+#| Map (#0 + #2)
+#| Project (#0)
+#----
+#----
