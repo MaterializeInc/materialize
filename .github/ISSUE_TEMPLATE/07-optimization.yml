@@ -23,6 +23,8 @@ body:
         #### Why should we add it?
 
         #### When would it be good to have?
+        <!-- This can be in terms of a lower-level IR instead of SQL. -->
+        <!-- Link other issues, if they exist, that would be helped. -->
 
         #### When would it be ineffectual?
 
@@ -31,11 +33,6 @@ body:
         #### In the worst case, how would it degrade performance?
     validations:
       required: true
-  - type: textarea
-    attributes:
-      label: Customer impact
-      description: |
-          List real life instances where this transformation would help.
   - type: textarea
     attributes:
       label: Cost model
@@ -52,9 +49,18 @@ body:
         <!-- Intuitively, this should be when benefit > overhead, but sometimes a benefit with regards to X comes at a cost with regards to Y, and it would be worthwhile to discuss when it is worthwhile to sacrifice Y to gain a benefit in X. -->
   - type: textarea
     attributes:
-      label: User-facing changes
+      label: Variations
       description: |
-        List any knobs that we may need to be tuned by or exposed to the user.
+        List any knobs that we may need to be tune ourselves or expose to the user.
+  - type: textarea
+    attributes:
+      label: User impact analysis
+      description: |
+        With regards to the class of queries that can be helped by the transformation:
+        * How often will users encounter any member of the class?
+        * Are there subclasses that users will encounter more often relative to other subclasses?
+
+        Take into account what you have seen from user queries, use cases, queries from benchmarks like TPC-H, etc.
   - type: textarea
     attributes:
       label: Proposed implementation
@@ -63,8 +69,8 @@ body:
       value: |
         #### Describe the implementation.
 
-        #### Which queries will do better with the given implementation?
+        #### What subset of queries that would benefit from this transformation does the implementation cover?
 
-        #### Which queries will do worse?
+        #### What subset of queries that do worse with this transformation does the implementation fail to skip?
 
         #### Break the implementation down into stages.
