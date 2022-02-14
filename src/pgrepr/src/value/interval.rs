@@ -77,7 +77,7 @@ impl<'a> FromSql<'a> for Interval {
         Ok(Interval(
             ReprInterval::new(
                 months,
-                days as i64 * 24 * 60 * 60,
+                i64::from(days) * 24 * 60 * 60,
                 i128::from(micros) * 1000,
             )
             .unwrap(),
