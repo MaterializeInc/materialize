@@ -1,0 +1,197 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+cat
+(defsource x [int64 int64 int64])
+----
+ok
+
+cat
+(defsource t1 ([(Int32 true) (Int32 true)] []))
+----
+ok
+
+cat
+(defsource t2 ([(Int32 true) (Int32 true)] []))
+----
+ok
+
+# regression test for #8235
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_binary add_int64 #1 #2)])
+        [(call_binary add_int64 null #3)])
+     [#1])
+----
+%0 =
+| Get x (u0)
+| Filter false
+| Project (#1)
+
+# pushdown filters with a map
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_binary add_int64 #0 #1)])
+        [(call_binary lt #3 (1234 Int32))])
+     [3])
+----
+%0 =
+| Get x (u0)
+| Filter ((#0 + #1) < 1234)
+| Map (#0 + #1)
+| Project (#3)
+
+# pushdown filters without a map
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (get x)
+        [(call_binary lt #0 (1234 Int32))])
+     [0 1])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 < 1234)
+| Project (#0, #1)
+
+# retained filters with a map
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_variadic hmac_string [#0 #1 #2])])
+        [(call_unary is_null #3)])
+     [0 3])
+----
+%0 =
+| Get x (u0)
+| Map hmac(#0, #1, #2)
+| Filter isnull(#3)
+| Project (#0, #3)
+
+# both pushdown and retained filters with a map
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_variadic hmac_string [#0 #1 #2])])
+        [
+            (call_binary lt #0 1234)
+            (call_unary is_null #3)
+        ])
+     [0 3])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 < 1234)
+| Map hmac(#0, #1, #2)
+| Filter isnull(#3)
+| Project (#0, #3)
+
+# joining with both pushdown and retained predicates with maps
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (project
+            (join
+                [
+                    (map (get t1) [(call_binary add_int64 #0 #1)])
+                    (map (get t2) [(call_binary mul_int64 #0 #1)])
+                ]
+                [[#0 #2]])
+            [0 1 2 3 4 5])
+        [
+            (call_unary not (call_unary is_null #0))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+        ])
+    [0 5])
+----
+----
+%0 =
+| Get t1 (u1)
+| Map (#0 + #1)
+
+%1 =
+| Get t2 (u2)
+| Map (#0 * #1)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+| Project (#0, #5)
+----
+----
+
+# joining with both pushdown and retained predicates without a map
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (project
+            (join
+                [(get t1) (get t2)]
+                [[#0 #2]])
+            [0])
+        [
+            (call_unary not (call_unary is_null #0))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+        ])
+    [0])
+----
+----
+%0 =
+| Get t1 (u1)
+
+%1 =
+| Get t2 (u2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+| Project (#0)
+----
+----
+
+# both pushdown and retained predicates
+build apply=CanonicalizeMfp
+(project
+    (map
+        (filter
+            (project
+                (join
+                    [(get t1) (get t2)]
+                    [[#0 #2]])
+                [0 2])
+            [
+                (call_unary not (call_unary is_null #0))
+                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            ])
+        [(call_binary add_int64 #0 #1)])
+    [2])
+----
+----
+%0 =
+| Get t1 (u1)
+
+%1 =
+| Get t2 (u2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+| Map (#0 + #2)
+| Project (#0)
+----
+----
