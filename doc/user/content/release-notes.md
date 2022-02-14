@@ -119,6 +119,8 @@ changes that have not yet been documented.
 - Fix a bug where too many columns were returned when both `*` and a
   table function appeared in the `SELECT` list {{% gh 10363 %}}.
 
+- Add support for `ARRAY(<subquery>)` constructor.
+
 {{< comment >}}
 Only add new release notes above this line.
 

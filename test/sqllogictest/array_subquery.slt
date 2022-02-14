@@ -1,0 +1,239 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE xs (x int not null)
+
+statement ok
+CREATE TABLE ys (y int not null)
+
+statement ok
+INSERT INTO xs VALUES (1), (1), (2);
+
+statement ok
+INSERT INTO ys VALUES (2), (4), (5);
+
+statement ok
+SELECT (ARRAY[1])::text
+
+### Array subqueries ###
+statement ok
+SELECT ARRAY(SELECT x FROM xs)::text
+
+query T
+SELECT ARRAY(SELECT x FROM xs)::text
+----
+{1,1,2}
+
+query T
+SELECT ARRAY(SELECT x FROM xs WHERE x > 1)::text
+----
+{2}
+
+query T
+SELECT ARRAY[ARRAY(SELECT x FROM xs)]::text
+----
+{{1,1,2}}
+
+statement ok
+SELECT ARRAY(SELECT x FROM xs LIMIT 2)::text
+
+query T
+SELECT ARRAY(SELECT x FROM xs ORDER BY x DESC)::text
+----
+{2,1,1}
+
+query T
+SELECT ARRAY(SELECT x FROM xs ORDER BY x DESC LIMIT 2)::text
+----
+{2,1}
+
+query T
+SELECT ARRAY(SELECT x FROM xs ORDER BY x DESC LIMIT 1)::text
+----
+{2}
+
+query T
+SELECT ARRAY[ARRAY(SELECT x FROM xs), ARRAY(SELECT y FROM ys)]::text
+----
+{{1,1,2},{2,4,5}}
+
+query T
+SELECT array_cat(ARRAY(SELECT x FROM xs), ARRAY(SELECT y FROM ys))::text
+----
+{1,1,2,2,4,5}
+
+query T
+SELECT array_cat(ARRAY(SELECT x FROM xs), ARRAY(SELECT y FROM ys ORDER BY y DESC))::text
+----
+{1,1,2,5,4,2}
+
+query T
+SELECT ARRAY(SELECT y FROM xs JOIN ys ON xs.x = ys.y)::text
+----
+{2}
+
+query T
+SELECT ARRAY(SELECT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
+----
+{2,2,2,4}
+
+query T
+SELECT ARRAY(SELECT DISTINCT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
+----
+{2,4}
+
+query T
+SELECT ARRAY(SELECT 1 WHERE FALSE)::text
+----
+{}
+
+statement ok
+CREATE TABLE zs (z int not null)
+
+query T
+SELECT ARRAY(SELECT z FROM zs)::text;
+----
+{}
+
+query T
+SELECT ARRAY(SELECT AVG(0) FROM zs)::text;
+----
+{NULL}
+
+statement ok
+CREATE TABLE users (id int not null, other_field int not null)
+
+statement ok
+CREATE TABLE customer (id int not null, first_name string not null, last_name string not null, zip string not null)
+
+statement ok
+INSERT INTO users VALUES (1, 10), (2, 5), (3, 8);
+
+statement ok
+INSERT INTO customer VALUES (1, 'alice', 'lasta', '10003'::text), (2, 'bob', 'lastb', '10013'::text), (3, 'charlie', 'lastc', '11217'::text);
+
+query T
+SELECT ARRAY(SELECT id FROM customer)::text
+----
+{1,2,3}
+
+query T
+SELECT ARRAY(SELECT other_field FROM users ORDER BY id ASC)::text
+----
+{10,5,8}
+
+query error Expected subselect to return 1 column, got 2 columns
+SELECT ARRAY(SELECT first_name, last_name FROM customer)::text
+
+# Verify nested arrays
+query error ARRAY expression cannot be cast to uniform type: text\[\] vs integer\[\]
+SELECT ARRAY[ARRAY[customer.first_name, customer.last_name], ARRAY[customer.zip], ARRAY[customer.id]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+
+query error text\[\]\[\] not yet supported
+SELECT ARRAY(SELECT ARRAY[customer.first_name] FROM customer)
+
+# Check CTE syntax can be included in a query
+query T
+SELECT ARRAY(WITH usps AS (SELECT 42) SELECT customer.first_name FROM customer)
+----
+{bob,alice,charlie}
+
+statement ok
+CREATE TABLE qs (q int not null)
+
+query T
+SELECT ARRAY(SELECT TRUE FROM(SELECT AVG(0) FROM qs))::text;
+----
+{t}
+
+query T
+SELECT ARRAY(SELECT TRUE FROM(SELECT AVG(0) FROM (SELECT FROM qs)))::text;
+----
+{t}
+
+query error text list\[\] not yet supported
+SELECT ARRAY(SELECT LIST[customer.first_name, customer.last_name, customer.zip, customer.id::text] FROM customer);
+
+
+# Joe Notes. TODO REMOVE
+#CREATE TABLE xs (x int not null)
+#CREATE TABLE ys (y int not null)
+#INSERT INTO xs VALUES (1), (1), (2);
+#INSERT INTO ys VALUES (2), (4), (5);
+#
+#GOOD
+#SELECT ARRAY[ARRAY(SELECT x FROM xs), ARRAY(SELECT y FROM ys)]::text
+#----
+#{{1,1,2},{2,4,5}}
+#
+#
+#CREATE TABLE customer (id int not null, first_name string not null, last_name string not null, zip string not null)
+#INSERT INTO customer VALUES (1, 'alice', 'lasta', '10003'::text), (2, 'bob', 'lastb', '10013'::text), (3, 'charlie', 'lastc', '11217'::text);
+#
+#BAD
+#SELECT ARRAY(SELECT ARRAY[customer.first_name] FROM customer)
+#----
+# {bob,alice,charlie}
+#
+#GOOD
+#SELECT array_cat(ARRAY[ARRAY['bob'], ARRAY['alice'], ARRAY['charlie']], ARRAY[]::string[][]);
+#---------------------------
+# {{bob},{alice},{charlie}}
+#
+#GOOD
+#SELECT array_cat(ARRAY[]::string[][], ARRAY[ARRAY['bob'], ARRAY['alice'], ARRAY['charlie']]);
+#---------------------------
+# {{bob},{alice},{charlie}}
+#
+#GOOD
+#SELECT array_cat(ARRAY[ARRAY['bob'], ARRAY['alice'], ARRAY['charlie']], ARRAY[ARRAY[]::string[]]);
+#---------------------------
+# {{bob},{alice},{charlie}}
+#
+#
+#SELECT ARRAY(SELECT ARRAY[customer.first_name] FROM customer);
+#Array(Array { elements: [String("bob")], dims: [ArrayDimension { lower_bound: 1, length: 1 }, ArrayDimension { lower_bound: 1, length: 1 }] })
+#Array(Array { elements: [String("alice")], dims: [ArrayDimension { lower_bound: 1, length: 1 }, ArrayDimension { lower_bound: 1, length: 1 }] })
+#Array(Array { elements: [String("charlie")], dims: [ArrayDimension { lower_bound: 1, length: 1 }, ArrayDimension { lower_bound: 1, length: 1 }] })
+#[String("bob"), String("alice"), String("charlie")]
+#
+#SELECT LIST(SELECT ARRAY[customer.first_name] FROM customer);
+#List([Array(Array { elements: [String("bob")], dims: [ArrayDimension { lower_bound: 1, length: 1 }] })])
+#List([Array(Array { elements: [String("alice")], dims: [ArrayDimension { lower_bound: 1, length: 1 }] })])
+#List([Array(Array { elements: [String("charlie")], dims: [ArrayDimension { lower_bound: 1, length: 1 }] })])
+#[Array(Array { elements: [String("bob")], dims: [ArrayDimension { lower_bound: 1, length: 1 }] }), Array(Array { elements: [String("alice")], dims: [ArrayDimension { lower_bound: 1, length: 1 }] }), Array(Array { elements: [String("charlie")], dims: [ArrayDimension { lower_bound: 1, length: 1 }] })]
+#
+#SELECT LIST(SELECT LIST[customer.first_name] FROM customer);
+#List([List([String("bob")])])
+#List([List([String("alice")])])
+#List([List([String("charlie")])])
+#[List([String("bob")]), List([String("alice")]), List([String("charlie")])]
+#
+#
+#LOOK AT array_array_concat FOR DIM CALC
+#
+#// Aggregates.
+#            "array_agg" => Aggregate {
+#                params!(NonVecAny) => Operation::unary_ordered(|ecx, e, order_by| {
+#                    if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
+#                        bail_unsupported!("array_agg on char");
+#                    };
+#                    // ArrayConcat excepts all inputs to be arrays, so wrap all input datums into
+#                    // arrays.
+#                    let e_arr = HirScalarExpr::CallVariadic{
+#                        func: VariadicFunc::ArrayCreate { elem_type: ecx.scalar_type(&e) },
+#                        exprs: vec![e],
+#                    };
+#                    Ok((e_arr, AggregateFunc::ArrayConcat { order_by }))
+#                }) => ArrayAny, 2335;
+#                params!(ArrayAny) => Operation::unary(|_ecx, _e| bail_unsupported!("array_agg on arrays")) => ArrayAny, 4053;
+#            },

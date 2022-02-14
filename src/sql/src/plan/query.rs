@@ -2407,7 +2407,7 @@ fn invent_column_name(
             Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
                 invent(ecx, expr, table_func_names)
             }
-            Expr::Subquery(query) | Expr::ListSubquery(query) => {
+            Expr::Subquery(query) | Expr::ListSubquery(query) | Expr::ArraySubquery(query) => {
                 // A bit silly to have to plan the query here just to get its column
                 // name, since we throw away the planned expression, but fixing this
                 // requires a separate semantic analysis phase.
@@ -2835,6 +2835,7 @@ fn plan_expr_inner<'a>(
         Expr::Exists(query) => plan_exists(ecx, query),
         Expr::Subquery(query) => plan_subquery(ecx, query),
         Expr::ListSubquery(query) => plan_list_subquery(ecx, query),
+        Expr::ArraySubquery(query) => plan_array_subquery(ecx, query),
         Expr::Collate { expr, collation } => plan_collate(ecx, expr, collation),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
@@ -3222,6 +3223,113 @@ fn plan_list_subquery(
                 element_type: Box::new(elem_type),
                 custom_oid: None,
             },
+        )),
+    }
+    .into())
+}
+
+fn plan_array_subquery(
+    ecx: &ExprContext,
+    query: &Query<Aug>,
+) -> Result<CoercibleScalarExpr, PlanError> {
+    if !ecx.allow_subqueries {
+        sql_bail!("{} does not allow subqueries", ecx.name)
+    }
+    // Array subqueries rely on the array_cat function which requires experimental mode
+    ecx.require_experimental_mode("array subquery")?;
+    let mut qcx = ecx.derived_query_context();
+    let (mut expr, _scope, finishing) = plan_query(&mut qcx, query)?;
+    if finishing.limit.is_some() || finishing.offset > 0 {
+        expr = HirRelationExpr::TopK {
+            input: Box::new(expr),
+            group_key: vec![],
+            order_key: finishing.order_by.clone(),
+            limit: finishing.limit,
+            offset: finishing.offset,
+        };
+    }
+
+    if finishing.project.len() != 1 {
+        sql_bail!(
+            "Expected subselect to return 1 column, got {} columns",
+            finishing.project.len()
+        );
+    }
+
+    let project_column = *finishing.project.get(0).unwrap();
+    let elem_type = qcx
+        .relation_type(&expr)
+        .column_types
+        .get(project_column)
+        .cloned()
+        .unwrap()
+        .scalar_type();
+
+    if matches!(
+        elem_type,
+        ScalarType::Char { .. }
+            | ScalarType::Array { .. }
+            | ScalarType::List { .. }
+            | ScalarType::Map { .. }
+    ) {
+        bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type)));
+    }
+
+    // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
+    // subquery above.
+    let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
+        func: VariadicFunc::ArrayCreate {
+            elem_type: elem_type.clone(),
+        },
+        exprs: vec![HirScalarExpr::column(project_column)],
+    })
+    .chain(
+        finishing
+            .order_by
+            .iter()
+            .map(|co| HirScalarExpr::column(co.column)),
+    )
+    .collect();
+
+    // However, column references for `aggregation_projection` and `aggregation_order_by`
+    // are with reference to the `exprs` of the aggregation expression.  Here that is
+    // `aggregation_exprs`.
+    let aggregation_projection = vec![0];
+    let aggregation_order_by = finishing
+        .order_by
+        .into_iter()
+        .enumerate()
+        .map(|(i, ColumnOrder { column: _, desc })| ColumnOrder { column: i, desc })
+        .collect();
+
+    let reduced_expr = expr
+        .reduce(
+            vec![],
+            vec![AggregateExpr {
+                func: AggregateFunc::ArrayConcat {
+                    order_by: aggregation_order_by,
+                },
+                expr: Box::new(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RecordCreate {
+                        field_names: iter::repeat(ColumnName::from(""))
+                            .take(aggregation_exprs.len())
+                            .collect(),
+                    },
+                    exprs: aggregation_exprs,
+                }),
+                distinct: false,
+            }],
+            None,
+        )
+        .project(aggregation_projection);
+
+    // If `expr` has no rows, return an empty array rather than NULL.
+    Ok(HirScalarExpr::CallBinary {
+        func: BinaryFunc::ArrayArrayConcat,
+        expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
+        expr2: Box::new(HirScalarExpr::literal(
+            Datum::empty_array(),
+            ScalarType::Array(Box::new(elem_type)),
         )),
     }
     .into())

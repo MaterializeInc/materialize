@@ -247,6 +247,15 @@ SELECT array_agg('a'::char)
 query error array_agg on char
 SELECT array_agg('a'::char(2))
 
+# array_agg with nested arrays
+statement ok
+CREATE TABLE t3 (a int[])
+
+statement ok
+INSERT INTO t3 VALUES (ARRAY[1]), (ARRAY[2]), (ARRAY[3])
+
+query error arrays not yet supported
+SELECT array_agg(a) FROM t3
 
 # Duplicates of cockroach/array.slt. todo@jldlaughlin: Remove when we support that file.
 # array subscript access
