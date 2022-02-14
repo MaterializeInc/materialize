@@ -167,15 +167,12 @@ create_source_s3_text ::=
     )
   )*
   ('COMPRESSION' ('NONE' | 'GZIP'))?
-  'WITH' '('
-      'region =' region
-      aws_credentials?
-  ')'
-  'FORMAT' (
+  with_options?
+  ('FORMAT' (
     'REGEX' regex |
     'TEXT' |
     'BYTES'
-  )
+  ))
   ('ENVELOPE NONE')?
 create_source_s3_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
@@ -190,10 +187,7 @@ create_source_s3_json ::=
     )
   )*
   ('COMPRESSION' ('NONE' | 'GZIP'))?
-  'WITH' '('
-      'region =' region
-      aws_credentials?
-  ')'
+  with_options?
   'FORMAT' ('TEXT' | 'BYTES')
   ('ENVELOPE NONE')?
 create_source_s3_csv ::=
@@ -210,10 +204,7 @@ create_source_s3_csv ::=
       )
     )*
     ('COMPRESSION' ('NONE' | 'GZIP'))?
-    'WITH' '('
-        'region =' region
-        aws_credentials?
-    ')'
+    with_options?
     'FORMAT' 'CSV' 'WITH' column_count 'COLUMNS'
     ('ENVELOPE NONE')?
 create_source_text ::=
@@ -485,3 +476,20 @@ update_stmt ::=
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
 with_options ::= 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
+with_options_aws ::= 'WITH' '('
+    (
+      static_credentials
+      | 'profile_name' '=' val
+      | 'role_arn' '=' val
+      | 'region' '=' val
+    )
+    (
+      static_credentials
+      | 'profile_name' '=' val
+      | 'role_arn' '=' val
+      | 'region' '=' val
+    )*
+    ')'
+
+with_options_aws_static ::=
+  'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="601" height="123">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="120" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="120"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">access_key_id</text>
+   <rect x="171" y="3" width="28" height="32" rx="10"/>
+   <rect x="169"
+         y="1"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="179" y="21">=</text>
+   <rect x="219" y="3" width="38" height="32"/>
+   <rect x="217" y="1" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="227" y="21">val</text>
+   <rect x="277" y="3" width="24" height="32" rx="10"/>
+   <rect x="275"
+         y="1"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="285" y="21">,</text>
+   <rect x="321" y="3" width="152" height="32" rx="10"/>
+   <rect x="319"
+         y="1"
+         width="152"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="329" y="21">secret_access_key</text>
+   <rect x="493" y="3" width="28" height="32" rx="10"/>
+   <rect x="491"
+         y="1"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="501" y="21">=</text>
+   <rect x="541" y="3" width="38" height="32"/>
+   <rect x="539" y="1" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="549" y="21">val</text>
+   <rect x="345" y="89" width="24" height="32" rx="10"/>
+   <rect x="343"
+         y="87"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="353" y="107">,</text>
+   <rect x="389" y="89" width="58" height="32" rx="10"/>
+   <rect x="387"
+         y="87"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="397" y="107">token</text>
+   <rect x="467" y="89" width="28" height="32" rx="10"/>
+   <rect x="465"
+         y="87"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="475" y="107">=</text>
+   <rect x="515" y="89" width="38" height="32"/>
+   <rect x="513" y="87" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="523" y="107">val</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m120 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m0 0 h10 m24 0 h10 m0 0 h10 m152 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-298 54 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h218 m-248 0 h20 m228 0 h20 m-268 0 q10 0 10 10 m248 0 q0 -10 10 -10 m-258 10 v12 m248 0 v-12 m-248 12 q0 10 10 10 m228 0 q10 0 10 -10 m-238 10 h10 m24 0 h10 m0 0 h10 m58 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m23 -32 h-3"/>
+   <polygon points="591 71 599 67 599 75"/>
+   <polygon points="591 71 583 67 583 75"/>
+</svg>
