@@ -208,7 +208,7 @@ def dashboard_links(start_time: str, env: str) -> None:
     template = (
         "https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?"
         + "orgId=1&from={time_from}&to={time_to}&var-test={test}&var-purpose={purpose}"
-        + "&var-env={env}"
+        + "&var-env={env}&var-git_ref={tag}"
     )
     purpose = "load_test"
 
@@ -220,7 +220,12 @@ def dashboard_links(start_time: str, env: str) -> None:
         "kafka-ingest-open-loop-persist",
     ):
         url = template.format(
-            time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
+            time_from=time_from,
+            time_to=time_to,
+            test=test,
+            purpose=purpose,
+            env=env,
+            tag=tag,
         )
         tests.append((test, url))
 
