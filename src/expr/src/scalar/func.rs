@@ -3028,10 +3028,10 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::LikeEscape => f.write_str("like_escape"),
             BinaryFunc::IsLikeMatch {
                 case_insensitive: false,
-            } => f.write_str("~~"),
+            } => f.write_str("like"),
             BinaryFunc::IsLikeMatch {
                 case_insensitive: true,
-            } => f.write_str("~~*"),
+            } => f.write_str("ilike"),
             BinaryFunc::IsRegexpMatch {
                 case_insensitive: false,
             } => f.write_str("~"),
@@ -4518,8 +4518,8 @@ impl UnaryFunc {
             BitLengthString => f.write_str("bit_length"),
             ByteLengthBytes => f.write_str("octet_length"),
             ByteLengthString => f.write_str("octet_length"),
-            IsLikeMatch(matcher) => write!(f, "~~ {}", matcher.pattern.quoted()),
-            IsRegexpMatch(regex) => write!(f, "~ {}", regex.as_str().quoted()),
+            IsLikeMatch(matcher) => write!(f, "like {}", matcher.pattern.quoted()),
+            IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             ExtractInterval(units) => write!(f, "extract_{}_iv", units),
             ExtractTime(units) => write!(f, "extract_{}_t", units),

@@ -3100,7 +3100,7 @@ fn plan_like(
         Some(ref ty @ ScalarType::Char { length }) => expr
             .type_as(&ecx, ty)?
             .call_unary(UnaryFunc::PadChar(expr_func::PadChar { length })),
-        _ => expr.type_as(&ecx, &ScalarType::String)?,
+        _ => expr.cast_to(&ecx, Implicit, &ScalarType::String)?,
     };
     let mut pattern = plan_expr(&ecx, pattern)?.cast_to(&ecx, Implicit, &ScalarType::String)?;
     if let Some(escape) = escape {
