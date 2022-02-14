@@ -646,7 +646,6 @@ impl Client for LocalClient {
 /// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
 pub mod partitioned {
 
-    use std::cmp::Ordering;
     use std::collections::hash_map::Entry;
     use std::collections::HashMap;
     use std::iter::Fuse;
@@ -654,7 +653,7 @@ pub mod partitioned {
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
     use timely::order::PartialOrder;
-    use timely::progress::Antichain;
+    use timely::progress::{Antichain, ChangeBatch};
 
     use crate::TailResponse;
 
@@ -720,8 +719,10 @@ pub mod partitioned {
     /// (currently, coord.rs).
     struct PendingTail {
         /// `frontiers[i]` is an antichain representing the times at which we may
-        /// still receieve results from worker `i`.
+        /// still receive results from worker `i`.
         frontiers: HashMap<usize, Antichain<Timestamp>>,
+        /// Consolidated frontiers
+        change_batch: ChangeBatch<Timestamp>,
         /// The results (possibly unsorted) which have not yet been delivered.
         buffer: Vec<(Timestamp, Row, Diff)>,
         /// The number of unique shard IDs expected.
@@ -759,34 +760,33 @@ pub mod partitioned {
             // behave like PEEKs.
             match self.frontiers.entry(shard_id) {
                 Entry::Occupied(mut oe) => {
+                    for element in oe.get().elements() {
+                        self.change_batch.update(*element, -1);
+                    }
                     assert!(
                         PartialOrder::less_than(oe.get(), &progress),
                         "Timestamps should advance"
                     );
+                    for element in progress.elements() {
+                        self.change_batch.update(*element, 1);
+                    }
                     oe.insert(progress);
                 }
                 Entry::Vacant(ve) => {
+                    for element in progress.elements() {
+                        self.change_batch.update(*element, 1);
+                    }
                     ve.insert(progress);
                 }
             }
             assert!(self.frontiers.len() <= self.parts);
             if self.frontiers.len() == self.parts {
-                let min_frontier = self
-                    .frontiers
-                    .values()
-                    .min_by(|f1, f2| {
-                        if PartialOrder::less_than(*f1, *f2) {
-                            Ordering::Less
-                        } else if f1 == f2 {
-                            Ordering::Equal
-                        } else if PartialOrder::less_than(*f2, *f1) {
-                            Ordering::Greater
-                        } else {
-                            panic!("Tail requires totally-ordered timestamps!")
-                        }
-                    })
-                    .unwrap()
-                    .clone();
+                self.change_batch.compact();
+                let mut min_frontier = Antichain::new();
+                if let Some(time) = self.change_batch.iter().next().map(|(time, _)| *time) {
+                    min_frontier.insert(time);
+                }
+
                 // assert!(self.reported_frontier.less_equal(&min_frontier));
                 assert!(PartialOrder::less_equal(
                     &self.reported_frontier,
@@ -962,6 +962,7 @@ pub mod partitioned {
                     let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
                         Some(PendingTail {
                             frontiers: HashMap::new(),
+                            change_batch: Default::default(),
                             buffer: Vec::new(),
                             parts: self.parts,
                             reported_frontier: Antichain::from_elem(0),
@@ -994,7 +995,7 @@ pub mod partitioned {
                                 } else {
                                     // Return the data first, then the progress message.
                                     Box::new(
-                                        vec![
+                                        [
                                             Response::Compute(
                                                 ComputeResponse::TailResponse(
                                                     id,
