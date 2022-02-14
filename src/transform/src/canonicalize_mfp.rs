@@ -58,8 +58,6 @@ impl CanonicalizeMfp {
         mfp.optimize();
         if !mfp.is_identity() {
             let (map, mut filter, project) = mfp.as_map_filter_project();
-            println!("Map: {:?} \n Filter: {:?} \n Project: {:?}", map, filter, project);
-
             if !filter.is_empty() {
                 // Push down the predicates that can be pushed down, removing
                 // them from the mfp object to be optimized.
