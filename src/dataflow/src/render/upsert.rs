@@ -31,83 +31,6 @@ use tracing::error;
 use crate::operator::StreamExt;
 use crate::source::{DecodeResult, SourceData};
 
-/// An `Upserter` is a set of methods used to perform efficient unpacking and
-/// thinning of values.
-///
-/// Different [`Envelope`][`mz_dataflow_types::sources::SourceEnvelope`]'s have
-/// different guarantees about the shape and ordering of the decoded value
-/// [`Row`][`mz_repr::Row`], and this trait allows those envelopes to
-/// consider those contraints when thinning values to efficiently store
-/// key-value pairs in the core state used to implement the `upsert` logic.
-/// See <https://github.com/MaterializeInc/materialize/blob/b87ecbf0973535d65a216d7c142baf52436733b5/doc/user/layouts/partials/create-source/envelope/upsert/details.html>
-/// for more details about upsert.
-pub(crate) trait Upserter {
-    /// Given a decoded key and a decoded value (whose shape is _specific to
-    /// the current [`Envelope`][`mz_dataflow_types::sources::SourceEnvelope`] type),
-    /// create a vector of datums, that can borrow from those values, that represents
-    /// the ENTIRE row, as ordered and expected by the sql evaluation engine. This
-    /// is used to pre-evaluate predicates and skip values that cannot show up later.
-    ///
-    /// Returning a `None` means this value is `null`, and can be represented by
-    /// `Ok(None)` later down the pipeline.
-    // TODO(guswynn): Can we skip doing a full new vector, once
-    // TAIT's are landed in rustc?
-    fn make_output<'a>(&self, key: &'a Row, value: &'a Row) -> Option<Vec<Datum<'a>>>;
-
-    /// Remove the `key` values from the full row.
-    ///
-    /// After the `make_output` values are `evaluated` into a fully formed row,
-    /// we want to remove `keys`, to reduce a copy; the canonical storage for a key
-    /// is not in this row, but as the key in the upsert operator's state.
-    ///
-    /// `row_packer` should be used with [`mz_repr::Row::finish_and_reuse`] to efficiently
-    /// produce new rows.
-    fn thin(&self, value: &Row, row_packer: &mut Row) -> Row;
-
-    /// Re-construct a row from a key and the thinned row returned by [`Upserter::thin`].
-    /// This show should be functionally equivalent to the previous input of `thin` for
-    /// this key-value pair.
-    ///
-    /// `row_packer` should be used with [`mz_repr::Row::finish_and_reuse`] to efficiently
-    /// produce new rows.
-    fn rehydrate(&self, key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row;
-
-    /// `post_process` is a callback passed the current size of the data
-    /// `upsert_core` is tracking, allowing `Upserter` implementors
-    /// to set metrics, etc.
-    fn post_process(&self, _current_values_size: u64) {}
-}
-
-pub(crate) struct OrderedUpserter {
-    pub key_arity: usize,
-    pub source_arity: usize,
-}
-
-/// The `OrderedUpserter` is the simplest implementor of [`Upserter`]. It builds
-/// a key-then-value ordered list of datums for evaluations, then thins and rehydrate's
-/// the row by stripping and replacing _arity of the key` values from the front.
-impl Upserter for OrderedUpserter {
-    fn make_output<'a>(&self, key: &'a Row, value: &'a Row) -> Option<Vec<Datum<'a>>> {
-        let mut datums = Vec::with_capacity(self.source_arity);
-        datums.extend(key.iter());
-        datums.extend(value.iter());
-        Some(datums)
-    }
-
-    fn thin(&self, value: &Row, row_packer: &mut Row) -> Row {
-        row_packer.clear();
-        row_packer.extend(value.iter().skip(self.key_arity));
-        row_packer.finish_and_reuse()
-    }
-
-    fn rehydrate(&self, key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row {
-        row_packer.clear();
-        row_packer.extend(key.iter());
-        row_packer.extend(thinned_value.iter());
-        row_packer.finish_and_reuse()
-    }
-}
-
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
     raw_data: SourceData,
@@ -124,7 +47,7 @@ struct UpsertSourceData {
 /// When `persist_config` is `Some` this will write upsert state to the configured persistent
 /// collection and restore state from it. This does now, however, seal the backing collection. It
 /// is the responsibility of the caller to ensure that the collection is sealed up.
-pub(crate) fn upsert<G, U>(
+pub(crate) fn upsert<G, P>(
     source_name: &str,
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
@@ -134,27 +57,30 @@ pub(crate) fn upsert<G, U>(
     persist_config: Option<
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
     >,
-    // this callback is designed to allow the CALLER to
-    // transform whatever `Row` comes out of decode for the VALUE (not key)
-    // and produce either a `None` (say they determined the row MEANS `null`
-    // somehow) or `Some(Row)`, where the internal row is ONLY the values
-    // (no keys). This allows the upsert core logic to try to trim
-    // copies of keys as much as possible.
+    // Given a decoded key and a decoded value (whose shape is _specific to
+    // the current [`Envelope`][`mz_dataflow_types::sources::SourceEnvelope`] type),
+    // create a vector of datums, that can borrow from those values, that represents
+    // the ENTIRE row, as ordered and expected by the sql evaluation engine. This
+    // is used to pre-evaluate predicates and skip values that cannot show up later.
     //
-    // It is also passed a mutable refernce to a `Row` to be used as
-    // an efficient way to pack rows (using `Row::finish_and_reuse`),
-    // if thats desired
+    // Returning a `None` means this value is `null`, and can be represented by
+    // `Ok(None)` later down the pipeline.
+    // Some(after_idx) skips the first after_idx values and looks for the value row
+    // (or null), designed to unpack debezium values
+    // None means just prepend the key with the value (normal upsert)
     //
-    // TODO(guswynn): this is currently unused by `persistent_upsert`,
-    // merge `persistent_upsert` and `upsert_core`
-    upserter: U,
+    // TODO(guswynn): !!! refactor `SourceEnvelope` to avoid these awkward parameters,
+    // and support upsert with non-prepended keys
+    after_idx: Option<usize>,
+    key_indices: Vec<usize>,
+    post_process: P,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    U: Upserter + 'static,
+    P: Fn(u64) + 'static,
 {
     // Currently, the upsert-specific transformations run in the
     // following order:
@@ -236,8 +162,16 @@ where
 
     let (upsert_output, upsert_persist_errs) = match persist_config {
         None => {
-            let upsert_output =
-                upsert_core(stream, predicates, position_or, as_of_frontier, upserter);
+            let upsert_output = upsert_core(
+                stream,
+                predicates,
+                position_or,
+                as_of_frontier,
+                source_arity,
+                after_idx,
+                key_indices,
+                post_process,
+            );
 
             let upsert_errs = operator::empty(&stream.scope());
 
@@ -375,17 +309,19 @@ fn evaluate(
 }
 
 /// Internal core upsert logic.
-fn upsert_core<G, U>(
+fn upsert_core<G, P>(
     stream: &Stream<G, DecodeResult>,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
-    // See the docs on `self::upsert`
-    upserter: U,
+    source_arity: usize,
+    after_idx: Option<usize>,
+    key_indices: Vec<usize>,
+    post_process: P,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
 where
     G: Scope<Timestamp = Timestamp>,
-    U: Upserter + 'static,
+    P: Fn(u64) + 'static,
 {
     let result_stream = stream.unary_frontier(
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
@@ -478,8 +414,35 @@ where
                                         Some(value) => {
                                             match value {
                                                 Ok(row) => {
-                                                    let envelope_value =
-                                                        upserter.make_output(&decoded_key, &row);
+                                                    let envelope_value = match after_idx {
+                                                        Some(after_idx) => {
+                                                            match row.iter().nth(after_idx).unwrap()
+                                                            {
+                                                                Datum::List(after) => {
+                                                                    let mut datums =
+                                                                        Vec::with_capacity(
+                                                                            source_arity,
+                                                                        );
+                                                                    datums.extend(after.iter());
+                                                                    Some(datums)
+                                                                }
+                                                                Datum::Null => None,
+                                                                d => panic!(
+                                                                    "type error: expected record, \
+                                                                        found {:?}",
+                                                                    d
+                                                                ),
+                                                            }
+                                                        }
+
+                                                        None => {
+                                                            let mut datums =
+                                                                Vec::with_capacity(source_arity);
+                                                            datums.extend(decoded_key.iter());
+                                                            datums.extend(row.iter());
+                                                            Some(datums)
+                                                        }
+                                                    };
 
                                                     /*
                                                     let mut datums =
@@ -525,14 +488,15 @@ where
                                         let thinned_value = new_value
                                             .as_ref()
                                             .map(|full_row| {
-                                                upserter.thin(&full_row, &mut row_packer)
+                                                thin(&key_indices, &full_row, &mut row_packer)
                                             })
                                             .map_err(|e| e.clone());
                                         current_values
                                             .insert(decoded_key.clone(), thinned_value)
                                             .map(|res| {
                                                 res.map(|v| {
-                                                    upserter.rehydrate(
+                                                    rehydrate(
+                                                        &key_indices,
                                                         &decoded_key,
                                                         &v,
                                                         &mut row_packer,
@@ -542,7 +506,8 @@ where
                                     } else {
                                         current_values.remove(&decoded_key).map(|res| {
                                             res.map(|v| {
-                                                upserter.rehydrate(
+                                                rehydrate(
+                                                    &key_indices,
                                                     &decoded_key,
                                                     &v,
                                                     &mut row_packer,
@@ -580,10 +545,59 @@ where
                 for time in removed_times {
                     to_send.remove(&time);
                 }
-                upserter.post_process(current_values.len() as u64)
+                post_process(current_values.len() as u64);
             }
         },
     );
 
     result_stream
+}
+
+/// `thin` uses information from the source description to find which indexes in the row
+/// are keys and skip them.
+fn thin(key_indices: &Vec<usize>, value: &Row, row_packer: &mut Row) -> Row {
+    let mut index = 0;
+    row_packer.clear();
+    for (i, d) in value.iter().enumerate() {
+        if key_indices.get(index) == Some(&i) {
+            index += 1;
+        } else {
+            row_packer.push(d)
+        }
+    }
+    row_packer.finish_and_reuse()
+}
+
+/// `thin` uses information from the source description to find which indexes in the row
+/// are keys and add them back in in the right places.
+fn rehydrate(
+    key_indices: &Vec<usize>,
+    key: &Row,
+    thinned_value: &Row,
+    row_packer: &mut Row,
+) -> Row {
+    row_packer.clear();
+
+    let mut index = 0;
+    let mut count = 0;
+
+    let mut ki = key.iter();
+    let mut vi = thinned_value.iter();
+    loop {
+        if key_indices.get(index).is_some() {
+            row_packer.push(ki.next().expect(
+                "DebeziumEnvelope(DebeziumMode::Upsert) \
+                    to ensure the key_indices matches the key length",
+            ));
+            count += 1;
+        } else if let Some(v) = vi.next() {
+            row_packer.push(v);
+        } else if count >= key_indices.len() {
+            break;
+        }
+
+        index += 1;
+    }
+
+    row_packer.finish_and_reuse()
 }

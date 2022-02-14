@@ -23,88 +23,12 @@ use mz_dataflow_types::{
     DataflowError, DecodeError, LinearOperator,
 };
 use mz_expr::GlobalId;
-use mz_ore::metrics::UIntGauge;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::metrics::Metrics;
 use crate::source::DecodeResult;
 
 use timely::progress::Antichain;
-
-struct DebeziumUpserter {
-    key_indices: Vec<usize>,
-    after_idx: usize,
-    source_arity: usize,
-    gauge: UIntGauge,
-}
-
-/// An [`Upserter`][`super::upsert::Upserter`] for `DEBEZIUM UPSERT`. See
-/// the individual methods for explanations.
-impl super::upsert::Upserter for DebeziumUpserter {
-    /// Building a row for the rest of dataflow requires using the `after_idx` that
-    /// `typecheck_debezium` in `mz_sql::plan` determined`.
-    // TODO(guswynn): Is there any way to avoid storing the keys in `upsert_core`'s `to_send`
-    // storage, without having to thin-and-rehydrate twice?
-    fn make_output<'a>(&self, _key: &'a Row, value: &'a Row) -> Option<Vec<Datum<'a>>> {
-        match value.iter().nth(self.after_idx).unwrap() {
-            Datum::List(after) => {
-                let mut datums = Vec::with_capacity(self.source_arity);
-                datums.extend(after.iter());
-                Some(datums)
-            }
-            Datum::Null => None,
-            d => panic!("type error: expected record, found {:?}", d),
-        }
-    }
-
-    /// `thin` uses information from the source description to find which indexes in the row
-    /// are keys and skip them.
-    fn thin(&self, value: &Row, row_packer: &mut Row) -> Row {
-        let mut index = 0;
-        row_packer.clear();
-        for (i, d) in value.iter().enumerate() {
-            if self.key_indices.get(index) == Some(&i) {
-                index += 1;
-            } else {
-                row_packer.push(d)
-            }
-        }
-        row_packer.finish_and_reuse()
-    }
-
-    /// `thin` uses information from the source description to find which indexes in the row
-    /// are keys and add them back in in the right places.
-    fn rehydrate(&self, key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row {
-        row_packer.clear();
-
-        let mut index = 0;
-        let mut count = 0;
-
-        let mut ki = key.iter();
-        let mut vi = thinned_value.iter();
-        loop {
-            if self.key_indices.get(index).is_some() {
-                row_packer.push(ki.next().expect(
-                    "DebeziumEnvelope(DebeziumMode::Upsert) \
-                    to ensure the key_indices matches the key length",
-                ));
-                count += 1;
-            } else if let Some(v) = vi.next() {
-                row_packer.push(v);
-            } else if count >= self.key_indices.len() {
-                break;
-            }
-
-            index += 1;
-        }
-
-        row_packer.finish_and_reuse()
-    }
-
-    fn post_process(&self, current_values_size: u64) {
-        self.gauge.set(current_values_size);
-    }
-}
 
 pub(crate) struct DebeziumUpsertRenderContext<'a> {
     pub upsert_operator_name: String,
@@ -134,7 +58,9 @@ where
 {
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     match envelope.mode {
+        // TODO(guswynn): !!! Correctly deduplicate even in the upsert case
         DebeziumMode::Upsert => {
+            let gauge = metrics.debezium_upsert_count_for(src_id, dataflow_id);
             super::upsert::upsert(
                 &upsert_context.upsert_operator_name,
                 input,
@@ -142,22 +68,16 @@ where
                 upsert_context.operators,
                 upsert_context.source_arity,
                 None,
-                // TODO(guswynn): check with petros if the expect here is
-                // right
-                //
+                Some(after_idx),
                 // https://github.com/MaterializeInc/materialize/blob/main/src/dataflow-types/src/types.rs#L935-L937
                 // +
                 // https://github.com/MaterializeInc/materialize/blob/b87ecbf0973535d65a216d7c142baf52436733b5/src/sql/src/plan/statement/ddl.rs#L1013-L1020
-                // guarantee this expect is fin
-                DebeziumUpserter {
-                    key_indices: upsert_context.key_indices.expect(
-                        "SourceEnvelope::Debezium(DebeziumMode::Upsert)\
+                // guarantee this expect is fine
+                upsert_context.key_indices.expect(
+                    "SourceEnvelope::Debezium(DebeziumMode::Upsert)\
                         to have RelationType::keys",
-                    ),
-                    after_idx,
-                    source_arity: upsert_context.source_arity,
-                    gauge: metrics.debezium_upsert_count_for(src_id, dataflow_id),
-                },
+                ),
+                move |current_values_size| gauge.set(current_values_size),
             )
         }
         _ => input

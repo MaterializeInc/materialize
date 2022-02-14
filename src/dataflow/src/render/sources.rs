@@ -446,10 +446,9 @@ where
                                         .map(|config| config.upsert_config().clone()),
                                     // Non-debezium upsert always has keys in order in front of
                                     // values in evaluation.
-                                    super::upsert::OrderedUpserter {
-                                        key_arity,
-                                        source_arity,
-                                    },
+                                    None,
+                                    (0..key_arity).collect(),
+                                    |_| {},
                                 );
 
                                 // When persistence is enabled we need to seal up both the
