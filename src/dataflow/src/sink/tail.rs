@@ -60,14 +60,10 @@ where
         // An encapsulation of the Tail response protocol.
         // Used to send rows and progress messages,
         // and alert if the dataflow was dropped before completing.
-        let tail_protocol_handle = Rc::new(RefCell::new(if true {
-            Some(TailProtocol {
-                sink_id,
-                tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
-            })
-        } else {
-            None
-        }));
+        let tail_protocol_handle = Rc::new(RefCell::new(Some(TailProtocol {
+            sink_id,
+            tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
+        })));
         let tail_protocol_weak = Rc::downgrade(&tail_protocol_handle);
 
         tail(
