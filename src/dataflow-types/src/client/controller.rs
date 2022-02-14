@@ -14,8 +14,10 @@ use crate::client::{
     Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response, StorageCommand,
 };
 use mz_expr::GlobalId;
-use mz_repr::Timestamp;
-use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
+use timely::progress::Timestamp;
+use timely::progress::{Antichain, ChangeBatch};
+use timely::progress::frontier::AntichainRef;
+use differential_dataflow::lattice::Lattice;
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<C> {
@@ -26,17 +28,21 @@ pub struct Controller<C> {
     /// A `None` variant means that the source was dropped before it was first created.
     source_descriptions: std::collections::BTreeMap<GlobalId, Option<crate::sources::SourceDesc>>,
     /// Tracks `since` and `upper` frontiers for indexes and sinks.
-    compute_since_uppers: BTreeMap<ComputeInstanceId, SinceUpperMap>,
+    compute_since_uppers: BTreeMap<ComputeInstanceId, SinceUpperMap<mz_repr::Timestamp>>,
     /// Tracks `since` and `upper` frontiers for sources and tables.
-    storage_since_uppers: SinceUpperMap,
+    storage_since_uppers: SinceUpperMap<mz_repr::Timestamp>,
+    /// Constraints on `since` bounds from users and dependent indexes and sinks.
+    compaction_constraints: Constraints<mz_repr::Timestamp>,
 }
 
 #[async_trait::async_trait]
 impl<C: Client> Client for Controller<C> {
     async fn send(&mut self, cmd: Command) {
+        self.compaction_constraints.maintain();
         self.send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
+        self.compaction_constraints.maintain();
         self.recv().await
     }
 }
@@ -200,6 +206,7 @@ impl<C> Controller<C> {
             source_descriptions: Default::default(),
             compute_since_uppers: Default::default(),
             storage_since_uppers: Default::default(),
+            compaction_constraints: Constraints::new(),
         }
     }
     /// Returns the source description for a given identifier.
@@ -224,38 +231,41 @@ impl<C> Controller<C> {
     pub fn source_since_upper_for(
         &self,
         id: GlobalId,
-    ) -> Option<(AntichainRef<Timestamp>, AntichainRef<Timestamp>)> {
+    ) -> Option<(AntichainRef<mz_repr::Timestamp>, AntichainRef<mz_repr::Timestamp>)> {
         self.storage_since_uppers.get(&id)
+    }
+
+    pub fn pin_compaction(&mut self, ids: Vec<GlobalId>) -> ConstraintPin<mz_repr::Timestamp> {
+        self.compaction_constraints.pin_compaction(ids)
     }
 }
 
 #[derive(Default)]
-struct SinceUpperMap {
+struct SinceUpperMap<T: Timestamp+Lattice> {
     since_uppers:
-        std::collections::BTreeMap<GlobalId, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+        std::collections::BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)>,
 }
 
-impl SinceUpperMap {
-    fn insert(&mut self, id: GlobalId, since_upper: (Antichain<Timestamp>, Antichain<Timestamp>)) {
+impl<T: Timestamp+Lattice> SinceUpperMap<T> {
+    fn insert(&mut self, id: GlobalId, since_upper: (Antichain<T>, Antichain<T>)) {
         self.since_uppers.insert(id, since_upper);
     }
-    fn get(&self, id: &GlobalId) -> Option<(AntichainRef<Timestamp>, AntichainRef<Timestamp>)> {
+    fn get(&self, id: &GlobalId) -> Option<(AntichainRef<T>, AntichainRef<T>)> {
         self.since_uppers
             .get(id)
             .map(|(since, upper)| (since.borrow(), upper.borrow()))
     }
-    fn advance_since_for(&mut self, id: GlobalId, frontier: &Antichain<Timestamp>) {
+    fn advance_since_for(&mut self, id: GlobalId, frontier: &Antichain<T>) {
         if let Some((since, _upper)) = self.since_uppers.get_mut(&id) {
-            use differential_dataflow::lattice::Lattice;
             since.join_assign(frontier);
         } else {
             // If we allow compaction before the item is created, pre-restrict the valid range.
             // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
             self.since_uppers
-                .insert(id, (frontier.clone(), Antichain::from_elem(0)));
+                .insert(id, (frontier.clone(), Antichain::from_elem(T::minimum())));
         }
     }
-    fn update_upper_for(&mut self, id: GlobalId, changes: &ChangeBatch<Timestamp>) {
+    fn update_upper_for(&mut self, id: GlobalId, changes: &ChangeBatch<T>) {
         if let Some((_since, upper)) = self.since_uppers.get_mut(&id) {
             // Apply `changes` to `upper`.
             let mut changes = changes.clone();
@@ -272,5 +282,199 @@ impl SinceUpperMap {
             // If we can tell these are updates to an id that could still be constructed,
             // something is weird and we should error.
         }
+    }
+}
+
+pub struct Constraints<T: Timestamp> {
+    pub constraints: DependencyMap<T>,
+    /// Send and Recv pair for information about changes in expressed constraints.
+    dependency_send: crossbeam_channel::Sender<(Vec<GlobalId>, ChangeBatch<T>)>,
+    dependency_recv: crossbeam_channel::Receiver<(Vec<GlobalId>, ChangeBatch<T>)>,
+}
+
+impl<T: Timestamp+Lattice> Constraints<T> {
+    fn new() -> Self {
+        let (dependency_send, dependency_recv) = crossbeam_channel::unbounded();
+        Self {
+            constraints: Default::default(),
+            dependency_send,
+            dependency_recv,
+        }
+    }
+    fn pin_compaction(&mut self, ids: Vec<GlobalId>) -> ConstraintPin<T> {
+        ConstraintPin {
+            constraint: self.constraints.constraint_from(ids),
+            channel: self.dependency_send.clone(),
+        }
+    }
+    /// Applies accumulated maintenance work from constraint pins.
+    ///
+    /// Returns consequent changes in constraints at other operators.
+    fn maintain(&mut self) -> BTreeMap<GlobalId, ChangeBatch<T>> {
+        let mut updates = BTreeMap::new();
+        while let Ok((ids, mut update)) = self.dependency_recv.try_recv() {
+            for id in ids.into_iter() {
+                updates.entry(id).or_insert_with(ChangeBatch::new).extend(update.iter().cloned());
+            }
+        }
+        self.constraints.propagate(&mut updates)
+    }
+}
+
+/// A `Constraint` that can be owned and will correctly propagate changes to the constraint.
+pub struct ConstraintPin<T: Timestamp> {
+    constraint: Constraint<T>,
+    channel: crossbeam_channel::Sender<(Vec<GlobalId>, ChangeBatch<T>)>,
+}
+
+impl<T: Timestamp> ConstraintPin<T> {
+    pub fn frontier(&self) -> AntichainRef<T> {
+        self.constraint.frontier.frontier()
+    }
+
+    pub fn downgrade_to(&mut self, frontier: AntichainRef<T>) {
+        let mut updates = ChangeBatch::default();
+        updates.extend(frontier.iter().map(|time| (time.clone(), 1)));
+        updates.extend(self.constraint.frontier.frontier().iter().map(|time| (time.clone(), -1)));
+        self.constraint.frontier.clear();
+        self.constraint.frontier.update_iter(frontier.into_iter().map(|time| (time.clone(), 1)));
+        let depends_on = self.constraint.depends_on.clone();
+        // If the other end has hung up, we are not longer tracking constraints.
+        let _ = self.channel.send((depends_on, updates));
+    }
+}
+
+impl<T: Timestamp> Drop for ConstraintPin<T> {
+    fn drop(&mut self) {
+        let mut updates = ChangeBatch::default();
+        updates.extend(self.constraint.frontier.frontier().iter().map(|time| (time.clone(), -1)));
+        let depends_on = std::mem::take(&mut self.constraint.depends_on);
+        // If the other end has hung up, we are not longer tracking constraints.
+        let _ = self.channel.send((depends_on, updates));
+    }
+}
+
+pub use dependency_map::{DependencyMap, Constraint};
+/// Tracking the constraints on compaction across collections.
+mod dependency_map {
+
+    use std::collections::BTreeMap;
+
+    use differential_dataflow::lattice::Lattice;
+    use timely::progress::frontier::MutableAntichain;
+    use timely::progress::Timestamp;
+    use timely::progress::{Antichain, ChangeBatch};
+
+    use mz_expr::GlobalId;
+
+    /// Contains dependencies of outputs on inputs, and propagates constraints along them.
+    ///
+    /// Specifically, we track for various `GlobalId`s for which times the id must be "valid",
+    /// using the `since` frontier. If an output must be valid for some `since`, then the inputs
+    /// must also remain valid, so that the ouputs could be reconstructed in the case of a fault.
+    ///
+    /// Sources in particular must not be allowed to compact their representation until we are
+    /// certain that downstream consumers no longer rely on the information. It is less clear
+    /// whether we *must* hold back intermediate index compaction, though it would be of use in
+    /// the case that we wanted to migrate dataflows around (e.g. stop and restart a dataflow,
+    /// without a COMPUTE-wide fault).
+    pub struct DependencyMap<T> {
+        /// Constraints identifiers impose on each other.
+        ///
+        /// Each constraint names other *strictly prior* identifiers, as well as holds the
+        /// constrained frontier that these identifiers must respect. The frontier contains
+        /// the accumulated constraints imposed on it as well.
+        constraints: BTreeMap<GlobalId, Constraint<T>>
+    }
+
+    impl<T> Default for DependencyMap<T> {
+        fn default() -> Self {
+            Self { constraints: BTreeMap::default() }
+        }
+    }
+
+    impl<T: Timestamp + Lattice> DependencyMap<T> {
+        /// Introduces a new identifier to be tracked.
+        ///
+        /// To remove an identifier, downgrade its constraint to the empty frontier.
+        pub fn add(&mut self, id: GlobalId, depends_on: Vec<GlobalId>) {
+            // Only allow dependence on strictly prior identifier.
+            assert!(depends_on.iter().all(|d| d < &id));
+            // Introduce state about `id`.
+            let constraint = self.constraint_from(depends_on);
+            self.constraints.insert(id, constraint);
+        }
+        /// Applies `updates` to each frontier, and transitively applies the effects to those it depends on.
+        ///
+        /// If the updates or their transitive effects result in constraints advancing to the empty frontier,
+        /// they are removed from the tracking structure.
+        ///
+        /// Returns the transitive effects applied to all identifiers, which includes the initial `updates`.
+        pub fn propagate(
+            &mut self,
+            updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
+        ) -> BTreeMap<GlobalId, ChangeBatch<T>> {
+            let mut results = BTreeMap::<GlobalId, ChangeBatch<T>>::default();
+            // Repeatedly extract the *greatest* identifier, topologically last.
+            while let Some(last) = updates.keys().rev().next().cloned() {
+                let mut update = updates.remove(&last).expect("Certain to exist");
+                let constraint = self
+                    .constraints
+                    .get_mut(&last)
+                    .expect("Propagating changes for absent constraint");
+                let changes = constraint.frontier.update_iter(update.drain());
+                update.extend(changes);
+                // `update` now contains the change in constraints to pass along to those `last` depends on.
+                for id in constraint.depends_on.iter() {
+                    // Communicate change
+                    updates
+                        .get_mut(id)
+                        .expect("Depended on an absent identifier")
+                        .extend(update.iter().cloned());
+                }
+                results.insert(last, update);
+                // Clean up, if the constraint is now vacuuous.
+                if constraint.frontier.frontier().is_empty() {
+                    self.constraints.remove(&last);
+                }
+            }
+            results
+        }
+
+        pub fn constraint_from(&mut self, depends_on: Vec<GlobalId>) -> Constraint<T> {
+            // The initial state of `id`'s constraints are determined by the state of those it depends on.
+            let mut initially = Antichain::from_elem(T::minimum());
+            for depended_on in depends_on.iter() {
+                let mut upper = Antichain::new();
+                for time1 in initially.elements().iter() {
+                    for time2 in self.constraints[depended_on].frontier.frontier().iter() {
+                        upper.insert(time1.join(time2));
+                    }
+                }
+                initially = upper;
+            }
+            // Inform each of those `id` depends up of the new constraint.
+            let mut update = ChangeBatch::new();
+            update.extend(initially.iter().map(|time| (time.clone(), 1)));
+            let mut updates = BTreeMap::default();
+            for depended_on in depends_on.iter() {
+                updates.insert(*depended_on, update.clone());
+            }
+            self.propagate(&mut updates);
+            let mut frontier = MutableAntichain::default();
+            frontier.update_iter(initially.iter().map(|time| (time.clone(), 1)));
+            Constraint {
+                frontier,
+                depends_on,
+            }
+        }
+    }
+
+    /// A constraint imposed on the frontiers of other identifiers.
+    pub struct Constraint<T> {
+        /// The frontier the constraint holds.
+        pub(super) frontier: MutableAntichain<T>,
+        /// Those whose frontiers must be held to `frontier`.
+        pub(super) depends_on: Vec<GlobalId>,
     }
 }
