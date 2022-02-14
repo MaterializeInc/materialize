@@ -8,5 +8,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+#
+# mzcompose — runs Docker Compose with Materialize customizations.
 
-find . -name 'junit_*.xml' -delete
+exec "$(dirname "$0")"/../../../../bin/pyactivate -m materialize.cli.mzcompose "$@"

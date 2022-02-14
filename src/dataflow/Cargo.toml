@@ -54,13 +54,13 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.5.4"
 scopeguard = "1.1.0"
 serde = { version = "1.0.136", features = ["derive"] }
-serde_json = "1.0.78"
+serde_json = "1.0.79"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.16.1", features = ["fs", "rt", "sync"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-util = { version = "0.6.9", features = ["codec", "io"] }
-tracing = "0.1.29"
+tracing = "0.1.30"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 

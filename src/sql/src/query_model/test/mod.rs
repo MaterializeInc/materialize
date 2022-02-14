@@ -13,69 +13,130 @@ pub(crate) mod util;
 use crate::plan::query::QueryLifetime;
 use crate::plan::StatementContext;
 use mz_expr_test_util::generate_explanation;
+use mz_lowertest::*;
 
 use crate::query_model;
 use catalog::TestCatalog;
 
+use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Tests to run on a Query Graph Model.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, MzReflect)]
+enum Directive {
+    // TODO: support build apply=(<stuff>)
+    /// Apply any number of specific changes to the model.
+    Build,
+    /// Decorrelate the model and convert it to a `MirRelationExpr`.
+    Lower,
+    /// Optimize the model.
+    Opt,
+    /// Optimize and decorrelate the model. Then convert it to a `MirRelationExpr`.
+    EndToEnd,
+}
+
+lazy_static! {
+    pub static ref RTI: ReflectedTypeInfo = {
+        let mut rti = ReflectedTypeInfo::default();
+        Directive::add_to_reflected_type_info(&mut rti);
+        rti
+    };
+}
+
+/// Convert the input string to a Query Graph Model.
+fn convert_input_to_model(
+    input: &str,
+    catalog: &TestCatalog,
+) -> Result<query_model::Model, String> {
+    // TODO (#9347): Support parsing specs for HirRelationExpr.
+    // TODO (#10518): Support parsing specs for QGM.
+    // match parse_input_as_qgm(input) {
+    //   Ok(model) => Ok(model),
+    //   Err(err) => {
+    //      let hir = match parse_input_as_hir(input) {
+    //         Ok(hir) => hir,
+    //         Err(err2) =>
+    //      }
+    //      query_model::Model::from(hir)
+    //   }
+    // }
+    match mz_sql_parser::parser::parse_statements(input) {
+        Ok(mut stmts) => {
+            assert!(stmts.len() == 1);
+            let stmt = stmts.pop().unwrap();
+            let scx = &StatementContext::new(None, catalog);
+            if let mz_sql_parser::ast::Statement::Select(query) = stmt {
+                let planned_query = match crate::plan::query::plan_root_query(
+                    scx,
+                    query.query,
+                    QueryLifetime::Static,
+                ) {
+                    Ok(planned_query) => planned_query,
+                    Err(e) => return Err(format!("unable to plan query: {}: {}", input, e)),
+                };
+                Ok(query_model::Model::from(planned_query.expr))
+            } else {
+                Err(format!("invalid query: {}", input))
+            }
+        }
+        Err(e) => {
+            // TODO: try to parse the input as a spec for an HIR.
+            // If that fails, try to parse the input as a spec for a QGM.
+            // Change this error message.
+            Err(format!("unable to parse SQL: {}: {}", input, e))
+        }
+    }
+}
+
+fn run_command(
+    command: &str,
+    input: &str,
+    args: &HashMap<String, Vec<String>>,
+    catalog: &TestCatalog,
+) -> Result<String, String> {
+    let mut model = convert_input_to_model(input, catalog)?;
+    let directive: Directive = deserialize(
+        &mut tokenize(command)?.into_iter(),
+        "Directive",
+        &RTI,
+        &mut GenericTestDeserializeContext::default(),
+    )?;
+
+    if matches!(directive, Directive::Opt | Directive::EndToEnd) {
+        model.optimize();
+    }
+
+    // TODO: allow printing multiple stages of the transformation of the query.
+    if matches!(directive, Directive::Lower | Directive::EndToEnd) {
+        Ok(generate_explanation(
+            catalog,
+            &model.into(),
+            args.get("format"),
+        ))
+    } else {
+        match model.as_dot(input) {
+            Ok(graph) => Ok(graph),
+            Err(e) => return Err(format!("graph generation error: {}", e)),
+        }
+    }
+}
+
 #[test]
-fn test_hir_generator() {
+fn test_qgm() {
     datadriven::walk("tests/querymodel", |f| {
         let mut catalog = TestCatalog::default();
 
         f.run(move |s| -> String {
-            let build_stmt = |stmt, dot_graph, lower| -> String {
-                let scx = &StatementContext::new(None, &catalog);
-                if let mz_sql_parser::ast::Statement::Select(query) = stmt {
-                    let planned_query = match crate::plan::query::plan_root_query(
-                        scx,
-                        query.query,
-                        QueryLifetime::Static,
-                    ) {
-                        Ok(planned_query) => planned_query,
-                        Err(e) => return format!("unable to plan query: {}: {}", s.input, e),
-                    };
-
-                    let model = query_model::Model::from(planned_query.expr);
-
-                    let mut output = String::new();
-
-                    if dot_graph {
-                        output += &match model.as_dot(&s.input) {
-                            Ok(graph) => graph,
-                            Err(e) => return format!("graph generation error: {}", e),
-                        };
-                    }
-
-                    if lower {
-                        output +=
-                            &generate_explanation(&catalog, &model.into(), s.args.get("format"));
-                    }
-
-                    output
-                } else {
-                    format!("invalid query: {}", s.input)
-                }
-            };
-
-            let execute_command = |dot_graph, lower| -> String {
-                let stmts = match mz_sql_parser::parser::parse_statements(&s.input) {
-                    Ok(stmts) => stmts,
-                    Err(e) => return format!("unable to parse SQL: {}: {}", s.input, e),
-                };
-
-                stmts.into_iter().fold("".to_string(), |c, stmt| {
-                    c + &build_stmt(stmt, dot_graph, lower)
-                })
-            };
-
             match s.directive.as_str() {
-                "build" => execute_command(true, false),
-                "lower" => execute_command(false, true),
                 "cat" => match catalog.execute_commands(&s.input) {
                     Ok(ok) => ok,
                     Err(err) => err,
                 },
-                _ => panic!("unknown directive: {}", s.directive),
+                other => match run_command(other, &s.input, &s.args, &catalog) {
+                    Ok(ok) => ok,
+                    Err(err) => err,
+                },
             }
         })
     });

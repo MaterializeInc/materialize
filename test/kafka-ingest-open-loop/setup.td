@@ -38,8 +38,8 @@ $ kafka-create-topic topic=load-test partitions=4
 #
 # TODO: remove this once the optimization is pushed down into persistent upsert
 # as well.
-> CREATE VIEW intermediate AS SELECT key0, data, kafka_partition, mz_offset FROM load_test
-  WHERE key0 != '\\x0' AND
+> CREATE VIEW intermediate AS SELECT data, kafka_partition, mz_offset FROM load_test
+  WHERE
   data != '\\x0' AND
   kafka_partition != 10000 AND
   mz_offset != -1

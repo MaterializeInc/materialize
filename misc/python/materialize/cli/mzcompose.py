@@ -238,7 +238,7 @@ class GenShortcutsCommand(Command):
 #
 # mzcompose — runs Docker Compose with Materialize customizations.
 
-exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
+exec "$(dirname "$0")"/{}/bin/pyactivate -m materialize.cli.mzcompose "$@"
 """
         for path in repo.compositions.values():
             mzcompose_path = path / "mzcompose"

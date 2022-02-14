@@ -14,6 +14,9 @@
 
 dag: true
 
+env:
+  CI_BUILDER_SCCACHE: 1
+
 steps:
   - id: build-x86_64
     label: Build x86_64
@@ -159,6 +162,7 @@ steps:
     label: Billing demo smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: billing
@@ -168,6 +172,7 @@ steps:
     label: Kinesis performance smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -176,6 +181,7 @@ steps:
   - id: chbench-demo
     label: chbench smoke test
     depends_on: build-x86_64
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench
@@ -186,6 +192,7 @@ steps:
     label: Catalog compatibility test
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: catalog-compat
@@ -195,6 +202,7 @@ steps:
     label: Restart test
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
@@ -203,6 +211,7 @@ steps:
     label: Upgrade tests
     depends_on: build-x86_64
     timeout_in_minutes: 60
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
@@ -212,6 +221,7 @@ steps:
     label: Metabase smoke test
     depends_on: build-x86_64
     timeout_in_minutes: 10
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: metabase
@@ -222,6 +232,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     artifact_paths: junit_mzcompose_*.xml
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
@@ -230,6 +241,7 @@ steps:
     label: Debezium Postgres tests
     depends_on: build-x86_64
     inputs: [test/debezium]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: debezium
@@ -239,6 +251,7 @@ steps:
     label: Debezium SQL Server tests
     depends_on: build-x86_64
     inputs: [test/debezium]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: debezium
@@ -248,6 +261,7 @@ steps:
     label: Postgres CDC tests
     depends_on: build-x86_64
     inputs: [test/pg-cdc]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc
@@ -256,6 +270,7 @@ steps:
     label: Postgres CDC resumption tests
     depends_on: build-x86_64
     inputs: [test/pg-cdc-resumption]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc-resumption
@@ -264,6 +279,7 @@ steps:
     label: S3 resumption tests
     depends_on: build-x86_64
     inputs: [test/s3-resumption]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: s3-resumption
@@ -271,6 +287,7 @@ steps:
   - id: kafka-resumption
     label: Kafka resumption tests
     depends_on: build-x86_64
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-resumption
@@ -278,6 +295,7 @@ steps:
   - id: kafka-exactly-once
     label: Kafka exactly-once tests
     depends_on: build-x86_64
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
@@ -285,6 +303,7 @@ steps:
   - id: persistence
     label: Persistence tests
     depends_on: build-x86_64
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
@@ -294,6 +313,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/csharp]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: csharp
@@ -304,6 +324,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/js]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: js
@@ -314,6 +335,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/java]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: java
@@ -324,6 +346,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/python]
+    artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: python
@@ -332,7 +355,9 @@ steps:
   - wait: ~
     continue_on_failure: true
 
-  - label: Analyze tests
+  - id: analyze
+    label: Analyze tests
+    inputs: ["*"]
     plugins:
       - junit-annotate#v2.0.2:
           artifacts: "*junit_*.xml"

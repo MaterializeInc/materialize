@@ -14,13 +14,13 @@ native-tls = "0.2.8"
 openssl = { version = "0.10.38", features = ["vendored"] }
 reqwest = { version = "0.11.9", features = ["blocking", "json", "native-tls-vendored"] }
 serde = { version = "1.0.136", features = ["derive"] }
-serde_json = "1.0.78"
+serde_json = "1.0.79"
 url = { version = "2.2.2", features = ["serde"] }
 
 [dev-dependencies]
-hyper = { version = "0.14.16", features = ["server"] }
+hyper = { version = "0.14.17", features = ["server"] }
 lazy_static = "1.4.0"
 mz-ore = { path = "../ore", features = ["task"] }
-serde_json = "1.0.78"
+serde_json = "1.0.79"
 tokio = { version = "1.16.1", features = ["macros"] }
-tracing = "0.1.29"
+tracing = "0.1.30"

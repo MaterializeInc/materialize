@@ -142,7 +142,8 @@ RUN mkdir rust \
     && rm -rf rust \
     && cargo install --root /usr/local --version "=1.33.1" cargo-deb \
     && cargo install --root /usr/local --version "=0.9.1" cargo-deny \
-    && cargo install --root /usr/local --version "=0.1.10" cargo2junit
+    && cargo install --root /usr/local --version "=0.1.10" cargo2junit \
+    && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache
 
 # Link the system lld into the cross-compiling sysroot.
 
@@ -216,6 +217,7 @@ ENV TARGET_RANLIB=$RANLIB
 ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
+ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=0
 
 # Set a environment variable that tools can check to see if they're in the
