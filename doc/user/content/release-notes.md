@@ -107,23 +107,6 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
-- **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
-  is called with a [`date`] value but a time-related field (e.g., `SECOND`).
-
-  Previous versions of Materialize would incorrectly return `0` in these cases.
-  The new behavior matches PostgreSQL.
-
-  [`date_part`](/sql/functions/date-part/) still returns a `0` in these cases,
-  which matches the PostgreSQL behavior {{% gh 9853 %}}.
-
-- **Breaking change.** Change the return type of [`extract`](/sql/functions/extract/)
-  from [`float`](/sql/types/float/) to [`numeric`](/sql/types/numeric/).
-
-  This new behavior matches PostgreSQL v14 {{% gh 9853 %}}.
-
-- **Breaking change.** Change the output of [`format_type`](/sql/functions/#system-information-func)
-  to match Postgres for some specific types.
-
 - **Breaking change.** Return an empty list for slice operations that retrieve
   no elements (e.g. the beginning of the slice's range exceeds the length of the
   list); previously Materialize returned NULL.
@@ -133,45 +116,7 @@ changes that have not yet been documented.
   -59.999999 seconds' to '-2147483648 months -2147483648 days -2147483648 hours
   -59 minutes -59.999999 seconds' to match PostgreSQL's behavior {{% gh 10598 %}}.
 
-- Add `microsecond`, `month`, `decade`, `century`, `millennium` units
-  to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
-  format {{% gh 10532 %}}.
-
-- Improve millisecond parsing for [`interval`](/sql/types/interval) using the
-  PostgreSQL verbose format {{% gh 6420 %}}.
-
-- Add the [`greatest`](/sql/functions/#generic) and [`least`](/sql/functions/#generic)
-  functions.
-
-- Correctly deduplicate debezium topics that have more than one partition.
-  Previous versions of materialize would experience data loss unless
-  `deduplication=full` was used.
-
-- Support the inverse [trigonometric functions](/sql/functions/#trigonometric-func)
-  `asin`, `asinh`, `acos`, `acosh`, `atan`, `atanh`.
-
-- Support the [`radians`](/sql/functions/#trigonometric-func) and
-  [`degrees`](/sql/functions/#trigonometric-func) functions.
-
-- Follow PostgreSQL's type conversion rules for the relations involved in a
-  `UNION`, `EXCEPT`, or `INTERSECT` operation {{% gh 3331 %}}.
-
-- Add the `md5`, `sha224`, `sha256`, `sha384`, and `sha512` [cryptography
-  functions](/sql/functions/#cryptography-func).
-
-- Support casting [`array`] types to [`list`] types.
-
-- Improve the performance of SQL `LIKE` expressions.
-
-- Add `SELECT` statement support to [`TAIL`](/sql/tail).
-
-- **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
-  of `CREATE SOURCE` and `CREATE SINK` no longer default
-  their SSL parameters to the kafka ones. Existing source definitions have
-  been migrated, however. See [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options))
-  for more info.
-
-- Fix a big where too many columns were returned when both `*` and a
+- Fix a bug where too many columns were returned when both `*` and a
   table function appeared in the `SELECT` list {{% gh 10363 %}}.
 
 {{< comment >}}
@@ -180,6 +125,79 @@ Only add new release notes above this line.
 The presence of this comment ensures that PRs that are alive across a release
 boundary don't silently merge their release notes into the wrong place.
 {{</ comment >}}
+
+{{% version-header v0.20.0 %}}
+
+- **Breaking change.** In Kafka sources and sinks, do not default the SSL
+  parameters for the Confluent Schema Registry to the SSL parameters for the
+  Kafka broker.
+
+  SSL parameters for the Confluent Schema Registry must now always be provided
+  explicitly, even when they are identical to the SSL parameters for the Kafka
+  broker. See the [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)
+  for details.
+
+  Existing source definitions have been automatically migrated to account for
+  the new behavior.
+
+- **Breaking change.** Change the return type of the
+  [`extract`](/sql/functions/extract/) function from [`float`](/sql/types/float/)
+  to [`numeric`](/sql/types/numeric/) {{% gh 9853 %}}.
+
+  The new behavior matches PostgreSQL v14.
+
+- **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
+  is called with a [`date`] value but a time-related field (e.g., `SECOND`)
+  {{% gh 9853 %}}.
+
+  Previous versions of Materialize would incorrectly return `0` in these cases.
+  The new behavior matches PostgreSQL.
+
+  [`date_part`](/sql/functions/date-part/) still returns a `0` in these cases,
+  which matches the PostgreSQL behavior.
+
+- **Breaking change.** Change the output of
+  [`format_type`](/sql/functions/#system-information-func) to use SQL standard
+  type names when possible, rather than PostgreSQL-specific type names.
+
+- Support assuming AWS roles in S3 and Kinesis sources {{% gh 5895 %}}. See
+  [Specifying AWS credentials](/sql/create-source/text-s3/#specifying-aws-credentials)
+  for details.
+
+- Support arbitrary `SELECT` statements in [`TAIL`](/sql/tail).
+
+  Previously, `TAIL` could only operate on sources, tables, and views.
+
+- Add the [`greatest`](/sql/functions/#generic-func) and [`least`](/sql/functions/#generic-func)
+  functions.
+
+- Add the [`radians`](/sql/functions/#trigonometric-func) and
+  [`degrees`](/sql/functions/#trigonometric-func) functions.
+
+- Add the inverse [trigonometric functions](/sql/functions/#trigonometric-func)
+  `asin`, `asinh`, `acos`, `acosh`, `atan`, `atanh`.
+
+- Add the [cryptography functions](/sql/functions/#cryptography-func) `md5`,
+  `sha224`, `sha256`, `sha384`, and `sha512`.
+
+- Add `microsecond`, `month`, `decade`, `century`, `millennium` units
+  to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
+  format.
+
+- Improve millisecond parsing for [`interval`](/sql/types/interval) using the
+  PostgreSQL verbose format {{% gh 6420 %}}.
+
+- Support casting [`array`] types to [`list`] types.
+
+- Follow PostgreSQL's type conversion rules for the relations involved in a
+  `UNION`, `EXCEPT`, or `INTERSECT` operation {{% gh 3331 %}}.
+
+- Correctly deduplicate Debezium-enveloped Kafka sources when the underlying
+  Kafka topic has more than one partition {{% gh 10375 %}}. Previous versions of
+  Materialize would lose data unless the `deduplication = 'full'` option was
+  specified.
+
+- Improve the performance of SQL `LIKE` expressions.
 
 {{% version-header v0.19.0 %}}
 
@@ -286,7 +304,7 @@ boundary don't silently merge their release notes into the wrong place.
    2
   ```
 
-- In Kafka sources, support independent SSL configurations for the Confluent
+- In Kafka sources and sinks, support independent SSL configurations for the Confluent
   Schema Registry and the Kafka broker. See the new
   [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)
   for details.

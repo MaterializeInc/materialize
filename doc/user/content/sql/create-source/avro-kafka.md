@@ -101,7 +101,11 @@ FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret' WITH (
     ssl_ca_location = '/secrets/ca.crt',
     ssl_key_password = 'mzmzmz'
 )
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081';
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081' WITH (
+    ssl_key_location = '/secrets/materialized.key',
+    ssl_certificate_location = '/secrets/materialized.crt',
+    ssl_ca_location = '/secrets/ca.crt',
+);
 ```
 
 This creates a source that...
