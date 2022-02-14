@@ -120,7 +120,7 @@ changes that have not yet been documented.
   table function appeared in the `SELECT` list {{% gh 10363 %}}.
 
 - Improve the clarity of any Avro schema resolution errors found when
-  creating materialized sources and views.
+  creating materialized sources and views. {{% gh 8415 %}}
 
 {{< comment >}}
 Only add new release notes above this line.
