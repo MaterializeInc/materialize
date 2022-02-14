@@ -1,0 +1,393 @@
+---
+title: "CREATE SOURCE: Kafka"
+description: "Connecting Materialize to a Kafka or Redpanda broker"
+menu:
+  main:
+    parent: 'create-source'
+aliases:
+    - /sql/create-source/avro-kafka
+    - /sql/create-source/json-kafka
+    - /sql/create-source/protobuf-kafka
+    - /sql/create-source/text-kafka
+    - /sql/create-source/csv-kafka
+---
+
+{{% create-source/intro %}}
+This page details how to connect Materialize to a Kafka broker to read data from individual topics.
+{{% /create-source/intro %}}
+
+{{< note >}}
+The same syntax, supported formats and features can be used to connect to a [Redpanda](/third-party/redpanda/) broker, unless stated otherwise.
+{{</ note >}}
+
+## Syntax
+
+{{< diagram "create-source-avro-kafka.svg" >}}
+
+#### `format_spec`
+
+{{< diagram "format-spec.svg" >}}
+
+#### `key_constraint`
+
+{{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+### `WITH` options
+
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`client_id`                          | `text`    | Use the supplied value as the Kafka client identifier.
+`group_id_prefix`                    | `text`    | Use the specified prefix in the consumer group ID. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
+`ignore_source_keys`                 | `boolean` | Default: `false`. If `true`, do not perform optimizations assuming uniqueness of primary keys in schemas.
+`isolation_level`                    | `text`    | Default: `read_committed`. Controls how to read messages that were transactionally written to Kafka. Supported options are `read_committed` to read only committed messages and `read_uncommitted` to read all messages, including those that are part of an open transaction or were aborted.
+`statistics_interval_ms`             | `int`     | `librdkafka` statistics emit interval in `ms`. A value of 0 disables statistics. Statistics can be queried using the `mz_kafka_source_statistics` system table. Accepts values [0, 86400000].
+`timestamp_frequency_ms`             | `int`     | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
+`topic_metadata_refresh_interval_ms` | `int`     | Default: `300000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
+`enable_auto_commit`                 | `boolean` | Default: `false`. Controls whether or not Materialize commits read offsets back into Kafka. This is purely for consumer progress monitoring and does not cause Materialize to resume reading from where it left off across restarts.
+`fetch_message_max_bytes` | `int` | Default: `134217728`. Controls the initial maximum number of bytes per topic+partition to request when fetching messages from the broker. If the client encounters a message larger than this value it will gradually try to increase it until the entire message can be fetched. Accepts values [1, 1000000000].
+
+## Supported formats
+
+|<div style="width:290px">Format</div> | Append-only envelope | Upsert envelope | Debezium envelope |
+---------------------------------------|:--------------------:|:---------------:|:-----------------:|
+| [Avro](../avro-kafka)                | ✓                    | ✓               | ✓                 |
+| [JSON](../json-kafka)                | ✓                    | ✓               |                   |
+| [Protobuf](../protobuf-kafka)        | ✓                    | ✓               |                   |
+| [Text/bytes](../text-kafka)          | ✓                    | ✓               |                   |
+| [CSV](../csv-kafka)                  | ✓                    |                 |                   |
+
+### Key-value encoding
+
+By default, the message key is decoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
+
+## Features
+
+### Handling upserts
+
+To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
+
+```sql
+CREATE SOURCE current_predictions
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081'
+  ENVELOPE UPSERT;
+```
+
+Note that:
+
+- Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
+
+#### Defining primary keys
+
+{{< warning >}}
+Materialize will **not enforce** the constraint and will produce wrong results if it's not unique.
+{{</ warning >}}
+
+Primary keys are **automatically** inferred for Kafka sources using the `UPSERT` or `DEBEZIUM` envelopes. For other source configurations, you can manually define a column (or set of columns) as a primary key using the `PRIMARY KEY (...) NOT ENFORCED` [syntax](#key_constraint). This enables optimizations and constructs that rely on a key to be present when it cannot be inferred.
+
+### Using Debezium
+
+{{< note >}}
+Currently, Materialize only supports Avro-encoded Debezium records. If you're interested in JSON support, please reach out in the community Slack or leave a comment in [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
+{{</ note >}}
+
+Materialize provides a dedicated envelope ([`ENVELOPE DEBEZIUM`]()) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
+
+```sql
+CREATE SOURCE kafka_repl
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'pg_repl.public.table1'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+```
+
+Note that:
+
+- If log compaction is enabled for your Debezium topic, you must use `ENVELOPE DEBEZIUM UPSERT`.
+
+Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
+
+For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/third-party/debezium/).
+
+### Exposing source metadata
+
+In addition to the message value, Materialize can expose the message key and other source metadata fields to SQL.
+
+#### Key
+
+The message key is exposed via the `INCLUDE KEY` option. Composite keys are also supported {{% gh 7645 %}}.
+
+```sql
+CREATE SOURCE kafka_metadata
+  FROM 'localhost:9092' TOPIC 'data'
+  KEY FORMAT TEXT
+  VALUE FORMAT TEXT
+  INCLUDE KEY AS renamed_id;
+```
+
+Note that:
+
+- This option requires specifying the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
+
+- The `UPSERT` envelope always includes keys.
+
+- The `DEBEZIUM` envelope is incompatible with this option.
+
+#### Partition, offset, timestamp
+
+These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET` and `INCLUDE TIMESTAMP` options.
+
+```sql
+CREATE SOURCE kafka_metadata
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081'
+  INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts
+  ENVELOPE NONE;
+```
+
+```sql
+SELECT "offset" FROM kafka_metadata WHERE ts > '2021-01-01';
+
+offset
+------
+15
+14
+13
+```
+
+Note that:
+
+- Using the `INCLUDE OFFSET` option with Debezium requires `UPSERT` semantics.
+
+### Setting start offsets
+
+To start consuming a Kafka stream from a specific offset, you can use the `start_offset` option.
+
+```sql
+CREATE MATERIALIZED SOURCE kafka_offset
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  -- Start reading from the earliest offset in the first partition,
+  -- the second partition at 10, and the third partition at 100
+  WITH (start_offset=[0,10,100])
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081';
+```
+
+Note that:
+
+- If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `start_offset=1` or `start_offset=[1, ...]`.
+- If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `start_offset=[1,2]`, when you add the second partition you will miss the first 2 records of data.
+- Using an offset with a source envelope that can supply updates or deletes requires that Materialize handle possibly nonsensical events (e.g. an update for a row that was never inserted). For that reason, starting at an offset requires either a `NONE` envelope or a `(DEBEZIUM) UPSERT` envelope.
+
+#### Time-based offsets
+
+It's also possible to set a start offset based on Kafka timestamps, using the `kafka_time_offset` option. This approach sets the start offset for each available partition based on the Kafka timestamp and the source behaves as if `start_offset` was provided directly.
+
+{{< note >}}
+The `kafka_time_offset` option is not supported yet for Redpanda sources ([Redpanda #2397](https://github.com/vectorizedio/redpanda/issues/2397)).
+{{</ note >}}
+
+It's important to note that `kafka_time_offset` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
+
+If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/guides/temporal-filters/) instead.
+
+#### `WITH` options
+
+Field               | Value | Description
+--------------------|-------|--------------------
+`start_offset`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers, and the source must use either `ENVELOPE NONE` or `ENVELOPE DEBEZIUM UPSERT`.
+`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used. **This option is not currently supported for [Redpanda](/third-party/redpanda).**
+
+
+## Authentication
+
+### SSL
+
+To connect to a Kafka broker that requires [SSL authentication](https://docs.confluent.io/platform/current/kafka/authentication_ssl.html), use the provided [`WITH` options](#ssl-with-options).
+
+```sql
+CREATE MATERIALIZED SOURCE kafka_ssl
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret' WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/secrets/materialized.key',
+      ssl_certificate_location = '/secrets/materialized.crt',
+      ssl_ca_location = '/secrets/ca.crt',
+      ssl_key_password = 'mzmzmz'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081' WITH (
+      ssl_key_location = '/secrets/materialized.key',
+      ssl_certificate_location = '/secrets/materialized.crt',
+      ssl_ca_location = '/secrets/ca.crt',
+  );
+```
+
+Note that:
+
+- To connect to a Confluent Schema Registry using SSL, it must use the same certificate authority (CA) as the Kafka broker.
+
+#### SSL `WITH` options
+
+Field                      | Value  | Description
+---------------------------|--------|---------------------------
+`security_protocol`        | `text` | Use `ssl` to connect to the Kafka cluster.
+`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
+`ssl_key_location`         | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
+`ssl_key_password`         | `text` | Your SSL key's password, if any.
+`ssl_ca_location`          | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+
+#### Confluent Schema Registry SSL `WITH` options
+
+Field | Value | Description
+------|-------|------------
+`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication. <em>New in v0.17.0.</em>
+`ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.  <em>New in v0.17.0.</em>
+`ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. <em>New in v0.17.0.</em>
+
+### SASL
+
+To connect to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html), use the provided [`WITH` options](#sasl-with-options).
+
+```sql
+CREATE SOURCE kafka_sasl
+  FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
+      -- Connect to a broker that requires SASL PLAIN authentication
+      security_protocol = 'SASL_SSL',
+      sasl_mechanisms = 'PLAIN',
+      sasl_username = '<BROKER_USERNAME>',
+      sasl_password = '<BROKER_PASSWORD>',
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld';
+```
+
+This is the configuration required to connect to Kafka brokers running on [Confluent Cloud](https://docs.confluent.io/cloud/current/faq.html#what-client-and-protocol-versions-are-supported).
+
+#### SASL `WITH` options
+
+Field                                   | Value  | Description
+----------------------------------------|--------|----------------------------------------
+`security_protocol`                     | `text` | Use `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
+`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
+`sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
+`sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
+`sasl_password_env`                     | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
+
+### Kerberos
+
+To authenticate to a Kafka broker configured for Kerberos, use the provided [`WITH` options](#kerberos-with-options).
+
+```sql
+CREATE SOURCE kafka_kerberos
+  FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'tps-reports' WITH (
+      security_protocol = 'sasl_plaintext',
+      sasl_kerberos_keytab = '/secrets/materialized.keytab',
+      sasl_kerberos_service_name = 'kafka',
+      sasl_kerberos_principal = 'materialized@CI.MATERIALIZE.IO'
+  )
+  FORMAT AVRO USING SCHEMA FILE '/tps-reports-schema.json';
+```
+
+Note that:
+
+- Materialize does _not_ support Kerberos authentication for the Confluent Schema Registry.
+
+#### Kerberos `WITH` options
+
+Field                                   | Value  | Description
+----------------------------------------|--------|----------------------------------------
+`security_protocol`                     | `text` | Use `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
+`sasl_kerberos_keytab`                  | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_kinit_cmd`               | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_principal`               | `text` | Materialize Kerberos principal name. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_service_name`            | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanisms` is `GSSAPI`.
+
+## Examples
+
+### Creating a source
+
+{{< tabs tabID="1" >}}
+{{< tab "Avro">}}
+
+```sql
+CREATE SOURCE avro_source
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081';
+```
+
+{{< /tab >}}
+{{< tab "JSON">}}
+
+```sql
+CREATE SOURCE json_source
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FORMAT BYTES;
+```
+
+```sql
+CREATE MATERIALIZED VIEW jsonified_kafka_source AS
+  SELECT
+    data->>'field1' AS field_1,
+    data->>'field2' AS field_2,
+    data->>'field3' AS field_3
+  FROM (SELECT text::jsonb AS data FROM json_source);
+```
+
+{{< /tab >}}
+{{< tab "Protobuf">}}
+
+```sql
+CREATE SOURCE proto_source
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+  WITH (cache = true)
+  FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
+```
+
+{{< /tab >}}
+{{< tab "Text/bytes">}}
+
+```sql
+CREATE SOURCE text_source
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FORMAT TEXT
+  USING SCHEMA FILE '/scratch/data.json'
+  ENVELOPE UPSERT;
+```
+
+{{< /tab >}}
+{{< tab "CSV">}}
+
+```sql
+CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FORMAT CSV WITH 3 COLUMNS;
+```
+
+{{< /tab >}}
+{{< /tabs >}}
+
+### Using a schema registry
+
+```sql
+CREATE SOURCE events
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+```
+
+For setups requiring [Basic HTTP authentication](https://docs.confluent.io/platform/current/security/basic-auth.html#basic-auth-sr):
+
+```sql
+CREATE SOURCE events
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081' WITH (
+    username = '<SCHEMA_REGISTRY_USERNAME>',
+    password = '<SCHEMA_REGISTRY_PASSWORD>'
+);
+```
+
+## Related pages
+
+- [`CREATE SOURCE`](../)
+- [Using Debezium](/third-party/debezium/)
