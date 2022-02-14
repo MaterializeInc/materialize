@@ -1095,10 +1095,10 @@ where
             }
             ExecuteResponse::TransactionExited { tag, was_implicit } => {
                 // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
-                // transaction, a notice is sent warning them. (The transaction is still closed
+                // transaction, a warning is sent warning them. (The transaction is still closed
                 // and a new implicit transaction started, though.)
                 if was_implicit {
-                    let msg = ErrorResponse::notice(
+                    let msg = ErrorResponse::warning(
                         SqlState::NO_ACTIVE_SQL_TRANSACTION,
                         "there is no transaction in progress",
                     );

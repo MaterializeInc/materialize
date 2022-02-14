@@ -145,7 +145,7 @@ Query {"query": "COMMIT;"}
 Query {"query": "ROLLBACK;"}
 ----
 
-until
+until err_field_typs=SCM
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -154,7 +154,7 @@ ReadyForQuery
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
-NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
 CommandComplete {"tag":"COMMIT"}
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["2"]}
@@ -163,16 +163,16 @@ ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["3"]}
 CommandComplete {"tag":"SELECT 1"}
-NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
 CommandComplete {"tag":"ROLLBACK"}
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["4"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
 CommandComplete {"tag":"COMMIT"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
 
