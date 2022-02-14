@@ -234,3 +234,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     f"C> Finished after {elapsed:.3f}s sent and ingested {records_sent} records. max observed lag {max_lag} records."
                 )
                 break
+
+
+def workflow_smoke_test(c: Composition) -> None:
+    for arg in ["--upsert", "--enable-persistence"]:
+        c.workflow(
+            "default",
+            "--num-seconds=15",
+            "--records-per-second=1000",
+            arg,
+        )
+        c.kill("materialized")
+        c.rm("materialized", "testdrive-svc", "kafka", destroy_volumes=True)
+        c.rm_volumes("mzdata")
