@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.0.1.post1 - 2021-02-14
 
 * Disable transactions. This avoids errors of the form "CREATE ... must be
   executed outside of a transaction block" ([materialize-dbt-utils#11]).
