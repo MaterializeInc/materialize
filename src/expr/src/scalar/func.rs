@@ -4518,7 +4518,7 @@ impl UnaryFunc {
             BitLengthString => f.write_str("bit_length"),
             ByteLengthBytes => f.write_str("octet_length"),
             ByteLengthString => f.write_str("octet_length"),
-            IsLikeMatch(matcher) => write!(f, "like {}", matcher.pattern.quoted()),
+            IsLikeMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
             IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             ExtractInterval(units) => write!(f, "extract_{}_iv", units),
