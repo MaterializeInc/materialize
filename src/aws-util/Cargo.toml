@@ -16,7 +16,6 @@ aws-smithy-client = { version = "0.36.0", default-features = false }
 aws-smithy-http = "0.36.0"
 aws-types = "0.6.0"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
-openssl-sys = { version = "0.9.72", features = ["vendored"] }
 
 [features]
 kinesis = ["aws-sdk-kinesis"]

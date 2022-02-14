@@ -2321,9 +2321,9 @@ dependencies = [
 
 [[package]]
 name = "inotify-sys"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4563555856585ab3180a5bf0b2f9f8d301a728462afffc8195b3f5394229c55"
+checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
 dependencies = [
  "libc",
 ]
@@ -2934,7 +2934,6 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "mz-http-proxy",
- "openssl-sys",
 ]
 
 [[package]]
@@ -3166,7 +3165,6 @@ dependencies = [
  "mz-interchange",
  "mz-kafka-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-types",
  "mz-repr",
  "num_enum",
@@ -3441,7 +3439,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "crossbeam-utils",
  "ctor",
  "either",
  "futures",
@@ -3742,7 +3739,6 @@ dependencies = [
  "mz-sql-parser",
  "postgres-protocol",
  "postgres-types",
- "prost-build",
  "protobuf-native",
  "rdkafka",
  "regex",
@@ -3766,7 +3762,6 @@ dependencies = [
  "anyhow",
  "datadriven",
  "enum-kinds",
- "hex",
  "itertools",
  "lazy_static",
  "mz-ore",
@@ -3882,7 +3877,6 @@ dependencies = [
  "postgres_array",
  "predicates",
  "prost",
- "prost-build",
  "prost-reflect",
  "protobuf-src",
  "rand",
