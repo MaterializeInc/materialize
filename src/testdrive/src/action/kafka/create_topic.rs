@@ -21,7 +21,7 @@ use crate::parser::BuiltinCommand;
 
 pub struct CreateTopicAction {
     topic_prefix: String,
-    partitions: usize,
+    partitions: Option<usize>,
     replication_factor: i32,
     compression: String,
     compaction: bool,
@@ -29,7 +29,8 @@ pub struct CreateTopicAction {
 
 pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
-    let partitions = cmd.args.opt_parse("partitions")?.unwrap_or(1);
+    let partitions = cmd.args.opt_parse("partitions")?;
+
     let replication_factor = cmd.args.opt_parse("replication-factor")?.unwrap_or(1);
     let compression = cmd
         .args
@@ -146,15 +147,17 @@ impl Action for CreateTopicAction {
         //
         // [0]: https://github.com/confluentinc/confluent-kafka-python/issues/524#issuecomment-456783176
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
+        let partitions = self.partitions.unwrap_or(state.kafka_default_partitions);
+
         println!(
             "Creating Kafka topic {} with partition count of {}",
-            topic_name, self.partitions
+            topic_name, partitions
         );
-        let partitions = i32::try_from(self.partitions)
-            .map_err(|_| anyhow!("partition count must fit in an i32: {}", self.partitions))?;
+
         let new_topic = NewTopic::new(
             &topic_name,
-            partitions,
+            i32::try_from(partitions)
+                .map_err(|_| anyhow!("partition count must fit in an i32: {}", partitions))?,
             TopicReplication::Fixed(self.replication_factor),
         )
         // Disabling retention is very important! Our testdrive tests
@@ -181,7 +184,7 @@ impl Action for CreateTopicAction {
 
         mz_kafka_util::admin::ensure_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await?;
-        state.kafka_topics.insert(topic_name, self.partitions);
+        state.kafka_topics.insert(topic_name, partitions);
         Ok(ControlFlow::Continue)
     }
 }

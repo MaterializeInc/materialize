@@ -51,6 +51,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="set the number of materialized dataflow workers",
     )
     parser.add_argument(
+        "--kafka-default-partitions",
+        type=int,
+        metavar="N",
+        help="set the default number of kafka partitions per topic",
+    )
+    parser.add_argument(
         "--persistent-user-tables",
         action="store_true",
         help="enable the --persistent-user-tables materialized option",
@@ -83,6 +89,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     testdrive = Testdrive(
         forward_buildkite_shard=True,
+        kafka_default_partitions=args.kafka_default_partitions,
         entrypoint_extra=[f"--aws-region={args.aws_region}"]
         if args.aws_region
         else ["--aws-endpoint=http://localstack:4566"],

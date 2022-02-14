@@ -122,6 +122,9 @@ struct Args {
         default_value = "localhost:9092"
     )]
     kafka_addr: String,
+    /// Default number of partitions to create for topics
+    #[clap(long, default_value = "1", value_name = "N")]
+    kafka_default_partitions: usize,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
@@ -252,6 +255,7 @@ async fn main() {
 
         // === Confluent options. ===
         kafka_addr: args.kafka_addr,
+        kafka_default_partitions: args.kafka_default_partitions,
         kafka_opts: args.kafka_option,
         schema_registry_url: args.schema_registry_url,
         cert_path: args.cert,
