@@ -56,11 +56,12 @@ body:
     attributes:
       label: User impact analysis
       description: |
-        With regards to the class of queries that can be helped by the transformation:
-        * How often will users encounter any member of the class?
-        * Are there subclasses that users will encounter more often relative to other subclasses?
+        Take into account what you have seen from user queries, use cases,
+        queries from benchmarks like TPC-H, etc.
+      value: |
+        #### How often will users input a query that can be helped by the transformation?
 
-        Take into account what you have seen from user queries, use cases, queries from benchmarks like TPC-H, etc.
+        #### Among the queries that can be helped, are there subclasses of queries that users will input more often?
   - type: textarea
     attributes:
       label: Proposed implementation
