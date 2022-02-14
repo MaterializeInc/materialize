@@ -39,7 +39,7 @@ smallvec = "1.8.0"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.16.1", features = ["fs"] }
-tracing = "0.1.29"
+tracing = "0.1.30"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde"] }
 
