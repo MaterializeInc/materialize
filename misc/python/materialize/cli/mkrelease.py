@@ -122,14 +122,14 @@ def incorporate_inner(
     new_version = tag.bump_patch().replace(prerelease="dev")
     if not create_branch and not checkout:
         if is_finish:
-            create = f"continue-{new_version}"
+            create_branch = f"continue-{new_version}"
         else:
-            create = f"prepare-{new_version}"
+            create_branch = f"prepare-{new_version}"
 
     release(
         new_version,
         checkout=checkout,
-        create_branch=create,
+        create_branch=create_branch,
         tag=False,
         affect_remote=affect_remote,
     )
@@ -264,7 +264,8 @@ def release(
     if create_branch is not None:
         git.create_branch(create_branch)
 
-    confirm_on_latest_rc(affect_remote)
+    if not version.prerelease:
+        confirm_on_latest_rc(affect_remote)
 
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
