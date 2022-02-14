@@ -126,10 +126,20 @@ impl TimestampProposer {
     }
 }
 
-/// This struct holds per partition timestamp binding state, as a ordered list of bindings (time, offset).
-/// Each binding indicates "all offsets < offset must be bound to time", and adjacent pairs of bindings
-/// (time1, offset1), (time2, offset2) denote that offsets in [offset1, offset2) should get bound
-/// to time1.
+/// This struct holds per partition timestamp binding state, as an ordered list
+/// of pairs (time, offset). Each pair indicates "all offsets < offset must be
+/// bound to time".
+///
+/// Adjacent pairs indicate half-open intervals of offsets that are bound to
+/// various timestamps. There can be duplicate offsets, which denote timestamps
+/// that are closed but did not have any timestamps assigned to them.
+///
+/// As an example, the sequence of pairs (t1, o1), (t2, o2), (t3, o2) indicates
+/// that:
+/// - offsets in [0, o1) are bound to t1.
+/// - offsets in [o1, o2) are bound to t2.
+/// - offsets in [o2, inf) have not been assigned a timestamp yet.
+/// - no offsets are bound to t3, and no offsets will be bound to t3.
 #[derive(Debug)]
 pub struct PartitionTimestamps {
     id: PartitionId,
@@ -159,9 +169,7 @@ impl PartitionTimestamps {
         }
 
         let mut new_bindings = Vec::with_capacity(self.bindings.len());
-        // Now let's only keep the largest binding for each timestamp, ie lets merge bindings
-        // of the form (timestamp1, offset1), (timestamp1, offset2), (timestamp1, offset3) =>
-        // (timestamp1, offset3)
+        // Now let's only keep the largest binding for each timestamp.
         for i in 0..(self.bindings.len() - 1) {
             if self.bindings[i].0 != self.bindings[i + 1].0 {
                 new_bindings.push(self.bindings[i]);
@@ -174,52 +182,59 @@ impl PartitionTimestamps {
     }
 
     fn add_binding(&mut self, timestamp: Timestamp, offset: MzOffset) {
-        let (last_ts, last_offset) = self.bindings.last().unwrap_or(&(0, MzOffset { offset: 0 }));
-        assert!(
-            offset >= *last_offset,
-            "offset should not go backwards, but {} < {}",
-            offset,
-            last_offset
-        );
-        assert!(
-            timestamp >= *last_ts,
-            "timestamp should not go backwards, but {} < {}",
-            timestamp,
-            last_ts
-        );
+        if let Some((last_ts, last_offset)) = self.bindings.last() {
+            assert!(
+                offset >= *last_offset,
+                "offset should not go backwards, but {} < {}",
+                offset,
+                last_offset
+            );
+            assert!(
+                timestamp > *last_ts,
+                "timestamp must go forwards but {} <= {}",
+                timestamp,
+                last_ts
+            );
+        }
         self.bindings.push((timestamp, offset));
     }
 
-    /// Gets the minimal timestamp binding (time, offset) for offset (the minimal time
-    /// with offset > requested offset.
+    /// Gets the timestamp binding for `offset`.
+    ///
+    /// The timestamp binding is the minimum binding_time such that:
+    /// - (binding_time, binding_offset) exists in the list of bindings
+    /// - binding_offset > `offset`
     ///
     /// Returns None if no such binding exists.
     fn get_binding(&self, offset: MzOffset) -> Option<Timestamp> {
         // Rust's binary search is inconvenient so let's roll our own.
-        // Maintain the invariants that the offset at lo (entries[lo].1) is always <=
-        // than the requested offset, and n is > 1. Check for violations of that before we
-        // start the main loop.
         if self.bindings.is_empty() {
             return None;
         }
 
-        let mut n = self.bindings.len();
+        let mut remaining = self.bindings.len();
         let mut lo = 0;
         if self.bindings[lo].1 > offset {
             return Some(self.bindings[lo].0);
         }
 
-        while n > 1 {
-            let half = n / 2;
+        // Invariants:
+        // - The offset at lo is always <= requested offset.
+        // - remaining > 1
+        // - lo < bindings.len()
+        while remaining > 1 {
+            let half = remaining / 2;
 
-            // Advance lo if a later element has an offset less than / equal to the one requested.
+            // Advance lo if a later element has an offset <= equal to the one requested.
             if self.bindings[lo + half].1 <= offset {
                 lo += half;
             }
 
-            n -= half;
+            remaining -= half;
         }
 
+        // lo points to the max offset <= the requested offset, so lo + 1
+        // points to the minimum offset > requested offset.
         if lo + 1 < self.bindings.len() {
             Some(self.bindings[lo + 1].0)
         } else {
@@ -257,10 +272,7 @@ pub struct TimestampBindingBox {
     /// new partitions from coordinator to source operator. We could factor this out of
     /// TimestampBinding* into it's own piece that only deals with managing new partitions.
     known_partitions: HashMap<PartitionId, Option<MzOffset>>,
-    /// List of timestamp bindings per independent partition. This vector is sorted
-    /// by timestamp and offset and each `(time, offset)` entry indicates that offsets <=
-    /// `offset` should be assigned `time` as their timestamp. Consecutive entries form
-    /// an interval of offsets.
+    /// List of timestamp bindings per independent partition.
     partitions: HashMap<PartitionId, PartitionTimestamps>,
     /// Indicates the lowest timestamp across all partitions that we retain bindings for.
     /// This frontier can be held back by other entities holding the shared
@@ -1039,5 +1051,36 @@ mod tests {
         actual_updates.sort();
         expected_updates.sort();
         assert_eq!(actual_updates, expected_updates);
+    }
+
+    #[test]
+    fn partition_timestamps() {
+        let mut pt = PartitionTimestamps::new(PartitionId::Kafka(1));
+        let bindings = vec![
+            (1, MzOffset { offset: 2 }),
+            (2, MzOffset { offset: 5 }),
+            (3, MzOffset { offset: 5 }),
+            (5, MzOffset { offset: 6 }),
+            (6, MzOffset { offset: 6 }),
+        ];
+
+        for (time, offset) in bindings.iter() {
+            pt.add_binding(*time, offset.clone());
+        }
+
+        let test_cases = vec![
+            ((0, 2), Some(1)),
+            ((2, 5), Some(2)),
+            ((5, 6), Some(5)),
+            ((6, 10), None),
+        ];
+
+        for ((test_start, test_end), expected_binding) in test_cases {
+            for offset in test_start..test_end {
+                let mz_offset = MzOffset { offset };
+                let binding = pt.get_binding(mz_offset);
+                assert_eq!(binding, expected_binding);
+            }
+        }
     }
 }
