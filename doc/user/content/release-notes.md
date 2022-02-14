@@ -197,6 +197,8 @@ boundary don't silently merge their release notes into the wrong place.
   Materialize would lose data unless the `deduplication = 'full'` option was
   specified.
 
+- Add support for `ESCAPE` clauses in `LIKE` & `ILIKE` expressions.
+
 - Improve the performance of SQL `LIKE` expressions.
 
 {{% version-header v0.19.0 %}}
