@@ -46,7 +46,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::ArrangementFlavor;
 use mz_repr::DatumVec;
 
-use crate::arrangement::manager::RowSpine;
+use mz_dataflow_types::arrangement::manager::RowSpine;
 
 /// Render a dataflow based on the provided plan.
 ///

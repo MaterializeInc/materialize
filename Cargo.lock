@@ -3170,6 +3170,7 @@ dependencies = [
  "mz-persist-types",
  "mz-repr",
  "num_enum",
+ "prometheus",
  "rdkafka",
  "regex",
  "serde",

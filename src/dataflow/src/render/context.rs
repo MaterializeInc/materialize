@@ -28,8 +28,8 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use crate::operator::CollectionExt;
+use mz_dataflow_types::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use mz_dataflow_types::{DataflowDescription, DataflowError};
 use mz_expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
 use mz_repr::{DatumVec, Diff, Row, RowArena};

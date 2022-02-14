@@ -27,14 +27,14 @@ use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_expr::GlobalId;
 use mz_repr::Timestamp;
 
-use crate::activator::RcActivator;
-use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
 use crate::server::boundary::ComputeReplay;
 use crate::server::PendingPeek;
 use crate::sink::SinkBaseMetrics;
+use mz_dataflow_types::arrangement::manager::{TraceBundle, TraceManager};
+use mz_timely_util::activator::RcActivator;
 
 /// Worker-local state that is maintained across dataflows.
 ///

@@ -201,7 +201,7 @@ where
             });
 
             errors.push(errs);
-            use crate::arrangement::manager::RowSpine;
+            use mz_dataflow_types::arrangement::manager::RowSpine;
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }

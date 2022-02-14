@@ -32,6 +32,7 @@ mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 num_enum = "0.5.6"
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 serde = { version = "1.0.136", features = ["derive"] }

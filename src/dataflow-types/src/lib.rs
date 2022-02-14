@@ -13,6 +13,7 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
+pub mod arrangement;
 pub mod client;
 pub mod logging;
 pub mod plan;

@@ -23,9 +23,10 @@ use mz_ore::metrics::{
 };
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use mz_dataflow_types::DataflowError;
 use mz_expr::GlobalId;
 use mz_repr::{Diff, Row, Timestamp};
+
+use crate::DataflowError;
 
 pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
@@ -46,7 +47,7 @@ pub struct TraceMetrics {
 }
 
 impl TraceMetrics {
-    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
+    pub fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             total_maintenance_time: registry.register(metric!(
                 name: "mz_arrangement_maintenance_seconds_total",

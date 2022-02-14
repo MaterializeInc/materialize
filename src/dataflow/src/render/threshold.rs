@@ -21,9 +21,9 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use mz_repr::{Diff, Row};
 
-use crate::arrangement::manager::RowSpine;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
+use mz_dataflow_types::arrangement::manager::RowSpine;
 use mz_dataflow_types::plan::threshold::{
     BasicThresholdPlan, RetractionsThresholdPlan, ThresholdPlan,
 };

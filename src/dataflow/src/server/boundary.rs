@@ -64,9 +64,9 @@ mod event_link {
     use mz_dataflow_types::SourceInstanceKey;
     use mz_repr::{Diff, Row};
 
-    use crate::activator::RcActivator;
-    use crate::replay::MzReplay;
     use crate::server::ActivatedEventPusher;
+    use mz_timely_util::activator::RcActivator;
+    use mz_timely_util::replay::MzReplay;
 
     use super::{ComputeReplay, StorageCapture};
 

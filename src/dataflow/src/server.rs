@@ -36,12 +36,12 @@ use mz_ore::result::ResultExt;
 use mz_repr::{DatumVec, Diff, Row, RowArena, Timestamp};
 
 use self::metrics::{ServerMetrics, WorkerMetrics};
-use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 use crate::event::ActivatedEventPusher;
 use crate::metrics::Metrics;
 use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
+use mz_dataflow_types::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 
 pub mod boundary;
 mod compute_state;

@@ -115,11 +115,11 @@ use mz_expr::{GlobalId, Id};
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{Row, Timestamp};
 
-use crate::arrangement::manager::TraceBundle;
 pub use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::boundary::{ComputeReplay, StorageCapture};
 use crate::server::{ComputeState, StorageState};
+use mz_dataflow_types::arrangement::manager::TraceBundle;
 
 pub mod context;
 mod debezium;

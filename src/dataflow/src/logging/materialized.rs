@@ -23,13 +23,13 @@ use timely::logging::WorkerIdentifier;
 use tracing::error;
 
 use super::{LogVariant, MaterializedLog};
-use crate::activator::RcActivator;
-use crate::arrangement::manager::RowSpine;
-use crate::arrangement::KeysValsHandle;
-use crate::replay::MzReplay;
+use mz_dataflow_types::arrangement::manager::RowSpine;
+use mz_dataflow_types::arrangement::KeysValsHandle;
 use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr, SourceInstanceId};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, DatumVec, Row, Timestamp};
+use mz_timely_util::activator::RcActivator;
+use mz_timely_util::replay::MzReplay;
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
