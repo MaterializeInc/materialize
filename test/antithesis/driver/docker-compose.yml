@@ -42,7 +42,7 @@ services:
     fault_injector_block: false
     networks:
       antithesis-net:
-        ipv4_address: 10.0.0.80
+        ipv4_address: 10.0.0.129
     depends_on:
       cp-combined:
         condition: service_started
@@ -53,10 +53,7 @@ services:
       - -O
       - extglob
       - -c
-      # Run testdrive an an endless loop, exiting with a non-zero exit code if
-      # testdrive fails and the loop has terminated.
-      #
-      # We set the timeout below to 120 seconds rather than the original 30 seconds.
+      # Start Mz and the required components and leave the container up forever
       - >-
         wait-for-it --timeout=120 cp-combined:9092 &&
         wait-for-it --timeout=120 cp-combined:8081 &&
