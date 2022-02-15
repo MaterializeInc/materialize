@@ -433,7 +433,7 @@ impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
         ) -> Result<(), CopyErrorNotSupportedResponse> {
             match option {
                 Some(..) => Err(CopyErrorNotSupportedResponse::new(format!(
-                    "COPY {} only available in CSV mode",
+                    "COPY {} available only in CSV mode",
                     param
                 ))),
                 None => Ok(()),
@@ -443,7 +443,7 @@ impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
         assert_eq!(format, CopyFormat::Text);
         only_available_with_csv(quote, "quote")?;
         only_available_with_csv(escape, "escape")?;
-        only_available_with_csv(header, "header")?;
+        only_available_with_csv(header, "HEADER")?;
         let null = match null {
             Some(null) => Cow::from(null),
             None => Cow::from("\\N"),
