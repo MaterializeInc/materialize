@@ -72,6 +72,8 @@ pub enum ComputeError {
     DataflowMalformed,
     /// The dataflow `as_of` was not greater than the `since` of the identifier.
     DataflowSinceViolation(GlobalId),
+    /// The peek `timestamp` was not greater than the `since` of the identifier.
+    PeekSinceViolation(GlobalId),
 }
 
 #[derive(Debug)]
@@ -209,7 +211,18 @@ impl<C: Client> Controller<C> {
         timestamp: Timestamp,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-    ) {
+    ) -> Result<(), ControllerError> {
+        let (since, _upper) = self
+            .compute_since_uppers
+            .get(&instance)
+            .ok_or(ComputeError::InstanceMissing(instance))?
+            .get(&id)
+            .ok_or(ComputeError::IdentifierMissing(id))?;
+
+        if !since.less_equal(&timestamp) {
+            Err(ComputeError::PeekSinceViolation(id))?;
+        }
+
         self.client
             .send(Command::Compute(
                 ComputeCommand::Peek {
@@ -223,6 +236,8 @@ impl<C: Client> Controller<C> {
                 instance,
             ))
             .await;
+
+        Ok(())
     }
     pub async fn cancel_peek(&mut self, instance: ComputeInstanceId, conn_id: u32) {
         self.client

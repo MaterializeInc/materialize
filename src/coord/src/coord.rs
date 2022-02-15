@@ -5110,7 +5110,8 @@ pub mod fast_path_peek {
                     finishing.clone(),
                     map_filter_project,
                 )
-                .await;
+                .await
+                .unwrap();
 
             use futures::FutureExt;
             use futures::StreamExt;
