@@ -254,15 +254,17 @@ To connect to a Kafka broker that requires [SASL authentication](https://docs.co
 #### SASL/PLAIN
 
 ```sql
-CREATE SOURCE kafka_sasl
+CREATE MATERIALIZED SOURCE kafka_sasl
   FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
-      -- Connect to a broker that requires SASL PLAIN authentication
-      security_protocol = 'sasl_ssl',
+      security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
       sasl_username = '<BROKER_USERNAME>',
       sasl_password = '<BROKER_PASSWORD>',
   )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld' WITH (
+      username = '<SCHEMA_REGISTRY_USERNAME>',
+      password = '<SCHEMA_REGISTRY_PASSWORD>'
+  );
 ```
 
 This is the configuration required to connect to Kafka brokers running on [Confluent Cloud](https://docs.confluent.io/cloud/current/faq.html#what-client-and-protocol-versions-are-supported).
@@ -288,8 +290,8 @@ Note that:
 
 Field                                   | Value  | Description
 ----------------------------------------|--------|----------------------------------------
-`security_protocol`                     | `text` | Use `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
-`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
+`security_protocol`                     | `text` | Use `plaintext`, `ssl`, `sasl_plaintext` or `sasl_ssl` to connect to the Kafka cluster.
+`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `GSSAPI` (the default), `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER`.
 `sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
 `sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
 `sasl_password_env`                     | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
