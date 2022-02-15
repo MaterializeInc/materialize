@@ -22,7 +22,7 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 ## Syntax
 
-{{< diagram "create-source-avro-kafka.svg" >}}
+{{< diagram "create-source-kafka.svg" >}}
 
 #### `format_spec`
 
@@ -35,6 +35,8 @@ The same syntax, supported formats and features can be used to connect to a [Red
 #### `with_options`
 
 {{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-connector-details connector="kafka" envelopes="debezium upsert append-only" %}}
 
 ### `WITH` options
 
@@ -54,11 +56,11 @@ Field                                | Value     | Description
 
 |<div style="width:290px">Format</div> | Append-only envelope | Upsert envelope | Debezium envelope |
 ---------------------------------------|:--------------------:|:---------------:|:-----------------:|
-| [Avro](../avro-kafka)                | ✓                    | ✓               | ✓                 |
-| [JSON](../json-kafka)                | ✓                    | ✓               |                   |
-| [Protobuf](../protobuf-kafka)        | ✓                    | ✓               |                   |
-| [Text/bytes](../text-kafka)          | ✓                    | ✓               |                   |
-| [CSV](../csv-kafka)                  | ✓                    |                 |                   |
+| [Avro]()                             | ✓                    | ✓               | ✓                 |
+| [JSON]()                             | ✓                    | ✓               |                   |
+| [Protobuf]()                         | ✓                    | ✓               |                   |
+| [Text/bytes]()                       | ✓                    | ✓               |                   |
+| [CSV]()                              | ✓                    |                 |                   |
 
 ### Key-value encoding
 
@@ -68,7 +70,7 @@ By default, the message key is decoded using the same format as the message valu
 
 ### Handling upserts
 
-To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
+To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use [`ENVELOPE UPSERT`]():
 
 ```sql
 CREATE SOURCE current_predictions
@@ -106,7 +108,7 @@ CREATE SOURCE kafka_repl
 
 Note that:
 
-- If log compaction is enabled for your Debezium topic, you must use `ENVELOPE DEBEZIUM UPSERT`.
+- If log compaction is enabled for your Debezium topic, you must use [`ENVELOPE DEBEZIUM UPSERT`]().
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
@@ -132,9 +134,9 @@ Note that:
 
 - This option requires specifying the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
 
-- The `UPSERT` envelope always includes keys.
+- The [`UPSERT`]() envelope always includes keys.
 
-- The `DEBEZIUM` envelope is incompatible with this option.
+- The [`DEBEZIUM`]() envelope is incompatible with this option.
 
 #### Partition, offset, timestamp
 
@@ -249,11 +251,13 @@ Field | Value | Description
 
 To connect to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html), use the provided [`WITH` options](#sasl-with-options).
 
+#### SASL/PLAIN
+
 ```sql
 CREATE SOURCE kafka_sasl
   FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
       -- Connect to a broker that requires SASL PLAIN authentication
-      security_protocol = 'SASL_SSL',
+      security_protocol = 'sasl_ssl',
       sasl_mechanisms = 'PLAIN',
       sasl_username = '<BROKER_USERNAME>',
       sasl_password = '<BROKER_PASSWORD>',
@@ -263,19 +267,7 @@ CREATE SOURCE kafka_sasl
 
 This is the configuration required to connect to Kafka brokers running on [Confluent Cloud](https://docs.confluent.io/cloud/current/faq.html#what-client-and-protocol-versions-are-supported).
 
-#### SASL `WITH` options
-
-Field                                   | Value  | Description
-----------------------------------------|--------|----------------------------------------
-`security_protocol`                     | `text` | Use `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
-`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
-`sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
-`sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
-`sasl_password_env`                     | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
-
-### Kerberos
-
-To authenticate to a Kafka broker configured for Kerberos, use the provided [`WITH` options](#kerberos-with-options).
+#### SASL/GSSAPI (Kerberos)
 
 ```sql
 CREATE SOURCE kafka_kerberos
@@ -292,11 +284,15 @@ Note that:
 
 - Materialize does _not_ support Kerberos authentication for the Confluent Schema Registry.
 
-#### Kerberos `WITH` options
+#### SASL `WITH` options
 
 Field                                   | Value  | Description
 ----------------------------------------|--------|----------------------------------------
 `security_protocol`                     | `text` | Use `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
+`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
+`sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
+`sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
+`sasl_password_env`                     | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
 `sasl_kerberos_keytab`                  | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
 `sasl_kerberos_kinit_cmd`               | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
 `sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.

@@ -254,7 +254,7 @@ format_spec ::=
         'SCHEMA FILE' path
         ) |
   'PROTOBUF' (
-        'MESSAGE' message_name 'USING SCHEMA FILE' path? |
+        'MESSAGE' message_name 'USING SCHEMA FILE' path |
         'USING CONFLUENT SCHEMA REGISTRY' url with_options
         ) |
   'REGEX' regex |
