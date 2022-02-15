@@ -82,7 +82,7 @@ $ set pg-dbz-schema={
     ]
   }
 
-$ kafka-create-topic topic=pg-dbz-data
+$ kafka-create-topic topic=pg-dbz-data partitions=1
 
 $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
 {"before": null, "after": {"row":{"val": "foo"}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[null, \"3\"]"}, "snapshot": {"string": "false"}}, "transaction": {"total_order": null}}
