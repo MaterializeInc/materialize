@@ -373,7 +373,7 @@ where
                 // shut down. We also need to clear all pending futures to make sure we never
                 // attempt to downgrade any more capabilities.
                 if frontiers[0].is_empty() {
-                    cap_set.downgrade(input_frontier.iter());
+                    cap_set.downgrade(frontiers[0].frontier().iter());
                     pending_futures.clear();
                 }
 
