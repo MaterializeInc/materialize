@@ -33,12 +33,18 @@ pub enum CoordError {
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
     ChangedPlan,
-    /// The specified session parameter is constrained to its current value.
-    ConstrainedParameter(&'static (dyn Var + Send + Sync)),
+    /// The specified session parameter is constrained to a finite set of values.
+    ConstrainedParameter {
+        parameter: &'static (dyn Var + Send + Sync),
+        value: String,
+        valid_values: Vec<String>,
+    },
     /// The cursor already exists.
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// The specified parameter is fixed to a single specific value.
+    FixedValueParameter(&'static (dyn Var + Send + Sync)),
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
     /// Unexpected internal state was encountered.
@@ -224,6 +230,9 @@ impl CoordError {
                 ))
             }
             CoordError::Catalog(c) => c.hint(),
+            CoordError::ConstrainedParameter { valid_values, .. } => {
+                Some(format!("Available values: {}.", valid_values.join(", ")))
+            }
             CoordError::Eval(e) => e.hint(),
             CoordError::InvalidAlterOnDisabledIndex(idx) => Some(format!(
                 "To perform this ALTER, first enable the index using ALTER \
@@ -270,16 +279,24 @@ impl fmt::Display for CoordError {
             }
             CoordError::ChangedPlan => f.write_str("cached plan must not change result type"),
             CoordError::Catalog(e) => e.fmt(f),
-            CoordError::ConstrainedParameter(p) => write!(
+            CoordError::ConstrainedParameter {
+                parameter, value, ..
+            } => write!(
                 f,
-                "parameter {} can only be set to {}",
-                p.name().quoted(),
-                p.value().quoted()
+                "invalid value for parameter {}: {}",
+                parameter.name().quoted(),
+                value.quoted()
             ),
             CoordError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             CoordError::Eval(e) => e.fmt(f),
+            CoordError::FixedValueParameter(p) => write!(
+                f,
+                "parameter {} can only be set to {}",
+                p.name().quoted(),
+                p.value().quoted()
+            ),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             CoordError::IncompleteTimestamp(unstarted) => write!(
                 f,

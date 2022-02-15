@@ -290,7 +290,7 @@ impl Vars {
             // Unfortunately, some orm's like Prisma set NAMES to UTF8, thats the only
             // value we support, so we let is through
             if UncasedStr::new(value) != CLIENT_ENCODING.value {
-                return Err(CoordError::ConstrainedParameter(&CLIENT_ENCODING));
+                return Err(CoordError::FixedValueParameter(&CLIENT_ENCODING));
             } else {
                 Ok(())
             }
@@ -300,7 +300,7 @@ impl Vars {
             for value in value.split(',') {
                 let value = UncasedStr::new(value.trim());
                 if value != "ISO" && value != "MDY" {
-                    return Err(CoordError::ConstrainedParameter(&DATE_STYLE));
+                    return Err(CoordError::FixedValueParameter(&DATE_STYLE));
                 }
             }
             Ok(())
@@ -349,7 +349,7 @@ impl Vars {
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             match bool::parse(value) {
                 Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
-                Ok(_) => Err(CoordError::ConstrainedParameter(
+                Ok(_) => Err(CoordError::FixedValueParameter(
                     &STANDARD_CONFORMING_STRINGS,
                 )),
                 Err(()) => Err(CoordError::InvalidParameterType(
@@ -358,7 +358,7 @@ impl Vars {
             }
         } else if name == TIMEZONE.name {
             if UncasedStr::new(value) != TIMEZONE.value {
-                return Err(CoordError::ConstrainedParameter(&TIMEZONE));
+                return Err(CoordError::FixedValueParameter(&TIMEZONE));
             } else {
                 Ok(())
             }
