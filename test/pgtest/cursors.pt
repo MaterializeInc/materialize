@@ -35,7 +35,7 @@ CommandComplete {"tag":"FETCH 1"}
 ReadyForQuery {"status":"T"}
 CommandComplete {"tag":"CLOSE CURSOR"}
 ReadyForQuery {"status":"T"}
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"p\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"p\" does not exist"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -178,7 +178,7 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"BEGIN"}
 ReadyForQuery {"status":"T"}
@@ -187,7 +187,7 @@ ReadyForQuery {"status":"T"}
 RowDescription {"fields":[{"name":"column1"}]}
 CommandComplete {"tag":"COMMIT"}
 ReadyForQuery {"status":"I"}
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}
 
 # Verify that a single Query message can declare and fetch from a
@@ -213,7 +213,7 @@ RowDescription {"fields":[{"name":"column1"}]}
 DataRow {"fields":["6"]}
 CommandComplete {"tag":"FETCH 1"}
 ReadyForQuery {"status":"I"}
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}
 
 # Test cursors in extended protocol.
@@ -379,7 +379,7 @@ ReadyForQuery {"status":"T"}
 ParseComplete
 BindComplete
 CommandComplete {"tag":"DECLARE CURSOR"}
-ErrorResponse {"fields":[{"typ":"C","value":"55000"},{"typ":"M","value":"portal \"\" cannot be run"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"55000"},{"typ":"M","value":"portal \"\" cannot be run"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -429,7 +429,7 @@ CommandComplete {"tag":"FETCH 1"}
 ParseComplete
 BindComplete
 CommandComplete {"tag":"CLOSE CURSOR"}
-ErrorResponse {"fields":[{"typ":"C","value":"55000"},{"typ":"M","value":"portal \"\" cannot be run"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"55000"},{"typ":"M","value":"portal \"\" cannot be run"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -508,7 +508,7 @@ RowDescription {"fields":[{"name":"column1"}]}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"FETCH 1"}
 ReadyForQuery {"status":"T"}
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"\" does not exist"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -549,7 +549,7 @@ Query {"query": "DECLARE c CURSOR FOR SELECT 1"}
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"DECLARE CURSOR can only be used in transaction blocks"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25P01"},{"typ":"M","value":"DECLARE CURSOR can only be used in transaction blocks"}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -564,5 +564,5 @@ ReadyForQuery
 ----
 ParseComplete
 BindComplete
-ErrorResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"DECLARE CURSOR can only be used in transaction blocks"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25P01"},{"typ":"M","value":"DECLARE CURSOR can only be used in transaction blocks"}]}
 ReadyForQuery {"status":"I"}

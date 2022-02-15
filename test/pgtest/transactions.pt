@@ -145,7 +145,7 @@ Query {"query": "COMMIT;"}
 Query {"query": "ROLLBACK;"}
 ----
 
-until err_field_typs=SCM
+until
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -187,7 +187,7 @@ ReadyForQuery
 ----
 CommandComplete {"tag":"BEGIN"}
 ReadyForQuery {"status":"T"}
-NoticeResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"there is already a transaction in progress"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"25001"},{"typ":"M","value":"there is already a transaction in progress"}]}
 CommandComplete {"tag":"BEGIN"}
 ReadyForQuery {"status":"T"}
 

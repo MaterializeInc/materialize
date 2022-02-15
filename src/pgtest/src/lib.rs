@@ -36,7 +36,8 @@
 //! no_error_fields`.
 //! - `err_field_typs` specifies the set of error message fields
 //! ([reference](https://www.postgresql.org/docs/current/protocol-error-fields.html)).
-//! For example: `until err_field_typs=VC` would return the severity and code
+//! The default is `CMS` (code, message, severity).
+//! For example: `until err_field_typs=SC` would return the severity and code
 //! fields in any ErrorResponse message.
 //!
 //! For example, to execute a simple prepared statement:
@@ -486,7 +487,7 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                 } else {
                     match args.remove("err_field_typs") {
                         Some(typs) => typs.join("").chars().collect(),
-                        None => vec!['C', 'M'],
+                        None => vec!['C', 'S', 'M'],
                     }
                 };
                 let mut ignore = HashSet::new();

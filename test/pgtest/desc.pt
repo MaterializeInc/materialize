@@ -80,7 +80,7 @@ Sync
 until ignore=ParameterDescription
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -93,7 +93,7 @@ Query {"query": "EXECUTE q"}
 until ignore=RowDescription
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
 ReadyForQuery {"status":"I"}
 
 # Changing it back fixes it.
