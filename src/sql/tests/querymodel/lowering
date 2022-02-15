@@ -164,6 +164,7 @@ from (select 10 as a, 5 as b, 'world' as c, 'realm' as d) x
 
 cat
 (defsource x ([(int32 false) int64 int32] [[0]]) [a b c])
+(defsource y ([(int32 false) int32] [[0]]) [a b])
 ----
 ok
 
@@ -444,5 +445,216 @@ select min(a), c, count(*), b, max(a) from x group by c, b;
 | Project (#0..=#4)
 | Map #2, #0, #3, #1, #4
 | Project (#5..=#9)
+----
+----
+
+lower
+select x.a, x.b, y.a from x left join y on x.a > y.b
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 =
+| Get ? (u1)
+
+%4 = Let l2 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 = Let l3 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0..#4)
+| Filter (#0 > #4)
+
+%6 =
+| Get %5 (l3)
+| Distinct group=(#0, #1, #2)
+| Negate
+
+%7 =
+| Get %2 (l1)
+| Distinct group=(#0, #1, #2)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %2 (= #0 #3) (= #1 #4) (= #2 #5)
+| | implementation = Unimplemented
+| Project (#0..#2)
+
+%10 =
+| Constant (null, null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+
+%12 =
+| Union %5 %11
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+| Map #0, #1, #3
+| Project (#5..#7)
+----
+----
+
+lower
+select * from x right join y on x.a > y.b
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 =
+| Get ? (u1)
+
+%4 = Let l2 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 = Let l3 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0..#4)
+| Filter (#0 > #4)
+
+%6 =
+| Get %5 (l3)
+| Project (#3, #4, #0..#2)
+| Distinct group=(#0, #1)
+| Negate
+
+%7 =
+| Get %4 (l2)
+| Distinct group=(#0, #1)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %4 (= #0 #2) (= #1 #3)
+| | implementation = Unimplemented
+| Project (#0, #1)
+
+%10 =
+| Constant (null, null, null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+| Project (#2..#4, #0, #1)
+
+%12 =
+| Union %5 %11
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+----
+----
+
+lower
+select * from x full join y on x.a > y.b
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 =
+| Get ? (u1)
+
+%4 = Let l2 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 = Let l3 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0..#4)
+| Filter (#0 > #4)
+
+%6 =
+| Get %5 (l3)
+| Distinct group=(#0, #1, #2)
+| Negate
+
+%7 =
+| Get %2 (l1)
+| Distinct group=(#0, #1, #2)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %2 (= #0 #3) (= #1 #4) (= #2 #5)
+| | implementation = Unimplemented
+| Project (#0..#2)
+
+%10 =
+| Constant (null, null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+
+%12 =
+| Union %5 %11
+
+%13 =
+| Get %5 (l3)
+| Project (#3, #4, #0..#2)
+| Distinct group=(#0, #1)
+| Negate
+
+%14 =
+| Get %4 (l2)
+| Distinct group=(#0, #1)
+
+%15 =
+| Union %13 %14
+
+%16 =
+| Join %15 %4 (= #0 #2) (= #1 #3)
+| | implementation = Unimplemented
+| Project (#0, #1)
+
+%17 =
+| Constant (null, null, null)
+
+%18 =
+| Join %16 %17
+| | implementation = Unimplemented
+| Project (#2..#4, #0, #1)
+
+%19 =
+| Union %12 %18
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
 ----
 ----

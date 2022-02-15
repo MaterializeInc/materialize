@@ -215,6 +215,123 @@ impl<'a> Lowerer<'a> {
                 }).collect_vec();
                 input.project(projection)
             }
+            BoxType::OuterJoin(box_struct) => {
+                // TODO: Correlated outer joins are not yet supported.
+                let correlation_info = the_box.correlation_info();
+                if !correlation_info.is_empty() {
+                    panic!("correlated joins are not supported yet");
+                }
+
+                let ot = get_outer.typ();
+                let oa = ot.arity();
+
+                // An OuterJoin box is similar to a Select box in that the
+                // operations join, filter, project happen in that order.
+                // However, between the filter and project stage, we union in
+                // the rows that should be preserved.
+
+                // 0) Lower the lhs and rhs.
+                let mut q_iter = the_box.quantifiers.iter();
+                let lhs_id = *q_iter.next().unwrap();
+                let rhs_id = *q_iter.next().unwrap();
+                let lhs =
+                    self.lower_quantifier(lhs_id, get_outer.clone(), outer_column_map, id_gen);
+                let lt = lhs.typ();
+                let la = lt.arity() - oa;
+                let rhs =
+                    self.lower_quantifier(rhs_id, get_outer.clone(), outer_column_map, id_gen);
+                let rt = rhs.typ();
+                let ra = rt.arity() - oa;
+
+                lhs.let_in(id_gen, |id_gen, get_lhs| {
+                    rhs.let_in(id_gen, |id_gen, get_rhs| {
+                        // 1) Lower the inner join
+                        let (mut inner_join, column_map) = self.lower_join_inner(
+                            outer_column_map,
+                            oa,
+                            vec![(lhs_id, get_lhs.clone()), (rhs_id, get_rhs.clone())],
+                        );
+
+                        // 2) Lower the predicates as a filter following the
+                        //    join.
+                        inner_join = inner_join.filter(
+                            box_struct
+                                .predicates
+                                .iter()
+                                .map(|p| Self::lower_expression(p, &column_map)),
+                        );
+
+                        // 3) Calculate preserved rows
+                        // This corresponds to the general join case in lowering.rs
+                        // TODO: support the equijoin case.
+                        let mut result = inner_join.let_in(id_gen, |id_gen, get_join| {
+                            let mut result = get_join.clone();
+                            if self.model.get_quantifier(lhs_id).quantifier_type
+                                == QuantifierType::PreservedForeach
+                            {
+                                let left_outer = get_lhs.anti_lookup(
+                                    id_gen,
+                                    get_join.clone(),
+                                    rt.column_types
+                                        .into_iter()
+                                        .skip(oa)
+                                        .map(|typ| (Datum::Null, typ.nullable(true)))
+                                        .collect(),
+                                );
+                                result = result.union(left_outer);
+                            }
+                            if self.model.get_quantifier(rhs_id).quantifier_type
+                                == QuantifierType::PreservedForeach
+                            {
+                                let right_outer = get_rhs
+                                    .anti_lookup(
+                                        id_gen,
+                                        get_join
+                                            // need to swap left and right to make the anti_lookup work
+                                            .project(
+                                                (0..oa)
+                                                    .chain((oa + la)..(oa + la + ra))
+                                                    .chain((oa)..(oa + la))
+                                                    .collect(),
+                                            ),
+                                        lt.column_types
+                                            .into_iter()
+                                            .skip(oa)
+                                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                                            .collect(),
+                                    )
+                                    // swap left and right back again
+                                    .project(
+                                        (0..oa)
+                                            .chain((oa + ra)..(oa + ra + la))
+                                            .chain((oa)..(oa + ra))
+                                            .collect(),
+                                    );
+                                result = result.union(right_outer);
+                            }
+                            result
+                        });
+                        // 4) Lower the project component.
+                        if !the_box.columns.is_empty() {
+                            result = result.map(
+                                the_box
+                                    .columns
+                                    .iter()
+                                    .map(|c| Self::lower_expression(&c.expr, &column_map))
+                                    .collect_vec(),
+                            );
+                        }
+
+                        // Project the outer columns plus the ones in the projection of
+                        // this outer join box
+                        result.project(
+                            (0..oa)
+                                .chain((oa + la + ra)..(oa + la + ra + the_box.columns.len()))
+                                .collect_vec(),
+                        )
+                    })
+                })
+            }
             _ => panic!(),
         };
 
@@ -251,11 +368,28 @@ impl<'a> Lowerer<'a> {
 
         let outer_arity = get_outer.arity();
 
-        let join_inputs = quantifiers
+        let inputs = quantifiers
             .iter()
-            .map(|q_id| self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map, id_gen))
+            .map(|q_id| {
+                (
+                    *q_id,
+                    self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map, id_gen),
+                )
+            })
             .collect_vec();
 
+        self.lower_join_inner(outer_column_map, outer_arity, inputs)
+    }
+
+    /// Same as `lower_join` except the outer relation has already been applied
+    /// to the quantifiers.
+    fn lower_join_inner(
+        &mut self,
+        outer_column_map: &ColumnMap,
+        outer_arity: usize,
+        inputs: Vec<(QuantifierId, mz_expr::MirRelationExpr)>,
+    ) -> (mz_expr::MirRelationExpr, ColumnMap) {
+        let (quantifiers, join_inputs): (Vec<_>, Vec<_>) = inputs.into_iter().unzip();
         let join = if join_inputs.len() == 1 {
             join_inputs.into_iter().next().unwrap()
         } else {
@@ -298,7 +432,7 @@ impl<'a> Lowerer<'a> {
         let mut input = self.apply(input_box, get_outer.clone(), outer_column_map, id_gen);
 
         match &quantifier.quantifier_type {
-            QuantifierType::Foreach => {
+            QuantifierType::Foreach | QuantifierType::PreservedForeach => {
                 // No special handling required
             }
             QuantifierType::Scalar => {
