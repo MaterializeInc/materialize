@@ -1,5 +1,17 @@
 # dbt-materialize Changelog
 
+## 1.0.2.post2 - 2021-02-14
+
+* Execute hooks that specify `transaction: true` ([#7675]). In particular, this
+  includes hooks that are configured as a simple string.
+
+  Previously, dbt-materialize would only execute hooks that specified
+  `transaction: false`. The new behavior matches the other non-transactional dbt
+  adapters, which simply execute all hooks outside of a transaction regardless
+  of their configured `transaction` behavior.
+
+[#7675]: https://github.com/MaterializeInc/materialize/issues/7675
+
 ## 1.0.1.post1 - 2021-02-14
 
 * Disable transactions. This avoids errors of the form "CREATE ... must be
