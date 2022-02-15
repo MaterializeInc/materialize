@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, Probe, UnorderedInput};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
+use tracing::debug;
 
 use mz_persist::client::{MultiWriteHandle, StreamWriteHandle};
 use mz_persist::operators::source::PersistedSource;
@@ -728,7 +729,7 @@ fn get_persist_config(
 
             let seal_ts = persist_desc.upper_seal_ts;
 
-            tracing::debug!(
+            debug!(
                 "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
                 source_id,
                 persist_desc.primary_stream,
@@ -752,7 +753,7 @@ fn get_persist_config(
 
             let seal_ts = persist_desc.upper_seal_ts;
 
-            tracing::debug!(
+            debug!(
                 "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamp: {}.",
                 source_id,
                 persist_desc.primary_stream,

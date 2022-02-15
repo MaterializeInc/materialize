@@ -25,6 +25,7 @@ use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
+use tracing::error;
 
 use mz_dataflow_types::DataflowError;
 
@@ -557,7 +558,7 @@ where
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
                     if cnt < &0 {
-                        tracing::error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
+                        error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
                     }
                 }
             } else {

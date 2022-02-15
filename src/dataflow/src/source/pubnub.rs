@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use pubnub_hyper::core::data::{channel, message::Type};
 use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport};
+use tracing::info;
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
 use mz_dataflow_types::{sources::PubNubSourceConnector, SourceErrorDetails};
@@ -80,7 +81,7 @@ impl SimpleSource for PubNubSourceReader {
                 }
             }
 
-            tracing::info!(
+            info!(
                 "pubnub channel {:?} disconnected. reconnecting",
                 channel.to_string()
             );

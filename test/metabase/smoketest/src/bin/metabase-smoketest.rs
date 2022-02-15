@@ -13,6 +13,7 @@ use anyhow::{bail, Context};
 use itertools::Itertools;
 use tokio::net::TcpStream;
 use tokio_postgres::NoTls;
+use tracing::debug;
 
 use mz_metabase::{
     DatabaseMetadata, LoginRequest, SetupDatabase, SetupDatabaseDetails, SetupPrefs, SetupRequest,
@@ -29,7 +30,7 @@ async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error>
         .retry_async(|_| async {
             let res = TcpStream::connect("materialized:6875").await;
             if let Err(e) = &res {
-                tracing::debug!("error connecting to materialized: {}", e);
+                debug!("error connecting to materialized: {}", e);
             }
             res
         })
@@ -56,7 +57,7 @@ async fn connect_metabase() -> Result<mz_metabase::Client, anyhow::Error> {
         .retry_async(|_| async {
             let res = client.session_properties().await;
             if let Err(e) = &res {
-                tracing::debug!("error connecting to metabase: {}", e);
+                debug!("error connecting to metabase: {}", e);
             }
             res.map(|res| res.setup_token)
         })
@@ -116,7 +117,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let metabase_client = connect_metabase().await?;
 
     let databases = metabase_client.databases().await?;
-    tracing::debug!("Databases: {:#?}", databases);
+    debug!("Databases: {:#?}", databases);
 
     let database_names: Vec<_> = databases.iter().map(|d| &d.name).sorted().collect();
     assert_eq!(database_names, &["Materialize", "Sample Dataset"]);
@@ -165,7 +166,7 @@ async fn main() -> Result<(), anyhow::Error> {
             for t in &mut metadata.tables {
                 t.fields.sort_by(|a, b| a.name.cmp(&b.name));
             }
-            tracing::debug!("Materialize database metadata: {:#?}", metadata);
+            debug!("Materialize database metadata: {:#?}", metadata);
             if expected_metadata != metadata {
                 bail!(
                     "metadata did not match\nexpected:\n{:#?}\nactual:\n{:#?}",

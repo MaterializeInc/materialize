@@ -18,6 +18,7 @@ use std::{cmp, env, process};
 use differential_dataflow::Hashable;
 use mz_persist::operators::stream::Persist;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -81,8 +82,8 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
                 let err_stream = vec![(err.to_string(), 0, 1)].to_stream(scope);
                 (ok_stream, err_stream)
             });
-            ok_stream.inspect(|d| tracing::info!("ok: {:?}", d));
-            err_stream.inspect(|d| tracing::info!("err: {:?}", d));
+            ok_stream.inspect(|d| info!("ok: {:?}", d));
+            err_stream.inspect(|d| info!("err: {:?}", d));
         })
     })?;
 

@@ -19,6 +19,7 @@ use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
+use tracing::trace;
 
 use crate::logging::LoggingConfig;
 use crate::{
@@ -477,12 +478,12 @@ impl LocalClient {
 #[async_trait(?Send)]
 impl Client for LocalClient {
     async fn send(&mut self, cmd: Command) {
-        tracing::trace!("SEND dataflow command: {:?}", cmd);
+        trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
         let response = self.client.recv().await;
-        tracing::trace!("RECV dataflow response: {:?}", response);
+        trace!("RECV dataflow response: {:?}", response);
         response
     }
 }
@@ -500,6 +501,7 @@ pub mod partitioned {
     use mz_repr::{Diff, Row, Timestamp};
     use timely::order::PartialOrder;
     use timely::progress::{Antichain, ChangeBatch};
+    use tracing::debug;
 
     use crate::TailResponse;
 
@@ -706,7 +708,7 @@ pub mod partitioned {
             for id in cease.into_iter() {
                 let previous = self.uppers.remove(&id);
                 if previous.is_none() {
-                    tracing::debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
+                    debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
                 }
             }
         }

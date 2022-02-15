@@ -13,6 +13,7 @@ use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use tracing::{debug, trace};
 
 use mz_dataflow_types::client::{
     Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
@@ -169,7 +170,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         | ExternalSourceConnector::PubNub(_) => None,
                     }
                 } else {
-                    tracing::debug!(
+                    debug!(
                         "Timestamping not supported for local sources {}. Ignoring",
                         id
                     );
@@ -185,7 +186,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             self.timely_worker.peers(),
                             &pid,
                         ) {
-                            tracing::trace!(
+                            trace!(
                                 "Adding partition/binding on worker {}: ({}, {}, {})",
                                 self.timely_worker.index(),
                                 pid,
@@ -195,7 +196,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             data.add_partition(pid.clone(), None);
                             data.add_binding(pid, timestamp, offset);
                         } else {
-                            tracing::trace!(
+                            trace!(
                                 "NOT adding partition/binding on worker {}: ({}, {}, {})",
                                 self.timely_worker.index(),
                                 pid,
@@ -228,12 +229,12 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
             StorageCommand::DropSourceTimestamping { id } => {
                 let prev = self.storage_state.ts_histories.remove(&id);
                 if prev.is_none() {
-                    tracing::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
+                    debug!("Attempted to drop timestamping for source {} that was not previously known", id);
                 }
 
                 let prev = self.storage_state.ts_source_mapping.remove(&id);
                 if prev.is_none() {
-                    tracing::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
+                    debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
 
                 self.storage_state.reported_bindings_frontiers.remove(&id);

@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use tokio::runtime::Runtime as AsyncRuntime;
+use tracing::warn;
 
 use crate::client::RuntimeClient;
 use crate::error::Error;
@@ -153,7 +154,7 @@ impl Drop for MemLog {
         // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
-            tracing::warn!("MemLog dropped without close");
+            warn!("MemLog dropped without close");
         }
     }
 }
@@ -339,7 +340,7 @@ impl Drop for MemBlob {
         // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
-            tracing::warn!("MemBlob dropped without close");
+            warn!("MemBlob dropped without close");
         }
     }
 }

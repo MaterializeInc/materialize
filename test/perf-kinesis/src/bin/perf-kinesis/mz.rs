@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use tokio_postgres::Client;
+use tracing::info;
 
 use mz_test_util::mz_client;
 
@@ -24,14 +25,14 @@ pub async fn create_source_and_views(
          FORMAT BYTES",
         stream_arn = stream_arn,
     );
-    tracing::info!("creating source=> {}", query);
+    info!("creating source=> {}", query);
     client
         .batch_execute(&query)
         .await
         .context("Creating source")?;
 
     let query = "CREATE VIEW foo_view AS SELECT CONVERT_FROM(data, 'utf8') AS data FROM foo";
-    tracing::info!("creating view=> {}", query);
+    info!("creating view=> {}", query);
     client
         .batch_execute(query)
         .await
@@ -39,7 +40,7 @@ pub async fn create_source_and_views(
 
     // Only materialize the count.
     let query = "CREATE MATERIALIZED VIEW foo_count AS SELECT count(*) FROM foo";
-    tracing::info!("creating materialized view=> {}", query);
+    info!("creating materialized view=> {}", query);
     client
         .batch_execute(query)
         .await
@@ -54,12 +55,12 @@ pub async fn query_materialized_view_until(
     expected_total_records: u64,
 ) -> Result<(), anyhow::Error> {
     let query = format!("SELECT * FROM {view_name};", view_name = view_name);
-    tracing::info!("querying view=> {}", query);
+    info!("querying view=> {}", query);
 
     let row = mz_client::try_query_one(&client, &*query, Duration::from_secs(1)).await?;
     let count: i64 = row.get("count");
     if count as u64 == expected_total_records {
-        tracing::info!(
+        info!(
             "Found all {} records, done querying.",
             expected_total_records
         );

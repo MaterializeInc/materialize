@@ -106,6 +106,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
+use tracing::error;
 
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
@@ -836,10 +837,9 @@ impl Coordinator {
                         // EDIT: On further consideration, I think it doesn't
                         // affect correctness if this fails, just availability
                         // of the table.
-                        tracing::error!(
+                        error!(
                             "failed to seal persisted stream to ts {}: {}",
-                            advance_to,
-                            err
+                            advance_to, err
                         );
                     }
                 },
@@ -1539,7 +1539,7 @@ impl Coordinator {
             let persist_multi = match &mut self.persister.table_writer {
                 Some(multi) => multi,
                 None => {
-                    tracing::error!("internal error: persist_multi_details invariant violated");
+                    error!("internal error: persist_multi_details invariant violated");
                     return;
                 }
             };
@@ -1551,7 +1551,7 @@ impl Coordinator {
                 async move {
                     if let Err(err) = compaction_fut.await {
                         // TODO: Do something smarter here
-                        tracing::error!("failed to compact persisted tables: {}", err);
+                        error!("failed to compact persisted tables: {}", err);
                     }
                 },
             );
