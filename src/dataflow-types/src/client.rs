@@ -370,7 +370,7 @@ pub enum StorageResponse {
 
 /// A client to a running dataflow server.
 #[async_trait(?Send)]
-pub trait Client: Send {
+pub trait Client {
     /// Sends a command to the dataflow server.
     async fn send(&mut self, cmd: Command);
 

@@ -247,7 +247,7 @@ pub struct LoggingConfig {
 
 /// Configures a coordinator.
 pub struct Config {
-    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client>,
+    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client + Send>,
     pub logging: Option<LoggingConfig>,
     pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
