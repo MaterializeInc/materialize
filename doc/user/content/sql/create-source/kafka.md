@@ -56,11 +56,11 @@ Field                                | Value     | Description
 
 |<div style="width:290px">Format</div> | Append-only envelope | Upsert envelope | Debezium envelope |
 ---------------------------------------|:--------------------:|:---------------:|:-----------------:|
-| [Avro]()                             | ✓                    | ✓               | ✓                 |
-| [JSON]()                             | ✓                    | ✓               |                   |
-| [Protobuf]()                         | ✓                    | ✓               |                   |
-| [Text/bytes]()                       | ✓                    | ✓               |                   |
-| [CSV]()                              | ✓                    |                 |                   |
+| Avro                                 | ✓                    | ✓               | ✓                 |
+| JSON                                 | ✓                    | ✓               |                   |
+| Protobuf                             | ✓                    | ✓               |                   |
+| Text/bytes                           | ✓                    | ✓               |                   |
+|  CSV                                 | ✓                    |                 |                   |
 
 ### Key-value encoding
 
@@ -70,7 +70,7 @@ By default, the message key is decoded using the same format as the message valu
 
 ### Handling upserts
 
-To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use [`ENVELOPE UPSERT`]():
+To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
 
 ```sql
 CREATE SOURCE current_predictions
@@ -97,7 +97,7 @@ Primary keys are **automatically** inferred for Kafka sources using the `UPSERT`
 Currently, Materialize only supports Avro-encoded Debezium records. If you're interested in JSON support, please reach out in the community Slack or leave a comment in [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
 {{</ note >}}
 
-Materialize provides a dedicated envelope ([`ENVELOPE DEBEZIUM`]()) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
+Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
 
 ```sql
 CREATE SOURCE kafka_repl
@@ -108,7 +108,7 @@ CREATE SOURCE kafka_repl
 
 Note that:
 
-- If log compaction is enabled for your Debezium topic, you must use [`ENVELOPE DEBEZIUM UPSERT`]().
+- If log compaction is enabled for your Debezium topic, you must use `ENVELOPE DEBEZIUM UPSERT`.
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
@@ -134,9 +134,9 @@ Note that:
 
 - This option requires specifying the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
 
-- The [`UPSERT`]() envelope always includes keys.
+- The `UPSERT` envelope always includes keys.
 
-- The [`DEBEZIUM`]() envelope is incompatible with this option.
+- The `DEBEZIUM` envelope is incompatible with this option.
 
 #### Partition, offset, timestamp
 

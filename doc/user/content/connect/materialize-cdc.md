@@ -3,8 +3,7 @@ title: "Materialize CDC"
 description: "The Materialize CDC format is a format for change datafeeds that has been designed especially to prevent errors resulting from record duplication or missequencing."
 menu:
   main:
-    parent: "connections"
-    weight: 4
+    parent: "sources"
 ---
 
 {{< beta />}}
@@ -134,7 +133,7 @@ Field | Description
 
 ## Example Materialize CDC workflow
 
-You specify the use of the Materialize CDC format in the [Avro schema](../../sql/create-source/avro-kafka/#avro-format-details) when a source is created.
+You specify the use of the Materialize CDC format in the [Avro schema](../../sql/create-source/kafka/#format_spec) when a source is created.
 
 ```sql
   CREATE MATERIALIZED SOURCE name_of_source
