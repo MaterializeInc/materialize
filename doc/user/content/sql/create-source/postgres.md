@@ -28,7 +28,7 @@ _src_name_  | The name for the source.
 **CONNECTION** _connection_info_ | Postgres connection parameters. See the Postgres documentation on [supported correction parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
-## `WITH` options
+### `WITH` options
 
 The following option is valid within the `WITH` clause.
 

@@ -77,9 +77,9 @@ Postgres sources ingest the raw replication stream data for all tables included 
 
 ```sql
 CREATE SOURCE mz_source
-FROM POSTGRES
-  CONNECTION 'host=example.com port=5432 user=host dbname=postgres sslmode=require'
-  PUBLICATION 'mz_source';
+    FROM POSTGRES
+      CONNECTION 'host=example.com port=5432 user=host dbname=postgres sslmode=require'
+      PUBLICATION 'mz_source';
 ```
 
 {{< note >}}
@@ -112,10 +112,10 @@ Any materialized view defined on top of this source will be incrementally update
 
 ```sql
 CREATE MATERIALIZED VIEW cnt_view1 AS
-SELECT field1,
-       COUNT(*) AS cnt
-FROM view1
-GROUP BY field1;
+    SELECT field1,
+           COUNT(*) AS cnt
+    FROM view1
+    GROUP BY field1;
 ```
 
 ## Kafka + Debezium
@@ -156,9 +156,9 @@ As a _superuser_:
 
 Debezium is deployed as a set of Kafka Connect-compatible connectors, so you first need to define a Postgres connector configuration and then start the connector by adding it to Kafka Connect.
 
-{{< note >}}
-Currently, Materialize only supports Avro-encoded Debezium records. If you’re interested in JSON support, please reach out in the community Slack or leave a comment on [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
-{{</ note >}}
+{{< warning >}}
+If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html), you **must** override the default value of `After-state only` to `false`.
+{{</ warning >}}
 
 1. Create a connector configuration file and save it as `register-postgres.json`:
 
@@ -213,28 +213,31 @@ Currently, Materialize only supports Avro-encoded Debezium records. If you’re 
 
 ### Create a source
 
+{{< note >}}
+Currently, Materialize only supports Avro-encoded Debezium records. If you’re interested in JSON support, please reach out in the community Slack or leave a comment on [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
+{{</ note >}}
+
 Debezium emits change events using an envelope that contains detailed information about upstream database operations, like the `before` and `after` values for each record. To create a source that interprets the [Debezium envelope](/sql/create-source/avro-kafka/#debezium-envelope-details) in Materialize:
 
 ```sql
 CREATE SOURCE kafka_repl
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'pg_repl.public.table1'
-KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM UPSERT;
+    FROM KAFKA BROKER 'kafka:9092' TOPIC 'pg_repl.public.table1'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+    ENVELOPE DEBEZIUM UPSERT;
 ```
 
-Enabling `UPSERT` allows you to replicate tables with `REPLICA IDENTITY DEFAULT` or `INDEX`. Although this approach is less resource-intensive for the upstream database, it will require **more memory** in Materialize as it needs to track state proportional to the number of unique primary keys in the changing data.
+Enabling `UPSERT` allows you to replicate tables with `REPLICA IDENTITY DEFAULT` or `INDEX`. Although this approach is less resource-intensive for the upstream database, it will require **more memory** in Materialize, as it needs to track state proportional to the number of unique primary keys in the changing data.
 
 If the original Postgres table uses `REPLICA IDENTITY FULL`:
 
 ```sql
 CREATE SOURCE kafka_repl
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'pg_repl.public.table1'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
+    FROM KAFKA BROKER 'kafka:9092' TOPIC 'pg_repl.public.table1'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+    ENVELOPE DEBEZIUM;
 ```
 
-When should you use what? `UPSERT` works best when there is a small number of quickly changing rows; setting `REPLICA IDENTITY FULL` in the original tables and using the regular Debezium envelope works best for pretty much everything else.
+When should you use what? `UPSERT` works best when there is a small number of quickly changing rows and is required if log compaction is enabled for your Debezium topic; setting `REPLICA IDENTITY FULL` in the original tables and using the regular Debezium envelope works best for pretty much everything else.
 
 #### Transaction support
 
