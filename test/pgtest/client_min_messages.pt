@@ -1,0 +1,29 @@
+# Test logic related to filtering which messages are sent to clients based on severity levels
+
+# Check default behavior
+send
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+
+# Change client_min_messages and see that NoticeResponse is missing
+send
+Query {"query": "SET client_min_messages = ERROR"}
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
