@@ -10,7 +10,6 @@
 //! Timely and Differential Dataflow operators for persisting and replaying
 //! data.
 
-pub mod input;
 pub mod replay;
 pub mod source;
 pub mod stream;
