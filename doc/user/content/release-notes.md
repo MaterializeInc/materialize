@@ -122,6 +122,9 @@ changes that have not yet been documented.
 - Improve the clarity of any Avro schema resolution errors found when
   creating materialized sources and views. {{% gh 8415 %}}
 
+- Allow setting `standard_conforming_strings` to its default value of `on`.
+  Setting it to `off` is still not supported.
+
 {{< comment >}}
 Only add new release notes above this line.
 
