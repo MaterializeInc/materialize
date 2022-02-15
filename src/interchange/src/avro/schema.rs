@@ -13,14 +13,14 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Error};
+use anyhow::{anyhow, bail, Context};
 use tracing::warn;
 
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_ore::cast::CastFrom;
 use mz_ore::retry::Retry;
-use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 
 use super::is_null;
@@ -160,7 +160,7 @@ fn validate_schema_2(
                 )
             }
             ScalarType::Numeric {
-                scale: Some(u8::try_from(*scale).unwrap()),
+                max_scale: Some(NumericMaxScale::try_from(*scale)?),
             }
         }
         SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
@@ -253,8 +253,8 @@ impl ConfluentAvroResolver {
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<(&'b [u8], &'a Schema)> {
-        let resolved_schema = match &mut self.writer_schemas {
+    ) -> anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)> {
+        let (resolved_schema, schema_id) = match &mut self.writer_schemas {
             Some(cache) => {
                 debug_assert!(
                     self.confluent_wire_format,
@@ -264,10 +264,13 @@ impl ConfluentAvroResolver {
                 // XXX(guswynn): use destructuring assignments when they are stable
                 let (schema_id, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
                 bytes = adjusted_bytes;
-                cache
+                let schema = cache
                     .get(schema_id, &self.reader_schema)
                     .await
-                    .map_err(Error::msg)?
+                    .with_context(|| {
+                        format!("failed to resolve Avro schema (id = {})", schema_id)
+                    })?;
+                (schema, Some(schema_id))
             }
 
             // If we haven't been asked to use a schema registry, we have no way
@@ -279,10 +282,10 @@ impl ConfluentAvroResolver {
                     let (_, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
                     bytes = adjusted_bytes;
                 }
-                &self.reader_schema
+                (&self.reader_schema, None)
             }
         };
-        Ok((bytes, resolved_schema))
+        Ok((bytes, resolved_schema, schema_id))
     }
 }
 

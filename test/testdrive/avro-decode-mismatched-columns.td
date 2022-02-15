@@ -31,7 +31,7 @@ $ kafka-ingest format=avro topic=decode-1to2-nodefault schema=${1column} timesta
   ENVELOPE NONE
 
 ! SELECT * FROM decode_1to2_nodefault
-contains:avro deserialization error: IO error: UnexpectedEof
+contains:avro deserialization error: unable to decode row : IO error: UnexpectedEof
 
 #
 # 1 column -> 2 columns with default
@@ -48,7 +48,7 @@ $ kafka-ingest format=avro topic=decode-1to2-default schema=${1column} timestamp
   ENVELOPE NONE
 
 ! SELECT * FROM decode_1to2_default
-contains:avro deserialization error: IO error: UnexpectedEof
+contains:Text: avro deserialization error: unable to decode row : IO error: UnexpectedEof
 
 #
 # 2 columns -> 1 column

@@ -46,10 +46,18 @@ impl ToSql for Interval {
         // Our intervals are guaranteed to fit within SQL's min/max intervals,
         // so this is compression is guaranteed to be lossless. For details, see
         // `repr::scalar::datetime::compute_interval`.
-        let days = std::cmp::min(self.0.days() as i128, i32::MAX as i128);
+        let days: i128 = std::cmp::max(
+            std::cmp::min(self.0.days().into(), i32::MAX.into()),
+            i32::MIN.into(),
+        );
         let ns = self.0.duration - days * 24 * 60 * 60 * 1_000_000_000;
-        out.put_i64((ns / 1000) as i64);
-        out.put_i32(days as i32);
+        out.put_i64((ns / 1000).try_into().expect(
+            "bounds checking when creating Intervals should prevent this field from overflowing",
+        ));
+        out.put_i32(
+            days.try_into()
+                .expect("days is bound between i32::MAX and i32::MIN above"),
+        );
         out.put_i32(self.0.months);
         Ok(IsNull::No)
     }
@@ -67,7 +75,12 @@ impl<'a> FromSql<'a> for Interval {
         let days = raw.read_i32::<NetworkEndian>()?;
         let months = raw.read_i32::<NetworkEndian>()?;
         Ok(Interval(
-            ReprInterval::new(months, days as i64 * 24 * 60 * 60, micros * 1000).unwrap(),
+            ReprInterval::new(
+                months,
+                i64::from(days) * 24 * 60 * 60,
+                i128::from(micros) * 1000,
+            )
+            .unwrap(),
         ))
     }
 

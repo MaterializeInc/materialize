@@ -119,6 +119,12 @@ changes that have not yet been documented.
 - Fix a bug where too many columns were returned when both `*` and a
   table function appeared in the `SELECT` list {{% gh 10363 %}}.
 
+- Improve the clarity of any Avro schema resolution errors found when
+  creating materialized sources and views. {{% gh 8415 %}}
+
+- Allow setting `standard_conforming_strings` to its default value of `on`.
+  Setting it to `off` is still not supported.
+
 - Add support for `ARRAY(<subquery>)` constructor.
 
 {{< comment >}}

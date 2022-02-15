@@ -9,7 +9,25 @@
 
 #![allow(missing_docs)]
 
-//! Reserved OIDs through Materialized.
+//! PostgreSQL OID constants.
+
+/// The first OID in PostgreSQL's system catalog that is not pinned during
+/// bootstrapping.
+///
+/// See: <https://github.com/postgres/postgres/blob/aa0105141/src/include/access/transam.h#L173-L175>
+pub const FIRST_UNPINNED_OID: u32 = 12000;
+
+/// The first OID that is assigned by Materialize rather than PostgreSQL.
+pub const FIRST_MATERIALIZE_OID: u32 = 16384;
+
+/// The first OID that is assigned to user objects rather than system builtins.
+pub const FIRST_USER_OID: u32 = 20_000;
+
+// Postgres builtins in the "unpinned" OID range. We get to choose whatever OIDs
+// we like for these builtins.
+pub const FUNC_PG_EXPAND_ARRAY: u32 = 12000;
+
+// Materialize-specific builtin OIDs.
 pub const TYPE_LIST_OID: u32 = 16_384;
 pub const TYPE_MAP_OID: u32 = 16_385;
 pub const FUNC_CEIL_F32_OID: u32 = 16_386;
@@ -78,4 +96,3 @@ pub const FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TSTZ_OID: u32 = 16_450;
 pub const FUNC_MZ_DATE_BIN_HOPPING_TS_OID: u32 = 16_451;
 pub const FUNC_MZ_DATE_BIN_HOPPING_TSTZ_OID: u32 = 16_452;
 pub const FUNC_MZ_TYPE_NAME: u32 = 16_453;
-// next ID: 16_454

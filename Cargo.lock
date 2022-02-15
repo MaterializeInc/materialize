@@ -3612,8 +3612,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
+ "mz-pgrepr",
  "mz-repr",
- "mz-sql-parser",
  "openssl",
  "postgres-openssl",
  "tokio",
@@ -4748,9 +4748,9 @@ dependencies = [
 
 [[package]]
 name = "prost-reflect"
-version = "0.5.6"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2c59a186b1edc4d5df9c1b7a3583892088382818efad45be72e0b79f0d618cf"
+checksum = "a8c5c7613141bfc3b3c68d9feda8f43af4ae229fb54d10e1b214168b36a5912b"
 dependencies = [
  "base64",
  "prost",
@@ -4958,7 +4958,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.28.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#cc45e9e7dabad9ae40f00222839fedbb2c797455"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#9594a34f73709d443c968ab191a010eb1908dae0"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -4975,7 +4975,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.2.0+1.8.2"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#cc45e9e7dabad9ae40f00222839fedbb2c797455"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#9594a34f73709d443c968ab191a010eb1908dae0"
 dependencies = [
  "cmake",
  "libc",
@@ -5733,7 +5733,7 @@ checksum = "25eb0ca3468fc0acc11828786797f6ef9aa1555e4a211a60d64cc8e4d1be47d6"
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#731b06e060811353b91bc06ea807e079715e28a2"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#3cf154011cfc62f71257a2eeadf1c772775f1874"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -5751,12 +5751,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#731b06e060811353b91bc06ea807e079715e28a2"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#3cf154011cfc62f71257a2eeadf1c772775f1874"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#731b06e060811353b91bc06ea807e079715e28a2"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#3cf154011cfc62f71257a2eeadf1c772775f1874"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -5772,7 +5772,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#731b06e060811353b91bc06ea807e079715e28a2"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#3cf154011cfc62f71257a2eeadf1c772775f1874"
 dependencies = [
  "columnation",
  "serde",
@@ -5781,7 +5781,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#731b06e060811353b91bc06ea807e079715e28a2"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#3cf154011cfc62f71257a2eeadf1c772775f1874"
 
 [[package]]
 name = "tinytemplate"

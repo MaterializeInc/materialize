@@ -10,12 +10,19 @@
 //! A client that maintains summaries of the involved objects.
 use std::collections::BTreeMap;
 
+use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
+
+use crate::client::SourceConnector;
 use crate::client::{
     Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response, StorageCommand,
 };
+use crate::logging::LoggingConfig;
+use crate::DataflowDescription;
+use crate::Update;
 use mz_expr::GlobalId;
-use mz_repr::Timestamp;
-use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
+use mz_expr::PartitionId;
+use mz_expr::RowSetFinishing;
+use mz_repr::{Row, Timestamp};
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<C> {
@@ -31,146 +38,292 @@ pub struct Controller<C> {
     storage_since_uppers: SinceUpperMap,
 }
 
-#[async_trait::async_trait]
-impl<C: Client> Client for Controller<C> {
-    async fn send(&mut self, cmd: Command) {
-        self.send(cmd).await
+// Implementation of COMPUTE commands.
+impl<C: Client> Controller<C> {
+    pub async fn create_instance(
+        &mut self,
+        instance: ComputeInstanceId,
+        logging: Option<LoggingConfig>,
+    ) {
+        self.compute_since_uppers
+            .insert(instance, Default::default());
+
+        if let Some(logging_config) = logging.as_ref() {
+            for id in logging_config.log_identifiers() {
+                self.compute_since_uppers
+                    .get_mut(&instance)
+                    .expect("Reference to absent instance")
+                    .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
+            }
+        }
+
+        self.client
+            .send(Command::Compute(
+                ComputeCommand::CreateInstance(logging),
+                instance,
+            ))
+            .await;
     }
-    async fn recv(&mut self) -> Option<Response> {
-        self.recv().await
+    pub async fn drop_instance(&mut self, instance: ComputeInstanceId) {
+        self.compute_since_uppers.remove(&instance);
+
+        self.client
+            .send(Command::Compute(ComputeCommand::DropInstance, instance))
+            .await;
+    }
+    pub async fn create_dataflows(
+        &mut self,
+        instance: ComputeInstanceId,
+        dataflows: Vec<DataflowDescription<crate::plan::Plan>>,
+    ) {
+        // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
+        // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
+        for dataflow in dataflows.iter() {
+            let as_of = dataflow
+                .as_of
+                .as_ref()
+                .expect("Dataflow constructed without as_of set");
+
+            // Validate sources have `since.less_equal(as_of)`.
+            // TODO(mcsherry): Instead, return an error from the constructing method.
+            for (source_id, _) in dataflow.source_imports.iter() {
+                let (since, _upper) = self
+                    .source_since_upper_for(*source_id)
+                    .expect("Source frontiers absent in dataflow construction");
+                assert!(<_ as timely::order::PartialOrder>::less_equal(
+                    &since,
+                    &as_of.borrow()
+                ));
+            }
+
+            // Validate indexes have `since.less_equal(as_of)`.
+            // TODO(mcsherry): Instead, return an error from the constructing method.
+            for (index_id, _) in dataflow.index_imports.iter() {
+                let (since, _upper) = self
+                    .compute_since_uppers
+                    .get_mut(&instance)
+                    .expect("Reference to absent instance")
+                    .get(index_id)
+                    .expect("Index frontiers absent in dataflow construction");
+                assert!(<_ as timely::order::PartialOrder>::less_equal(
+                    &since,
+                    &as_of.borrow()
+                ));
+            }
+
+            for (sink_id, _) in dataflow.sink_exports.iter() {
+                // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
+                self.compute_since_uppers
+                    .get_mut(&instance)
+                    .expect("Reference to absent instance")
+                    .insert(*sink_id, (as_of.clone(), Antichain::from_elem(0)));
+            }
+            for (index_id, _, _) in dataflow.index_exports.iter() {
+                // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
+                self.compute_since_uppers
+                    .get_mut(&instance)
+                    .expect("Reference to absent instance")
+                    .insert(*index_id, (as_of.clone(), Antichain::from_elem(0)));
+            }
+        }
+
+        self.client
+            .send(Command::Compute(
+                ComputeCommand::CreateDataflows(dataflows),
+                instance,
+            ))
+            .await
+    }
+    pub async fn drop_sinks(
+        &mut self,
+        instance: ComputeInstanceId,
+        sink_identifiers: Vec<GlobalId>,
+    ) {
+        self.client
+            .send(Command::Compute(
+                ComputeCommand::DropSinks(sink_identifiers),
+                instance,
+            ))
+            .await
+    }
+    pub async fn drop_indexes(
+        &mut self,
+        instance: ComputeInstanceId,
+        index_identifiers: Vec<GlobalId>,
+    ) {
+        self.client
+            .send(Command::Compute(
+                ComputeCommand::DropIndexes(index_identifiers),
+                instance,
+            ))
+            .await
+    }
+    pub async fn peek(
+        &mut self,
+        instance: ComputeInstanceId,
+        id: GlobalId,
+        key: Option<Row>,
+        conn_id: u32,
+        timestamp: Timestamp,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+    ) {
+        self.client
+            .send(Command::Compute(
+                ComputeCommand::Peek {
+                    id,
+                    key,
+                    conn_id,
+                    timestamp,
+                    finishing,
+                    map_filter_project,
+                },
+                instance,
+            ))
+            .await
+    }
+    pub async fn cancel_peek(&mut self, instance: ComputeInstanceId, conn_id: u32) {
+        self.client
+            .send(Command::Compute(
+                ComputeCommand::CancelPeek { conn_id },
+                instance,
+            ))
+            .await
+    }
+    pub async fn allow_index_compaction(
+        &mut self,
+        instance: ComputeInstanceId,
+        frontiers: Vec<(GlobalId, Antichain<Timestamp>)>,
+    ) {
+        for (id, frontier) in frontiers.iter() {
+            self.compute_since_uppers
+                .get_mut(&instance)
+                .expect("Reference to absent instance")
+                .advance_since_for(*id, frontier);
+        }
+
+        self.client
+            .send(Command::Compute(
+                ComputeCommand::AllowIndexCompaction(frontiers),
+                instance,
+            ))
+            .await
     }
 }
 
+// Implementation of STORAGE commands.
 impl<C: Client> Controller<C> {
-    pub async fn send(&mut self, cmd: Command) {
-        match &cmd {
-            Command::Compute(ComputeCommand::CreateInstance(logging), instance) => {
-                self.compute_since_uppers
-                    .insert(*instance, Default::default());
-
-                if let Some(logging_config) = logging {
-                    for id in logging_config.log_identifiers() {
-                        self.compute_since_uppers
-                            .get_mut(instance)
-                            .expect("Reference to absent instance")
-                            .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
-                    }
+    pub async fn create_sources(
+        &mut self,
+        bindings: Vec<(GlobalId, (crate::sources::SourceDesc, Antichain<Timestamp>))>,
+    ) {
+        // Maintain the list of bindings, and complain if one attempts to either
+        // 1. create a dropped source identifier, or
+        // 2. create an existing source identifier with a new description.
+        for (id, (description, since)) in bindings.iter() {
+            let description = Some(description.clone());
+            match self.source_descriptions.get(&id) {
+                Some(None) => {
+                    panic!("Attempt to recreate dropped source id: {:?}", id);
                 }
-            }
-            Command::Compute(ComputeCommand::DropInstance, instance) => {
-                self.compute_since_uppers.remove(instance);
-            }
-            Command::Storage(StorageCommand::CreateSources(bindings)) => {
-                // Maintain the list of bindings, and complain if one attempts to either
-                // 1. create a dropped source identifier, or
-                // 2. create an existing source identifier with a new description.
-                for (id, (description, since)) in bindings.iter() {
-                    let description = Some(description.clone());
-                    match self.source_descriptions.get(&id) {
-                        Some(None) => {
-                            panic!("Attempt to recreate dropped source id: {:?}", id);
-                        }
-                        Some(prior_description) => {
-                            if prior_description != &description {
-                                panic!(
+                Some(prior_description) => {
+                    if prior_description != &description {
+                        panic!(
                                     "Multiple distinct descriptions created for source id {}: {:?} and {:?}",
                                     id,
                                     prior_description.as_ref().unwrap(),
                                     description.as_ref().unwrap(),
                                 );
-                            }
-                        }
-                        None => {
-                            // All is well; no reason to panic.
-                        }
-                    }
-
-                    self.source_descriptions.insert(*id, description.clone());
-                    // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
-                    self.storage_since_uppers
-                        .insert(*id, (since.clone(), Antichain::from_elem(0)));
-                }
-            }
-            Command::Storage(StorageCommand::DropSources(identifiers)) => {
-                for id in identifiers.iter() {
-                    if !self.source_descriptions.contains_key(id) {
-                        tracing::error!("Source id {} dropped without first being created", id);
-                    } else {
-                        self.source_descriptions.insert(*id, None);
                     }
                 }
-            }
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows), instance) => {
-                // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
-                // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
-                for dataflow in dataflows.iter() {
-                    let as_of = dataflow
-                        .as_of
-                        .as_ref()
-                        .expect("Dataflow constructed without as_of set");
-
-                    // Validate sources have `since.less_equal(as_of)`.
-                    // TODO(mcsherry): Instead, return an error from the constructing method.
-                    for (source_id, _) in dataflow.source_imports.iter() {
-                        let (since, _upper) = self
-                            .source_since_upper_for(*source_id)
-                            .expect("Source frontiers absent in dataflow construction");
-                        assert!(<_ as timely::order::PartialOrder>::less_equal(
-                            &since,
-                            &as_of.borrow()
-                        ));
-                    }
-
-                    // Validate indexes have `since.less_equal(as_of)`.
-                    // TODO(mcsherry): Instead, return an error from the constructing method.
-                    for (index_id, _) in dataflow.index_imports.iter() {
-                        let (since, _upper) = self
-                            .compute_since_uppers
-                            .get_mut(instance)
-                            .expect("Reference to absent instance")
-                            .get(index_id)
-                            .expect("Index frontiers absent in dataflow construction");
-                        assert!(<_ as timely::order::PartialOrder>::less_equal(
-                            &since,
-                            &as_of.borrow()
-                        ));
-                    }
-
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
-                        // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
-                        self.compute_since_uppers
-                            .get_mut(instance)
-                            .expect("Reference to absent instance")
-                            .insert(*sink_id, (as_of.clone(), Antichain::from_elem(0)));
-                    }
-                    for (index_id, _, _) in dataflow.index_exports.iter() {
-                        // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
-                        self.compute_since_uppers
-                            .get_mut(instance)
-                            .expect("Reference to absent instance")
-                            .insert(*index_id, (as_of.clone(), Antichain::from_elem(0)));
-                    }
-                }
-            }
-            Command::Compute(ComputeCommand::AllowIndexCompaction(frontiers), instance) => {
-                for (id, frontier) in frontiers.iter() {
-                    self.compute_since_uppers
-                        .get_mut(instance)
-                        .expect("Reference to absent instance")
-                        .advance_since_for(*id, frontier);
-                }
-            }
-            Command::Storage(StorageCommand::AllowSourceCompaction(frontiers)) => {
-                for (id, frontier) in frontiers.iter() {
-                    self.storage_since_uppers.advance_since_for(*id, frontier);
+                None => {
+                    // All is well; no reason to panic.
                 }
             }
 
-            _ => {}
+            self.source_descriptions.insert(*id, description.clone());
+            // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
+            self.storage_since_uppers
+                .insert(*id, (since.clone(), Antichain::from_elem(0)));
         }
-        self.client.send(cmd).await
-    }
 
+        self.client
+            .send(Command::Storage(StorageCommand::CreateSources(bindings)))
+            .await
+    }
+    pub async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) {
+        for id in identifiers.iter() {
+            if !self.source_descriptions.contains_key(id) {
+                tracing::error!("Source id {} dropped without first being created", id);
+            } else {
+                self.source_descriptions.insert(*id, None);
+            }
+        }
+
+        self.client
+            .send(Command::Storage(StorageCommand::DropSources(identifiers)))
+            .await
+    }
+    pub async fn table_insert(&mut self, id: GlobalId, updates: Vec<Update>) {
+        self.client
+            .send(Command::Storage(StorageCommand::Insert { id, updates }))
+            .await
+    }
+    pub async fn update_durability_frontiers(
+        &mut self,
+        updates: Vec<(GlobalId, Antichain<Timestamp>)>,
+    ) {
+        self.client
+            .send(Command::Storage(StorageCommand::DurabilityFrontierUpdates(
+                updates,
+            )))
+            .await
+    }
+    pub async fn add_source_timestamping(
+        &mut self,
+        id: GlobalId,
+        connector: SourceConnector,
+        bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
+    ) {
+        self.client
+            .send(Command::Storage(StorageCommand::AddSourceTimestamping {
+                id,
+                connector,
+                bindings,
+            }))
+            .await
+    }
+    pub async fn allow_source_compaction(
+        &mut self,
+        frontiers: Vec<(GlobalId, Antichain<Timestamp>)>,
+    ) {
+        for (id, frontier) in frontiers.iter() {
+            self.storage_since_uppers.advance_since_for(*id, frontier);
+        }
+
+        self.client
+            .send(Command::Storage(StorageCommand::AllowSourceCompaction(
+                frontiers,
+            )))
+            .await
+    }
+    pub async fn drop_source_timestamping(&mut self, id: GlobalId) {
+        self.client
+            .send(Command::Storage(StorageCommand::DropSourceTimestamping {
+                id,
+            }))
+            .await
+    }
+    pub async fn advance_all_table_timestamps(&mut self, advance_to: Timestamp) {
+        self.client
+            .send(Command::Storage(StorageCommand::AdvanceAllLocalInputs {
+                advance_to,
+            }))
+            .await
+    }
+}
+
+impl<C: Client> Controller<C> {
     pub async fn recv(&mut self) -> Option<Response> {
         let response = self.client.recv().await;
 

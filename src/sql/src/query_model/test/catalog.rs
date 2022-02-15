@@ -10,7 +10,7 @@
 use crate::ast::{Expr, Raw};
 use crate::catalog::{
     CatalogConfig, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType, CatalogRole,
-    CatalogSchema, SessionCatalog,
+    CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -134,6 +134,10 @@ impl CatalogItem for TestCatalogItem {
     fn table_details(&self) -> Option<&[Expr<Raw>]> {
         unimplemented!()
     }
+
+    fn type_details(&self) -> Option<&CatalogTypeDetails> {
+        unimplemented!()
+    }
 }
 
 /// A dummy [`SessionCatalog`] implementation.
@@ -235,10 +239,6 @@ impl SessionCatalog for TestCatalog {
 
     fn item_exists(&self, _: &FullName) -> bool {
         false
-    }
-
-    fn try_get_lossy_scalar_type_by_id(&self, _: &GlobalId) -> Option<ScalarType> {
-        None
     }
 
     fn config(&self) -> &CatalogConfig {

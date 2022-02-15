@@ -1,0 +1,636 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [int32 int32] [f1 f2])
+(defsource y [int32 int32 int32 int32] [f1 f2 f3 f4])
+(defsource z [int32 int32] [f1 f2])
+----
+ok
+
+# Example seen from real life user that our MIR optimizer does not handle.
+#
+#            SELECT(p3)              SELECT(p3)
+#               |                       |
+#            LOJ(p2)     ==>         LOJ(p2)
+#           /       \               /       \
+#       LOJ(p1)      z         JOIN(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
+# Nulls from y are rejected by an outer select predicate p3.
+# In the first left join, y is on the rhs, so the left join becomes an inner one.
+# In the second left join, y is on the lhs, so the left join is unchanged.
+opt
+select x.f1, x.f2, y.f3, y.f4, z.f2
+from x
+left join y on x.f1 = y.f1 and x.f2 = y.f2
+left join z on x.f1 = z.f1
+where y.f4 <> 0
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "select x.f1, x.f2, y.f3, y.f4, z.f2
+from x
+left join y on x.f1 = y.f1 and x.f2 = y.f2
+left join z on x.f1 = z.f1
+where y.f4 \<\> 0"
+    node [ shape = box ]
+    subgraph cluster6 {
+        label = "Box6:Select"
+        boxhead6 [ shape = record, label = "{ Distinct: Preserve| 0: Q5.C0| 1: Q5.C1| 2: Q5.C4| 3: Q5.C5| 4: Q5.C7 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q5 [ label = "Q5(F)" ]
+        }
+    }
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0| 1: Q4.C1| 2: Q4.C2| 3: Q4.C3| 4: Q4.C4| 5: Q4.C5| 6: Q4.C6| 7: Q4.C7| (Q4.C5 != 0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:OuterJoin"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: Q2.C3| 4: Q2.C4| 5: Q2.C5| 6: Q3.C0| 7: Q3.C1| (Q2.C0 = Q3.C0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(P)" ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| ((Q0.C0 = Q1.C0) && (Q0.C1 = Q1.C1)) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Get"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Get"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q5 -> boxhead5 [ lhead = cluster5 ]
+    Q4 -> boxhead0 [ lhead = cluster0 ]
+    Q2 -> boxhead1 [ lhead = cluster1 ]
+    Q3 -> boxhead4 [ lhead = cluster4 ]
+    Q0 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead3 [ lhead = cluster3 ]
+}
+
+#            ROJ(p2)                 ROJ(p2)
+#           /       \               /       \
+#       FOJ(p1)      z   ==>    ROJ(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
+# Nulls from y are rejected by the right outer join.
+# In the full join, y is on the rhs, so the full join becomes a right join.
+opt
+SELECT
+    x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
+FROM
+    x
+    FULL OUTER JOIN y ON x.f1 = y.f1
+    RIGHT OUTER JOIN z ON y.f2 = z.f2
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "SELECT
+    x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
+FROM
+    x
+    FULL OUTER JOIN y ON x.f1 = y.f1
+    RIGHT OUTER JOIN z ON y.f2 = z.f2"
+    node [ shape = box ]
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0| 1: Q4.C1| 2: Q4.C3| 3: Q4.C4| 4: Q4.C6| 5: Q4.C7 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:OuterJoin"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: Q2.C3| 4: Q2.C4| 5: Q2.C5| 6: Q3.C0| 7: Q3.C1| (Q2.C3 = Q3.C1) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+            Q3 [ label = "Q3(P)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:OuterJoin"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| (Q0.C0 = Q1.C0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q1 [ label = "Q1(P)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Get"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Get"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q4 -> boxhead0 [ lhead = cluster0 ]
+    Q2 -> boxhead1 [ lhead = cluster1 ]
+    Q3 -> boxhead4 [ lhead = cluster4 ]
+    Q0 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead3 [ lhead = cluster3 ]
+}
+
+#            SELECT(p3)              SELECT(p3)
+#               |                       |
+#            ROJ(p2)     ==>        JOIN(p2)
+#           /       \               /       \
+#       FOJ(p1)      z         JOIN(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
+# Nulls from x are rejected by an outer select predicate p3.
+# In the right join, x is on lhs, so the right join becomes an inner join.
+# Nulls from y are rejected by the right join.
+# In the full join, x is on lhs and y is on rhs, so the full join becomes an
+# inner join.
+opt
+SELECT
+    x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
+FROM
+    x
+    FULL OUTER JOIN y ON x.f2 = y.f2
+    RIGHT OUTER JOIN z ON y.f2 = z.f2
+WHERE
+    x.f1 > 0
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "SELECT
+    x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
+FROM
+    x
+    FULL OUTER JOIN y ON x.f2 = y.f2
+    RIGHT OUTER JOIN z ON y.f2 = z.f2
+WHERE
+    x.f1 \> 0"
+    node [ shape = box ]
+    subgraph cluster6 {
+        label = "Box6:Select"
+        boxhead6 [ shape = record, label = "{ Distinct: Preserve| 0: Q5.C0| 1: Q5.C1| 2: Q5.C3| 3: Q5.C4| 4: Q5.C6| 5: Q5.C7 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q5 [ label = "Q5(F)" ]
+        }
+    }
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0| 1: Q4.C1| 2: Q4.C2| 3: Q4.C3| 4: Q4.C4| 5: Q4.C5| 6: Q4.C6| 7: Q4.C7| (Q4.C0 \> 0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Select"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: Q2.C3| 4: Q2.C4| 5: Q2.C5| 6: Q3.C0| 7: Q3.C1| (Q2.C3 = Q3.C1) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| (Q0.C1 = Q1.C1) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Get"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Get"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q5 -> boxhead5 [ lhead = cluster5 ]
+    Q4 -> boxhead0 [ lhead = cluster0 ]
+    Q2 -> boxhead1 [ lhead = cluster1 ]
+    Q3 -> boxhead4 [ lhead = cluster4 ]
+    Q0 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead3 [ lhead = cluster3 ]
+}
+
+#            SELECT(p3)              SELECT(p3)
+#               |                       |
+#            ROJ(p2)     ==>        JOIN(p2)
+#           /       \               /       \
+#       LOJ(p1)      z          LOJ(p1)      z
+#      /       \               /       \
+#     x         y             x         y
+#
+# Nulls from x are rejected by an outer select predicate.
+# In the right join, x is on lhs, so the right join becomes an inner join.
+# In the left join, x is on lhs and y is on rhs, so it stays the same.
+opt
+SELECT
+    x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
+FROM
+    x
+    LEFT OUTER JOIN y ON x.f2 = y.f2
+    RIGHT OUTER JOIN z ON x.f2 = z.f2
+WHERE
+    x.f1 > 0
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "SELECT
+    x.f1, x.f2, y.f2, y.f3, z.f1, z.f2
+FROM
+    x
+    LEFT OUTER JOIN y ON x.f2 = y.f2
+    RIGHT OUTER JOIN z ON x.f2 = z.f2
+WHERE
+    x.f1 \> 0"
+    node [ shape = box ]
+    subgraph cluster6 {
+        label = "Box6:Select"
+        boxhead6 [ shape = record, label = "{ Distinct: Preserve| 0: Q5.C0| 1: Q5.C1| 2: Q5.C3| 3: Q5.C4| 4: Q5.C6| 5: Q5.C7 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q5 [ label = "Q5(F)" ]
+        }
+    }
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0| 1: Q4.C1| 2: Q4.C2| 3: Q4.C3| 4: Q4.C4| 5: Q4.C5| 6: Q4.C6| 7: Q4.C7| (Q4.C0 \> 0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Select"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: Q2.C3| 4: Q2.C4| 5: Q2.C5| 6: Q3.C0| 7: Q3.C1| (Q2.C1 = Q3.C1) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:OuterJoin"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| (Q0.C1 = Q1.C1) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(P)" ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Get"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Get"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q5 -> boxhead5 [ lhead = cluster5 ]
+    Q4 -> boxhead0 [ lhead = cluster0 ]
+    Q2 -> boxhead1 [ lhead = cluster1 ]
+    Q3 -> boxhead4 [ lhead = cluster4 ]
+    Q0 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead3 [ lhead = cluster3 ]
+}
+
+#               JOIN(p3)                          JOIN(p3)
+#              /       \                         /       \
+#       ROJ(p1)         LOJ(p2)    ==>   JOIN(p1)        JOIN(p2)
+#      /       \       /       \         /       \       /       \
+#     x         y     y         z       x         y     y         z
+#
+# A test where the two outer joins to be simplified are in two separate
+# subgraphs. Both outer joins should be converted to inner joins.
+opt
+SELECT * FROM
+(SELECT x.*, y.f1 as f3 FROM x RIGHT OUTER JOIN y on y.f1 = x.f1) x
+INNER JOIN
+(SELECT z.*, y.f1 as f3 FROM y LEFT OUTER JOIN z on y.f1 = z.f1) z ON x.f2 + z.f2 = 5
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "SELECT * FROM
+(SELECT x.*, y.f1 as f3 FROM x RIGHT OUTER JOIN y on y.f1 = x.f1) x
+INNER JOIN
+(SELECT z.*, y.f1 as f3 FROM y LEFT OUTER JOIN z on y.f1 = z.f1) z ON x.f2 + z.f2 = 5"
+    node [ shape = box ]
+    subgraph cluster0 {
+        label = "Box0:Select"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C0| 1: Q3.C1| 2: Q3.C2| 3: Q7.C0| 4: Q7.C1| 5: Q7.C2| ((Q3.C1 + Q7.C1) = 5) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+            Q7 [ label = "Q7(F)" ]
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| (Q1.C0 = Q0.C0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Get"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster7 {
+        label = "Box7:Select"
+        boxhead7 [ shape = record, label = "{ Distinct: Preserve| 0: Q6.C4| 1: Q6.C5| 2: Q6.C0 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q6 [ label = "Q6(F)" ]
+        }
+    }
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0| 1: Q4.C1| 2: Q4.C2| 3: Q4.C3| 4: Q5.C0| 5: Q5.C1| (Q4.C0 = Q5.C0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+            Q5 [ label = "Q5(F)" ]
+        }
+    }
+    subgraph cluster6 {
+        label = "Box6:Get"
+        boxhead6 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q3 -> boxhead4 [ lhead = cluster4 ]
+    Q7 -> boxhead7 [ lhead = cluster7 ]
+    Q2 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead3 [ lhead = cluster3 ]
+    Q6 -> boxhead5 [ lhead = cluster5 ]
+    Q4 -> boxhead3 [ lhead = cluster3 ]
+    Q5 -> boxhead6 [ lhead = cluster6 ]
+}
+
+#      JOIN(p1)
+#      /       \
+#     |         |
+#      \       /
+#       SELECT
+#          |
+#       FOJ(p1)
+#      /       \
+#     x         y
+#
+# Test that we currently avoid simplifying outer joins where an ancestor has
+# more than one parent box.
+opt
+WITH w(f1, f2, f3) as (select x.*, y.f3 from x full outer join y on x.f1 = y.f3)
+select * from w w1 inner join w w2 on w1.f1 = w1.f3
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "WITH w(f1, f2, f3) as (select x.*, y.f3 from x full outer join y on x.f1 = y.f3)
+select * from w w1 inner join w w2 on w1.f1 = w1.f3"
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C0| 1: Q3.C1| 2: Q3.C2| 3: Q4.C0| 4: Q4.C1| 5: Q4.C2| (Q3.C0 = Q3.C2) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C4 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:OuterJoin"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| (Q0.C0 = Q1.C2) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(P)" ]
+            Q1 [ label = "Q1(P)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Get"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q4 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead0 [ lhead = cluster0 ]
+    Q0 -> boxhead1 [ lhead = cluster1 ]
+    Q1 -> boxhead2 [ lhead = cluster2 ]
+}
+
+#      JOIN(p1)
+#      /       \
+#     |         |
+#      \       /
+#       FOJ(p1)
+#      /       \
+#     x         y
+#
+# Test that we currently avoid simplifying outer joins with more than one parent
+# box.
+opt
+WITH w(f1, f2, f3, f4, f5, f6) as (select * from x full outer join y on x.f1 = y.f3)
+select * from w w1 inner join w w2 on w1.f1 = w1.f6
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "WITH w(f1, f2, f3, f4, f5, f6) as (select * from x full outer join y on x.f1 = y.f3)
+select * from w w1 inner join w w2 on w1.f1 = w1.f6"
+    node [ shape = box ]
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: Q2.C3| 4: Q2.C4| 5: Q2.C5| 6: Q3.C0| 7: Q3.C1| 8: Q3.C2| 9: Q3.C3| 10: Q3.C4| 11: Q3.C5| (Q2.C0 = Q2.C5) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:OuterJoin"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| (Q0.C0 = Q1.C2) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(P)" ]
+            Q1 [ label = "Q1(P)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Get"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Get"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| 3: C3 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead0 [ lhead = cluster0 ]
+    Q3 -> boxhead0 [ lhead = cluster0 ]
+    Q0 -> boxhead1 [ lhead = cluster1 ]
+    Q1 -> boxhead2 [ lhead = cluster2 ]
+}

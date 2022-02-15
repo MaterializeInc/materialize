@@ -41,9 +41,9 @@ Before deploying a Debezium connector, you need to ensure that the upstream data
 Debezium is deployed as a set of Kafka Connect-compatible
 connectors, so you first need to define a MySQL connector configuration and then start the connector by adding it to Kafka Connect.
 
-{{< note >}}
-Currently, Materialize only supports Avro-encoded Debezium records. If you’re interested in JSON support, please reach out in the community Slack or leave a comment on [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
-{{</ note >}}
+{{< warning >}}
+If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html), you **must** override the default value of `After-state only` to `false`.
+{{</ warning >}}
 
 1. Create a connector configuration file and save it as `register-mysql.json`:
 
@@ -97,15 +97,20 @@ Currently, Materialize only supports Avro-encoded Debezium records. If you’re 
 
 ### Create a source
 
+{{< note >}}
+Currently, Materialize only supports Avro-encoded Debezium records. If you’re interested in JSON support, please reach out in the community Slack or leave a comment on [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
+{{</ note >}}
+
 Debezium emits change events using an envelope that contains detailed information about upstream database operations, like the `before` and `after` values for each record. To create a source that interprets the [Debezium envelope](/sql/create-source/avro-kafka/#debezium-envelope-details) in Materialize:
 
 ```sql
 CREATE SOURCE kafka_repl
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'dbserver1.db1.table1'
-KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
+    FROM KAFKA BROKER 'kafka:9092' TOPIC 'dbserver1.db1.table1'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+    ENVELOPE DEBEZIUM;
 ```
+
+If log compaction is enabled for your Debezium topic, you must use `ENVELOPE DEBEZIUM UPSERT`. This will require **more memory** in Materialize, as it needs to track state proportional to the number of unique primary keys in the changing data.
 
 #### Transaction support
 
@@ -117,8 +122,8 @@ Any materialized view defined on top of this source will be incrementally update
 
 ```sql
 CREATE MATERIALIZED VIEW cnt_table1 AS
-SELECT field1,
-       COUNT(*) AS cnt
-FROM kafka_repl
-GROUP BY field1;
+    SELECT field1,
+           COUNT(*) AS cnt
+    FROM kafka_repl
+    GROUP BY field1;
 ```

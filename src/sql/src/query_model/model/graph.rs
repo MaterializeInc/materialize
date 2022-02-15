@@ -286,6 +286,17 @@ impl From<Select> for BoxType {
     }
 }
 
+impl Select {
+    pub fn new(predicates: Vec<BoxScalarExpr>) -> Select {
+        Select {
+            predicates,
+            order_key: None,
+            limit: None,
+            offset: None,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TableFunction {
     pub parameters: Vec<BoxScalarExpr>,
@@ -414,11 +425,10 @@ impl Model {
     }
 
     /// Get a mutable reference to the box identified by `box_id` bound to this [`Model`].
-    #[allow(dead_code)]
-    pub(crate) fn get_mut_quantifier(
-        &mut self,
+    pub(crate) fn get_mut_quantifier<'a>(
+        &'a mut self,
         quantifier_id: QuantifierId,
-    ) -> BoundRefMut<'_, Quantifier> {
+    ) -> BoundRefMut<'a, Quantifier> {
         let model_ptr = self as *mut Self;
         unsafe {
             let reference = (*model_ptr)

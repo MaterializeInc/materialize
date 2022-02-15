@@ -20,6 +20,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, TableFunc};
@@ -1938,7 +1939,7 @@ impl AggregateExpr {
 
             // SumInt64 takes Int64s as input, but outputs numerics.
             AggregateFunc::SumInt64 => self.expr.clone().call_unary(UnaryFunc::CastInt64ToNumeric(
-                scalar_func::CastInt64ToNumeric(Some(0)),
+                scalar_func::CastInt64ToNumeric(Some(NumericMaxScale::ZERO)),
             )),
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.

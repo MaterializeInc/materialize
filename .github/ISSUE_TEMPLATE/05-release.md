@@ -54,9 +54,18 @@ production readiness.
 - [ ] Create a new release candidate, specifying what kind of release this
   should be (see `--help` for all the release types):
 
-  ```shell
-  bin/mkrelease new-rc weekly
-  ```
+  - If there are no cherry-picks you can run the following command:
+
+    ```shell
+    bin/mkrelease new-rc weekly --checkout <commit_from_previous_step>
+    ```
+
+  - Otherwise, you need to check out the commit from the previous step, run the
+    appropriate `git cherry-pick` commands, and then run:
+
+    ```shell
+    bin/mkrelease new-rc weekly
+    ```
 
 - [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
 

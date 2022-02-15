@@ -113,7 +113,7 @@ $ set schema={
     ]
   }
 
-$ kafka-create-topic topic=data
+$ kafka-create-topic topic=data partitions=1
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1, "json": "null", "c": "True", "d": "False", "e": {"nested_data_1": {"n1_a": 42, "n1_b": {"double": 86.5}}}, "f": null}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"boolean": false}}, "transaction": {"total_order": null}}
@@ -223,7 +223,7 @@ $ set non-dbz-schema={
     ]
   }
 
-$ kafka-create-topic topic=non-dbz-data
+$ kafka-create-topic topic=non-dbz-data partitions=1
 
 $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp=1
 {"a": 1, "b": 2}
@@ -477,7 +477,7 @@ $ set new-dbz-schema={
     ]
   }
 
-$ kafka-create-topic topic=new-dbz-data
+$ kafka-create-topic topic=new-dbz-data partitions=1
 
 # We don't do anything sensible yet for snapshot "true" or "last", so just test that those are ingested.
 
@@ -747,7 +747,7 @@ $ set pg-dbz-schema={
     ]
   }
 
-$ kafka-create-topic topic=pg-dbz-data
+$ kafka-create-topic topic=pg-dbz-data partitions=1
 
 # The third and fourth records will be skipped, since `(lsn, total_order)` has gone backwards.
 $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
@@ -872,7 +872,7 @@ $ set ms-dbz-schema={
     "type": "record"
   }
 
-$ kafka-create-topic topic=ms-dbz-data
+$ kafka-create-topic topic=ms-dbz-data partitions=1
 
 # The third record will be skipped, since `lsn` has gone backwards.
 $ kafka-ingest format=avro topic=ms-dbz-data schema=${ms-dbz-schema} timestamp=1

@@ -569,7 +569,7 @@ impl<C> Clone for InterceptingDataflowClient<C> {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<C> mz_dataflow_types::client::Client for InterceptingDataflowClient<C>
 where
     C: mz_dataflow_types::client::Client,

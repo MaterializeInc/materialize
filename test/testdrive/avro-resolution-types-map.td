@@ -28,4 +28,7 @@ $ kafka-ingest format=avro topic=resolution-maps schema=${map-double} publish=tr
 {"f1": { "key1": 234.345 } }
 
 ! SELECT f1 -> 'key1' FROM resolution_maps
-contains:Schemas don't match: Double, Int
+contains:Writer schema has type `Double`, but reader schema has type `Int` for field `schema_map.f1`
+
+! SELECT f1 -> 'key1' FROM resolution_maps
+contains:failed to resolve Avro schema (id =

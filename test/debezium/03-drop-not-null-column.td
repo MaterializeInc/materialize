@@ -33,4 +33,4 @@ INSERT INTO alter_drop_column_not_null VALUES (345);
 # An error is thrown instead of returning nulls in a NOT NULL column
 
 ! SELECT * FROM alter_drop_column_not_null;
-contains:Reader field `col_not_null` not found in writer, and has no default
+contains:Reader field `postgres.public.alter_drop_column_not_null.Value.col_not_null` not found in writer, and has no default

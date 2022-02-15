@@ -397,19 +397,21 @@ class Postgres(Service):
         self,
         name: str = "postgres",
         mzbuild: str = "postgres",
+        image: Optional[str] = None,
         port: int = 5432,
         command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20",
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
     ) -> None:
-        super().__init__(
-            name=name,
-            config={
+        config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
+        config.update(
+            {
                 "mzbuild": mzbuild,
                 "command": command,
                 "ports": [port],
                 "environment": environment,
-            },
+            }
         )
+        super().__init__(name=name, config=config)
 
 
 class SqlServer(Service):
@@ -529,6 +531,7 @@ class Testdrive(Service):
         mzbuild: str = "testdrive",
         materialized_url: str = "postgres://materialize@materialized:6875",
         kafka_url: str = "kafka:9092",
+        kafka_default_partitions: Optional[int] = None,
         no_reset: bool = False,
         default_timeout: str = "30s",
         seed: Optional[int] = None,
@@ -579,6 +582,9 @@ class Testdrive(Service):
             entrypoint.append("--no-reset")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
+
+        if kafka_default_partitions:
+            entrypoint.append(f"--kafka-default-partitions={kafka_default_partitions}")
 
         if forward_buildkite_shard:
             shard = os.environ.get("BUILDKITE_PARALLEL_JOB")

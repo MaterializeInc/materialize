@@ -108,7 +108,7 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::{ComputeClient, StorageClient, DEFAULT_COMPUTE_INSTANCE_ID};
+use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
 use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
 use mz_dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
@@ -134,7 +134,7 @@ use mz_sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
-use mz_sql::catalog::{CatalogError, SessionCatalog as _};
+use mz_sql::catalog::{CatalogError, CatalogTypeDetails, SessionCatalog as _};
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -247,7 +247,7 @@ pub struct LoggingConfig {
 
 /// Configures a coordinator.
 pub struct Config {
-    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client>,
+    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client + Send>,
     pub logging: Option<LoggingConfig>,
     pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
@@ -2726,7 +2726,10 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
-            inner: plan.typ.inner.into(),
+            details: CatalogTypeDetails {
+                array_id: None,
+                typ: plan.typ.inner,
+            },
             depends_on: plan.typ.depends_on,
         };
         let id = self.catalog.allocate_id()?;
@@ -4872,7 +4875,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use mz_dataflow_types::client::{ComputeClient, DEFAULT_COMPUTE_INSTANCE_ID};
+    use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use std::collections::HashMap;
 
     use crate::CoordError;

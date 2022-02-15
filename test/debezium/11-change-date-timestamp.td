@@ -34,4 +34,4 @@ UPDATE alter_change_date_timestamp SET f1 = '2012-12-12 12:12:12' WHERE f1 = '20
 DELETE FROM alter_change_date_timestamp WHERE f1 = '2011-11-11';
 
 ! SELECT * FROM alter_change_date_timestamp;
-contains:Failed to match TimestampMicro against any variant in the reader
+contains:Failed to match writer union variant `TimestampMicro` against any variant in the reader for field `postgres.public.alter_change_date_timestamp.Value.f1`

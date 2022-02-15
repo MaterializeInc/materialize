@@ -117,16 +117,43 @@ def workflow_user_tables(c: Composition) -> None:
 
 
 def workflow_failpoints(c: Composition) -> None:
-    seed = round(time.time())
+    c.start_and_wait_for_tcp(services=prerequisites)
 
-    c.up("materialized")
-    c.wait_for_materialized()
+    for failpoint in [
+        "fileblob_set_sync",
+        "fileblob_delete_before",
+        "fileblob_delete_after",
+        "insert_timestamp_bindings_before",
+        "insert_timestamp_bindings_after",
+    ]:
+        for action in ["return", "panic", "sleep(1000)"]:
+            print(
+                f">>> Running failpoint test for failpoint {failpoint} with action {action}"
+            )
+            seed = round(time.time())
 
-    c.run("testdrive-svc", f"--seed={seed}", f"failpoints/{td_test}.td")
+            c.up("materialized")
+            c.wait_for_materialized()
 
-    c.kill("materialized")
-    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
-    c.rm_volumes("mzdata")
+            c.run(
+                "testdrive-svc",
+                f"--seed={seed}",
+                f"--var=failpoint={failpoint}",
+                f"--var=action={action}",
+                "failpoints/before.td",
+            )
+
+            time.sleep(2)
+            # kill Mz if the failpoint has not killed it
+            c.kill("materialized")
+            c.up("materialized")
+            c.wait_for_materialized()
+
+            c.run("testdrive-svc", f"--seed={seed}", "failpoints/after.td")
+
+            c.kill("materialized")
+            c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+            c.rm_volumes("mzdata")
 
 
 def workflow_disable_user_indexes(c: Composition) -> None:

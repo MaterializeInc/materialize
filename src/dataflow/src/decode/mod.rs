@@ -70,7 +70,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                             Some(value) => value,
                             None => continue,
                         };
-                        let (mut data, schema) = match block_on(resolver.resolve(&*value)) {
+                        let (mut data, schema, _) = match block_on(resolver.resolve(&*value)) {
                             Ok(ok) => ok,
                             Err(e) => {
                                 error!("Failed to get schema info for CDCv2 record: {}", e);

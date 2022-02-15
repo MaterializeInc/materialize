@@ -100,6 +100,8 @@ pub struct Config {
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
     pub kafka_addr: String,
+    /// Default number of partitions to use for topics
+    pub kafka_default_partitions: usize,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
     pub kafka_opts: Vec<(String, String)>,
@@ -152,6 +154,7 @@ pub struct State {
     kafka_admin: rdkafka::admin::AdminClient<MzClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_config: ClientConfig,
+    kafka_default_partitions: usize,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
     kafka_topics: HashMap<String, usize>,
 
@@ -787,6 +790,7 @@ pub async fn create_state(
         kafka_admin,
         kafka_admin_opts,
         kafka_config,
+        kafka_default_partitions: config.kafka_default_partitions,
         kafka_producer,
         kafka_topics,
 

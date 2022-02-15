@@ -1040,5 +1040,5 @@ fn test_partially_broken_union() {
     let err_read = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice()).unwrap_err();
     assert!(err_read
         .to_string()
-        .contains("Reader field `a` not found in writer"));
+        .contains("Reader field `s.a` not found in writer"));
 }

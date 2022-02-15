@@ -41,6 +41,19 @@ contains:parameter "client_encoding" can only be set to "UTF8"
 ! SET NAMES = "something";
 contains:unrecognized configuration parameter "names"
 
+# standard_conforming_strings is constrained to true
+> SET standard_conforming_strings = ON;
+
+> SET standard_conforming_strings = true;
+
+> SET standard_conforming_strings TO TRUE;
+
+! SET standard_conforming_strings = OFF;
+contains:parameter "standard_conforming_strings" can only be set to "on"
+
+! SET standard_conforming_strings = typo;
+contains:parameter "standard_conforming_strings" requires a "boolean" value
+
 > SET sql_safe_updates = on
 > SHOW sql_safe_updates
 on

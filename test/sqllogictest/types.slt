@@ -460,10 +460,10 @@ select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 
 # 🔬🔬 record
 
-query error type "pg_catalog.record" does not exist
+query error cannot reference pseudo type pg_catalog.record
 SELECT ROW(1, 2)::record;
 
-query error type "pg_catalog.record" does not exist
+query error cannot reference pseudo type pg_catalog.record
 SELECT ROW(1, 2)::pg_catalog.record;
 
 # 🔬🔬 text
@@ -486,9 +486,12 @@ SELECT 'dog'::char(3)
 dog
 
 query T
-SELECT 'dog'::pg_catalog.char(3)
+SELECT 'dog'::pg_catalog.bpchar(3)
 ----
 dog
+
+query error pg_catalog.char does not support type modifiers
+SELECT 'dog'::pg_catalog.char(3)
 
 # 🔬🔬🔬 varchar
 
@@ -593,7 +596,7 @@ SELECT '1'::materialize.pg_catalog.int4
 1
 
 # tables are not types yet
-query error type "pg_catalog.pg_enum" does not exist
+query error "pg_catalog.pg_enum" does not refer to a type
 SELECT '1'::pg_catalog.pg_enum
 
 # 🔬 format_type

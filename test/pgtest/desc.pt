@@ -2,6 +2,16 @@
 # replaced.
 
 send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "CREATE TABLE t (a INT)"}
 Parse {"name": "q", "query": "SELECT * FROM t"}
 Describe {"variant": "S", "name": "q"}
@@ -70,7 +80,7 @@ Sync
 until ignore=ParameterDescription
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -83,7 +93,7 @@ Query {"query": "EXECUTE q"}
 until ignore=RowDescription
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
 ReadyForQuery {"status":"I"}
 
 # Changing it back fixes it.

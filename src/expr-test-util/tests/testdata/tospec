@@ -18,12 +18,12 @@ rel-to-test
 ----
 cat
 (defsource u16 ([(Int32 false) (Int16 false) (Int32 false) (Int16 true) (Date true) (Int16 true) (Int16 true) (Int16 true)] [[0 1 2]]))
-(defsource u19 ([(Int32 false) (Int16 false) (Int32 false) (Int16 false) (Int32 true) (Int32 true) (Date true) (Int16 true) ((Numeric 2) true) (String true)] [[0 1 2 3]]))
+(defsource u19 ([(Int32 false) (Int16 false) (Int32 false) (Int16 false) (Int32 true) (Int32 true) (Date true) (Int16 true) ((Numeric (null)) true) (String true)] [[0 1 2 3]]))
 (defsource u26 ([(Int32 false) (Int32 false) (Int16 true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Int32 true) (Int16 true) (Int16 true) (String true) (Int32 false)] [[0 1]]))
 (defsource u31 ([(Int16 false) (String false) (Int16 false) (String false)] [[0]]))
-(defsource u34 ([(Int16 false) (String false) (String false) (Int16 false) (String false) ((Numeric 2) false) (String false)] [[0]]))
+(defsource u34 ([(Int16 false) (String false) (String false) (Int16 false) (String false) ((Numeric (null)) false) (String false)] [[0]]))
 (defsource u37 ([(Int16 false) (String false) (String false)] [[0]]))
-(defsource u6 ([(Int16 false) (Int16 false) (Int32 false) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Date true) (String true) ((Numeric 2) true) ((Numeric 4) true) ((Numeric 2) true) ((Numeric 2) true) (Int16 true) (Int16 true) (String true) (Int32 true)] [[0 1 2]]))
+(defsource u6 ([(Int16 false) (Int16 false) (Int32 false) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Date true) (String true) ((Numeric (null)) true) ((Numeric (null)) true) ((Numeric (null)) true) ((Numeric (null)) true) (Int16 true) (Int16 true) (String true) (Int32 true)] [[0 1 2]]))
 ----
 ok
 

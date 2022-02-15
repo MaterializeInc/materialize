@@ -29,4 +29,7 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${null} publish=true t
 {"f1": {"int": 123 } }
 
 ! SELECT f1 FROM resolution_unions
-contains:Decode error: Text: avro deserialization error: Schema resolution error: Failed to match Null against any variant in the reader
+contains:Failed to match writer union variant `Null` against any variant in the reader for field `schema_union.f1`
+
+! SELECT f1 FROM resolution_unions
+contains:unable to decode row (Avro schema id =

@@ -46,7 +46,7 @@ $ set schema={
     ]
   }
 
-$ kafka-create-topic topic=dbzupsert
+$ kafka-create-topic topic=dbzupsert partitions=1
 
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}}

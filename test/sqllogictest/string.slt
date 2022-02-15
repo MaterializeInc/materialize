@@ -85,6 +85,39 @@ SELECT substr('for cannot be negative', 1, -3)
 query error negative substring length not allowed
 SELECT substr('for still cannot be negative', 30, -2)
 
+query B
+SELECT substr('hello', 2) IS NULL
+----
+false
+
+query B
+SELECT substr(NULL, 2) IS NULL
+----
+true
+
+query B
+SELECT substr('hello', NULL) IS NULL
+----
+true
+
+query B
+SELECT substr(NULL, 2, 3) IS NULL
+----
+true
+
+query B
+SELECT substr('hello', NULL, 3) IS NULL
+----
+true
+
+query B
+SELECT substr('hello', 2, NULL) IS NULL
+----
+true
+
+query error division by zero
+SELECT substr('hello', 0/0, 3)
+
 # standard tests
 
 # TODO: materialize#589 SELECT strcol FROM substrtest
@@ -929,29 +962,29 @@ true
 
 # Invalid type mods
 
-query error length for type character varying must be within \[1-10485760\], have 0
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::VARCHAR(0)
 
-query error length for type character varying must be within \[1-10485760\], have 10485761
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::VARCHAR(10485761)
 
-query error length for type character must be within \[1-10485760\], have 0
+query error length for type character must be between 1 and 10485760
 SELECT ''::CHAR(0)
 
-query error length for type character must be within \[1-10485760\], have 10485761
+query error length for type character must be between 1 and 10485760
 SELECT ''::CHAR(10485761)
 
-query error length for type character varying must be within \[1-10485760\], have 0
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::pg_catalog.VARCHAR(0)
 
-query error length for type character varying must be within \[1-10485760\], have 10485761
+query error length for type character varying must be between 1 and 10485760
 SELECT ''::pg_catalog.VARCHAR(10485761)
 
-query error length for type character must be within \[1-10485760\], have 0
-SELECT ''::pg_catalog.CHAR(0)
+query error length for type character must be between 1 and 10485760
+SELECT ''::pg_catalog.bpchar(0)
 
-query error length for type character must be within \[1-10485760\], have 10485761
-SELECT ''::pg_catalog.CHAR(10485761)
+query error length for type character must be between 1 and 10485760
+SELECT ''::pg_catalog.bpchar(10485761)
 
 ### position ###
 statement ok

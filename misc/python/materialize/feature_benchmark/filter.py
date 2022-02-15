@@ -13,13 +13,11 @@ import numpy as np
 
 
 class Filter:
-    pass
-
-
-class RemoveOutliers(Filter):
     def __init__(self) -> None:
         self._data: List[float] = []
 
+
+class RemoveOutliers(Filter):
     def filter(self, measurement: float) -> bool:
         self._data.append(measurement)
 
@@ -37,3 +35,14 @@ class RemoveOutliers(Filter):
 class NoFilter(Filter):
     def filter(self, measurement: float) -> bool:
         return False
+
+
+class FilterFirst(Filter):
+    def filter(self, measurement: float) -> bool:
+        self._data.append(measurement)
+
+        if len(self._data) == 1:
+            print("Discarding first measurement.")
+            return True
+        else:
+            return False

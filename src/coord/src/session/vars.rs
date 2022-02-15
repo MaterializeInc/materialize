@@ -347,7 +347,15 @@ impl Vars {
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(value, local)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
-            Err(CoordError::ReadOnlyParameter(&STANDARD_CONFORMING_STRINGS))
+            match bool::parse(value) {
+                Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
+                Ok(_) => Err(CoordError::ConstrainedParameter(
+                    &STANDARD_CONFORMING_STRINGS,
+                )),
+                Err(()) => Err(CoordError::InvalidParameterType(
+                    &STANDARD_CONFORMING_STRINGS,
+                )),
+            }
         } else if name == TIMEZONE.name {
             if UncasedStr::new(value) != TIMEZONE.value {
                 return Err(CoordError::ConstrainedParameter(&TIMEZONE));

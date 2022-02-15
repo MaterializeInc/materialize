@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_dataflow_types::{
@@ -37,12 +38,13 @@ use mz_dataflow_types::{
     sources::{AwsExternalId, SourceConnector, Timeline},
 };
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, SessionCatalog,
+    CatalogItemType as SqlCatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
 use mz_sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use mz_sql::plan::{
@@ -75,10 +77,6 @@ pub use crate::catalog::error::ErrorKind;
 
 const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
-
-// TODO@jldlaughlin: Better assignment strategy for system type OIDs.
-// https://github.com/MaterializeInc/materialize/pull/4316#discussion_r496238962
-pub const FIRST_USER_OID: u32 = 20_000;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -538,35 +536,9 @@ pub struct Index {
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
     pub create_sql: String,
-    pub inner: TypeInner,
+    #[serde(skip)]
+    pub details: CatalogTypeDetails,
     pub depends_on: Vec<GlobalId>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum TypeInner {
-    Array {
-        element_id: GlobalId,
-    },
-    Base,
-    List {
-        element_id: GlobalId,
-    },
-    Map {
-        key_id: GlobalId,
-        value_id: GlobalId,
-    },
-    Pseudo,
-}
-
-impl From<mz_sql::plan::TypeInner> for TypeInner {
-    fn from(t: mz_sql::plan::TypeInner) -> TypeInner {
-        match t {
-            mz_sql::plan::TypeInner::List { element_id } => TypeInner::List { element_id },
-            mz_sql::plan::TypeInner::Map { key_id, value_id } => {
-                TypeInner::Map { key_id, value_id }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1042,25 +1014,15 @@ impl Catalog {
                 Builtin::Type(typ) => {
                     catalog.state.insert_item(
                         typ.id,
-                        typ.oid(),
+                        typ.oid,
                         FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: PG_CATALOG_SCHEMA.into(),
-                            item: typ.name().to_owned(),
+                            item: typ.name.to_owned(),
                         },
                         CatalogItem::Type(Type {
-                            create_sql: format!("CREATE TYPE {}", typ.name()),
-                            inner: match typ.kind() {
-                                postgres_types::Kind::Array(element_type) => {
-                                    let element_id = catalog.state.ambient_schemas
-                                        [PG_CATALOG_SCHEMA]
-                                        .items[element_type.name()];
-                                    TypeInner::Array { element_id }
-                                }
-                                postgres_types::Kind::Pseudo => TypeInner::Pseudo,
-                                postgres_types::Kind::Simple => TypeInner::Base,
-                                _ => unreachable!(),
-                            },
+                            create_sql: format!("CREATE TYPE {}", typ.name),
+                            details: typ.details.clone(),
                             depends_on: vec![],
                         }),
                     );
@@ -1609,6 +1571,12 @@ impl Catalog {
         &mut self,
         timestamps: impl IntoIterator<Item = (GlobalId, String, Timestamp, i64)>,
     ) -> Result<(), Error> {
+        fail_point!("insert_timestamp_bindings_before", |_| {
+            Err(Error::new(ErrorKind::FailpointReached(
+                "insert_timestamp_bindings_before".to_string(),
+            )))
+        });
+
         let mut storage = self.storage();
         let tx = storage.transaction()?;
 
@@ -1616,6 +1584,12 @@ impl Catalog {
             tx.insert_timestamp_binding(&sid, &pid, ts, offset)?;
         }
         tx.commit()?;
+
+        fail_point!("insert_timestamp_bindings_after", |_| {
+            Err(Error::new(ErrorKind::FailpointReached(
+                "insert_timestamp_bindings_after".to_string(),
+            )))
+        });
 
         Ok(())
     }
@@ -1811,16 +1785,6 @@ impl Catalog {
                                 )));
                             }
                         };
-                        if let CatalogItem::Type(Type {
-                            inner: TypeInner::Base { .. },
-                            ..
-                        }) = item
-                        {
-                            return Err(CoordError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
-                                name.item,
-                            ))));
-                        }
-
                         let schema_id = tx.load_schema_id(database_id, &name.schema)?;
                         let serialized_item = self.serialize_item(&item);
                         tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
@@ -2277,7 +2241,10 @@ impl Catalog {
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
-                inner: typ.inner.into(),
+                details: CatalogTypeDetails {
+                    array_id: None,
+                    typ: typ.inner,
+                },
                 depends_on: typ.depends_on,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
@@ -2760,48 +2727,6 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.catalog.try_get(name, self.conn_id).is_some()
     }
 
-    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType> {
-        let entry = self.catalog.get_by_id(id);
-        let t = match entry.item() {
-            CatalogItem::Type(t) => t,
-            _ => return None,
-        };
-
-        Some(match t.inner {
-            TypeInner::Array { element_id } => {
-                let element_type = self
-                    .try_get_lossy_scalar_type_by_id(&element_id)
-                    .expect("array's element_id refers to a valid type");
-                ScalarType::Array(Box::new(element_type))
-            }
-            TypeInner::Base => mz_pgrepr::Type::from_oid(entry.oid())?.to_scalar_type_lossy(),
-            TypeInner::List { element_id } => {
-                let element_type = self
-                    .try_get_lossy_scalar_type_by_id(&element_id)
-                    .expect("list's element_id refers to a valid type");
-                ScalarType::List {
-                    element_type: Box::new(element_type),
-                    custom_oid: Some(entry.oid),
-                }
-            }
-            TypeInner::Map { key_id, value_id } => {
-                let key_type = self
-                    .try_get_lossy_scalar_type_by_id(&key_id)
-                    .expect("map's key_id refers to a valid type");
-                assert!(matches!(key_type, ScalarType::String));
-                let value_type = Box::new(
-                    self.try_get_lossy_scalar_type_by_id(&value_id)
-                        .expect("map's value_id refers to a valid type"),
-                );
-                ScalarType::Map {
-                    value_type,
-                    custom_oid: Some(entry.oid),
-                }
-            }
-            TypeInner::Pseudo => return None,
-        })
-    }
-
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.catalog.config
     }
@@ -2901,6 +2826,14 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn table_details(&self) -> Option<&[Expr<Raw>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
+        } else {
+            None
+        }
+    }
+
+    fn type_details(&self) -> Option<&CatalogTypeDetails> {
+        if let CatalogItem::Type(Type { details, .. }) = self.item() {
+            Some(details)
         } else {
             None
         }

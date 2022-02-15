@@ -38,7 +38,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
+use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
@@ -61,9 +61,10 @@ pub enum NullaryFunc {
 impl NullaryFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
-            NullaryFunc::MzLogicalTimestamp => {
-                ScalarType::Numeric { scale: Some(0) }.nullable(false)
+            NullaryFunc::MzLogicalTimestamp => ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
             }
+            .nullable(false),
         }
     }
 }
@@ -203,7 +204,10 @@ fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn cast_jsonb_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+fn cast_jsonb_to_numeric<'a>(
+    a: Datum<'a>,
+    scale: Option<NumericMaxScale>,
+) -> Result<Datum<'a>, EvalError> {
     match a {
         Datum::Numeric(_) => match scale {
             None => Ok(a),
@@ -1049,9 +1053,9 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     }
 }
 
-fn rescale_numeric<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+fn rescale_numeric<'a>(a: Datum<'a>, scale: NumericMaxScale) -> Result<Datum<'a>, EvalError> {
     let mut d = a.unwrap_numeric();
-    if numeric::rescale(&mut d.0, scale).is_err() {
+    if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
         return Err(EvalError::NumericFieldOverflow);
     };
     Ok(Datum::Numeric(d))
@@ -2604,7 +2608,7 @@ impl BinaryFunc {
             }
 
             ExtractInterval | ExtractTime | ExtractTimestamp | ExtractTimestampTz | ExtractDate => {
-                ScalarType::Numeric { scale: None }.nullable(true)
+                ScalarType::Numeric { max_scale: None }.nullable(true)
             }
 
             DatePartInterval | DatePartTime | DatePartTimestamp | DatePartTimestampTz => {
@@ -2685,7 +2689,7 @@ impl BinaryFunc {
 
             AddNumeric | DivNumeric | LogNumeric | ModNumeric | MulNumeric | PowerNumeric
             | RoundNumeric | SubNumeric => {
-                ScalarType::Numeric { scale: None }.nullable(in_nullable)
+                ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
 
             PgGetConstraintdef => ScalarType::String.nullable(in_nullable),
@@ -3315,7 +3319,7 @@ pub enum UnaryFunc {
     CastJsonbToInt64,
     CastJsonbToFloat32,
     CastJsonbToFloat64,
-    CastJsonbToNumeric(Option<u8>),
+    CastJsonbToNumeric(Option<NumericMaxScale>),
     CastJsonbToBool,
     CastUuidToString(CastUuidToString),
     CastRecordToString {
@@ -3409,7 +3413,7 @@ pub enum UnaryFunc {
     Exp(Exp),
     ExpNumeric(ExpNumeric),
     Sleep(Sleep),
-    RescaleNumeric(u8),
+    RescaleNumeric(NumericMaxScale),
     PgColumnSize(PgColumnSize),
     PgGetConstraintdef(PgGetConstraintdef),
     MzRowSize(MzRowSize),
@@ -3985,7 +3989,9 @@ impl UnaryFunc {
             | Upper
             | Lower => ScalarType::String.nullable(nullable),
 
-            CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
+            CastJsonbToNumeric(scale) => {
+                ScalarType::Numeric { max_scale: *scale }.nullable(nullable)
+            }
 
             TimezoneTime { .. } => ScalarType::Time.nullable(nullable),
 
@@ -4014,7 +4020,7 @@ impl UnaryFunc {
             | ExtractTime(_)
             | ExtractTimestamp(_)
             | ExtractTimestampTz(_)
-            | ExtractDate(_) => ScalarType::Numeric { scale: None }.nullable(nullable),
+            | ExtractDate(_) => ScalarType::Numeric { max_scale: None }.nullable(nullable),
 
             DatePartInterval(_)
             | DatePartTime(_)
@@ -4043,7 +4049,7 @@ impl UnaryFunc {
             RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(nullable),
 
             RescaleNumeric(scale) => (ScalarType::Numeric {
-                scale: Some(*scale),
+                max_scale: Some(*scale),
             })
             .nullable(nullable),
         }
@@ -5073,14 +5079,7 @@ where
         Int64 => strconv::format_int64(buf, d.unwrap_int64()),
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),
-        Numeric { scale } => {
-            let mut d = d.unwrap_numeric();
-            if let Some(scale) = scale {
-                numeric::rescale(&mut d.0, *scale).unwrap();
-            }
-
-            strconv::format_numeric(buf, &d)
-        }
+        Numeric { .. } => strconv::format_numeric(buf, &d.unwrap_numeric()),
         Date => strconv::format_date(buf, d.unwrap_date()),
         Time => strconv::format_time(buf, d.unwrap_time()),
         Timestamp => strconv::format_timestamp(buf, d.unwrap_timestamp()),
@@ -5876,9 +5875,13 @@ impl VariadicFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
+        // NOTE: The following is a list of the variadic functions
+        // that **DO NOT** propagate nulls.
         !matches!(
             self,
             VariadicFunc::Coalesce
+                | VariadicFunc::Greatest
+                | VariadicFunc::Least
                 | VariadicFunc::Concat
                 | VariadicFunc::JsonbBuildArray
                 | VariadicFunc::JsonbBuildObject
@@ -5886,6 +5889,7 @@ impl VariadicFunc {
                 | VariadicFunc::RecordCreate { .. }
                 | VariadicFunc::ArrayCreate { .. }
                 | VariadicFunc::ArrayToString { .. }
+                | VariadicFunc::ErrorIfNull
         )
     }
 }

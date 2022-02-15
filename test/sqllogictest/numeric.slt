@@ -811,13 +811,13 @@ SELECT 'NaN'::numeric(39,1);
 ----
 NaN
 
-query error precision for type numeric must be within \[1-39\], have 40
+query error precision for type numeric must be between 1 and 39
 SELECT 0.2::numeric(40,1);
 
-query error scale for type numeric must be within \[0-39\], have 40
+query error scale for type numeric must be between 0 and precision 39
 SELECT 0.2::numeric(39,40);
 
-query error numeric scale 39 must be between 0 and precision 1
+query error scale for type numeric must be between 0 and precision 1
 SELECT 0.2::numeric(1,39);
 
 query error numeric field overflow
