@@ -62,6 +62,7 @@
   {%- do store_result('agate_table', response='OK', agate_table=agate_table) -%}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
+  {{ run_hooks(pre_hooks, inside_transaction=True) }}
 
   {% if old_relation %}
      {{ adapter.drop_relation(old_relation) }}
@@ -77,6 +78,7 @@
   {% endcall %}
 
   {{ run_hooks(post_hooks, inside_transaction=False) }}
+  {{ run_hooks(post_hooks, inside_transaction=True) }}
 
   {% set target_relation = this.incorporate(type='materializedview') %}
   {{ return({'relations': [target_relation]}) }}
