@@ -71,17 +71,19 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
     }
 }
 
-/// Parses a SQL string containing zero or more SQL columns.
-pub fn parse_columns(
-    sql: &str,
-) -> Result<(Vec<ColumnDef<Raw>>, Vec<TableConstraint<Raw>>), ParserError> {
+/// Parses a SQL string containing a single data type.
+pub fn parse_data_type(sql: &str) -> Result<UnresolvedDataType, ParserError> {
     let tokens = lexer::lex(sql)?;
     let mut parser = Parser::new(sql, tokens);
-    let columns = parser.parse_columns(Optional)?;
+    let data_type = parser.parse_data_type()?;
     if parser.next_token().is_some() {
-        parser_err!(parser, parser.peek_prev_pos(), "extra token after columns")
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after data type"
+        )
     } else {
-        Ok(columns)
+        Ok(data_type)
     }
 }
 
@@ -2949,7 +2951,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an unsigned literal integer/long
+    /// Parse a signed literal integer.
+    fn parse_literal_int(&mut self) -> Result<i64, ParserError> {
+        match self.next_token() {
+            Some(Token::Number(s)) => s.parse::<i64>().map_err(|e| {
+                self.error(
+                    self.peek_prev_pos(),
+                    format!("Could not parse '{}' as i64: {}", s, e),
+                )
+            }),
+            other => self.expected(self.peek_prev_pos(), "literal integer", other),
+        }
+    }
+
+    /// Parse an unsigned literal integer.
     fn parse_literal_uint(&mut self) -> Result<u64, ParserError> {
         match self.next_token() {
             Some(Token::Number(s)) => s.parse::<u64>().map_err(|e| {
@@ -2958,7 +2973,7 @@ impl<'a> Parser<'a> {
                     format!("Could not parse '{}' as u64: {}", s, e),
                 )
             }),
-            other => self.expected(self.peek_prev_pos(), "literal int", other),
+            other => self.expected(self.peek_prev_pos(), "literal unsigned integer", other),
         }
     }
 
@@ -2988,25 +3003,16 @@ impl<'a> Parser<'a> {
                     };
                     UnresolvedDataType::Other {
                         name: RawName::Name(UnresolvedObjectName::unqualified(name)),
-                        typ_mod: match self.parse_optional_precision()? {
-                            Some(u) => vec![u],
-                            None => vec![],
-                        },
+                        typ_mod: self.parse_typ_mod()?,
                     }
                 }
                 BPCHAR => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("bpchar")),
-                    typ_mod: match self.parse_optional_precision()? {
-                        Some(u) => vec![u],
-                        None => vec![],
-                    },
+                    typ_mod: self.parse_typ_mod()?,
                 },
                 VARCHAR => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
-                    typ_mod: match self.parse_optional_precision()? {
-                        Some(u) => vec![u],
-                        None => vec![],
-                    },
+                    typ_mod: self.parse_typ_mod()?,
                 },
                 STRING => other("text"),
 
@@ -3107,9 +3113,9 @@ impl<'a> Parser<'a> {
         Ok(data_type)
     }
 
-    fn parse_typ_mod(&mut self) -> Result<Vec<u64>, ParserError> {
+    fn parse_typ_mod(&mut self) -> Result<Vec<i64>, ParserError> {
         if self.consume_token(&Token::LParen) {
-            let typ_mod = self.parse_comma_separated(Parser::parse_literal_uint)?;
+            let typ_mod = self.parse_comma_separated(Parser::parse_literal_int)?;
             self.expect_token(&Token::RParen)?;
             Ok(typ_mod)
         } else {

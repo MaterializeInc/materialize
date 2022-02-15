@@ -22,6 +22,8 @@ use mz_expr::DummyHumanizer;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::*;
 
 use crate::plan::error::PlanError;
@@ -31,7 +33,6 @@ use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
-use mz_repr::adt::array::ArrayDimension;
 
 use super::Explanation;
 
@@ -647,7 +648,9 @@ impl AggregateFunc {
             AggregateFunc::JsonbObjectAgg { .. } => ScalarType::Jsonb,
             AggregateFunc::StringAgg { .. } => ScalarType::String,
             AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
+            AggregateFunc::SumInt64 => ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.

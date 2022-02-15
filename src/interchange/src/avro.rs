@@ -33,7 +33,7 @@ mod tests {
     use ordered_float::OrderedFloat;
 
     use mz_avro::types::{DecimalValue, Value};
-    use mz_repr::adt::numeric;
+    use mz_repr::adt::numeric::{self, NumericMaxScale};
     use mz_repr::{Datum, RelationDesc, ScalarType};
 
     use super::*;
@@ -116,7 +116,9 @@ mod tests {
                 Value::Timestamp(date_time),
             ),
             (
-                ScalarType::Numeric { scale: Some(1) },
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::try_from(1_i64)?),
+                },
                 Datum::from(Numeric::from(1)),
                 Value::Decimal(DecimalValue {
                     unscaled: bytes.clone(),
@@ -125,7 +127,7 @@ mod tests {
                 }),
             ),
             (
-                ScalarType::Numeric { scale: None },
+                ScalarType::Numeric { max_scale: None },
                 Datum::from(Numeric::from(1)),
                 Value::Decimal(DecimalValue {
                     // equivalent to 1E39

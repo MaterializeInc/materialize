@@ -44,6 +44,7 @@ use crate::ast::{
     ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement,
     TransactionAccessMode,
 };
+use crate::catalog::CatalogType;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
 pub(crate) mod error;
@@ -405,19 +406,8 @@ pub struct Index {
 #[derive(Clone, Debug)]
 pub struct Type {
     pub create_sql: String,
-    pub inner: TypeInner,
+    pub inner: CatalogType,
     pub depends_on: Vec<GlobalId>,
-}
-
-#[derive(Clone, Debug)]
-pub enum TypeInner {
-    List {
-        element_id: GlobalId,
-    },
-    Map {
-        key_id: GlobalId,
-        value_id: GlobalId,
-    },
 }
 
 /// Specifies when a `Peek` should occur.

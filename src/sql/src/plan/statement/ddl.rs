@@ -63,7 +63,7 @@ use crate::ast::{
     SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, UnresolvedObjectName, Value,
     ViewDefinition, WithOption,
 };
-use crate::catalog::{CatalogItem, CatalogItemType};
+use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
 use crate::names::{
     resolve_names_data_type, DatabaseSpecifier, FullName, ResolvedDataType, SchemaName,
@@ -78,7 +78,7 @@ use crate::plan::{
     CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
     DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
-    Source, Table, Type, TypeInner, View,
+    Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2137,14 +2137,17 @@ pub fn plan_create_type(
             Some(_) => bail!("{} must be a data type", key),
             None => bail!("{} parameter required", key),
         };
-        match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
+        match scx.catalog.get_item_by_id(&item.id()).type_details() {
             None => bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
                 item.name(),
                 item.item_type()
             ),
-            Some(ScalarType::Char { .. }) if as_type == CreateTypeAs::List => {
+            Some(CatalogTypeDetails {
+                typ: CatalogType::Char,
+                ..
+            }) if as_type == CreateTypeAs::List => {
                 bail_unsupported!("char list")
             }
             _ => {}
@@ -2159,21 +2162,22 @@ pub fn plan_create_type(
     }
 
     let inner = match as_type {
-        CreateTypeAs::List => TypeInner::List {
+        CreateTypeAs::List => CatalogType::List {
             element_id: *ids.get(0).expect("custom type to have element id"),
         },
         CreateTypeAs::Map => {
             let key_id = *ids.get(0).expect("key");
-            match scx.catalog.try_get_lossy_scalar_type_by_id(&key_id) {
-                Some(ScalarType::String) => {}
-                Some(t) => bail!(
-                    "key_type must be text, got {}",
-                    scx.humanize_scalar_type(&t)
-                ),
+            let entry = scx.catalog.get_item_by_id(&key_id);
+            match entry.type_details() {
+                Some(CatalogTypeDetails {
+                    typ: CatalogType::String,
+                    ..
+                }) => {}
+                Some(_) => bail!("key_type must be text, got {}", entry.name()),
                 None => unreachable!("already guaranteed id correlates to a type"),
             }
 
-            TypeInner::Map {
+            CatalogType::Map {
                 key_id,
                 value_id: *ids.get(1).expect("value"),
             }

@@ -18,6 +18,7 @@ use anyhow::bail;
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
+use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
@@ -299,7 +300,10 @@ pub fn describe_tail(
     let progress = options.progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_column(
         "mz_timestamp",
-        ScalarType::Numeric { scale: Some(0) }.nullable(false),
+        ScalarType::Numeric {
+            max_scale: Some(NumericMaxScale::ZERO),
+        }
+        .nullable(false),
     );
     if progress {
         desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));

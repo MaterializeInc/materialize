@@ -25,11 +25,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lazy_static::lazy_static;
-use postgres_types::{Kind, Type};
 
 use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use mz_expr::GlobalId;
 use mz_repr::{RelationDesc, ScalarType};
+use mz_sql::catalog::{CatalogType, CatalogTypeDetails};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -51,7 +51,7 @@ impl Builtin {
             Builtin::Log(log) => log.name,
             Builtin::Table(table) => table.name,
             Builtin::View(view) => view.name,
-            Builtin::Type(typ) => typ.name(),
+            Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
         }
     }
@@ -104,23 +104,11 @@ pub struct BuiltinView {
 }
 
 pub struct BuiltinType {
+    pub name: &'static str,
     pub schema: &'static str,
     pub id: GlobalId,
-    pgtype: &'static Type,
-}
-
-impl BuiltinType {
-    pub fn name(&self) -> &str {
-        self.pgtype.name()
-    }
-
-    pub fn oid(&self) -> u32 {
-        self.pgtype.oid()
-    }
-
-    pub fn kind(&self) -> &Kind {
-        self.pgtype.kind()
-    }
+    pub oid: u32,
+    pub details: CatalogTypeDetails,
 }
 
 pub struct BuiltinFunc {
@@ -167,329 +155,646 @@ pub struct BuiltinRole {
 // Builtin types cannot be created, updated, or deleted. Their OIDs
 // are static, unlike other objects, to match the type OIDs defined by Postgres.
 pub const TYPE_BOOL: BuiltinType = BuiltinType {
+    name: "bool",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1000),
-    pgtype: &postgres_types::Type::BOOL,
+    oid: 16,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Bool,
+        array_id: Some(GlobalId::System(1008)),
+    },
 };
 
 pub const TYPE_BYTEA: BuiltinType = BuiltinType {
+    name: "bytea",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1001),
-    pgtype: &postgres_types::Type::BYTEA,
+    oid: 17,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Bytes,
+        array_id: Some(GlobalId::System(1009)),
+    },
 };
 
 pub const TYPE_INT8: BuiltinType = BuiltinType {
+    name: "int8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1002),
-    pgtype: &postgres_types::Type::INT8,
+    oid: 20,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int64,
+        array_id: Some(GlobalId::System(1012)),
+    },
 };
 
 pub const TYPE_INT4: BuiltinType = BuiltinType {
+    name: "int4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1003),
-    pgtype: &postgres_types::Type::INT4,
+    oid: 23,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int32,
+        array_id: Some(GlobalId::System(1010)),
+    },
 };
 
 pub const TYPE_TEXT: BuiltinType = BuiltinType {
+    name: "text",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1004),
-    pgtype: &postgres_types::Type::TEXT,
+    oid: 25,
+    details: CatalogTypeDetails {
+        typ: CatalogType::String,
+        array_id: Some(GlobalId::System(1011)),
+    },
 };
 
 pub const TYPE_OID: BuiltinType = BuiltinType {
+    name: "oid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1005),
-    pgtype: &postgres_types::Type::OID,
+    oid: 26,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Oid,
+        array_id: Some(GlobalId::System(1015)),
+    },
 };
 
 pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
+    name: "float4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1006),
-    pgtype: &postgres_types::Type::FLOAT4,
+    oid: 700,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Float32,
+        array_id: Some(GlobalId::System(1013)),
+    },
 };
 
 pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
+    name: "float8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1007),
-    pgtype: &postgres_types::Type::FLOAT8,
+    oid: 701,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Float64,
+        array_id: Some(GlobalId::System(1014)),
+    },
 };
 
 pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
+    name: "_bool",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1008),
-    pgtype: &postgres_types::Type::BOOL_ARRAY,
+    oid: 1000,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1000),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
+    name: "_bytea",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1009),
-    pgtype: &postgres_types::Type::BYTEA_ARRAY,
+    oid: 1001,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1001),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
+    name: "_int4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1010),
-    pgtype: &postgres_types::Type::INT4_ARRAY,
+    oid: 1007,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1003),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
+    name: "_text",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1011),
-    pgtype: &postgres_types::Type::TEXT_ARRAY,
+    oid: 1009,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1004),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
+    name: "_int8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1012),
-    pgtype: &postgres_types::Type::INT8_ARRAY,
+    oid: 1016,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1002),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
+    name: "_float4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1013),
-    pgtype: &postgres_types::Type::FLOAT4_ARRAY,
+    oid: 1021,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1006),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
+    name: "_float8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1014),
-    pgtype: &postgres_types::Type::FLOAT8_ARRAY,
+    oid: 1022,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1007),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
+    name: "_oid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1015),
-    pgtype: &postgres_types::Type::OID_ARRAY,
+    oid: 1028,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1005),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_DATE: BuiltinType = BuiltinType {
+    name: "date",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1016),
-    pgtype: &postgres_types::Type::DATE,
+    oid: 1082,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Date,
+        array_id: Some(GlobalId::System(1020)),
+    },
 };
 
 pub const TYPE_TIME: BuiltinType = BuiltinType {
+    name: "time",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1017),
-    pgtype: &postgres_types::Type::TIME,
+    oid: 1083,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Time,
+        array_id: Some(GlobalId::System(1021)),
+    },
 };
 
 pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
+    name: "timestamp",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1018),
-    pgtype: &postgres_types::Type::TIMESTAMP,
+    oid: 1114,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Timestamp,
+        array_id: Some(GlobalId::System(1019)),
+    },
 };
 
 pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
+    name: "_timestamp",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1019),
-    pgtype: &postgres_types::Type::TIMESTAMP_ARRAY,
+    oid: 1115,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1018),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
+    name: "_date",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1020),
-    pgtype: &postgres_types::Type::DATE_ARRAY,
+    oid: 1182,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1016),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
+    name: "_time",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1021),
-    pgtype: &postgres_types::Type::TIME_ARRAY,
+    oid: 1183,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1017),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
+    name: "timestamptz",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1022),
-    pgtype: &postgres_types::Type::TIMESTAMPTZ,
+    oid: 1184,
+    details: CatalogTypeDetails {
+        typ: CatalogType::TimestampTz,
+        array_id: Some(GlobalId::System(1023)),
+    },
 };
 
 pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
+    name: "_timestamptz",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1023),
-    pgtype: &postgres_types::Type::TIMESTAMPTZ_ARRAY,
+    oid: 1185,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1022),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
+    name: "interval",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1024),
-    pgtype: &postgres_types::Type::INTERVAL,
+    oid: 1186,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Interval,
+        array_id: Some(GlobalId::System(1025)),
+    },
 };
 
 pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
+    name: "_interval",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1025),
-    pgtype: &postgres_types::Type::INTERVAL_ARRAY,
+    oid: 1187,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1024),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
+    name: "numeric",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1026),
-    pgtype: &postgres_types::Type::NUMERIC,
+    oid: 1700,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Numeric,
+        array_id: Some(GlobalId::System(1027)),
+    },
 };
 
 pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
+    name: "_numeric",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1027),
-    pgtype: &postgres_types::Type::NUMERIC_ARRAY,
+    oid: 1231,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1026),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_RECORD: BuiltinType = BuiltinType {
+    name: "record",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1028),
-    pgtype: &postgres_types::Type::RECORD,
+    oid: 2249,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: Some(GlobalId::System(1029)),
+    },
 };
 
 pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
+    name: "_record",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1029),
-    pgtype: &postgres_types::Type::RECORD_ARRAY,
+    oid: 2287,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1028),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_UUID: BuiltinType = BuiltinType {
+    name: "uuid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1030),
-    pgtype: &postgres_types::Type::UUID,
+    oid: 2950,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Uuid,
+        array_id: Some(GlobalId::System(1031)),
+    },
 };
 
 pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
+    name: "_uuid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1031),
-    pgtype: &postgres_types::Type::UUID_ARRAY,
+    oid: 2951,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1030),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_JSONB: BuiltinType = BuiltinType {
+    name: "jsonb",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1032),
-    pgtype: &postgres_types::Type::JSONB,
+    oid: 3802,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Jsonb,
+        array_id: Some(GlobalId::System(1033)),
+    },
 };
 
 pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
+    name: "_jsonb",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1033),
-    pgtype: &postgres_types::Type::JSONB_ARRAY,
+    oid: 3807,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1032),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANY: BuiltinType = BuiltinType {
+    name: "any",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1034),
-    pgtype: &postgres_types::Type::ANY,
+    oid: 2276,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANYARRAY: BuiltinType = BuiltinType {
+    name: "anyarray",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1035),
-    pgtype: &postgres_types::Type::ANYARRAY,
+    oid: 2277,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANYELEMENT: BuiltinType = BuiltinType {
+    name: "anyelement",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1036),
-    pgtype: &postgres_types::Type::ANYELEMENT,
+    oid: 2283,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
+    name: "anynonarray",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1037),
-    pgtype: &postgres_types::Type::ANYNONARRAY,
+    oid: 2776,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_CHAR: BuiltinType = BuiltinType {
+    name: "char",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1038),
-    pgtype: &postgres_types::Type::CHAR,
+    oid: 18,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Char1,
+        array_id: Some(GlobalId::System(1043)),
+    },
 };
 
 pub const TYPE_VARCHAR: BuiltinType = BuiltinType {
+    name: "varchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1039),
-    pgtype: &postgres_types::Type::VARCHAR,
+    oid: 1043,
+    details: CatalogTypeDetails {
+        typ: CatalogType::VarChar,
+        array_id: Some(GlobalId::System(1044)),
+    },
 };
 
 pub const TYPE_INT2: BuiltinType = BuiltinType {
+    name: "int2",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1040),
-    pgtype: &postgres_types::Type::INT2,
+    oid: 21,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int16,
+        array_id: Some(GlobalId::System(1041)),
+    },
 };
 
 pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
+    name: "_int2",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1041),
-    pgtype: &postgres_types::Type::INT2_ARRAY,
+    oid: 1005,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1040),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
+    name: "bpchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1042),
-    pgtype: &postgres_types::Type::BPCHAR,
+    oid: 1042,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Char,
+        array_id: Some(GlobalId::System(1045)),
+    },
 };
 
 pub const TYPE_CHAR_ARRAY: BuiltinType = BuiltinType {
+    name: "_char",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1043),
-    pgtype: &postgres_types::Type::CHAR_ARRAY,
+    oid: 1002,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1038),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_VARCHAR_ARRAY: BuiltinType = BuiltinType {
+    name: "_varchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1044),
-    pgtype: &postgres_types::Type::VARCHAR_ARRAY,
+    oid: 1015,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1039),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
+    name: "_bpchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1045),
-    pgtype: &postgres_types::Type::BPCHAR_ARRAY,
+    oid: 1014,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1042),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_REGPROC: BuiltinType = BuiltinType {
+    name: "regproc",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1046),
-    pgtype: &postgres_types::Type::REGPROC,
+    oid: 24,
+    details: CatalogTypeDetails {
+        typ: CatalogType::RegProc,
+        array_id: Some(GlobalId::System(1047)),
+    },
 };
 
 pub const TYPE_REGPROC_ARRAY: BuiltinType = BuiltinType {
+    name: "_regproc",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1047),
-    pgtype: &postgres_types::Type::REGPROC_ARRAY,
+    oid: 1008,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1046),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_REGTYPE: BuiltinType = BuiltinType {
+    name: "regtype",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1048),
-    pgtype: &postgres_types::Type::REGTYPE,
+    oid: 2206,
+    details: CatalogTypeDetails {
+        typ: CatalogType::RegType,
+        array_id: Some(GlobalId::System(1049)),
+    },
 };
 
 pub const TYPE_REGTYPE_ARRAY: BuiltinType = BuiltinType {
+    name: "_regtype",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1049),
-    pgtype: &postgres_types::Type::REGTYPE_ARRAY,
+    oid: 2211,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1048),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_REGCLASS: BuiltinType = BuiltinType {
+    name: "regclass",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1050),
-    pgtype: &postgres_types::Type::REGCLASS,
+    oid: 2205,
+    details: CatalogTypeDetails {
+        typ: CatalogType::RegClass,
+        array_id: Some(GlobalId::System(1051)),
+    },
 };
 
 pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
+    name: "_regclass",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1051),
-    pgtype: &postgres_types::Type::REGCLASS_ARRAY,
+    oid: 2210,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1050),
+        },
+        array_id: None,
+    },
 };
 
-lazy_static! {
-    pub static ref TYPE_LIST: BuiltinType = BuiltinType {
-        schema: PG_CATALOG_SCHEMA,
-        id: GlobalId::System(1998),
-        pgtype: &mz_pgrepr::LIST,
-    };
-    pub static ref TYPE_MAP: BuiltinType = BuiltinType {
-        schema: PG_CATALOG_SCHEMA,
-        id: GlobalId::System(1999),
-        pgtype: &mz_pgrepr::MAP,
-    };
-}
+pub const TYPE_LIST: BuiltinType = BuiltinType {
+    name: "list",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1998),
+    oid: mz_pgrepr::oid::TYPE_LIST_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
+pub const TYPE_MAP: BuiltinType = BuiltinType {
+    name: "map",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1999),
+    oid: mz_pgrepr::oid::TYPE_MAP_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
 
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
@@ -1352,7 +1657,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
-    ''::pg_catalog.char as attidentity,
+    ''::pg_catalog.\"char\" as attidentity,
     FALSE as attisdropped
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
@@ -1581,7 +1886,7 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid as oid,
     NULL::pg_catalog.text as conname,
     NULL::pg_catalog.oid as connamespace,
-    NULL::pg_catalog.char as contype,
+    NULL::pg_catalog.\"char\" as contype,
     NULL::pg_catalog.bool as condeferrable,
     NULL::pg_catalog.bool as condeferred,
     NULL::pg_catalog.bool as convalidated,
@@ -1590,9 +1895,9 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid as conindid,
     NULL::pg_catalog.oid as conparentid,
     NULL::pg_catalog.oid as confrelid,
-    NULL::pg_catalog.char as confupdtype,
-    NULL::pg_catalog.char as confdeltype,
-    NULL::pg_catalog.char as confmatchtype,
+    NULL::pg_catalog.\"char\" as confupdtype,
+    NULL::pg_catalog.\"char\" as confdeltype,
+    NULL::pg_catalog.\"char\" as confmatchtype,
     NULL::pg_catalog.bool as conislocal,
     NULL::pg_catalog.int4 as coninhcount,
     NULL::pg_catalog.bool as connoinherit,
@@ -1629,7 +1934,7 @@ pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
 SELECT NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS amname,
     NULL::pg_catalog.regproc AS amhandler,
-    NULL::pg_catalog.char(1) AS amtype
+    NULL::pg_catalog.\"char\" AS amtype
 WHERE false",
     id: GlobalId::System(5036),
     needs_logs: false,

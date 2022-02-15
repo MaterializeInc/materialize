@@ -1427,7 +1427,7 @@ pub mod plan {
                     // We'll need to use this a fair bit.
                     let decimal_one = MirScalarExpr::literal_ok(
                         Datum::from(Numeric::from(1)),
-                        ScalarType::Numeric { scale: None },
+                        ScalarType::Numeric { max_scale: None },
                     );
 
                     // TODO(#7611): Truncate any significant fractional digits

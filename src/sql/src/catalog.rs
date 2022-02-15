@@ -125,13 +125,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &FullName) -> bool;
 
-    /// Returns a lossy `ScalarType` associated with `id` if one exists.
-    ///
-    /// For example `pg_catalog.numeric` returns `ScalarType::Numeric { scale: None}`,
-    /// meaning that its precision and scale need to be associated with values
-    /// from elsewhere.
-    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType>;
-
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
@@ -273,6 +266,10 @@ pub trait CatalogItem {
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
     fn table_details(&self) -> Option<&[Expr<Raw>]>;
+
+    /// Returns the type information associated with the catalog item, if the
+    /// catalog item is a type.
+    fn type_details(&self) -> Option<&CatalogTypeDetails>;
 }
 
 /// The type of a [`CatalogItem`].
@@ -306,6 +303,59 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
         }
     }
+}
+
+/// Details about a type in the catalog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogTypeDetails {
+    /// The ID of the type with this type as the array element, if available.
+    pub array_id: Option<GlobalId>,
+    /// The description of this type.
+    pub typ: CatalogType,
+}
+
+/// A type stored in the catalog.
+///
+/// The variants correspond one-to-one with [`ScalarType`], but with type
+/// modifiers removed and with embedded types replaced with references to other
+/// types in the catalog.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogType {
+    Array {
+        element_id: GlobalId,
+    },
+    Bool,
+    Bytes,
+    Char,
+    Char1,
+    Date,
+    Float32,
+    Float64,
+    Int16,
+    Int32,
+    Int64,
+    Interval,
+    Jsonb,
+    List {
+        element_id: GlobalId,
+    },
+    Map {
+        key_id: GlobalId,
+        value_id: GlobalId,
+    },
+    Numeric,
+    Oid,
+    Pseudo,
+    RegClass,
+    RegProc,
+    RegType,
+    String,
+    Time,
+    Timestamp,
+    TimestampTz,
+    Uuid,
+    VarChar,
 }
 
 /// An error returned by the catalog.
@@ -437,10 +487,6 @@ impl SessionCatalog for DummyCatalog {
 
     fn item_exists(&self, _: &FullName) -> bool {
         false
-    }
-
-    fn try_get_lossy_scalar_type_by_id(&self, _: &GlobalId) -> Option<ScalarType> {
-        None
     }
 
     fn config(&self) -> &CatalogConfig {

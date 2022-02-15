@@ -15,6 +15,9 @@ use std::num::TryFromIntError;
 use mz_expr::EvalError;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_repr::adt::char::InvalidCharLengthError;
+use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
+use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::strconv::ParseError;
 use mz_repr::ColumnName;
 
@@ -62,6 +65,9 @@ pub enum PlanError {
     Parse(ParseError),
     Catalog(CatalogError),
     UpsertSinkWithoutKey,
+    InvalidNumericMaxScale(InvalidNumericMaxScaleError),
+    InvalidCharLength(InvalidCharLengthError),
+    InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -146,6 +152,9 @@ impl fmt::Display for PlanError {
             Self::Parse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
+            Self::InvalidNumericMaxScale(e) => e.fmt(f),
+            Self::InvalidCharLength(e) => e.fmt(f),
+            Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
         }
     }
@@ -168,6 +177,24 @@ impl From<ParseError> for PlanError {
 impl From<RecursionLimitError> for PlanError {
     fn from(e: RecursionLimitError) -> PlanError {
         PlanError::RecursionLimit(e)
+    }
+}
+
+impl From<InvalidNumericMaxScaleError> for PlanError {
+    fn from(e: InvalidNumericMaxScaleError) -> PlanError {
+        PlanError::InvalidNumericMaxScale(e)
+    }
+}
+
+impl From<InvalidCharLengthError> for PlanError {
+    fn from(e: InvalidCharLengthError) -> PlanError {
+        PlanError::InvalidCharLength(e)
+    }
+}
+
+impl From<InvalidVarCharMaxLengthError> for PlanError {
+    fn from(e: InvalidVarCharMaxLengthError) -> PlanError {
+        PlanError::InvalidVarCharMaxLength(e)
     }
 }
 

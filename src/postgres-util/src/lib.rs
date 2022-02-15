@@ -9,126 +9,22 @@
 
 //! Provides convenience functions for working with upstream Postgres sources from the `sql` package.
 
-use std::fmt;
-
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::config::{ReplicationMode, SslMode};
-use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{Client, Config};
 
 use mz_ore::task;
-use mz_repr::adt;
-use mz_sql_parser::ast::display::{AstDisplay, AstFormatter};
-use mz_sql_parser::ast::Ident;
-use mz_sql_parser::impl_display;
-
-pub struct PgNumericMod {
-    precision: u16,
-    scale: u16,
-}
-
-/// Mirror of PostgreSQL's
-/// [`VARHDRSZ`](https://github.com/postgres/postgres/blob/REL_14_0/src/include/c.h#L627) constant
-const PG_HEADER_SIZE: i32 = 4;
-
-pub enum PgScalarType {
-    Simple(PgType),
-    /// Represents a `numeric` type with optional scale and presicion
-    Numeric(Option<PgNumericMod>),
-    /// Represents a `numeric` array type with optional scale and presicion
-    NumericArray(Option<PgNumericMod>),
-    BPChar {
-        length: i32,
-    },
-    BPCharArray {
-        length: i32,
-    },
-    VarChar {
-        length: i32,
-    },
-    VarCharArray {
-        length: i32,
-    },
-}
-
-impl AstDisplay for PgScalarType {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Simple(typ) => {
-                f.write_str(typ);
-            }
-            Self::Numeric(typ_mod) => {
-                f.write_str("numeric");
-                if let Some(typ_mod) = typ_mod {
-                    f.write_str("(");
-                    f.write_str(typ_mod.precision);
-                    f.write_str(", ");
-                    f.write_str(typ_mod.scale);
-                    f.write_str(")");
-                }
-            }
-            Self::NumericArray(typ_mod) => {
-                f.write_str("numeric");
-                if let Some(typ_mod) = typ_mod {
-                    f.write_str("(");
-                    f.write_str(typ_mod.precision);
-                    f.write_str(", ");
-                    f.write_str(typ_mod.scale);
-                    f.write_str(")");
-                }
-                f.write_str("[]");
-            }
-            Self::BPChar { length } => {
-                f.write_str("character(");
-                f.write_str(length);
-                f.write_str(")");
-            }
-            Self::BPCharArray { length } => {
-                f.write_str("character(");
-                f.write_str(length);
-                f.write_str(")[]");
-            }
-            Self::VarChar { length } => {
-                f.write_str("character varying(");
-                f.write_str(length);
-                f.write_str(")");
-            }
-            Self::VarCharArray { length } => {
-                f.write_str("character varying(");
-                f.write_str(length);
-                f.write_str(")[]");
-            }
-        }
-    }
-}
-impl_display!(PgScalarType);
+use mz_pgrepr::Type as PgType;
 
 /// The schema of a single column
 pub struct PgColumn {
-    pub name: Ident,
-    pub scalar_type: PgScalarType,
+    pub name: String,
+    pub ty: PgType,
     pub nullable: bool,
     pub primary_key: bool,
 }
-
-impl AstDisplay for PgColumn {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(&self.name);
-        f.write_str(" ");
-        f.write_str(&self.scalar_type);
-        if self.primary_key {
-            f.write_str(" PRIMARY KEY");
-        }
-        if self.nullable {
-            f.write_str(" NULL");
-        } else {
-            f.write_str(" NOT NULL");
-        }
-    }
-}
-impl_display!(PgColumn);
 
 /// Information about a remote table
 pub struct TableInfo {
@@ -246,7 +142,7 @@ pub async fn publication_info(
                 "SELECT
                         a.attname AS name,
                         a.atttypid AS oid,
-                        a.atttypmod AS modifier,
+                        a.atttypmod AS typmod,
                         a.attnotnull AS not_null,
                         b.oid IS NOT NULL AS primary_key
                     FROM pg_catalog.pg_attribute a
@@ -265,64 +161,13 @@ pub async fn publication_info(
             .map(|row| {
                 let name: String = row.get("name");
                 let oid = row.get("oid");
-                let pg_type =
-                    PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
-                let scalar_type = match pg_type {
-                    PgType::NUMERIC | PgType::NUMERIC_ARRAY => {
-                        let modifier: i32 = row.get("modifier");
-                        // https://github.com/postgres/postgres/blob/REL_13_3/src/backend/utils/adt/numeric.c#L967-L983
-                        let typ_mod = if modifier < PG_HEADER_SIZE {
-                            None
-                        } else {
-                            let tmp_mod = modifier - PG_HEADER_SIZE;
-                            let scale = (tmp_mod & 0xffff) as u16;
-                            let precision = ((tmp_mod >> 16) & 0xffff) as u16;
-                            Some(PgNumericMod { scale, precision })
-                        };
-
-                        match pg_type {
-                            PgType::NUMERIC => PgScalarType::Numeric(typ_mod),
-                            PgType::NUMERIC_ARRAY => PgScalarType::NumericArray(typ_mod),
-                            _ => unreachable!(),
-                        }
-                    }
-                    PgType::BPCHAR | PgType::BPCHAR_ARRAY => {
-                        let modifier: i32 = row.get("modifier");
-                        // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L282-L286
-                        let length = if modifier < PG_HEADER_SIZE {
-                            adt::char::MAX_LENGTH
-                        } else {
-                            modifier - PG_HEADER_SIZE
-                        };
-
-                        match pg_type {
-                            PgType::BPCHAR => PgScalarType::BPChar { length },
-                            PgType::BPCHAR_ARRAY => PgScalarType::BPCharArray { length },
-                            _ => unreachable!(),
-                        }
-                    }
-                    PgType::VARCHAR | PgType::VARCHAR_ARRAY => {
-                        let modifier: i32 = row.get("modifier");
-                        // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L617
-                        let length = if modifier < PG_HEADER_SIZE {
-                            adt::varchar::MAX_LENGTH
-                        } else {
-                            modifier - PG_HEADER_SIZE
-                        };
-
-                        match pg_type {
-                            PgType::VARCHAR => PgScalarType::VarChar { length },
-                            PgType::VARCHAR_ARRAY => PgScalarType::VarCharArray { length },
-                            _ => unreachable!(),
-                        }
-                    }
-                    other => PgScalarType::Simple(other),
-                };
+                let typmod: i32 = row.get("typmod");
+                let ty = PgType::from_oid_and_typmod(oid, typmod)?;
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PgColumn {
-                    name: Ident::new(name),
-                    scalar_type,
+                    name,
+                    ty,
                     nullable: !not_null,
                     primary_key,
                 })

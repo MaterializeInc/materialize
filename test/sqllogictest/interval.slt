@@ -581,7 +581,7 @@ statement error Expected end of statement, found left parenthesis
 SELECT INTERVAL '2-3 3:4' DAY(1)
 
 # Only allow positive integer nanosecond precision
-statement error Expected literal int, found operator
+statement error Expected literal unsigned integer, found operator
 SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
 
 # Arbitrary punctuation delimiters

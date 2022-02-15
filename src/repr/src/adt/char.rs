@@ -7,38 +7,72 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::ops::Deref;
+use std::error::Error;
 
 use anyhow::bail;
+use serde::{Deserialize, Serialize};
 
-use super::util;
+use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
+
+use std::fmt;
 
 // https://github.com/postgres/postgres/blob/REL_14_0/src/include/access/htup_details.h#L577-L584
-pub const MAX_LENGTH: i32 = 10_485_760;
+const MAX_LENGTH: u32 = 10_485_760;
 
-/// A rust type representing a PostgreSQL char type
+/// A marker type indicating that a Rust string should be interpreted as a
+/// [`ScalarType::Char`].
+///
+/// [`ScalarType::Char`]: crate::ScalarType::Char
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Char<S: AsRef<str>>(pub S);
 
-impl<S: AsRef<str>> Deref for Char<S> {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
+/// The `length` of a [`ScalarType::Char`].
+///
+/// This newtype wrapper ensures that the length is within the valid range.
+///
+/// [`ScalarType::Char`]: crate::ScalarType::Char
+#[derive(
+    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+)]
+pub struct CharLength(u32);
+
+impl CharLength {
+    /// A length of one.
+    pub const ONE: CharLength = CharLength(1);
+
+    /// Consumes the newtype wrapper, returning the inner `u32`.
+    pub fn into_u32(self) -> u32 {
+        self.0
     }
 }
 
-pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<usize>, anyhow::Error> {
-    let typ_mod = util::extract_typ_mod::<usize>(
-        "character",
-        typ_mod,
-        &[(
-            "length",
-            1,
-            usize::try_from(MAX_LENGTH).expect("max length is positive"),
-        )],
-    )?;
-    Ok(Some(*typ_mod.get(0).unwrap_or(&1)))
+impl TryFrom<i64> for CharLength {
+    type Error = InvalidCharLengthError;
+
+    fn try_from(length: i64) -> Result<Self, Self::Error> {
+        match u32::try_from(length) {
+            Ok(length) if length > 0 && length < MAX_LENGTH => Ok(CharLength(length)),
+            _ => Err(InvalidCharLengthError),
+        }
+    }
 }
+
+/// The error returned when constructing a [`CharLength`] from an invalid value.
+#[derive(Debug, Clone)]
+pub struct InvalidCharLengthError;
+
+impl fmt::Display for InvalidCharLengthError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "length for type character must be between 1 and {}",
+            MAX_LENGTH
+        )
+    }
+}
+
+impl Error for InvalidCharLengthError {}
 
 /// Controls how to handle trailing whitespace at the end of bpchar data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -77,7 +111,7 @@ impl CharWhiteSpace {
 /// * `white_space` - Express how to handle trailing whitespace on `s`
 fn format_char_str(
     s: &str,
-    length: Option<usize>,
+    length: Option<CharLength>,
     fail_on_len: bool,
     white_space: CharWhiteSpace,
 ) -> Result<String, anyhow::Error> {
@@ -85,16 +119,19 @@ fn format_char_str(
         // Note that length is 1-indexed, so finding `None` means the string's
         // characters don't exceed the length, while finding `Some` means it
         // does.
-        Some(l) => match s.char_indices().nth(l) {
-            None => white_space.process_str(s, length),
-            Some((idx, _)) => {
-                if !fail_on_len || s[idx..].chars().all(|c| c.is_ascii_whitespace()) {
-                    white_space.process_str(&s[..idx], length)
-                } else {
-                    bail!("{} exceeds maximum length of {}", s, l)
+        Some(l) => {
+            let l = usize::cast_from(l.into_u32());
+            match s.char_indices().nth(l) {
+                None => white_space.process_str(s, Some(l)),
+                Some((idx, _)) => {
+                    if !fail_on_len || s[idx..].chars().all(|c| c.is_ascii_whitespace()) {
+                        white_space.process_str(&s[..idx], Some(l))
+                    } else {
+                        bail!("{} exceeds maximum length of {}", s, l)
+                    }
                 }
             }
-        },
+        }
         None => white_space.process_str(s, None),
     })
 }
@@ -106,7 +143,7 @@ fn format_char_str(
 /// appropriate to return to clients.
 pub fn format_str_trim(
     s: &str,
-    length: Option<usize>,
+    length: Option<CharLength>,
     fail_on_len: bool,
 ) -> Result<String, anyhow::Error> {
     format_char_str(s, length, fail_on_len, CharWhiteSpace::Trim)
@@ -117,6 +154,6 @@ pub fn format_str_trim(
 ///
 /// The value returned is appropriate to return to clients, but _is not_
 /// appropriate to store in `Datum::String`.
-pub fn format_str_pad(s: &str, length: Option<usize>) -> String {
+pub fn format_str_pad(s: &str, length: Option<CharLength>) -> String {
     format_char_str(s, length, false, CharWhiteSpace::Pad).unwrap()
 }

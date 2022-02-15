@@ -133,7 +133,7 @@ lazy_static! {
             (Int16, Float32) => Implicit: CastInt16ToFloat32(func::CastInt16ToFloat32),
             (Int16, Float64) => Implicit: CastInt16ToFloat64(func::CastInt16ToFloat64),
             (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(func::CastInt16ToNumeric(s))))
             }),
             (Int16, Oid) => Implicit: CastInt16ToOid(func::CastInt16ToOid),
@@ -150,7 +150,7 @@ lazy_static! {
             (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
             (Int32, Float64) => Implicit: CastInt32ToFloat64(func::CastInt32ToFloat64),
             (Int32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToNumeric(func::CastInt32ToNumeric(s))))
             }),
             (Int32, String) => Assignment: CastInt32ToString(func::CastInt32ToString),
@@ -160,7 +160,7 @@ lazy_static! {
             (Int64, Int16) => Assignment: CastInt64ToInt16(func::CastInt64ToInt16),
             (Int64, Int32) => Assignment: CastInt64ToInt32(func::CastInt64ToInt32),
             (Int64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToNumeric(func::CastInt64ToNumeric(s))))
             }),
             (Int64, Float32) => Implicit: CastInt64ToFloat32(func::CastInt64ToFloat32),
@@ -212,7 +212,7 @@ lazy_static! {
             (Float32, Int64) => Assignment: CastFloat32ToInt64(func::CastFloat32ToInt64),
             (Float32, Float64) => Implicit: CastFloat32ToFloat64(func::CastFloat32ToFloat64),
             (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(func::CastFloat32ToNumeric(s))))
             }),
             (Float32, String) => Assignment: CastFloat32ToString(func::CastFloat32ToString),
@@ -223,7 +223,7 @@ lazy_static! {
             (Float64, Int64) => Assignment: CastFloat64ToInt64(func::CastFloat64ToInt64),
             (Float64, Float32) => Assignment: CastFloat64ToFloat32(func::CastFloat64ToFloat32),
             (Float64, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(func::CastFloat64ToNumeric(s))))
             }),
             (Float64, String) => Assignment: CastFloat64ToString(func::CastFloat64ToString),
@@ -318,7 +318,7 @@ lazy_static! {
             (String, Float32) => Explicit: CastStringToFloat32(func::CastStringToFloat32),
             (String, Float64) => Explicit: CastStringToFloat64(func::CastStringToFloat64),
             (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(func::CastStringToNumeric(s))))
             }),
             (String, Date) => Explicit: CastStringToDate(func::CastStringToDate),
@@ -357,33 +357,33 @@ lazy_static! {
                 })))
             }),
             (String, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
+                let length = to_type.unwrap_char_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
             (String, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
+                let length = to_type.unwrap_varchar_max_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
             // CHAR
             (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
+                let length = to_type.unwrap_char_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
             (Char, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
+                let length = to_type.unwrap_varchar_max_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
             // VARCHAR
             (VarChar, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
             (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
+                let length = to_type.unwrap_char_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
             (VarChar, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
+                let length = to_type.unwrap_varchar_max_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
@@ -430,7 +430,7 @@ lazy_static! {
             (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
             (Jsonb, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(s)))
             }),
             (Jsonb, String) => Assignment: CastJsonbToString,
@@ -440,7 +440,7 @@ lazy_static! {
 
             // Numeric
             (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let scale = to_type.unwrap_numeric_scale();
+                let scale = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| match scale {
                     None => e,
                     Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
@@ -562,11 +562,14 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
     match ecx.scalar_type(&expr) {
         Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Int16 | Int32 | Float32 | Float64 => {
-            plan_cast(ecx, CastContext::Explicit, expr, &Numeric { scale: None })
-                .expect("cast known to exist")
-                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
-        }
+        Int16 | Int32 | Float32 | Float64 => plan_cast(
+            ecx,
+            CastContext::Explicit,
+            expr,
+            &Numeric { max_scale: None },
+        )
+        .expect("cast known to exist")
+        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {

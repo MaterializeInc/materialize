@@ -15,6 +15,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::{GlobalId, Id, LocalId};
+use mz_ore::str::StrExt;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::Fold;
@@ -23,7 +24,7 @@ use crate::ast::{
     self, AstInfo, Cte, Expr, Ident, Query, Raw, RawName, Statement, UnresolvedDataType,
     UnresolvedObjectName,
 };
-use crate::catalog::{CatalogItemType, SessionCatalog};
+use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
 use crate::plan::{PlanError, QueryContext, StatementContext};
 
@@ -213,10 +214,6 @@ impl ResolvedObjectName {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ResolvedDataType {
-    // TODO(benesch): `AnonymousArray` should not exist because that concept
-    // does not exist in PostgreSQL. Array types exist properly in the catalog
-    // and should be resolved into `Named` types during name resolution.
-    AnonymousArray(Box<ResolvedDataType>),
     AnonymousList(Box<ResolvedDataType>),
     AnonymousMap {
         key_type: Box<ResolvedDataType>,
@@ -225,7 +222,7 @@ pub enum ResolvedDataType {
     Named {
         id: GlobalId,
         name: PartialName,
-        modifiers: Vec<u64>,
+        modifiers: Vec<i64>,
         print_id: bool,
     },
 }
@@ -233,10 +230,6 @@ pub enum ResolvedDataType {
 impl AstDisplay for ResolvedDataType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ResolvedDataType::AnonymousArray(element_type) => {
-                element_type.fmt(f);
-                f.write_str("[]");
-            }
             ResolvedDataType::AnonymousList(element_type) => {
                 element_type.fmt(f);
                 f.write_str(" list");
@@ -318,8 +311,32 @@ impl<'a> NameResolver<'a> {
     ) -> Result<<Aug as AstInfo>::DataType, PlanError> {
         match data_type {
             UnresolvedDataType::Array(elem_type) => {
-                let elem_type = self.fold_data_type_internal(*elem_type)?;
-                Ok(ResolvedDataType::AnonymousArray(Box::new(elem_type)))
+                let name = elem_type.to_string();
+                match self.fold_data_type_internal(*elem_type)? {
+                    ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => {
+                        sql_bail!("type \"{}[]\" does not exist", name)
+                    }
+                    ResolvedDataType::Named { id, modifiers, .. } => {
+                        let element_item = self.catalog.get_item_by_id(&id);
+                        let array_item = match element_item.type_details() {
+                            Some(CatalogTypeDetails {
+                                array_id: Some(array_id),
+                                ..
+                            }) => self.catalog.get_item_by_id(&array_id),
+                            Some(_) => sql_bail!("type \"{}[]\" does not exist", name),
+                            None => sql_bail!(
+                                "{} does not refer to a type",
+                                element_item.name().to_string().quoted()
+                            ),
+                        };
+                        Ok(ResolvedDataType::Named {
+                            id: array_item.id(),
+                            name: array_item.name().clone().into(),
+                            modifiers,
+                            print_id: true,
+                        })
+                    }
+                }
             }
             UnresolvedDataType::List(elem_type) => {
                 let elem_type = self.fold_data_type_internal(*elem_type)?;

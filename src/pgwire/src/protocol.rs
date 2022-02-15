@@ -34,7 +34,8 @@ use mz_dataflow_types::PeekResponse;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
-use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena};
+use mz_pgcopy::CopyFormatParams;
+use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
@@ -45,7 +46,6 @@ use crate::message::{
 };
 use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
-use mz_pgcopy::CopyFormatParams;
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -465,7 +465,17 @@ where
         let mut param_types = vec![];
         for oid in param_oids {
             match mz_pgrepr::Type::from_oid(oid) {
-                Some(ty) => param_types.push(Some(ty.to_scalar_type_lossy())),
+                Some(ty) => match ScalarType::try_from(&ty) {
+                    Ok(ty) => param_types.push(Some(ty)),
+                    Err(err) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                err.to_string(),
+                            ))
+                            .await
+                    }
+                },
                 None if oid == 0 => param_types.push(None),
                 None => {
                     return self

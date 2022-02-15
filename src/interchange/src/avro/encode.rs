@@ -300,16 +300,16 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
                 ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
                 ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
-                ScalarType::Numeric { scale } => {
+                ScalarType::Numeric { max_scale } => {
                     let mut d = datum.unwrap_numeric().0;
-                    let (unscaled, precision, scale) = match scale {
-                        Some(scale) => {
+                    let (unscaled, precision, scale) = match max_scale {
+                        Some(max_scale) => {
                             // Values must be rescaled to resaturate trailing zeroes
-                            numeric::rescale(&mut d, *scale).unwrap();
+                            numeric::rescale(&mut d, max_scale.into_u8()).unwrap();
                             (
                                 numeric::numeric_to_twos_complement_be(d).to_vec(),
                                 NUMERIC_DATUM_MAX_PRECISION,
-                                *scale,
+                                max_scale.into_u8(),
                             )
                         }
                         // Decimals without specified scale must nonetheless be

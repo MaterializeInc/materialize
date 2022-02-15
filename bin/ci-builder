@@ -198,7 +198,7 @@ case "$cmd" in
         fi
         if [[ "${CI_BUILDER_SCCACHE:-}" ]]; then
             args+=(
-                --env RUSTC_WRAPPER=sccache
+                --env "RUSTC_WRAPPER=sccache"
                 --env SCCACHE_BUCKET
             )
         fi

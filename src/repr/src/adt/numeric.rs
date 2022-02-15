@@ -12,13 +12,16 @@
 //!
 //! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/
 
+use std::error::Error;
+use std::fmt;
+
 use anyhow::bail;
 use dec::{Context, Decimal};
 use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
 
+use mz_lowertest::MzReflect;
 use mz_ore::cast;
-
-use super::util;
 
 /// The number of internal decimal units in a [`Numeric`] value.
 pub const NUMERIC_DATUM_WIDTH: u8 = 13;
@@ -68,6 +71,64 @@ lazy_static! {
         cx.parse("340282366920938463463374607431768211456").unwrap()
     };
 }
+
+/// The `max_scale` of a [`ScalarType::Numeric`].
+///
+/// This newtype wrapper ensures that the scale is within the valid range.
+///
+/// [`ScalarType::Numeric`]: crate::ScalarType::Numeric
+#[derive(
+    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+)]
+pub struct NumericMaxScale(u8);
+
+impl NumericMaxScale {
+    /// A max scale of zero.
+    pub const ZERO: NumericMaxScale = NumericMaxScale(0);
+
+    /// Consumes the newtype wrapper, returning the inner `u8`.
+    pub fn into_u8(self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<i64> for NumericMaxScale {
+    type Error = InvalidNumericMaxScaleError;
+
+    fn try_from(max_scale: i64) -> Result<Self, Self::Error> {
+        match u8::try_from(max_scale) {
+            Ok(max_scale) if max_scale <= NUMERIC_DATUM_MAX_PRECISION => {
+                Ok(NumericMaxScale(max_scale))
+            }
+            _ => Err(InvalidNumericMaxScaleError),
+        }
+    }
+}
+
+impl TryFrom<usize> for NumericMaxScale {
+    type Error = InvalidNumericMaxScaleError;
+
+    fn try_from(max_scale: usize) -> Result<Self, Self::Error> {
+        Self::try_from(i64::try_from(max_scale).map_err(|_| InvalidNumericMaxScaleError)?)
+    }
+}
+
+/// The error returned when constructing a [`NumericMaxScale`] from an invalid
+/// value.
+#[derive(Debug, Clone)]
+pub struct InvalidNumericMaxScaleError;
+
+impl fmt::Display for InvalidNumericMaxScaleError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "scale for type numeric must be between 0 and {}",
+            NUMERIC_DATUM_MAX_PRECISION
+        )
+    }
+}
+
+impl Error for InvalidNumericMaxScaleError {}
 
 /// Traits to generalize converting [`Decimal`] values to and from their
 /// coefficients' two's complements.
@@ -602,37 +663,6 @@ pub fn rescale(n: &mut Numeric, scale: u8) -> Result<(), anyhow::Error> {
     munge_numeric(n)?;
 
     Ok(())
-}
-
-/// Validates the typ_mod is valid for numeric type and returns a specified
-/// scale is appropriate (we ignore the specified precision).
-pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<u8>, anyhow::Error> {
-    let typ_mod = util::extract_typ_mod::<u8>(
-        "numeric",
-        &typ_mod,
-        &[
-            ("precision", 1, NUMERIC_DATUM_MAX_PRECISION),
-            ("scale", 0, NUMERIC_DATUM_MAX_PRECISION),
-        ],
-    )?;
-
-    // Poor man's VecDeque
-    Ok(match typ_mod.len() {
-        0 | 1 => None,
-        2 => {
-            let precision = typ_mod[0];
-            let scale = typ_mod[1];
-            if scale > precision {
-                bail!(
-                    "numeric scale {} must be between 0 and precision {}",
-                    scale,
-                    precision
-                );
-            }
-            Some(scale)
-        }
-        _ => unreachable!(),
-    })
 }
 
 /// A type that can represent Real Numbers. Useful for interoperability between Numeric and
