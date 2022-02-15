@@ -2184,8 +2184,9 @@ lazy_static! {
             // Aggregates.
             "array_agg" => Aggregate {
                 params!(NonVecAny) => Operation::unary_ordered(|ecx, e, order_by| {
-                    if let ScalarType::Char {.. } | ScalarType::List | ScalarType::Map  = ecx.scalar_type(&e) {
-                        bail_unsupported!("array_agg on char");
+                    let elem_type = ecx.scalar_type(&e);
+                    if let ScalarType::Char {.. } | ScalarType::Map { .. } = elem_type {
+                        bail_unsupported!(format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type)));
                     };
                     // ArrayConcat excepts all inputs to be arrays, so wrap all input datums into
                     // arrays.

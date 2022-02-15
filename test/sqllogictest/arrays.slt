@@ -759,3 +759,13 @@ DETAIL: Arrays of 3 and 1 dimensions are not compatible for concatenation.
 
 query error no overload for integer\[\] || text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT ARRAY[1,2] || ARRAY['3'])
+
+# array_agg with maps
+statement ok
+CREATE TABLE t4 (a MAP[text=>int])
+
+statement ok
+INSERT INTO t4 VALUES ('{a=>123}'), ('{b=>456}')
+
+query error array_agg on map\[text=>integer\] not yet supported
+SELECT array_agg(a) FROM t4
