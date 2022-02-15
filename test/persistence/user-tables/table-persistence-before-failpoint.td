@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE TABLE t1 (f1 INTEGER);
+> CREATE TABLE failpoint_table (f1 INTEGER);
 
 #
 # Introduce an I/O error and expect transactions to fail
@@ -17,17 +17,17 @@
 
 > BEGIN
 
-> INSERT INTO t1 VALUES (1);
+> INSERT INTO failpoint_table VALUES (1);
 
 ! COMMIT
-contains:FileBlob::set sync fail point reached
+contains: fail point reached
 
 > BEGIN
 
-> INSERT INTO t1 VALUES (1);
+> INSERT INTO failpoint_table VALUES (1);
 
 ! COMMIT
-contains:FileBlob::set sync fail point reached
+contains: fail point reached
 
 #
 # Remove the I/O error and recover
@@ -37,6 +37,6 @@ contains:FileBlob::set sync fail point reached
 
 > BEGIN
 
-> INSERT INTO t1 VALUES (1);
+> INSERT INTO failpoint_table VALUES (1);
 
 > COMMIT

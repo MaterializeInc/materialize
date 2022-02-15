@@ -62,6 +62,7 @@ pub enum ErrorKind {
         this_version: &'static str,
         cause: String,
     },
+    FailpointReached(String),
 }
 
 impl Error {
@@ -139,7 +140,8 @@ impl std::error::Error for Error {
             | ErrorKind::ExperimentalModeRequired
             | ErrorKind::ExperimentalModeUnavailable
             | ErrorKind::FailedMigration { .. }
-            | ErrorKind::DefaultIndexDisabled { .. } => None,
+            | ErrorKind::DefaultIndexDisabled { .. }
+            | ErrorKind::FailpointReached(_) => None,
             ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
             ErrorKind::Persistence(e) => Some(e),
@@ -244,6 +246,9 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
                     idx_on.quoted(),
                     default_idx.quoted()
                 )
+            }
+            ErrorKind::FailpointReached(failpoint) => {
+                write!(f, "failpoint {} reached", failpoint)
             }
         }
     }

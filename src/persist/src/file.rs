@@ -462,7 +462,7 @@ impl Blob for FileBlob {
 
                 fail_point!("fileblob_set_sync", |_| {
                     Err(Error::from(format!(
-                        "FileBlob::set sync fail point reached for file {:?}",
+                        "FileBlob::set_sync fail point reached for file {:?}",
                         file_path
                     )))
                 });
@@ -482,7 +482,7 @@ impl Blob for FileBlob {
 
                 fail_point!("fileblob_set_sync", |_| {
                     Err(Error::from(format!(
-                        "FileBlob::set sync fail point reached for file {:?}",
+                        "FileBlob::set_sync fail point reached for file {:?}",
                         file_path
                     )))
                 });
@@ -497,12 +497,27 @@ impl Blob for FileBlob {
         let file_path = self.core.blob_path(key)?;
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
+
+        fail_point!("fileblob_delete_before", |_| {
+            Err(Error::from(format!(
+                "FileBlob::delete_before fail point reached for file {:?}",
+                file_path
+            )))
+        });
+
         if let Err(err) = fs::remove_file(&file_path) {
             // delete is documented to succeed if the key doesn't exist.
             if err.kind() != ErrorKind::NotFound {
                 return Err(err.into());
             }
         };
+
+        fail_point!("fileblob_delete_after", |_| {
+            Err(Error::from(format!(
+                "FileBlob::delete_after fail point reached for file {:?}",
+                file_path
+            )))
+        });
 
         Ok(())
     }

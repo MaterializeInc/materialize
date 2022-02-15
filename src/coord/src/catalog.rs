@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_dataflow_types::{
@@ -1573,6 +1574,12 @@ impl Catalog {
         &mut self,
         timestamps: impl IntoIterator<Item = (GlobalId, String, Timestamp, i64)>,
     ) -> Result<(), Error> {
+        fail_point!("insert_timestamp_bindings_before", |_| {
+            Err(Error::new(ErrorKind::FailpointReached(
+                "insert_timestamp_bindings_before".to_string(),
+            )))
+        });
+
         let mut storage = self.storage();
         let tx = storage.transaction()?;
 
@@ -1580,6 +1587,12 @@ impl Catalog {
             tx.insert_timestamp_binding(&sid, &pid, ts, offset)?;
         }
         tx.commit()?;
+
+        fail_point!("insert_timestamp_bindings_after", |_| {
+            Err(Error::new(ErrorKind::FailpointReached(
+                "insert_timestamp_bindings_after".to_string(),
+            )))
+        });
 
         Ok(())
     }
