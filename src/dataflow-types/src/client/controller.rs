@@ -10,12 +10,14 @@
 //! A client that maintains summaries of the involved objects.
 use std::collections::BTreeMap;
 
+use async_trait::async_trait;
+use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
+
 use crate::client::{
     Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response, StorageCommand,
 };
 use mz_expr::GlobalId;
 use mz_repr::Timestamp;
-use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<C> {
@@ -31,7 +33,7 @@ pub struct Controller<C> {
     storage_since_uppers: SinceUpperMap,
 }
 
-#[async_trait::async_trait]
+#[async_trait(?Send)]
 impl<C: Client> Client for Controller<C> {
     async fn send(&mut self, cmd: Command) {
         self.send(cmd).await
