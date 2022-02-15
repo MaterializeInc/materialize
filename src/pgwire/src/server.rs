@@ -18,6 +18,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, R
 use tokio_openssl::SslStream;
 use tracing::trace;
 
+use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::AsyncReady;
@@ -37,6 +38,7 @@ pub struct Config<'a> {
     /// If not present, then TLS is not enabled, and clients requests to
     /// negotiate TLS will be rejected.
     pub tls: Option<TlsConfig>,
+    pub frontegg: Option<FronteggAuthentication>,
 
     /// The registry that the pg wire server uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
@@ -66,6 +68,7 @@ pub struct Server {
     tls: Option<TlsConfig>,
     coord_client: mz_coord::Client,
     metrics: Metrics,
+    frontegg: Option<FronteggAuthentication>,
 }
 
 impl Server {
@@ -75,6 +78,7 @@ impl Server {
             metrics: Metrics::register_into(config.metrics_registry),
             tls: config.tls,
             coord_client: config.coord_client,
+            frontegg: config.frontegg,
         }
     }
 
@@ -111,6 +115,7 @@ impl Server {
                         version,
                         params,
                         metrics: &self.metrics,
+                        frontegg: self.frontegg.as_ref(),
                     })
                     .await?;
                     conn.flush().await?;

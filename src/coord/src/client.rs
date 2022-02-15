@@ -99,7 +99,7 @@ impl Client {
     pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, CoordError> {
         let conn_client = self.new_conn()?;
         let session = Session::new(conn_client.conn_id(), "mz_system".into());
-        let (mut session_client, _) = conn_client.startup(session).await?;
+        let (mut session_client, _) = conn_client.startup(session, false).await?;
         let res = session_client.simple_execute(stmts).await;
         session_client.terminate().await;
         res
@@ -146,6 +146,7 @@ impl ConnClient {
     pub async fn startup(
         self,
         session: Session,
+        create_user_if_not_exists: bool,
     ) -> Result<(SessionClient, StartupResponse), CoordError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
@@ -164,6 +165,7 @@ impl ConnClient {
         let response = client
             .send(|tx, session| Command::Startup {
                 session,
+                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             })

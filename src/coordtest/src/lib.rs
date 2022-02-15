@@ -174,7 +174,7 @@ impl CoordTest {
     async fn connect(&self) -> anyhow::Result<(SessionClient, StartupResponse)> {
         let conn_client = self.coord_client.new_conn()?;
         let session = Session::new(conn_client.conn_id(), "materialize".into());
-        Ok(conn_client.startup(session).await?)
+        Ok(conn_client.startup(session, false).await?)
     }
 
     fn rewrite_query(&self, query: &str) -> String {

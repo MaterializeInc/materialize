@@ -44,11 +44,13 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::metric;
 use mz_ore::metrics::ThirdPartyMetric;
 use mz_ore::metrics::{raw::IntCounterVec, MetricsRegistry};
 use sysinfo::{ProcessorExt, SystemExt};
+use uuid::Uuid;
 
 use self::tracing::MetricsRecorderLayer;
 use materialized::TlsMode;
@@ -283,7 +285,10 @@ struct Args {
         long, env = "MZ_TLS_MODE",
         possible_values = &["disable", "require", "verify-ca", "verify-full"],
         default_value = "disable",
-        default_value_if("tls-cert", None, Some("verify-full")),
+        default_value_ifs = &[
+            ("frontegg-tenant", None, Some("require")),
+            ("tls-cert", None, Some("verify-full")),
+        ],
         value_name = "MODE",
     )]
     tls_mode: String,
@@ -313,6 +318,26 @@ struct Args {
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,
+    /// Specifies the tenant id when authenticating users. Must be a valid UUID.
+    #[clap(
+        long,
+        env = "FRONTEGG_TENANT",
+        requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
+        hide = true
+    )]
+    frontegg_tenant: Option<Uuid>,
+    /// JWK used to validate JWTs during user authentication as a PEM public
+    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
+    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant", hide = true)]
+    frontegg_jwk: Option<String>,
+    /// The full URL (including path) to the api-token endpoint.
+    #[clap(
+        long,
+        env = "FRONTEGG_API_TOKEN_URL",
+        requires = "frontegg-tenant",
+        hide = true
+    )]
+    frontegg_api_token_url: Option<String>,
 
     // === Storage options. ===
     /// Where to store data.
@@ -476,6 +501,16 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         let key = args.tls_key.unwrap();
         Some(materialized::TlsConfig { mode, cert, key })
     };
+    let frontegg = args
+        .frontegg_tenant
+        .map(|tenant_id| {
+            FronteggAuthentication::new(
+                args.frontegg_api_token_url.unwrap(),
+                args.frontegg_jwk.unwrap().as_bytes(),
+                tenant_id,
+            )
+        })
+        .transpose()?;
 
     // Configure storage.
     let data_directory = args.data_directory;
@@ -774,6 +809,7 @@ dataflow workers: {workers}",
         listen_addr: args.listen_addr,
         third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
         tls,
+        frontegg,
         data_directory,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,

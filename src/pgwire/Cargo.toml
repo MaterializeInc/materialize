@@ -19,6 +19,7 @@ lazy_static = "1.4.0"
 mz-coord = { path = "../coord" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
+mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
