@@ -9,12 +9,13 @@
 
 from materialize import ROOT, ci_util, spawn
 from materialize.mzcompose import Composition, Service
-from materialize.mzcompose.services import Kafka, SchemaRegistry, Zookeeper
+from materialize.mzcompose.services import Kafka, Postgres, SchemaRegistry, Zookeeper
 
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Postgres(image="postgres:14.2"),
     Service(
         name="ci-cargo-test",
         config={
@@ -23,6 +24,7 @@ SERVICES = [
                 "ZOOKEEPER_ADDR=zookeeper:2181",
                 "KAFKA_ADDRS=kafka:9092",
                 "SCHEMA_REGISTRY_URL=http://schema-registry:8081",
+                "POSTGRES_URL=postgres://postgres:postgres@postgres",
                 "MZ_SOFT_ASSERTIONS=1",
                 "MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET=mtlz-test-persist-1d-lifecycle-delete",
                 "AWS_DEFAULT_REGION",
@@ -37,7 +39,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(["zookeeper", "kafka", "schema-registry", "postgres"])
     try:
         c.run("ci-cargo-test", "run-tests")
     finally:
