@@ -13,6 +13,7 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
+use async_trait::async_trait;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
@@ -331,7 +332,7 @@ impl Command {
 }
 
 /// Methods that reflect actions that can be performed against a compute instance.
-#[async_trait::async_trait]
+#[async_trait(?Send)]
 pub trait ComputeClient: Client {
     async fn create_instance(
         &mut self,
@@ -421,7 +422,7 @@ pub trait ComputeClient: Client {
 }
 
 /// Methods that reflect actions that can be performed against the storage layer.
-#[async_trait::async_trait]
+#[async_trait(?Send)]
 pub trait StorageClient: Client {
     async fn create_sources(
         &mut self,
@@ -525,7 +526,7 @@ pub enum StorageResponse {
 }
 
 /// A client to a running dataflow server.
-#[async_trait::async_trait]
+#[async_trait(?Send)]
 pub trait Client: Send {
     /// Sends a command to the dataflow server.
     async fn send(&mut self, cmd: Command);
@@ -537,7 +538,7 @@ pub trait Client: Send {
     async fn recv(&mut self) -> Option<Response>;
 }
 
-#[async_trait::async_trait]
+#[async_trait(?Send)]
 impl Client for Box<dyn Client> {
     async fn send(&mut self, cmd: Command) {
         (**self).send(cmd).await
@@ -630,7 +631,7 @@ impl LocalClient {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait(?Send)]
 impl Client for LocalClient {
     async fn send(&mut self, cmd: Command) {
         tracing::trace!("SEND dataflow command: {:?}", cmd);
@@ -647,6 +648,8 @@ impl Client for LocalClient {
 pub mod partitioned {
 
     use std::collections::HashMap;
+
+    use async_trait::async_trait;
 
     use mz_expr::GlobalId;
     use mz_repr::Timestamp;
@@ -675,7 +678,7 @@ pub mod partitioned {
         }
     }
 
-    #[async_trait::async_trait]
+    #[async_trait(?Send)]
     impl<C: Client> Client for Partitioned<C> {
         async fn send(&mut self, cmd: Command) {
             self.state.observe_command(&cmd);
@@ -843,6 +846,7 @@ pub mod partitioned {
 
 /// A client backed by a process-local timely worker thread.
 pub mod process_local {
+    use async_trait::async_trait;
 
     use super::{Client, Command, Response};
 
@@ -853,7 +857,7 @@ pub mod process_local {
         worker_thread: std::thread::Thread,
     }
 
-    #[async_trait::async_trait]
+    #[async_trait(?Send)]
     impl Client for ProcessLocal {
         async fn send(&mut self, cmd: Command) {
             self.worker_tx

@@ -14,6 +14,8 @@
 
 #![deny(missing_docs)]
 
+use async_trait::async_trait;
+
 use mz_dataflow_types::client::{partitioned::Partitioned, Client, Command, Response};
 
 /// A convenience type for compatibility.
@@ -34,7 +36,7 @@ impl RemoteClient {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait(?Send)]
 impl Client for RemoteClient {
     async fn send(&mut self, cmd: Command) {
         tracing::trace!("Broadcasting dataflow command: {:?}", cmd);
@@ -48,6 +50,7 @@ impl Client for RemoteClient {
 /// A client to a remote dataflow server.
 pub mod tcp {
 
+    use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
     use tokio::io::{AsyncRead, AsyncWrite};
@@ -70,7 +73,7 @@ pub mod tcp {
         }
     }
 
-    #[async_trait::async_trait]
+    #[async_trait(?Send)]
     impl mz_dataflow_types::client::Client for TcpClient {
         async fn send(&mut self, cmd: mz_dataflow_types::client::Command) {
             // TODO: something better than panicking.
