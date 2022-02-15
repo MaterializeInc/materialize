@@ -37,7 +37,7 @@ pub enum CoordError {
     ConstrainedParameter {
         parameter: &'static (dyn Var + Send + Sync),
         value: String,
-        valid_values: Vec<String>,
+        valid_values: Vec<&'static str>,
     },
     /// The cursor already exists.
     DuplicateCursor(String),

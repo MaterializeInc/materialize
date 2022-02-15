@@ -35,6 +35,12 @@ const CLIENT_ENCODING: ServerVar<str> = ServerVar {
     description: "Sets the client's character set encoding (PostgreSQL).",
 };
 
+const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
+    name: static_uncased_str!("client_min_messages"),
+    value: &ClientSeverity::Notice,
+    description: "Sets the message levels that are sent to the client (PostgreSQL).",
+};
+
 const DATABASE: ServerVar<str> = ServerVar {
     name: static_uncased_str!("database"),
     value: "materialize",
@@ -149,6 +155,7 @@ const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
 pub struct Vars {
     application_name: SessionVar<str>,
     client_encoding: ServerVar<str>,
+    client_min_messages: SessionVar<ClientSeverity>,
     database: SessionVar<str>,
     date_style: ServerVar<str>,
     extra_float_digits: SessionVar<i32>,
@@ -169,6 +176,7 @@ impl Default for Vars {
         Vars {
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
+            client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
@@ -193,6 +201,7 @@ impl Vars {
         vec![
             &self.application_name as &dyn Var,
             &self.client_encoding,
+            &self.client_min_messages,
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
@@ -240,6 +249,8 @@ impl Vars {
             Ok(&self.application_name)
         } else if name == CLIENT_ENCODING.name {
             Ok(&self.client_encoding)
+        } else if name == CLIENT_MIN_MESSAGES.name {
+            Ok(&self.client_min_messages)
         } else if name == DATABASE.name {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
@@ -293,6 +304,16 @@ impl Vars {
                 return Err(CoordError::FixedValueParameter(&CLIENT_ENCODING));
             } else {
                 Ok(())
+            }
+        } else if name == CLIENT_MIN_MESSAGES.name {
+            if let Ok(_) = ClientSeverity::parse(value) {
+                self.client_min_messages.set(value, local)
+            } else {
+                return Err(CoordError::ConstrainedParameter {
+                    parameter: &CLIENT_MIN_MESSAGES,
+                    value: value.into(),
+                    valid_values: ClientSeverity::valid_values(),
+                });
             }
         } else if name == DATABASE.name {
             self.database.set(value, local)
@@ -377,6 +398,7 @@ impl Vars {
         let Vars {
             application_name,
             client_encoding: _,
+            client_min_messages,
             database,
             date_style: _,
             extra_float_digits,
@@ -392,6 +414,7 @@ impl Vars {
             transaction_isolation: _,
         } = self;
         application_name.end_transaction(action);
+        client_min_messages.end_transaction(action);
         database.end_transaction(action);
         qgm_optimizations.end_transaction(action);
         extra_float_digits.end_transaction(action);
@@ -406,6 +429,11 @@ impl Vars {
     /// Returns the value of the `client_encoding` configuration parameter.
     pub fn client_encoding(&self) -> &'static str {
         self.client_encoding.value
+    }
+
+    /// Returns the value of the `client_min_messages` configuration parameter.
+    pub fn client_min_messages(&self) -> &ClientSeverity {
+        self.client_min_messages.value()
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
@@ -674,5 +702,106 @@ impl Value for [&str] {
 
     fn format(&self) -> String {
         self.join(", ")
+    }
+}
+
+/// Severity levels can used to be used to filter which messages get sent
+/// to a client.
+///
+/// The ordering of severity levels used for client-level filtering differs from the
+/// one used for server-side logging in two aspects: INFO messages are always sent,
+/// and the LOG severity is considered as below NOTICE, while it is above ERROR for
+/// server-side logs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientSeverity {
+    /// Sends only INFO, ERROR, FATAL and PANIC level messages.
+    Error,
+    /// Sends only WARNING, INFO, ERROR, FATAL and PANIC level messages.
+    Warning,
+    /// Sends only NOTICE, WARNING, INFO, ERROR, FATAL and PANIC level messages.
+    Notice,
+    /// Sends only LOG, NOTICE, WARNING, INFO, ERROR, FATAL and PANIC level messages.
+    Log,
+    /// Sends all messages to the client, since all DEBUG levels are treated as the same right now.
+    Debug1,
+    /// Sends all messages to the client, since all DEBUG levels are treated as the same right now.
+    Debug2,
+    /// Sends all messages to the client, since all DEBUG levels are treated as the same right now.
+    Debug3,
+    /// Sends all messages to the client, since all DEBUG levels are treated as the same right now.
+    Debug4,
+    /// Sends all messages to the client, since all DEBUG levels are treated as the same right now.
+    Debug5,
+    /// Sends only NOTICE, WARNING, INFO, ERROR, FATAL and PANIC level messages.
+    /// Not listed as a valid value, but accepted by Postgres
+    Info,
+}
+
+impl ClientSeverity {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ClientSeverity::Error => "error",
+            ClientSeverity::Warning => "warning",
+            ClientSeverity::Notice => "notice",
+            ClientSeverity::Info => "info",
+            ClientSeverity::Log => "log",
+            ClientSeverity::Debug1 => "debug1",
+            ClientSeverity::Debug2 => "debug2",
+            ClientSeverity::Debug3 => "debug3",
+            ClientSeverity::Debug4 => "debug4",
+            ClientSeverity::Debug5 => "debug5",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        // INFO left intentionally out, to match Postgres
+        vec![
+            ClientSeverity::Debug5.as_str(),
+            ClientSeverity::Debug4.as_str(),
+            ClientSeverity::Debug3.as_str(),
+            ClientSeverity::Debug2.as_str(),
+            ClientSeverity::Debug1.as_str(),
+            ClientSeverity::Log.as_str(),
+            ClientSeverity::Notice.as_str(),
+            ClientSeverity::Warning.as_str(),
+            ClientSeverity::Error.as_str(),
+        ]
+    }
+}
+
+impl Value for ClientSeverity {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(s: &str) -> Result<Self::Owned, ()> {
+        let s = UncasedStr::new(s);
+
+        if s == ClientSeverity::Error.as_str() {
+            Ok(ClientSeverity::Error)
+        } else if s == ClientSeverity::Warning.as_str() {
+            Ok(ClientSeverity::Warning)
+        } else if s == ClientSeverity::Notice.as_str() {
+            Ok(ClientSeverity::Notice)
+        } else if s == ClientSeverity::Info.as_str() {
+            Ok(ClientSeverity::Info)
+        } else if s == ClientSeverity::Log.as_str() {
+            Ok(ClientSeverity::Log)
+        } else if s == ClientSeverity::Debug1.as_str() {
+            Ok(ClientSeverity::Debug1)
+        // Postgres treats `debug` as an input as equivalent to `debug2`
+        } else if s == ClientSeverity::Debug2.as_str() || s == "debug" {
+            Ok(ClientSeverity::Debug2)
+        } else if s == ClientSeverity::Debug3.as_str() {
+            Ok(ClientSeverity::Debug3)
+        } else if s == ClientSeverity::Debug4.as_str() {
+            Ok(ClientSeverity::Debug4)
+        } else if s == ClientSeverity::Debug5.as_str() {
+            Ok(ClientSeverity::Debug5)
+        } else {
+            Err(())
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
     }
 }
