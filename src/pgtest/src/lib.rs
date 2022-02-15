@@ -57,6 +57,31 @@
 //! CommandComplete {"tag":"SELECT 1"}
 //! ReadyForQuery {"status":"I"}
 //! ```
+//!
+//! # Usage while writing tests
+//!
+//! The expected way to use this while writing tests is to generate output from a postgres server.
+//! Use the `pgtest-mz` directory if our output differs incompatibly from postgres.
+//! Write your test, excluding any lines after the `----` of the `until` directive.
+//! For example:
+//! ```pgtest
+//! send
+//! Query {"query": "SELECT 1"}
+//! ----
+//!
+//! until
+//! ReadyForQuery
+//! ----
+//! ```
+//! Then run the pgtest binary, enabling rewrites and pointing it at postgres:
+//! ```shell
+//! REWRITE=1 cargo run --bin mz-pgtest -- test/pgtest/test.pt --addr localhost:5432 --user postgres
+//! ```
+//! This will generate the expected output for the `until` directive.
+//! Now rerun against a running materialized server:
+//! ```shell
+//! cargo run --bin mz-pgtest -- test/pgtest/test.pt
+//! ```
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
