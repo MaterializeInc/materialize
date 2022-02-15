@@ -61,7 +61,6 @@
 //! ```
 
 // TODO
-// - Variant with S3Blob
 // - Impl of Runtime directly using Indexed
 // - Impl of Runtime with Timely workers running in processes
 // - Storage (log/blob) with variable latency/slow requests
