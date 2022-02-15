@@ -3136,109 +3136,72 @@ fn plan_list_subquery(
     ecx: &ExprContext,
     query: &Query<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    if !ecx.allow_subqueries {
-        sql_bail!("{} does not allow subqueries", ecx.name)
-    }
-    let mut qcx = ecx.derived_query_context();
-    let (mut expr, _scope, finishing) = plan_query(&mut qcx, query)?;
-    if finishing.limit.is_some() || finishing.offset > 0 {
-        expr = HirRelationExpr::TopK {
-            input: Box::new(expr),
-            group_key: vec![],
-            order_key: finishing.order_by.clone(),
-            limit: finishing.limit,
-            offset: finishing.offset,
-        };
-    }
-
-    if finishing.project.len() != 1 {
-        sql_bail!(
-            "Expected subselect to return 1 column, got {} columns",
-            finishing.project.len()
-        );
-    }
-
-    let project_column = *finishing.project.get(0).unwrap();
-    let elem_type = qcx
-        .relation_type(&expr)
-        .column_types
-        .get(project_column)
-        .cloned()
-        .unwrap()
-        .scalar_type();
-
-    // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
-    // subquery above.
-    let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
-        func: VariadicFunc::ListCreate {
-            elem_type: elem_type.clone(),
-        },
-        exprs: vec![HirScalarExpr::column(project_column)],
-    })
-    .chain(
-        finishing
-            .order_by
-            .iter()
-            .map(|co| HirScalarExpr::column(co.column)),
-    )
-    .collect();
-
-    // However, column references for `aggregation_projection` and `aggregation_order_by`
-    // are with reference to the `exprs` of the aggregation expression.  Here that is
-    // `aggregation_exprs`.
-    let aggregation_projection = vec![0];
-    let aggregation_order_by = finishing
-        .order_by
-        .into_iter()
-        .enumerate()
-        .map(|(i, ColumnOrder { column: _, desc })| ColumnOrder { column: i, desc })
-        .collect();
-
-    let reduced_expr = expr
-        .reduce(
-            vec![],
-            vec![AggregateExpr {
-                func: AggregateFunc::ListConcat {
-                    order_by: aggregation_order_by,
+    plan_vector_like_subquery(
+        ecx,
+        query,
+        |_| false,
+        |elem_type| VariadicFunc::ListCreate { elem_type },
+        |order_by| AggregateFunc::ListConcat { order_by },
+        BinaryFunc::ListListConcat,
+        |elem_type| {
+            HirScalarExpr::literal(
+                Datum::empty_list(),
+                ScalarType::List {
+                    element_type: Box::new(elem_type),
+                    custom_oid: None,
                 },
-                expr: Box::new(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RecordCreate {
-                        field_names: iter::repeat(ColumnName::from(""))
-                            .take(aggregation_exprs.len())
-                            .collect(),
-                    },
-                    exprs: aggregation_exprs,
-                }),
-                distinct: false,
-            }],
-            None,
-        )
-        .project(aggregation_projection);
-
-    // If `expr` has no rows, return an empty list rather than NULL.
-    Ok(HirScalarExpr::CallBinary {
-        func: BinaryFunc::ListListConcat,
-        expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
-        expr2: Box::new(HirScalarExpr::literal(
-            Datum::empty_list(),
-            ScalarType::List {
-                element_type: Box::new(elem_type),
-                custom_oid: None,
-            },
-        )),
-    }
-    .into())
+            )
+        },
+    )
 }
 
 fn plan_array_subquery(
     ecx: &ExprContext,
     query: &Query<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
+    // Array subqueries rely on the array_cat function which requires experimental mode
+    ecx.require_experimental_mode("array subquery")?;
+    plan_vector_like_subquery(
+        ecx,
+        query,
+        |elem_type| {
+            matches!(
+                elem_type,
+                ScalarType::Char { .. }
+                    | ScalarType::Array { .. }
+                    | ScalarType::List { .. }
+                    | ScalarType::Map { .. }
+            )
+        },
+        |elem_type| VariadicFunc::ArrayCreate { elem_type },
+        |order_by| AggregateFunc::ArrayConcat { order_by },
+        BinaryFunc::ArrayArrayConcat,
+        |elem_type| {
+            HirScalarExpr::literal(Datum::empty_array(), ScalarType::Array(Box::new(elem_type)))
+        },
+    )
+}
+
+/// Generic function used to plan both array subqueries and list subqueries
+fn plan_vector_like_subquery<F1, F2, F3, F4>(
+    ecx: &ExprContext,
+    query: &Query<Aug>,
+    is_unsupported_type: F1,
+    vector_create: F2,
+    aggregate_concat: F3,
+    binary_concat: BinaryFunc,
+    empty_literal: F4,
+) -> Result<CoercibleScalarExpr, PlanError>
+where
+    F1: Fn(&ScalarType) -> bool,
+    F2: Fn(ScalarType) -> VariadicFunc,
+    F3: Fn(Vec<ColumnOrder>) -> AggregateFunc,
+    F4: Fn(ScalarType) -> HirScalarExpr,
+{
     if !ecx.allow_subqueries {
         sql_bail!("{} does not allow subqueries", ecx.name)
     }
-    // Array subqueries rely on the array_cat function which requires experimental mode
-    ecx.require_experimental_mode("array subquery")?;
+
     let mut qcx = ecx.derived_query_context();
     let (mut expr, _scope, finishing) = plan_query(&mut qcx, query)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
@@ -3267,22 +3230,14 @@ fn plan_array_subquery(
         .unwrap()
         .scalar_type();
 
-    if matches!(
-        elem_type,
-        ScalarType::Char { .. }
-            | ScalarType::Array { .. }
-            | ScalarType::List { .. }
-            | ScalarType::Map { .. }
-    ) {
+    if is_unsupported_type(&elem_type) {
         bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type)));
     }
 
     // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
     // subquery above.
     let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
-        func: VariadicFunc::ArrayCreate {
-            elem_type: elem_type.clone(),
-        },
+        func: vector_create(elem_type.clone()),
         exprs: vec![HirScalarExpr::column(project_column)],
     })
     .chain(
@@ -3308,9 +3263,7 @@ fn plan_array_subquery(
         .reduce(
             vec![],
             vec![AggregateExpr {
-                func: AggregateFunc::ArrayConcat {
-                    order_by: aggregation_order_by,
-                },
+                func: aggregate_concat(aggregation_order_by),
                 expr: Box::new(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
                         field_names: iter::repeat(ColumnName::from(""))
@@ -3325,14 +3278,11 @@ fn plan_array_subquery(
         )
         .project(aggregation_projection);
 
-    // If `expr` has no rows, return an empty array rather than NULL.
+    // If `expr` has no rows, return an empty array/list rather than NULL.
     Ok(HirScalarExpr::CallBinary {
-        func: BinaryFunc::ArrayArrayConcat,
+        func: binary_concat,
         expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
-        expr2: Box::new(HirScalarExpr::literal(
-            Datum::empty_array(),
-            ScalarType::Array(Box::new(elem_type)),
-        )),
+        expr2: Box::new(empty_literal(elem_type)),
     }
     .into())
 }
