@@ -10,6 +10,7 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -341,7 +342,7 @@ impl PendingPeek {
     }
 
     /// Collects data for a known-complete peek.
-    fn collect_finished_data(&mut self) -> Result<Vec<(Row, usize)>, String> {
+    fn collect_finished_data(&mut self) -> Result<Vec<(Row, NonZeroUsize)>, String> {
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -420,7 +421,10 @@ impl PendingPeek {
                     } else {
                         copies.try_into().unwrap()
                     };
-                    results.push((result, copies));
+                    // if copies > 0 ... otherwise skip
+                    if let Some(copies) = NonZeroUsize::new(copies) {
+                        results.push((result, copies));
+                    }
 
                     // If we hold many more than `max_results` records, we can thin down
                     // `results` using `self.finishing.ordering`.

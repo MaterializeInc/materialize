@@ -5078,19 +5078,18 @@ pub mod fast_path_peek {
                 differential_dataflow::consolidation::consolidate_updates(&mut rows);
 
                 let mut results = Vec::new();
-                for (ref row, _time, count) in rows {
+                for (row, _time, count) in rows {
                     if count < 0 {
                         Err(EvalError::InvalidParameterValue(format!(
                             "Negative multiplicity in constant result: {}",
                             count
                         )))?
                     };
-                    for _ in 0..count {
-                        // TODO: If `count` is too large, or `results` too full, we could error.
-                        results.push(row.clone());
+                    if count > 0 {
+                        results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                     }
                 }
-                finishing.finish(&mut results);
+                let results = finishing.finish(results);
                 return Ok(crate::coord::send_immediate_rows(results));
             }
 
@@ -5197,12 +5196,10 @@ pub mod fast_path_peek {
                         }
                     }
                 })
-                .map(move |resp| {
-                    let mut resp = resp.into();
-                    if let PeekResponseUnary::Rows(rows) = &mut resp {
-                        finishing.finish(rows)
-                    }
-                    resp
+                .map(move |resp| match resp {
+                    PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+                    PeekResponse::Canceled => PeekResponseUnary::Canceled,
+                    PeekResponse::Error(e) => PeekResponseUnary::Error(e),
                 });
 
             // If it was created, drop the dataflow once the peek command is sent.

@@ -12,6 +12,7 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
+use std::num::NonZeroUsize;
 
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -2115,43 +2116,88 @@ impl RowSetFinishing {
             && self.offset == 0
             && self.project.iter().copied().eq(0..arity)
     }
-    /// Applies finishing actions to a row set.
-    pub fn finish(&self, rows: &mut Vec<Row>) {
+    /// Determines the index of the (Row, count) pair, and the
+    /// index into the count within that paiir, corresponding to a particular offset
+    fn get_offset(&self, rows: &[(Row, NonZeroUsize)]) -> (usize, usize) {
+        let mut offset_remaining = self.offset;
+        for (i, (_, count)) in rows.iter().enumerate() {
+            let count = count.get();
+            if count > offset_remaining {
+                return (i, offset_remaining);
+            }
+            offset_remaining -= count;
+        }
+        // The offset is past the end of the rows; we will
+        // return nothing.
+        (rows.len(), 0)
+    }
+    /// Applies finishing actions to a row set,
+    /// and unrolls it to a unary representation.
+    pub fn finish(&self, mut rows: Vec<(Row, NonZeroUsize)>) -> Vec<Row> {
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
-        let mut sort_by = |left: &Row, right: &Row| {
+        let sort_by = |(left, _): &(Row, _), (right, _): &(Row, _)| {
             let left_datums = left_datum_vec.borrow_with(left);
             let right_datums = right_datum_vec.borrow_with(right);
             compare_columns(&self.order_by, &left_datums, &right_datums, || {
                 left.cmp(&right)
             })
         };
-        let offset = self.offset;
-        if offset > rows.len() {
-            *rows = Vec::new();
-        } else {
-            if let Some(limit) = self.limit {
-                let offset_plus_limit = offset + limit;
-                if rows.len() > offset_plus_limit {
-                    pdqselect::select_by(rows, offset_plus_limit, &mut sort_by);
-                    rows.truncate(offset_plus_limit);
+        rows.sort_by(sort_by);
+
+        let (offset_nth_row, offset_kth_copy) = self.get_offset(&rows);
+
+        // Adjust the first returned row's count to account for the offset.
+        if let Some((_, nth_diff)) = rows.get_mut(offset_nth_row) {
+            // Justification for `unwrap`:
+            // we only get here if we return from `get_offset`
+            // having found something to return,
+            // which can only happen if the count of
+            // this row is greater than the offset remaining.
+            *nth_diff = NonZeroUsize::new(nth_diff.get() - offset_kth_copy).unwrap();
+        }
+
+        let limit = self.limit.unwrap_or(std::usize::MAX);
+        // Compute the capacity, so we only have to allocate once.
+        // This will be at most `self.limit`, but might be less, if there are
+        // fewer rows remaining.
+        let return_size = {
+            let mut total = 0;
+            let mut nth_row = offset_nth_row;
+            loop {
+                if nth_row == rows.len() {
+                    break total;
+                }
+                let (_, count) = &rows[nth_row];
+                let count = count.get();
+                total += count;
+                nth_row += 1;
+                if total >= limit {
+                    break limit;
                 }
             }
-            if offset > 0 {
-                pdqselect::select_by(rows, offset, &mut sort_by);
-                rows.drain(..offset);
+        };
+        let mut ret = Vec::with_capacity(return_size);
+        let mut remaining = limit;
+        let mut row_packer = Row::default();
+        let mut datum_vec = mz_repr::DatumVec::new();
+        for (row, count) in rows {
+            if remaining == 0 {
+                break;
             }
-            rows.sort_by(&mut sort_by);
-            let mut row_packer = Row::default();
-            let mut datum_vec = mz_repr::DatumVec::new();
-            for row in rows.iter_mut() {
-                *row = {
+            let count = std::cmp::min(count.get(), remaining);
+            for _ in 0..count {
+                let new_row = {
                     let datums = datum_vec.borrow_with(&row);
                     row_packer.extend(self.project.iter().map(|i| &datums[*i]));
                     row_packer.finish_and_reuse()
                 };
+                ret.push(new_row);
             }
+            remaining -= count;
         }
+
+        ret
     }
 }
 
