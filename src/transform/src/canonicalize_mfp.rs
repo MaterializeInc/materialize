@@ -71,6 +71,7 @@ impl CanonicalizeMfp {
                     .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
                 if !pushdown.is_empty() {
                     *relation = relation.take_dangerous().filter(pushdown);
+                    crate::fusion::filter::Filter.action(relation);
                 }
                 mfp = mz_expr::MapFilterProject::new(mfp.input_arity)
                     .map(map)
@@ -86,6 +87,7 @@ impl CanonicalizeMfp {
                 }
                 if !filter.is_empty() {
                     *relation = relation.take_dangerous().filter(filter);
+                    crate::fusion::filter::Filter.action(relation);
                 }
                 if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
