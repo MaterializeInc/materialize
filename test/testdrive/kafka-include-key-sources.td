@@ -24,7 +24,7 @@ $ set schema={
     ]
   }
 
-$ kafka-create-topic topic=avro-data
+$ kafka-create-topic topic=avro-data partitions=1
 $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1
 {"id": 1} {"id": 2, "b": 3}
 
@@ -173,7 +173,7 @@ named_id named_geo a
 contains:Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.
 
 # formats: TEXT and REGEX
-$ kafka-create-topic topic=textsrc
+$ kafka-create-topic topic=textsrc partitions=1
 
 $ kafka-ingest topic=textsrc format=bytes key-format=bytes key-terminator=:
 one,1:horse,apple

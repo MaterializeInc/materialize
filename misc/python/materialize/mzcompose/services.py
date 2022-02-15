@@ -529,6 +529,7 @@ class Testdrive(Service):
         mzbuild: str = "testdrive",
         materialized_url: str = "postgres://materialize@materialized:6875",
         kafka_url: str = "kafka:9092",
+        kafka_default_partitions: Optional[int] = None,
         no_reset: bool = False,
         default_timeout: str = "30s",
         seed: Optional[int] = None,
@@ -579,6 +580,9 @@ class Testdrive(Service):
             entrypoint.append("--no-reset")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
+
+        if kafka_default_partitions:
+            entrypoint.append(f"--kafka-default-partitions={kafka_default_partitions}")
 
         if forward_buildkite_shard:
             shard = os.environ.get("BUILDKITE_PARALLEL_JOB")

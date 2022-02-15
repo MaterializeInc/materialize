@@ -95,7 +95,7 @@ fish          fish     1000
 birdmore      geese    56
 mämmalmore    moose    42
 
-$ kafka-create-topic topic=textbytes
+$ kafka-create-topic topic=textbytes partitions=1
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 fish:fish
@@ -176,7 +176,7 @@ message Test {
 
 $ protobuf-compile-descriptors inputs=test.proto output=test.pb
 
-$ kafka-create-topic topic=textproto
+$ kafka-create-topic topic=textproto partitions=1
 
 > CREATE MATERIALIZED SOURCE textproto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textproto-${testdrive.seed}'
@@ -232,7 +232,7 @@ mämmalmore  five   7
 bìrd1       six    8
 mammalmore  seven  10
 
-$ kafka-create-topic topic=nullkey
+$ kafka-create-topic topic=nullkey partitions=1
 
 # A null key should result in an error decoding that row but not a panic
 $ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
@@ -256,7 +256,7 @@ key0          text  mz_offset
 birdmore      geese 5
 mammalmore    moose 6
 
-$ kafka-create-topic topic=realtimeavroavro
+$ kafka-create-topic topic=realtimeavroavro partitions=1
 
 # test multi-field avro key
 $ set keyschema2={
