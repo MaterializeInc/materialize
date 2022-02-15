@@ -82,41 +82,12 @@ impl SourceReader for KafkaSourceReader {
         _: SourceDataEncoding,
         logger: Option<Logger>,
         _: SourceBaseMetrics,
-    ) -> Result<(KafkaSourceReader, Option<PartitionId>), anyhow::Error> {
-        match connector {
-            ExternalSourceConnector::Kafka(kc) => Ok((
-                KafkaSourceReader::new(
-                    source_name,
-                    source_id,
-                    worker_id,
-                    worker_count,
-                    consumer_activator,
-                    kc,
-                    restored_offsets,
-                    logger,
-                ),
-                None,
-            )),
+    ) -> Result<Self, anyhow::Error> {
+        let kc = match connector {
+            ExternalSourceConnector::Kafka(kc) => kc,
             _ => unreachable!(),
-        }
-    }
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
-        self.get_next_kafka_message()
-    }
-}
+        };
 
-impl KafkaSourceReader {
-    /// Constructor
-    pub fn new(
-        source_name: String,
-        source_id: SourceInstanceId,
-        worker_id: usize,
-        worker_count: usize,
-        consumer_activator: SyncActivator,
-        kc: KafkaSourceConnector,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
-        logger: Option<Logger>,
-    ) -> KafkaSourceReader {
         let KafkaSourceConnector {
             addrs,
             topic,
@@ -191,7 +162,7 @@ impl KafkaSourceReader {
                 .unwrap();
         }
 
-        KafkaSourceReader {
+        Ok(KafkaSourceReader {
             topic_name: topic,
             source_name,
             id: source_id,
@@ -205,9 +176,69 @@ impl KafkaSourceReader {
             stats_rx,
             last_stats: None,
             partition_info,
-        }
+        })
     }
 
+    /// This function polls from the next consumer for which a message is available. This function
+    /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
+    /// queue.
+    ///
+    /// If a message has an offset that is smaller than the next expected offset for this consumer
+    /// (and this partition) we skip this message, and seek to the appropriate offset
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+        let partition_info = self.partition_info.lock().unwrap().take();
+        if let Some(partitions) = partition_info {
+            for pid in partitions {
+                self.add_partition(PartitionId::Kafka(pid));
+            }
+        }
+        let mut next_message = NextMessage::Pending;
+
+        // Poll the consumer once. We split the consumer's partitions out into separate queues and
+        // poll those individually, but it's still necessary to drive logic that consumes from
+        // rdkafka's internal event queue, such as statistics callbacks.
+        //
+        // Additionally, assigning topics and splitting them off into separate queues is not
+        // atomic, so we expect to see at least some messages to show up when polling the consumer
+        // directly.
+        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
+            match result {
+                Err(e) => error!(
+                    "kafka error when polling consumer for source: {} topic: {} : {}",
+                    self.source_name, self.topic_name, e
+                ),
+                Ok(message) => {
+                    let source_message = SourceMessage::from(&message);
+                    next_message = self.handle_message(source_message);
+                }
+            }
+        }
+
+        self.update_stats();
+
+        let consumer_count = self.get_partition_consumers_count();
+        let mut attempts = 0;
+        while attempts < consumer_count {
+            // First, see if we have a message aleady, either from polling the consumer, above, or
+            // from polling the partition queues below.
+            if let NextMessage::Ready(_) = next_message {
+                // Found a message, exit the loop and return message
+                break;
+            }
+
+            let message = self.poll_from_next_queue();
+            attempts += 1;
+
+            if let Some(message) = message {
+                next_message = self.handle_message(message);
+            }
+        }
+
+        Ok(next_message)
+    }
+}
+
+impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
@@ -340,66 +371,6 @@ impl KafkaSourceReader {
                 self.source_name, e
             ),
         }
-    }
-
-    /// This function polls from the next consumer for which a message is available. This function
-    /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
-    /// queue.
-    ///
-    /// If a message has an offset that is smaller than the next expected offset for this consumer
-    /// (and this partition) we skip this message, and seek to the appropriate offset
-    fn get_next_kafka_message(
-        &mut self,
-    ) -> Result<NextMessage<Option<Vec<u8>>, Option<Vec<u8>>>, anyhow::Error> {
-        let partition_info = self.partition_info.lock().unwrap().take();
-        if let Some(partitions) = partition_info {
-            for pid in partitions {
-                self.add_partition(PartitionId::Kafka(pid));
-            }
-        }
-        let mut next_message = NextMessage::Pending;
-
-        // Poll the consumer once. We split the consumer's partitions out into separate queues and
-        // poll those individually, but it's still necessary to drive logic that consumes from
-        // rdkafka's internal event queue, such as statistics callbacks.
-        //
-        // Additionally, assigning topics and splitting them off into separate queues is not
-        // atomic, so we expect to see at least some messages to show up when polling the consumer
-        // directly.
-        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
-            match result {
-                Err(e) => error!(
-                    "kafka error when polling consumer for source: {} topic: {} : {}",
-                    self.source_name, self.topic_name, e
-                ),
-                Ok(message) => {
-                    let source_message = SourceMessage::from(&message);
-                    next_message = self.handle_message(source_message);
-                }
-            }
-        }
-
-        self.update_stats();
-
-        let consumer_count = self.get_partition_consumers_count();
-        let mut attempts = 0;
-        while attempts < consumer_count {
-            // First, see if we have a message aleady, either from polling the consumer, above, or
-            // from polling the partition queues below.
-            if let NextMessage::Ready(_) = next_message {
-                // Found a message, exit the loop and return message
-                break;
-            }
-
-            let message = self.poll_from_next_queue();
-            attempts += 1;
-
-            if let Some(message) = message {
-                next_message = self.handle_message(message);
-            }
-        }
-
-        Ok(next_message)
     }
 
     /// Read any statistics JSON blobs generated via the rdkafka statistics callback.
