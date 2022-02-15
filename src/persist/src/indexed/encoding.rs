@@ -259,7 +259,7 @@ pub struct BlobUnsealedBatch {
 /// put multiple small batches in a single blob but also break a very large
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,

@@ -385,7 +385,7 @@ impl<B: Blob> BlobCache<B> {
         &self,
         key: String,
         batch: BlobTraceBatch,
-    ) -> Result<(ProtoBatchFormat, u64), Error> {
+    ) -> Result<(ProtoBatchFormat, u64, Arc<BlobTraceBatch>), Error> {
         let async_guard = self.async_runtime.enter();
 
         if key == Self::META_KEY {
@@ -408,11 +408,13 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.trace.blob_write_count.inc();
         self.metrics.trace.blob_write_bytes.inc_by(val_len);
 
+        // WIP return batch from cache instead
+        let batch = Arc::new(batch);
         self.cache
-            .maybe_add_trace(key, usize::cast_from(val_len), Arc::new(batch))?;
+            .maybe_add_trace(key, usize::cast_from(val_len), Arc::clone(&batch))?;
 
         drop(async_guard);
-        Ok((format, val_len))
+        Ok((format, val_len, batch))
     }
 
     /// Removes a batch from both [Blob] storage and the local cache.

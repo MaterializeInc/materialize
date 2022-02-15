@@ -126,6 +126,8 @@ where
 
         let (restored_upsert_oks, state_errs) = {
             let snapshot = persist_config.read_handle.snapshot();
+            // WIP nope
+            let snapshot = snapshot.map(|x| x.trace());
             let (restored_oks, restored_errs) = self
                 .scope()
                 .replay(snapshot, &as_of_frontier)

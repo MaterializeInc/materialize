@@ -66,7 +66,7 @@ where
 
         let snapshot_seal = snapshot
             .as_ref()
-            .map_or(None, |snapshot| Some(snapshot.get_seal()));
+            .map_or(None, |snapshot| Some(snapshot.ts_upper.clone()));
 
         // TODO: Plumb the name of the stream down through the handles and use
         // it for the operator.
@@ -478,3 +478,6 @@ mod tests {
         Ok(())
     }
 }
+
+// WIP test that that frontier advances to the snapshot seal without any
+// additional traffic

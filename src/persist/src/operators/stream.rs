@@ -757,6 +757,7 @@ mod tests {
     // NOTE: We know by construction of the MultiWriteHandle that we seal atomically, and we cannot
     // realistically assert on the order we get from the channels.
     #[test]
+    #[ignore = "WIP"]
     fn seal_multiple_streams() -> Result<(), Error> {
         mz_ore::test::init_logging();
         let mut registry = MemRegistry::new();

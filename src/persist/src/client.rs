@@ -21,7 +21,7 @@ use mz_persist_types::Codec;
 use timely::progress::Antichain;
 
 use crate::error::Error;
-use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
+use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter, TraceSnapshot};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
@@ -729,6 +729,11 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     pub fn get_seal(&self) -> Antichain<u64> {
         self.snap.get_seal()
     }
+
+    /// WIP nope
+    pub fn trace(self) -> TraceSnapshot {
+        self.snap.1
+    }
 }
 
 impl<K: Codec, V: Codec> Snapshot<K, V> for DecodedSnapshot<K, V> {
@@ -851,7 +856,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     pub fn listen(
         &self,
         sender: crossbeam_channel::Sender<ListenEvent>,
-    ) -> Result<DecodedSnapshot<K, V>, Error> {
+    ) -> Result<TraceSnapshot, Error> {
         let stream_id = match self.stream_id {
             Ok(stream_id) => stream_id,
             Err(ref e) => return Err(e.clone()),
@@ -861,8 +866,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         self.client
             .sender
             .send_cmd_read(CmdRead::Listen(stream_id, sender, tx));
-        let snap = rx.recv()?;
-        Ok(DecodedSnapshot::new(snap))
+        rx.recv()
     }
 }
 

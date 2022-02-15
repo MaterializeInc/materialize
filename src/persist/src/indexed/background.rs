@@ -61,12 +61,12 @@ pub struct DrainUnsealedReq {
 }
 
 /// A successful drain.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DrainUnsealedRes {
     /// The original request, so the caller doesn't have to do this matching.
     pub req: DrainUnsealedReq,
     /// The compacted batch.
-    pub drained: Option<TraceBatchMeta>,
+    pub drained: Option<(TraceBatchMeta, Arc<BlobTraceBatch>)>,
 }
 
 /// A runtime for background asynchronous maintenance of stored data.
@@ -184,7 +184,7 @@ impl<B: Blob> Maintainer<B> {
         };
 
         let merged_key = Arrangement::new_blob_key();
-        let (format, size_bytes) = blob.set_trace_batch(merged_key.clone(), new_batch)?;
+        let (format, size_bytes, _) = blob.set_trace_batch(merged_key.clone(), new_batch)?;
 
         // Only upgrade the compaction level if we know this new batch represents
         // an increase in data over both of its parents so that we know we need
@@ -254,7 +254,7 @@ mod tests {
             .collect::<ColumnarRecordsVec>()
             .into_inner(),
         };
-        let (b0_format, b0_size_bytes) = blob.set_trace_batch("b0".into(), b0.clone())?;
+        let (b0_format, b0_size_bytes, _) = blob.set_trace_batch("b0".into(), b0.clone())?;
 
         let b1 = BlobTraceBatch {
             desc: desc_from(1, 3, 0),
@@ -266,7 +266,7 @@ mod tests {
             .collect::<ColumnarRecordsVec>()
             .into_inner(),
         };
-        let (b1_format, b1_size_bytes) = blob.set_trace_batch("b1".into(), b1.clone())?;
+        let (b1_format, b1_size_bytes, _) = blob.set_trace_batch("b1".into(), b1.clone())?;
 
         let req = CompactTraceReq {
             b0: TraceBatchMeta {

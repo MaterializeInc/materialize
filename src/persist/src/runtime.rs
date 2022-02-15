@@ -447,7 +447,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         // mz_metrics). Otherwise, it has no effect.
         //
         // TODO: Make step smarter and remove this hack.
-        let need_step = need_step && self.indexed.has_pending_responses();
+        // WIP let need_step = need_step && self.indexed.has_pending_responses();
 
         if need_step {
             self.prev_step = step_start;
@@ -878,7 +878,7 @@ mod tests {
         let ok = timely::execute_directly(move |worker| {
             let writes = std::thread::spawn(move || {
                 write.write(&data).recv().expect("write was successful");
-                write.seal(2).recv().expect("seal was successful");
+                write.seal(1001).recv().expect("seal was successful");
             });
 
             let mut probe = ProbeHandle::new();
@@ -891,7 +891,7 @@ mod tests {
 
             writes.join().expect("write thread succeeds");
 
-            while probe.less_than(&2) {
+            while probe.less_than(&1001) {
                 worker.step();
             }
             p.stop().expect("stop was successful");

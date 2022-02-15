@@ -31,7 +31,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::error::Error;
-use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
+use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot, TraceSnapshot};
 use crate::indexed::background::{CompactTraceReq, CompactTraceRes, Maintainer};
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecords;
@@ -68,7 +68,7 @@ pub enum CmdRead {
     Listen(
         Id,
         crossbeam_channel::Sender<ListenEvent>,
-        PFutureHandle<ArrangementSnapshot>,
+        PFutureHandle<TraceSnapshot>,
     ),
     /// Flush out any pending work and close the underlying storage, causing
     /// all future commands to error.
@@ -238,7 +238,8 @@ impl PendingResponse {
 struct Pending {
     writes: HashMap<Id, Vec<ColumnarRecords>>,
     responses: Vec<PendingResponse>,
-    seals: HashMap<Id, u64>,
+    seals_for_listeners: HashMap<Id, u64>,
+    records_for_listeners: HashMap<Id, Vec<ColumnarRecords>>,
     deleted_trace_batches: Vec<Vec<TraceBatchMeta>>,
     durable_meta: BlobMeta,
 }
@@ -248,7 +249,8 @@ impl Pending {
         Self {
             writes: HashMap::new(),
             responses: Vec::new(),
-            seals: HashMap::new(),
+            seals_for_listeners: HashMap::new(),
+            records_for_listeners: HashMap::new(),
             deleted_trace_batches: Vec::new(),
             durable_meta,
         }
@@ -267,10 +269,20 @@ impl Pending {
         self.responses.push(resp);
     }
 
-    fn add_seals(&mut self, ids: Vec<Id>, seal: u64) {
-        for id in ids {
-            self.seals.insert(id, seal);
+    fn add_records_for_listeners(&mut self, id: Id, updates: Vec<ColumnarRecords>) {
+        for update in updates {
+            if update.len() != 0 {
+                self.records_for_listeners
+                    .entry(id)
+                    .or_default()
+                    .push(update);
+            }
         }
+    }
+
+    fn add_seal_for_listener(&mut self, id: Id, seal: u64) {
+        // WIP make sure this only advances it?
+        self.seals_for_listeners.insert(id, seal);
     }
 
     fn add_deleted_trace_batches(&mut self, batches: Vec<TraceBatchMeta>) {
@@ -550,6 +562,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
     pub fn apply(&mut self, cmd: Cmd) -> bool {
+        tracing::trace!("apply {:?}", cmd);
         // TODO: Should this metric be made more general so we count every
         // command type?
         if let Cmd::Write(..) = &cmd {
@@ -575,9 +588,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                     .do_seal(&ids, seal_ts)
                     .map(|_| seqno)
                     .map_err(|err| Error::Noop(seqno, err));
-                if resp.is_ok() {
-                    pending.add_seals(ids, seal_ts);
-                }
                 pending.add_response(PendingResponse::SeqNo(res, resp));
             }),
             Cmd::AllowCompaction(id_sinces, res) => self.apply_batched_cmd(|state, pending| {
@@ -880,8 +890,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
         let meta_before = pending.durable_meta;
         let updates_by_id = pending.writes;
-        let seals_for_listeners = pending.seals;
-        let updates_for_listeners = updates_by_id.clone();
+        let seals_for_listeners = pending.seals_for_listeners;
+        let updates_for_listeners = pending.records_for_listeners;
 
         let ret = {
             // TODO: The following error handling took a while to debug, see if
@@ -1081,7 +1091,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     fn step(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         self.drain_pending()?;
-        self.apply_unbatched_cmd(|state, blob| state.drain_unsealed(blob))?;
+        self.drain_unsealed()?;
         self.compact_unsealed()?;
         self.compact_trace_maintenance_reqs()
     }
@@ -1190,6 +1200,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
 
         for (id, updates) in updates {
+            tracing::trace!("sending listen records event {:?}: {:?}", id, &updates);
             if let Some(listeners) = self.listeners.get(&id) {
                 if listeners.is_empty() {
                     continue;
@@ -1215,6 +1226,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
 
         for (id, seal) in seals {
+            tracing::trace!("sending listen seal event {:?}: {:?}", id, seal);
             if let Some(listeners) = self.listeners.get(&id) {
                 for listener in listeners.iter() {
                     let seal_event = ListenEvent::Sealed(seal);
@@ -1258,17 +1270,46 @@ impl AppliedState {
 
         Ok(())
     }
+}
 
-    /// Atomically moves all writes in unsealed not in advance of the trace's
-    /// seal frontier into the trace and does any necessary resulting eviction
-    /// work to remove unnecessary batches.
-    fn drain_unsealed<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<(), Error> {
-        for arrangement in self.arrangements.values_mut() {
-            arrangement.unsealed_drain(blob)?;
+impl<L: Log, B: Blob> Indexed<L, B> {
+    fn drain_unsealed(&mut self) -> Result<(), Error> {
+        self.validate_pending_empty()?;
+
+        // Do all the fallible work up front.
+        let mut responses = Vec::new();
+        for (id, arrangement) in self.state.arrangements.iter() {
+            if let Some(req) = arrangement.unsealed_next_drain_req()? {
+                let res = Arrangement::drain_unsealed_blocking(&self.blob, req)?;
+                responses.push((*id, res));
+            }
         }
+
+        self.apply_batched_cmd(|state, pending| {
+            for (id, res) in responses {
+                let arrangement = match state.arrangements.get_mut(&id) {
+                    Some(x) => x,
+                    None => continue,
+                };
+                if let Some(batch) = arrangement.unsealed_handle_drain_response(res) {
+                    pending.add_records_for_listeners(id, batch.updates.clone());
+                    // WIP can ListenEvent::Sealed be an Antichain?
+                    for element in batch.desc.upper().elements() {
+                        pending.add_seal_for_listener(id, *element);
+                    }
+                }
+            }
+        });
+
+        // Immediately drain pending so we don't have to reason about these
+        // floating around at the same time as pending writes and seals.
+        self.drain_pending()?;
+
         Ok(())
     }
+}
 
+impl AppliedState {
     /// Returns the current "sealed" frontier for an id.
     ///
     /// This frontier represents a contract of time such that all updates with a
@@ -1385,10 +1426,11 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
         &mut self,
         id: Id,
         sender: crossbeam_channel::Sender<ListenEvent>,
-    ) -> Result<ArrangementSnapshot, Error> {
+    ) -> Result<TraceSnapshot, Error> {
         // Verify that id has been registered.
         let _ = self.state.sealed_frontier(id)?;
         let snapshot = self.state.do_snapshot(id, &self.blob)?;
+        let ArrangementSnapshot(_, snapshot, _, _) = snapshot;
         // NB: Keep this line after anything with an early return (aka anything
         // fallible). Otherwise, we might register the listener internally, but
         // fail the request.

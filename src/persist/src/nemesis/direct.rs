@@ -166,6 +166,7 @@ impl DirectCore {
 
                 let (progress_tx, progress_rx) = DataflowProgress::new();
                 let progress_handle = progress_tx.clone();
+                let name = name.to_owned();
                 let workers = timely::execute(
                     timely::Config::process(NUM_DATAFLOW_WORKER_THREADS),
                     move |worker| {
@@ -185,6 +186,7 @@ impl DirectCore {
                         });
                         while worker.step_or_park(None) {
                             probe.with_frontier(|frontier| {
+                                tracing::trace!("stream made progress {}: {:?}", name, frontier);
                                 progress_tx.maybe_progress(frontier);
                             })
                         }

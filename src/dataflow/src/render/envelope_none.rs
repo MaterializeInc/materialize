@@ -68,6 +68,7 @@ where
 
     let (restored_oks, restored_errs) = {
         let snapshot = persist_config.read_handle.snapshot();
+        let snapshot = snapshot.map(|x| x.trace());
 
         let (restored_oks, restored_errs) =
             scope.replay(snapshot, as_of_frontier).ok_err(split_ok_err);

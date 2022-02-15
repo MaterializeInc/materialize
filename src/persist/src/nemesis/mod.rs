@@ -288,7 +288,7 @@ const NUM_INGEST_WORKER_THREADS: usize = 1;
 const NUM_DATAFLOW_WORKER_THREADS: usize = 2;
 
 impl<R: Runtime> Runner<R> {
-    const MAX_OUTSTANDING: usize = 10;
+    const MAX_OUTSTANDING: usize = 1;
 
     pub fn new(generator: Generator, runtime: R) -> Self {
         Runner { generator, runtime }

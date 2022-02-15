@@ -16,8 +16,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::{Data as TimelyData, PartialOrder};
 
-use crate::client::DecodedSnapshot;
 use crate::error::Error;
+use crate::indexed::arrangement::TraceSnapshot;
 use crate::indexed::Snapshot;
 use crate::operators::DEFAULT_OUTPUTS_PER_YIELD;
 
@@ -26,7 +26,7 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// Emits each record in a snapshot.
     fn replay(
         &self,
-        snapshot: Result<DecodedSnapshot<K, V>, Error>,
+        snapshot: Result<TraceSnapshot, Error>,
         as_of_frontier: &Antichain<u64>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
         self.replay_yield(snapshot, as_of_frontier, DEFAULT_OUTPUTS_PER_YIELD)
@@ -38,7 +38,7 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// operators to reduce down the data and limit max memory usage.
     fn replay_yield(
         &self,
-        snapshot: Result<DecodedSnapshot<K, V>, Error>,
+        snapshot: Result<TraceSnapshot, Error>,
         as_of_frontier: &Antichain<u64>,
         outputs_per_yield: usize,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
@@ -52,7 +52,7 @@ where
 {
     fn replay_yield(
         &self,
-        snapshot: Result<DecodedSnapshot<K, V>, Error>,
+        snapshot: Result<TraceSnapshot, Error>,
         as_of_frontier: &Antichain<u64>,
         outputs_per_yield: usize,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
@@ -70,7 +70,7 @@ where
             move |cap, info| {
                 let activator = self.activator_for(&info.address[..]);
                 let mut snapshot_cap = if active_worker {
-                    Some((snapshot.map(|s| (s.since(), s.into_iter())), cap))
+                    Some((snapshot.map(|s| (s.since.clone(), s.into_iter())), cap))
                 } else {
                     None
                 };
@@ -97,14 +97,18 @@ where
                             // NB: This `idx` from enumerate resets back to 0
                             // each time the operator is run.
                             for (idx, x) in snapshot_iter.enumerate() {
-                                if let Ok((_, ts, _)) = &x {
+                                let x = x.and_then(|((k, v), t, d)| {
                                     // The raw update data held internally in the
                                     // snapshot may not be physically compacted up to
                                     // the logical compaction frontier of since.
                                     // Snapshot handles advancing any necessary data but
                                     // we double check that invariant here.
-                                    debug_assert!(snapshot_since.less_equal(ts));
-                                }
+                                    debug_assert!(snapshot_since.less_equal(&t));
+
+                                    let k = K::decode(&k)?;
+                                    let v = V::decode(&v)?;
+                                    Ok(((k, v), t, d))
+                                });
                                 session.give(x);
                                 if idx + 1 >= outputs_per_yield {
                                     done = false;
@@ -160,6 +164,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg(feature = "WIP")]
 mod tests {
 
     use timely::dataflow::channels::pact::Pipeline;
