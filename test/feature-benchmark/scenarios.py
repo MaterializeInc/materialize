@@ -928,3 +928,58 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 {self.n()}
             """
         )
+
+
+class Coordinator(Scenario):
+    """Feature benchmarks pertaining to the coordinator."""
+
+
+class QueryLatency(Coordinator):
+    SCALE = 3
+    """Measure the time it takes to run SELECT 1 queries"""
+
+    def benchmark(self) -> MeasurementSource:
+        selects = "\n".join(f"> SELECT 1\n1\n" for i in range(0, self.n()))
+
+        return Td(
+            f"""
+> BEGIN
+
+> SELECT 1;
+  /* A */
+1
+
+{selects}
+
+> SELECT 1;
+  /* B */
+1
+"""
+        )
+
+
+class ConnectionLatency(Coordinator):
+    SCALE = 3
+    """Measure the time it takes to establish connections to Mz"""
+
+    def benchmark(self) -> MeasurementSource:
+        connections = "\n".join(
+            f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialized-addr}}"
+            for i in range(0, self.n())
+        )
+
+        return Td(
+            f"""
+> BEGIN
+
+> SELECT 1;
+  /* A */
+1
+
+{connections}
+
+> SELECT 1;
+  /* B */
+1
+"""
+        )
