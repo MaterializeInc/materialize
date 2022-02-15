@@ -20,35 +20,16 @@ use tracing::{debug, error, info, warn};
 
 use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
-    DataflowError, DecodeError, LinearOperator,
+    DataflowError, DecodeError,
 };
-use mz_expr::GlobalId;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
-use crate::metrics::Metrics;
 use crate::source::DecodeResult;
-
-use timely::progress::Antichain;
-
-pub(crate) struct DebeziumUpsertRenderContext<'a> {
-    pub upsert_operator_name: String,
-    pub as_of_frontier: Antichain<Timestamp>,
-    pub operators: &'a mut Option<LinearOperator>,
-    pub key_indices: Option<Vec<usize>>,
-    pub source_arity: usize,
-}
 
 pub(crate) fn render<G: Scope>(
     envelope: &DebeziumEnvelope,
     input: &Stream<G, DecodeResult>,
     debug_name: String,
-    metrics: Metrics,
-    src_id: GlobalId,
-    dataflow_id: usize,
-
-    // context that is readily available in `super::sources` that is
-    // specific to `DebeziumMode::Upsert`
-    upsert_context: DebeziumUpsertRenderContext<'_>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
@@ -59,27 +40,6 @@ where
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     match envelope.mode {
         // TODO(guswynn): !!! Correctly deduplicate even in the upsert case
-        DebeziumMode::Upsert => {
-            let gauge = metrics.debezium_upsert_count_for(src_id, dataflow_id);
-            super::upsert::upsert(
-                &upsert_context.upsert_operator_name,
-                input,
-                upsert_context.as_of_frontier,
-                upsert_context.operators,
-                upsert_context.source_arity,
-                None,
-                Some(after_idx),
-                // https://github.com/MaterializeInc/materialize/blob/main/src/dataflow-types/src/types.rs#L935-L937
-                // +
-                // https://github.com/MaterializeInc/materialize/blob/b87ecbf0973535d65a216d7c142baf52436733b5/src/sql/src/plan/statement/ddl.rs#L1013-L1020
-                // guarantee this expect is fine
-                upsert_context.key_indices.expect(
-                    "SourceEnvelope::Debezium(DebeziumMode::Upsert)\
-                        to have RelationType::keys",
-                ),
-                move |current_values_size| gauge.set(current_values_size),
-            )
-        }
         _ => input
             .unary(Pipeline, "envelope-debezium", move |_, _| {
                 let mut dedup_state = HashMap::new();
@@ -335,7 +295,7 @@ impl DebeziumDeduplicationState {
                 Some(TrackFull::from_keys_in_range(start, end, pad_start)),
                 projection,
             ),
-            DebeziumMode::None | DebeziumMode::Upsert => return None,
+            DebeziumMode::None => return None,
         };
         Some(DebeziumDeduplicationState {
             last_position_and_offset: None,

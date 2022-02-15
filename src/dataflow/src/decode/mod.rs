@@ -26,7 +26,7 @@ use timely::scheduling::SyncActivator;
 use mz_dataflow_types::{
     sources::{
         encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
-        DebeziumMode, IncludedColumnSource, SourceEnvelope,
+        IncludedColumnSource, SourceEnvelope,
     },
     DecodeError, LinearOperator,
 };
@@ -366,9 +366,7 @@ where
     let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
 
     let dist: fn(&SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>) -> _ = match envelope {
-        SourceEnvelope::Debezium(dbz) if dbz.mode != DebeziumMode::Upsert => {
-            |x| x.partition.hashed()
-        }
+        SourceEnvelope::Debezium(_) => |x| x.partition.hashed(),
         _ => |x| {
             if let Some(position) = x.position {
                 position.hashed()

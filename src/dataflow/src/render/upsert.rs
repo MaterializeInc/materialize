@@ -20,6 +20,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
+    sources::{UpsertEnvelope, UpsertStyle},
     DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails,
 };
 use mz_expr::{EvalError, MirScalarExpr};
@@ -57,22 +58,7 @@ pub(crate) fn upsert<G, P>(
     persist_config: Option<
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
     >,
-    // Given a decoded key and a decoded value (whose shape is _specific to
-    // the current [`Envelope`][`mz_dataflow_types::sources::SourceEnvelope`] type),
-    // create a vector of datums, that can borrow from those values, that represents
-    // the ENTIRE row, as ordered and expected by the sql evaluation engine. This
-    // is used to pre-evaluate predicates and skip values that cannot show up later.
-    //
-    // Returning a `None` means this value is `null`, and can be represented by
-    // `Ok(None)` later down the pipeline.
-    // Some(after_idx) skips the first after_idx values and looks for the value row
-    // (or null), designed to unpack debezium values
-    // None means just prepend the key with the value (normal upsert)
-    //
-    // TODO(guswynn): !!! refactor `SourceEnvelope` to avoid these awkward parameters,
-    // and support upsert with non-prepended keys
-    after_idx: Option<usize>,
-    key_indices: Vec<usize>,
+    upsert_envelope: UpsertEnvelope,
     post_process: P,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -168,8 +154,7 @@ where
                 position_or,
                 as_of_frontier,
                 source_arity,
-                after_idx,
-                key_indices,
+                upsert_envelope,
                 post_process,
             );
 
@@ -315,8 +300,7 @@ fn upsert_core<G, P>(
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
     source_arity: usize,
-    after_idx: Option<usize>,
-    key_indices: Vec<usize>,
+    upsert_envelope: UpsertEnvelope,
     post_process: P,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
 where
@@ -411,60 +395,50 @@ where
                                 Some(Ok(decoded_key)) => {
                                     let decoded_value = match data.raw_data.value {
                                         None => Ok(None),
-                                        Some(value) => {
-                                            match value {
-                                                Ok(row) => {
-                                                    let envelope_value = match after_idx {
-                                                        Some(after_idx) => {
-                                                            match row.iter().nth(after_idx).unwrap()
-                                                            {
-                                                                Datum::List(after) => {
-                                                                    let mut datums =
-                                                                        Vec::with_capacity(
-                                                                            source_arity,
-                                                                        );
-                                                                    datums.extend(after.iter());
-                                                                    Some(datums)
-                                                                }
-                                                                Datum::Null => None,
-                                                                d => panic!(
-                                                                    "type error: expected record, \
-                                                                        found {:?}",
-                                                                    d
-                                                                ),
+                                        Some(value) => match value {
+                                            Ok(row) => {
+                                                let envelope_value = match upsert_envelope.style {
+                                                    UpsertStyle::Debezium { after_idx } => {
+                                                        match row.iter().nth(after_idx).unwrap() {
+                                                            Datum::List(after) => {
+                                                                let mut datums = Vec::with_capacity(
+                                                                    source_arity,
+                                                                );
+                                                                datums.extend(after.iter());
+                                                                Some(datums)
                                                             }
+                                                            Datum::Null => None,
+                                                            d => panic!(
+                                                                "type error: expected record, \
+                                                                        found {:?}",
+                                                                d
+                                                            ),
                                                         }
-
-                                                        None => {
-                                                            let mut datums =
-                                                                Vec::with_capacity(source_arity);
-                                                            datums.extend(decoded_key.iter());
-                                                            datums.extend(row.iter());
-                                                            Some(datums)
-                                                        }
-                                                    };
-
-                                                    /*
-                                                    let mut datums =
-                                                        Vec::with_capacity(source_arity);
-                                                        */
-
-                                                    if let Some(mut datums) = envelope_value {
-                                                        datums.extend(data.metadata.iter());
-                                                        evaluate(
-                                                            &datums,
-                                                            &predicates,
-                                                            &position_or,
-                                                            &mut row_packer,
-                                                        )
-                                                        .map_err(DataflowError::from)
-                                                    } else {
-                                                        Ok(None)
                                                     }
+                                                    _ => {
+                                                        let mut datums =
+                                                            Vec::with_capacity(source_arity);
+                                                        datums.extend(decoded_key.iter());
+                                                        datums.extend(row.iter());
+                                                        Some(datums)
+                                                    }
+                                                };
+
+                                                if let Some(mut datums) = envelope_value {
+                                                    datums.extend(data.metadata.iter());
+                                                    evaluate(
+                                                        &datums,
+                                                        &predicates,
+                                                        &position_or,
+                                                        &mut row_packer,
+                                                    )
+                                                    .map_err(DataflowError::from)
+                                                } else {
+                                                    Ok(None)
                                                 }
-                                                Err(err) => Err(err),
                                             }
-                                        }
+                                            Err(err) => Err(err),
+                                        },
                                     };
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
                                     // We store errors as well as non-None values, so that they can be
@@ -477,7 +451,11 @@ where
                                         let thinned_value = new_value
                                             .as_ref()
                                             .map(|full_row| {
-                                                thin(&key_indices, &full_row, &mut row_packer)
+                                                thin(
+                                                    &upsert_envelope.key_indices,
+                                                    &full_row,
+                                                    &mut row_packer,
+                                                )
                                             })
                                             .map_err(|e| e.clone());
                                         current_values
@@ -485,7 +463,7 @@ where
                                             .map(|res| {
                                                 res.map(|v| {
                                                     rehydrate(
-                                                        &key_indices,
+                                                        &upsert_envelope.key_indices,
                                                         &decoded_key,
                                                         &v,
                                                         &mut row_packer,
@@ -496,7 +474,7 @@ where
                                         current_values.remove(&decoded_key).map(|res| {
                                             res.map(|v| {
                                                 rehydrate(
-                                                    &key_indices,
+                                                    &upsert_envelope.key_indices,
                                                     &decoded_key,
                                                     &v,
                                                     &mut row_packer,

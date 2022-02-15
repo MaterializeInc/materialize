@@ -339,7 +339,6 @@ where
                 );
 
                 let (stream, errors) = {
-                    let (key_desc, _) = encoding.desc().expect("planning has verified this");
                     let (key_encoding, value_encoding) = match encoding {
                         SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
                         SourceDataEncoding::Single(value) => (None, value),
@@ -349,7 +348,8 @@ where
                     // syntax is implemented
                     //
                     // Default metadata is mostly configured in planning, but we need it here for upsert
-                    let default_metadata = provide_default_metadata(&envelope, &value_encoding);
+                    let default_metadata =
+                        provide_default_metadata(either::Either::Left(&envelope), &value_encoding);
 
                     let metadata_columns = connector.metadata_column_types(default_metadata);
 
@@ -404,53 +404,71 @@ where
                         }
 
                         // render envelopes
-                        let source_arity = src.desc.typ().arity();
                         match &envelope {
                             SourceEnvelope::Debezium(dbz_envelope) => {
                                 let (stream, errors) = super::debezium::render(
                                     dbz_envelope,
                                     &results,
                                     dataflow_debug_name.clone(),
-                                    storage_state.metrics.clone(),
-                                    src_id,
-                                    dataflow_id,
-                                    super::debezium::DebeziumUpsertRenderContext {
-                                        upsert_operator_name: format!(
-                                            "{}-debezium-upsert",
-                                            source_name
-                                        ),
-                                        as_of_frontier: as_of_frontier.clone(),
-                                        operators: &mut linear_operators,
-                                        // TODO(guswynn): check with petros if `0` is fine here
-                                        key_indices: src.desc.typ().keys.get(0).cloned(),
-                                        source_arity,
-                                    },
                                 );
                                 (stream.as_collection(), Some(errors.as_collection()))
                             }
-                            SourceEnvelope::Upsert(_key_envelope) => {
+                            SourceEnvelope::Upsert(upsert_envelope) => {
                                 // TODO: use the key envelope to figure out when to add keys.
                                 // The opeator currently does it unconditionally
-                                let upsert_operator_name = format!("{}-upsert", source_name);
-
-                                // See https://github.com/MaterializeInc/materialize/blob/b87ecbf0973535d65a216d7c142baf52436733b5/src/sql/src/plan/statement/ddl.rs#L1013-L1020
-                                let key_arity = key_desc.expect("SourceEnvelope::Upsert to require SourceDataEncoding::KeyValue").arity();
-
-                                let (upsert_ok, upsert_err) = super::upsert::upsert(
-                                    &upsert_operator_name,
-                                    &results,
-                                    as_of_frontier.clone(),
-                                    &mut linear_operators,
-                                    src.desc.typ().arity(),
-                                    source_persist_config
-                                        .as_ref()
-                                        .map(|config| config.upsert_config().clone()),
-                                    // Non-debezium upsert always has keys in order in front of
-                                    // values in evaluation.
-                                    None,
-                                    (0..key_arity).collect(),
-                                    |_| {},
+                                let upsert_operator_name = format!(
+                                    "{}-{}upsert",
+                                    source_name,
+                                    if let UpsertEnvelope {
+                                        style: UpsertStyle::Debezium { .. },
+                                        ..
+                                    } = upsert_envelope
+                                    {
+                                        "debezium-"
+                                    } else {
+                                        ""
+                                    }
                                 );
+
+                                let transformed_results =
+                                    transform_keys_from_key_envelope(upsert_envelope, results);
+
+                                let as_of_frontier = as_of_frontier.clone();
+
+                                let source_arity = src.desc.typ().arity();
+                                let persist_upsert_config = source_persist_config
+                                    .as_ref()
+                                    .map(|config| config.upsert_config().clone());
+
+                                let (upsert_ok, upsert_err) = match upsert_envelope.style {
+                                    UpsertStyle::Default(_) => super::upsert::upsert(
+                                        &upsert_operator_name,
+                                        &transformed_results,
+                                        as_of_frontier,
+                                        &mut linear_operators,
+                                        source_arity,
+                                        persist_upsert_config,
+                                        upsert_envelope.clone(),
+                                        |_| {},
+                                    ),
+                                    UpsertStyle::Debezium { .. } => {
+                                        let gauge = storage_state
+                                            .metrics
+                                            .debezium_upsert_count_for(src_id, dataflow_id);
+                                        super::upsert::upsert(
+                                            &upsert_operator_name,
+                                            &transformed_results,
+                                            as_of_frontier,
+                                            &mut linear_operators,
+                                            source_arity,
+                                            persist_upsert_config,
+                                            upsert_envelope.clone(),
+                                            move |current_values_size| {
+                                                gauge.set(current_values_size)
+                                            },
+                                        )
+                                    }
+                                };
 
                                 // When persistence is enabled we need to seal up both the
                                 // timestamp bindings and the upsert state. Otherwise, just
@@ -1004,6 +1022,51 @@ where
 
         KV { val, key: res.key }
     })
+}
+
+/// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
+fn transform_keys_from_key_envelope<G>(
+    upsert_envelope: &UpsertEnvelope,
+    results: timely::dataflow::Stream<G, DecodeResult>,
+) -> timely::dataflow::Stream<G, DecodeResult>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    match upsert_envelope {
+        UpsertEnvelope {
+            style:
+                UpsertStyle::Default(KeyEnvelope::LegacyUpsert | KeyEnvelope::Flattened)
+                | UpsertStyle::Debezium { .. },
+            ..
+        } => results,
+        UpsertEnvelope {
+            style: UpsertStyle::Default(KeyEnvelope::Named(_)),
+            ..
+        } => {
+            let mut row_packer = mz_repr::Row::default();
+            results.map(move |mut res| {
+                res.key = res.key.map(|k_result| {
+                    k_result.map(|k| {
+                        if k.iter().nth(1).is_none() {
+                            k
+                        } else {
+                            row_packer.clear();
+                            row_packer.push_list(k.iter());
+                            row_packer.finish_and_reuse()
+                        }
+                    })
+                });
+
+                res
+            })
+        }
+        UpsertEnvelope {
+            style: UpsertStyle::Default(KeyEnvelope::None),
+            ..
+        } => {
+            unreachable!("SourceEnvelope::Upsert should never have KeyEnvelope::None")
+        }
+    }
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]

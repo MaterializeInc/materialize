@@ -769,8 +769,38 @@ pub mod sources {
         /// If present, include the key columns as an output column of the source with the given properties.
         None(KeyEnvelope),
         Debezium(DebeziumEnvelope),
-        Upsert(KeyEnvelope),
+        Upsert(UpsertEnvelope),
         CdcV2,
+    }
+
+    /// `UnplannedSourceEnvelope` is a `SourceEnvelope` missing some information. This information
+    /// is obtained in `UnplannedSourceEnvelope::desc`, where
+    /// `UnplannedSourceEnvelope::into_source_envelope`
+    /// creates a full `SourceEnvelope`
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub enum UnplannedSourceEnvelope {
+        None(KeyEnvelope),
+        Debezium(DebeziumEnvelope),
+        Upsert(UpsertStyle),
+        CdcV2,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct UpsertEnvelope {
+        /// What style of Upsert we are using
+        pub style: UpsertStyle,
+        /// The indices of the keys in the full value row, used
+        /// to deduplicate data in `upsert_core`
+        pub key_indices: Vec<usize>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub enum UpsertStyle {
+        /// `ENVELOPE UPSERT`, where the key shape depends on the independent
+        /// `KeyEnvelope`
+        Default(KeyEnvelope),
+        /// `ENVELOPE DEBEZIUM UPSERT`
+        Debezium { after_idx: usize },
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -814,8 +844,6 @@ pub mod sources {
     pub enum DebeziumMode {
         /// Do not perform any deduplication
         None,
-        /// Keep track of keys from upstream and discard retractions for new keys
-        Upsert,
         /// We can trust high water mark
         Ordered(DebeziumDedupProjection),
         /// We need to store some piece of state for every message
@@ -891,36 +919,65 @@ pub mod sources {
         Ok(indices)
     }
 
-    impl SourceEnvelope {
+    impl UnplannedSourceEnvelope {
+        /// Transforms an `UnplannedSourceEnvelope` into a `SourceEnvelope`
+        ///
+        /// Panics if the input envelope is `UnplannedSourceEnvelope::Upsert` and
+        /// key is not passed as `Some`
+        fn into_source_envelope(self, key: Option<Vec<usize>>) -> SourceEnvelope {
+            match self {
+                UnplannedSourceEnvelope::Upsert(upsert_style) => {
+                    SourceEnvelope::Upsert(UpsertEnvelope {
+                        style: upsert_style,
+                        key_indices: key.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
+                    })
+                },
+                UnplannedSourceEnvelope::Debezium(inner) => {
+                    SourceEnvelope::Debezium(inner)
+                }
+                UnplannedSourceEnvelope::None(inner) => SourceEnvelope::None(inner),
+                UnplannedSourceEnvelope::CdcV2 => SourceEnvelope::CdcV2,
+            }
+        }
+
         /// Computes the output relation of this envelope when applied on top of the decoded key and
         /// value relation desc
         pub fn desc(
-            &self,
+            self,
             key_desc: Option<RelationDesc>,
             value_desc: RelationDesc,
             metadata_desc: RelationDesc,
-        ) -> anyhow::Result<RelationDesc> {
-            Ok(match self {
-                SourceEnvelope::None(key_envelope) | SourceEnvelope::Upsert(key_envelope) => {
+        ) -> anyhow::Result<(SourceEnvelope, RelationDesc)> {
+            Ok(match &self {
+                UnplannedSourceEnvelope::None(key_envelope)
+                | UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope)) => {
                     let key_desc = match key_desc {
                         Some(desc) => desc,
-                        None => return Ok(value_desc.concat(metadata_desc)),
+                        None => {
+                            return Ok((
+                                self.into_source_envelope(None),
+                                value_desc.concat(metadata_desc),
+                            ))
+                        }
                     };
 
-                    let keyed = match key_envelope {
-                        KeyEnvelope::None => value_desc,
+                    let (keyed, key) = match key_envelope {
+                        KeyEnvelope::None => (value_desc, None),
                         KeyEnvelope::Flattened => {
                             // Add the key columns as a key.
-                            let key_indices = (0..key_desc.arity()).collect();
-                            let key_desc = key_desc.with_key(key_indices);
-                            key_desc.concat(value_desc)
+                            let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
+                            let key_desc = key_desc.with_key(key_indices.clone());
+                            (key_desc.concat(value_desc), Some(key_indices))
                         }
                         KeyEnvelope::LegacyUpsert => {
-                            let key_indices = (0..key_desc.arity()).collect();
-                            let key_desc = key_desc.with_key(key_indices);
+                            let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
+                            let key_desc = key_desc.with_key(key_indices.clone());
                             let names = (0..key_desc.arity()).map(|i| format!("key{}", i));
                             // Rename key columns to "keyN"
-                            key_desc.with_names(names).concat(value_desc)
+                            (
+                                key_desc.with_names(names).concat(value_desc),
+                                Some(key_indices),
+                            )
                         }
                         KeyEnvelope::Named(key_name) => {
                             let key_desc = {
@@ -946,23 +1003,27 @@ pub mod sources {
                                 }
                             };
                             // In all cases the first column is the key
-                            key_desc.with_key(vec![0]).concat(value_desc)
+                            (key_desc.with_key(vec![0]).concat(value_desc), Some(vec![0]))
                         }
                     };
-                    keyed.concat(metadata_desc)
+                    (self.into_source_envelope(key), keyed.concat(metadata_desc))
                 }
-                SourceEnvelope::Debezium(envelope) => {
-                    match &value_desc.typ().column_types[envelope.after_idx].scalar_type {
+                UnplannedSourceEnvelope::Debezium(DebeziumEnvelope { after_idx, .. })
+                | UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx }) => {
+                    match &value_desc.typ().column_types[*after_idx].scalar_type {
                         ScalarType::Record { fields, .. } => {
                             let mut desc = RelationDesc::from_names_and_types(fields.clone());
-                            if let Some(key) = key_desc.map(|k| match_key_indices(&k, &desc)) {
-                                desc = desc.with_key(key?);
+                            let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
+                            if let Some(key) = key.clone() {
+                                desc = desc.with_key(key);
                             }
 
-                            match envelope.mode {
-                                DebeziumMode::Upsert => desc.concat(metadata_desc),
+                            let desc = match self {
+                                UnplannedSourceEnvelope::Upsert(_) => desc.concat(metadata_desc),
                                 _ => desc,
-                            }
+                            };
+
+                            (self.into_source_envelope(key), desc)
                         }
                         ty => bail!(
                             "Incorrect type for Debezium value, expected Record, got {:?}",
@@ -970,8 +1031,7 @@ pub mod sources {
                         ),
                     }
                 }
-                SourceEnvelope::CdcV2 => {
-                    // TODO: Validate that the value schema has an `updates` and `progress` column of
+                UnplannedSourceEnvelope::CdcV2 => {
                     // the correct types
 
                     // CdcV2 row data are in a record in a record in a list
@@ -980,9 +1040,10 @@ pub mod sources {
                             ScalarType::Record { fields, .. } => {
                                 // TODO maybe check this by name
                                 match &fields[0].1.scalar_type {
-                                    ScalarType::Record { fields, .. } => {
-                                        RelationDesc::from_names_and_types(fields.clone())
-                                    }
+                                    ScalarType::Record { fields, .. } => (
+                                        self.into_source_envelope(None),
+                                        RelationDesc::from_names_and_types(fields.clone()),
+                                    ),
                                     ty => {
                                         bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty)
                                     }
@@ -1022,16 +1083,13 @@ pub mod sources {
     ///
     /// Eventually we will require `INCLUDE <metadata>` for everything.
     pub fn provide_default_metadata(
-        envelope: &SourceEnvelope,
+        envelope: either::Either<&SourceEnvelope, &UnplannedSourceEnvelope>,
         encoding: &encoding::DataEncoding,
     ) -> bool {
         let is_avro = matches!(encoding, encoding::DataEncoding::Avro(_));
         let is_stateless_dbz = match envelope {
-            SourceEnvelope::Debezium(DebeziumEnvelope {
-                mode: DebeziumMode::Upsert,
-                ..
-            }) => false,
-            SourceEnvelope::Debezium(_) => true,
+            either::Either::Left(SourceEnvelope::Debezium(_))
+            | either::Either::Right(UnplannedSourceEnvelope::Debezium(_)) => true,
             _ => false,
         };
 

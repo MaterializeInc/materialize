@@ -16,6 +16,7 @@ bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.2"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+either = "1.6.1"
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 futures = "0.3.21"
