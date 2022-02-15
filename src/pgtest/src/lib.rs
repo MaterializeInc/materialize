@@ -36,7 +36,8 @@
 //! no_error_fields`.
 //! - `err_field_typs` specifies the set of error message fields
 //! ([reference](https://www.postgresql.org/docs/current/protocol-error-fields.html)).
-//! For example: `until err_field_typs=VC` would return the severity and code
+//! The default is `CMS` (code, message, severity).
+//! For example: `until err_field_typs=SC` would return the severity and code
 //! fields in any ErrorResponse message.
 //!
 //! For example, to execute a simple prepared statement:
@@ -56,6 +57,31 @@
 //! DataRow {"fields":["blah","5"]}
 //! CommandComplete {"tag":"SELECT 1"}
 //! ReadyForQuery {"status":"I"}
+//! ```
+//!
+//! # Usage while writing tests
+//!
+//! The expected way to use this while writing tests is to generate output from a postgres server.
+//! Use the `pgtest-mz` directory if our output differs incompatibly from postgres.
+//! Write your test, excluding any lines after the `----` of the `until` directive.
+//! For example:
+//! ```pgtest
+//! send
+//! Query {"query": "SELECT 1"}
+//! ----
+//!
+//! until
+//! ReadyForQuery
+//! ----
+//! ```
+//! Then run the pgtest binary, enabling rewrites and pointing it at postgres:
+//! ```shell
+//! REWRITE=1 cargo run --bin mz-pgtest -- test/pgtest/test.pt --addr localhost:5432 --user postgres
+//! ```
+//! This will generate the expected output for the `until` directive.
+//! Now rerun against a running materialized server:
+//! ```shell
+//! cargo run --bin mz-pgtest -- test/pgtest/test.pt
 //! ```
 
 use std::collections::HashSet;
@@ -94,7 +120,7 @@ impl PgTest {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        pgtest.until(vec!["ReadyForQuery"], vec![], HashSet::new())?;
+        pgtest.until(vec!["ReadyForQuery"], vec!['C', 'S', 'M'], HashSet::new())?;
         Ok(pgtest)
     }
     pub fn send<F: Fn(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
@@ -461,7 +487,7 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                 } else {
                     match args.remove("err_field_typs") {
                         Some(typs) => typs.join("").chars().collect(),
-                        None => vec!['C', 'M'],
+                        None => vec!['C', 'S', 'M'],
                     }
                 };
                 let mut ignore = HashSet::new();
