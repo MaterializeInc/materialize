@@ -25,7 +25,7 @@ from materialize.feature_benchmark.comparator import (
     RelativeThresholdComparator,
 )
 from materialize.feature_benchmark.executor import Docker
-from materialize.feature_benchmark.filter import Filter, NoFilter
+from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
@@ -48,8 +48,12 @@ from materialize.mzcompose.services import (
 #
 
 
-def make_filter() -> Filter:
-    return NoFilter()
+def make_filter(args: argparse.Namespace) -> Filter:
+    # Discard the first run unless a small --max-runs limit is explicitly set
+    if args.max_runs <= 5:
+        return NoFilter()
+    else:
+        return FilterFirst()
 
 
 def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCondition]:
@@ -125,7 +129,7 @@ def run_one_scenario(
                 scenario=scenario,
                 scale=args.scale,
                 executor=executor,
-                filter=make_filter(),
+                filter=make_filter(args),
                 termination_conditions=make_termination_conditions(args),
                 aggregation=make_aggregation(),
             )
