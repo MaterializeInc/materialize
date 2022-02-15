@@ -125,7 +125,7 @@ changes that have not yet been documented.
 - Allow setting `standard_conforming_strings` to its default value of `on`.
   Setting it to `off` is still not supported.
 
-- Add support for `ARRAY(<subquery>)` constructor.
+- Add support for `ARRAY(<subquery>)` constructor {{% gh 10700 %}}.
 
 {{< comment >}}
 Only add new release notes above this line.
