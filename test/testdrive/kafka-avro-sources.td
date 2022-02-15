@@ -872,7 +872,7 @@ $ set ms-dbz-schema={
     "type": "record"
   }
 
-$ kafka-create-topic topic=ms-dbz-data
+$ kafka-create-topic topic=ms-dbz-data partitions=1
 
 # The third record will be skipped, since `lsn` has gone backwards.
 $ kafka-ingest format=avro topic=ms-dbz-data schema=${ms-dbz-schema} timestamp=1
