@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use postgres::error::SqlState;
 
+use mz_coord::session::ClientSeverity as CoordClientSeverity;
 use mz_coord::session::TransactionStatus as CoordTransactionStatus;
 use mz_coord::{CoordError, StartupMessage};
 use mz_pgcopy::CopyErrorNotSupportedResponse;
@@ -447,6 +448,74 @@ impl Severity {
             Severity::Log => "LOG",
         }
     }
+
+    /// Checks if a message of a given severity level should be sent to a client.
+    ///
+    /// The ordering of severity levels used for client-level filtering differs from the
+    /// one used for server-side logging in two aspects: INFO messages are always sent,
+    /// and the LOG severity is considered as below NOTICE, while it is above ERROR for
+    /// server-side logs.
+    ///
+    /// Postgres only considers the session setting after the client authentication
+    /// handshake is completed. Since this function is only called after client authentication
+    /// is done, we are not treating this case right now, but be aware if refactoring it.
+    pub fn should_output_to_client(&self, minimum_client_severity: &CoordClientSeverity) -> bool {
+        match (minimum_client_severity, self) {
+            // INFO messages are always sent
+            (_, Severity::Info) => true,
+            (CoordClientSeverity::Error, Severity::Error | Severity::Fatal | Severity::Panic) => {
+                true
+            }
+            (
+                CoordClientSeverity::Warning,
+                Severity::Error | Severity::Fatal | Severity::Panic | Severity::Warning,
+            ) => true,
+            (
+                CoordClientSeverity::Notice,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice,
+            ) => true,
+            (
+                CoordClientSeverity::Info,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice,
+            ) => true,
+            (
+                CoordClientSeverity::Log,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice
+                | Severity::Log,
+            ) => true,
+            (
+                CoordClientSeverity::Debug1
+                | CoordClientSeverity::Debug2
+                | CoordClientSeverity::Debug3
+                | CoordClientSeverity::Debug4
+                | CoordClientSeverity::Debug5,
+                _,
+            ) => true,
+
+            (
+                CoordClientSeverity::Error,
+                Severity::Warning | Severity::Notice | Severity::Log | Severity::Debug,
+            ) => false,
+            (CoordClientSeverity::Warning, Severity::Notice | Severity::Log | Severity::Debug) => {
+                false
+            }
+            (CoordClientSeverity::Notice, Severity::Log | Severity::Debug) => false,
+            (CoordClientSeverity::Info, Severity::Log | Severity::Debug) => false,
+            (CoordClientSeverity::Log, Severity::Debug) => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -479,4 +548,46 @@ pub fn encode_row_description(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_output_to_client() {
+        #[rustfmt::skip]
+        let test_cases = [
+            (CoordClientSeverity::Debug1, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Debug2, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Debug3, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Debug4, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Debug5, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Log, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Log, vec![Severity::Debug], false),
+            (CoordClientSeverity::Info, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Info, vec![Severity::Debug, Severity::Log], false),
+            (CoordClientSeverity::Notice, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Notice, vec![Severity::Debug, Severity::Log], false),
+            (CoordClientSeverity::Warning, vec![Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Warning, vec![Severity::Debug, Severity::Log, Severity::Notice], false),
+            (CoordClientSeverity::Error, vec![Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (CoordClientSeverity::Error, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning], false),
+        ];
+
+        for test_case in test_cases {
+            run_test(test_case)
+        }
+
+        fn run_test(test_case: (CoordClientSeverity, Vec<Severity>, bool)) {
+            let client_min_messages_setting = test_case.0;
+            let expected = test_case.2;
+            for message_severity in test_case.1 {
+                assert!(
+                    message_severity.should_output_to_client(&client_min_messages_setting)
+                        == expected
+                )
+            }
+        }
+    }
 }

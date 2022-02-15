@@ -949,6 +949,42 @@ where
         Ok(State::Ready)
     }
 
+    /// Sends a backend message to the client, after applying a severity filter.
+    ///
+    /// The message is only sent if its severity is above the severity set
+    /// in the session, with the default value being NOTICE.
+    async fn send<M>(&mut self, message: M) -> Result<(), io::Error>
+    where
+        M: Into<BackendMessage>,
+    {
+        let message: BackendMessage = message.into();
+        match message {
+            BackendMessage::ErrorResponse(ref err) => {
+                let minimum_client_severity =
+                    self.coord_client.session().vars().client_min_messages();
+                if err
+                    .severity
+                    .should_output_to_client(minimum_client_severity)
+                {
+                    self.conn.send(message).await
+                } else {
+                    Ok(())
+                }
+            }
+            _ => self.conn.send(message).await,
+        }
+    }
+
+    pub async fn send_all(
+        &mut self,
+        messages: impl IntoIterator<Item = BackendMessage>,
+    ) -> Result<(), io::Error> {
+        for m in messages {
+            self.send(m).await?;
+        }
+        Ok(())
+    }
+
     async fn sync(&mut self) -> Result<State, io::Error> {
         // Close the current transaction if we are in an implicit transaction.
         if self.coord_client.session().transaction().is_implicit() {

@@ -104,6 +104,9 @@ where
     /// Note that the connection is not flushed after calling this method. You
     /// must call [`FramedConn::flush`] explicitly. Returns an error if the
     /// underlying connection is broken.
+    ///
+    /// Please use `StateMachine::send` instead if calling from `StateMachine`,
+    /// as it applies session-based filters before calling this method.
     pub async fn send<M>(&mut self, message: M) -> Result<(), io::Error>
     where
         M: Into<BackendMessage>,
