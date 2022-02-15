@@ -108,7 +108,7 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::{ComputeClient, StorageClient, DEFAULT_COMPUTE_INSTANCE_ID};
+use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
 use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
 use mz_dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
@@ -4875,7 +4875,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use mz_dataflow_types::client::{ComputeClient, DEFAULT_COMPUTE_INSTANCE_ID};
+    use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use std::collections::HashMap;
 
     use crate::CoordError;
