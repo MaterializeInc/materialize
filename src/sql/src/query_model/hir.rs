@@ -144,7 +144,7 @@ impl FromHir {
                 loop {
                     let old_arity = self.model.get_box(box_id).columns.len();
 
-                    // 1) Find a batch of scalars such that no scalar in the
+                    // 1) Find a prefix of scalars such that no scalar in the
                     // current batch depends on columns from the same batch.
                     let end_idx = scalars
                         .iter_mut()
@@ -159,7 +159,7 @@ impl FromHir {
                         })
                         .unwrap_or(scalars.len());
 
-                    // 2) Add the scalars in the batch to the box.
+                    // 2) Add the scalars in the prefix to the box.
                     for scalar in scalars.drain(0..end_idx) {
                         let expr = self.generate_expr(scalar, box_id)?;
                         let mut b = self.model.get_mut_box(box_id);
@@ -167,7 +167,7 @@ impl FromHir {
                     }
 
                     // 3) If there are scalars remaining, wrap the box so the
-                    // remaining scalars can point to the scalars in this batch.
+                    // remaining scalars can point to the scalars in this prefix.
                     if scalars.is_empty() {
                         break;
                     }
