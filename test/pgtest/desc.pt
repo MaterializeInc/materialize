@@ -2,6 +2,16 @@
 # replaced.
 
 send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "CREATE TABLE t (a INT)"}
 Parse {"name": "q", "query": "SELECT * FROM t"}
 Describe {"variant": "S", "name": "q"}
