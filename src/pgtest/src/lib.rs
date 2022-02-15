@@ -119,7 +119,7 @@ impl PgTest {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        pgtest.until(vec!["ReadyForQuery"], vec![], HashSet::new())?;
+        pgtest.until(vec!["ReadyForQuery"], vec!['C', 'S', 'M'], HashSet::new())?;
         Ok(pgtest)
     }
     pub fn send<F: Fn(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
