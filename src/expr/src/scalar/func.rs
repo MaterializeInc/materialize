@@ -5927,7 +5927,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
             VariadicFunc::ArrayToString { .. } => f.write_str("array_to_string"),
-            VariadicFunc::ArrayIndex => f.write_str("list_index"),
+            VariadicFunc::ArrayIndex => f.write_str("array_index"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListIndex => f.write_str("list_index"),
