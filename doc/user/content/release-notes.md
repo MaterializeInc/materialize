@@ -129,6 +129,9 @@ changes that have not yet been documented.
   indexing/accessing individual elements (as opposed to taking slices/ranges of
   values) {{% gh 9815 %}}.
 
+- Allow setting `client_min_messages` to support filtering which messages are
+  sent to the client based on the severity level.
+
 {{< comment >}}
 Only add new release notes above this line.
 
