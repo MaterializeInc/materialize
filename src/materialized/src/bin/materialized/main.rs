@@ -321,19 +321,24 @@ struct Args {
     /// Specifies the tenant id when authenticating users. Must be a valid UUID.
     #[clap(
         long,
-        env = "FRONTEGG_TENANT",
+        env = "MZ_FRONTEGG_TENANT",
         requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
         hide = true
     )]
     frontegg_tenant: Option<Uuid>,
     /// JWK used to validate JWTs during user authentication as a PEM public
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
-    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant", hide = true)]
+    #[clap(
+        long,
+        env = "MZ_FRONTEGG_JWK",
+        requires = "frontegg-tenant",
+        hide = true
+    )]
     frontegg_jwk: Option<String>,
     /// The full URL (including path) to the api-token endpoint.
     #[clap(
         long,
-        env = "FRONTEGG_API_TOKEN_URL",
+        env = "MZ_FRONTEGG_API_TOKEN_URL",
         requires = "frontegg-tenant",
         hide = true
     )]
