@@ -60,6 +60,12 @@ test_cases = [
         ],
         files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
     ),
+    # Another test that needs a working proxy to test
+    TestCase(
+        name="csr-failure",
+        env=["ALL_PROXY=http://squid:3128"],
+        files=["csr-failure.td"],
+    ),
 ]
 
 

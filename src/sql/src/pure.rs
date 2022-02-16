@@ -29,7 +29,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
-use mz_ccsr::Client;
+use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
@@ -790,7 +790,11 @@ async fn get_remote_csr_schema(
             )
         })?;
     let subject = format!("{}-key", topic);
-    let key_schema = ccsr_client.get_schema_by_subject(&subject).await.ok();
+    let key_schema = match ccsr_client.get_schema_by_subject(&subject).await {
+        Ok(ks) => Some(ks),
+        Err(GetBySubjectError::SubjectNotFound) => None,
+        Err(e) => bail!(e),
+    };
     Ok(Schema {
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
