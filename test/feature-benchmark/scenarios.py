@@ -887,7 +887,7 @@ class PgCdc(Scenario):
     pass
 
 
-class PostgresInitialLoad(PgCdc):
+class PgCdcInitialLoad(PgCdc):
     """Measure the time it takes to read 1M existing records from Postgres
     when creating a materialized source"""
 
@@ -924,6 +924,64 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
   /* A */
 
 > SELECT count(*) FROM mz_source_pgcdc
+  /* B */
+{self.n()}
+            """
+        )
+
+
+class PgCdcStreaming(PgCdc):
+    """Measure the time it takes to ingest records from Postgres post-snapshot"""
+
+    SCALE = 5
+
+    def shared(self) -> Action:
+        return TdAction(
+            f"""
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+
+DROP PUBLICATION IF EXISTS p1;
+CREATE PUBLICATION p1 FOR ALL TABLES;
+"""
+        )
+
+    def before(self) -> Action:
+        return TdAction(
+            f"""
+> DROP SOURCE IF EXISTS s1;
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
+ALTER TABLE t1 REPLICA IDENTITY FULL;
+
+> CREATE MATERIALIZED SOURCE s1
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  PUBLICATION 'p1';
+            """
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        insertions = "\n".join(
+            [
+                f"INSERT INTO t1 (f2) SELECT x FROM generate_series(1, {self.n()/1000}) as x;\nCOMMIT;"
+                for i in range(0, 1000)
+            ]
+        )
+
+        return Td(
+            f"""
+> SELECT 1;
+  /* A */
+1
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+{insertions}
+
+> SELECT count(*) FROM s1
   /* B */
 {self.n()}
             """
