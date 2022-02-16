@@ -941,10 +941,16 @@ impl Coordinator {
                             .frontier()
                             .first()
                             .expect("known to exist");
+                        let last_sqlite_compaction_ts = source_state
+                            .last_sqlite_compaction_ts;
 
-                        self.catalog
-                            .compact_timestamp_bindings(source_id, compaction_ts)
-                            .expect("compacting timestamp bindings cannot fail");
+                        // Hardcode a compaction of once every 15 minutes
+                        if compaction_ts - last_sqlite_compaction_ts > 900_000 {
+                            self.catalog
+                                .compact_timestamp_bindings(source_id, compaction_ts)
+                                .expect("compacting timestamp bindings cannot fail");
+                            source_state.last_sqlite_compaction_ts = compaction_ts;
+                        }
                     }
                 }
 

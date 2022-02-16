@@ -122,6 +122,8 @@ pub struct Frontiers<T: Timestamp> {
     /// This timestamp drives the advancement of the since frontier as a
     /// function of the upper frontier, trailing it by exactly this much.
     pub compaction_window_ms: Option<T>,
+    /// Last timestamp we compacted up to in sqlite
+    pub last_sqlite_compaction_ts: T,
 }
 
 impl<T: Timestamp + Copy> Frontiers<T> {
@@ -145,6 +147,7 @@ impl<T: Timestamp + Copy> Frontiers<T> {
             since: Rc::new(RefCell::new(MutableAntichain::new())),
             compaction_window_ms,
             since_action: Rc::new(RefCell::new(since_action)),
+            last_sqlite_compaction_ts: T::minimum(),
         };
         let handle = frontier.since_handle(initial);
         (frontier, handle)
