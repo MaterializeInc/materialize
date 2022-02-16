@@ -254,7 +254,7 @@ To connect to a Kafka broker that requires [SASL authentication](https://docs.co
 #### SASL/PLAIN
 
 ```sql
-CREATE MATERIALIZED SOURCE kafka_sasl
+CREATE SOURCE kafka_sasl
   FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
       security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
@@ -291,7 +291,7 @@ Note that:
 Field                                   | Value  | Description
 ----------------------------------------|--------|----------------------------------------
 `security_protocol`                     | `text` | Use `plaintext`, `ssl`, `sasl_plaintext` or `sasl_ssl` to connect to the Kafka cluster.
-`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `GSSAPI` (the default), `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER`.
+`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `GSSAPI` (the default), `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
 `sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
 `sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
 `sasl_password_env`                     | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
@@ -365,25 +365,6 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 {{< /tab >}}
 {{< /tabs >}}
-
-### Using a schema registry
-
-```sql
-CREATE SOURCE events
-FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
-```
-
-For setups requiring [Basic HTTP authentication](https://docs.confluent.io/platform/current/security/basic-auth.html#basic-auth-sr):
-
-```sql
-CREATE SOURCE events
-FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081' WITH (
-    username = '<SCHEMA_REGISTRY_USERNAME>',
-    password = '<SCHEMA_REGISTRY_PASSWORD>'
-);
-```
 
 ## Related pages
 
