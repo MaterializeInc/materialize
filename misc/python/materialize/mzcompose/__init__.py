@@ -184,11 +184,16 @@ class Composition:
         error: Optional[str]
 
     def __init__(
-        self, repo: mzbuild.Repository, name: str, preserve_ports: bool = False
+        self,
+        repo: mzbuild.Repository,
+        name: str,
+        preserve_ports: bool = False,
+        silent: bool = False,
     ):
         self.name = name
         self.repo = repo
         self.preserve_ports = preserve_ports
+        self.silent = silent
         self.workflows: Dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
 
@@ -333,7 +338,9 @@ class Composition:
             args: The arguments to pass to `docker-compose`.
             capture: Whether to capture the child's stdout stream.
         """
-        print(f"$ docker-compose {' '.join(args)}", file=sys.stderr)
+
+        if not self.silent:
+            print(f"$ docker-compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
 
@@ -345,6 +352,7 @@ class Composition:
             return subprocess.run(
                 [
                     "docker-compose",
+                    *(["--log-level=ERROR"] if self.silent else []),
                     f"-f/dev/fd/{self.file.fileno()}",
                     "--project-directory",
                     self.path,
