@@ -2832,6 +2832,21 @@ fn plan_expr_inner<'a>(
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
         Expr::SubscriptScalar { expr, subscript } => plan_subscript_scalar(ecx, expr, subscript),
         Expr::SubscriptSlice { expr, positions } => plan_subscript_slice(ecx, expr, positions),
+        Expr::Like {
+            expr,
+            pattern,
+            escape,
+            case_insensitive,
+            negated,
+        } => Ok(plan_like(
+            ecx,
+            expr,
+            pattern,
+            escape.as_deref(),
+            *case_insensitive,
+            *negated,
+        )?
+        .into()),
 
         // Subqueries.
         Expr::Exists(query) => plan_exists(ecx, query),
@@ -3070,6 +3085,38 @@ fn plan_subscript_slice(
         exprs,
     }
     .into())
+}
+
+fn plan_like(
+    ecx: &ExprContext,
+    expr: &Expr<Aug>,
+    pattern: &Expr<Aug>,
+    escape: Option<&Expr<Aug>>,
+    case_insensitive: bool,
+    not: bool,
+) -> Result<HirScalarExpr, PlanError> {
+    use CastContext::Implicit;
+    let ecx = ecx.with_name("LIKE argument");
+    let expr = plan_expr(&ecx, expr)?;
+    let haystack = match ecx.scalar_type(&expr) {
+        Some(ref ty @ ScalarType::Char { length }) => expr
+            .type_as(&ecx, ty)?
+            .call_unary(UnaryFunc::PadChar(expr_func::PadChar { length })),
+        _ => expr.cast_to(&ecx, Implicit, &ScalarType::String)?,
+    };
+    let mut pattern = plan_expr(&ecx, pattern)?.cast_to(&ecx, Implicit, &ScalarType::String)?;
+    if let Some(escape) = escape {
+        pattern = pattern.call_binary(
+            plan_expr(&ecx, escape)?.cast_to(&ecx, Implicit, &ScalarType::String)?,
+            BinaryFunc::LikeEscape,
+        );
+    }
+    let like = haystack.call_binary(pattern, BinaryFunc::IsLikeMatch { case_insensitive });
+    if not {
+        Ok(like.call_unary(UnaryFunc::Not(expr_func::Not)))
+    } else {
+        Ok(like)
+    }
 }
 
 fn plan_subscript_jsonb(

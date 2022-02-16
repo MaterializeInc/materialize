@@ -81,6 +81,14 @@ pub enum Expr<T: AstInfo> {
         subquery: Box<Query<T>>,
         negated: bool,
     },
+    /// `<expr> [ NOT ] {LIKE, ILIKE} <pattern> [ ESCAPE <escape> ]`
+    Like {
+        expr: Box<Expr<T>>,
+        pattern: Box<Expr<T>>,
+        escape: Option<Box<Expr<T>>>,
+        case_insensitive: bool,
+        negated: bool,
+    },
     /// `<expr> [ NOT ] BETWEEN <low> AND <high>`
     Between {
         expr: Box<Expr<T>>,
@@ -260,6 +268,31 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str("IN (");
                 f.write_node(&subquery);
                 f.write_str(")");
+            }
+            Expr::Like {
+                expr,
+                pattern,
+                escape,
+                case_insensitive,
+                negated,
+            } => {
+                f.write_node(&expr);
+                f.write_str(match (*case_insensitive, *negated) {
+                    (false, false) => " ~~ ",
+                    (false, true) => " !~~ ",
+                    (true, false) => " ~~* ",
+                    (true, true) => " !~~* ",
+                });
+                match escape {
+                    Some(escape) => {
+                        f.write_str("like_escape(");
+                        f.write_node(&pattern);
+                        f.write_str(", ");
+                        f.write_node(escape);
+                        f.write_str(")");
+                    }
+                    None => f.write_node(&pattern),
+                }
             }
             Expr::Between {
                 expr,

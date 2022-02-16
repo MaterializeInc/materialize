@@ -859,12 +859,176 @@ SELECT 'TEST' NOT LIKE 'TE_'
 ----
 true
 
+# Test custom escape characters
+
+query B
+SELECT 'banana!' LIKE 'ban%na!' ESCAPE 'n'
+----
+false
+
+query B
+SELECT 'ba%a!' LIKE 'ban%na!' ESCAPE 'n'
+----
+true
+
+query B
+SELECT 'banana!' LIKE 'ban\ana!' ESCAPE ''
+----
+false
+
+query B
+SELECT 'ban\ana!' LIKE 'ban\ana!' ESCAPE ''
+----
+true
+
+query B
+SELECT 'banana!' LIKE 'ban%%%na!' ESCAPE '%'
+----
+false
+
+query B
+SELECT 'ban%na!' LIKE 'ban%%%na!' ESCAPE '%'
+----
+true
+
+query B
+SELECT 'banana!' LIKE 'ba\n%na!' ESCAPE '\'
+----
+true
+
 # Test bad escaping.
 
 query error unterminated escape sequence in LIKE
 SELECT 'a' LIKE '\'
 
+query error invalid escape string
+SELECT 'a' LIKE 'a' ESCAPE 'foo'
+
 # Test massive LIKE patterns:
 
 query error LIKE pattern exceeds maximum length
 SELECT 'x' LIKE repeat('x', 367416)
+
+# Test nullability
+
+query B
+SELECT ('foo' LIKE 'f%') IS NULL;
+----
+false
+
+query B
+SELECT ('foo' LIKE 'f%' ESCAPE '~') IS NULL;
+----
+false
+
+query B
+SELECT (NULL LIKE 'f%') IS NULL;
+----
+true
+
+query B
+SELECT (NULL LIKE 'f%' ESCAPE '~') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' LIKE NULL) IS NULL;
+----
+true
+
+query B
+SELECT ('foo' LIKE NULL ESCAPE '~') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' LIKE 'f%' ESCAPE NULL) IS NULL;
+----
+true
+
+# Verify that the PostgreSQL operators work
+
+query B
+SELECT 'foo' ~~ 'f%';
+----
+true
+
+query B
+SELECT 'foo' !~~ 'f%';
+----
+false
+
+query B
+SELECT 'foo' ~~ 'F%';
+----
+false
+
+query B
+SELECT 'foo' !~~ 'f%';
+----
+false
+
+query B
+SELECT 'foo' !~~ 'g%';
+----
+true
+
+query B
+SELECT 'foo' ~~* 'F%';
+----
+true
+
+query B
+SELECT 'foo' ~~* 'G%';
+----
+false
+
+query B
+SELECT 'foo' !~~* 'G%';
+----
+true
+
+query B
+SELECT 'foo' !~~* 'f%';
+----
+false
+
+query B
+SELECT (NULL ~~ 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' ~~ NULL) IS NULL;
+----
+true
+
+query B
+SELECT (NULL ~~* 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' ~~* NULL) IS NULL;
+----
+true
+
+query B
+SELECT (NULL !~~ 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' !~~ NULL) IS NULL;
+----
+true
+
+query B
+SELECT (NULL !~~* 'f%') IS NULL;
+----
+true
+
+query B
+SELECT ('foo' !~~* NULL) IS NULL;
+----
+true

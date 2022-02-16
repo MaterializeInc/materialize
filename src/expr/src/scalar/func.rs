@@ -12,6 +12,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::str;
+use std::str::FromStr;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -2203,7 +2204,8 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
-    IsLikePatternMatch { case_insensitive: bool },
+    LikeEscape,
+    IsLikeMatch { case_insensitive: bool },
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
@@ -2384,8 +2386,9 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(eager!(lte)),
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::IsLikePatternMatch { case_insensitive } => {
-                eager!(is_like_pattern_match_dynamic, *case_insensitive)
+            BinaryFunc::LikeEscape => eager!(like_escape, temp_storage),
+            BinaryFunc::IsLikeMatch { case_insensitive } => {
+                eager!(is_like_match_dynamic, *case_insensitive)
             }
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
                 eager!(is_regexp_match_dynamic, *case_insensitive)
@@ -2551,13 +2554,13 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
-            IsLikePatternMatch { .. } | IsRegexpMatch { .. } => {
+            IsLikeMatch { .. } | IsRegexpMatch { .. } => {
                 // The output can be null if the pattern is invalid.
                 ScalarType::Bool.nullable(true)
             }
 
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Left | Right | Trim
-            | TrimLeading | TrimTrailing => ScalarType::String.nullable(in_nullable),
+            | TrimLeading | TrimTrailing | LikeEscape => ScalarType::String.nullable(in_nullable),
 
             AddInt16 | SubInt16 | MulInt16 | DivInt16 | ModInt16 | BitAndInt16 | BitOrInt16
             | BitXorInt16 | BitShiftLeftInt16 | BitShiftRightInt16 => {
@@ -2881,6 +2884,7 @@ impl BinaryFunc {
             | MapContainsMap
             | TextConcat
             | ListIndex
+            | IsLikeMatch { .. }
             | IsRegexpMatch { .. }
             | ArrayContains
             | ArrayIndex
@@ -2891,8 +2895,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
-            IsLikePatternMatch { .. }
-            | ToCharTimestamp
+            ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
             | DateBinTimestampTz
@@ -2934,7 +2937,8 @@ impl BinaryFunc {
             | RepeatString
             | PgGetConstraintdef
             | ArrayRemove
-            | ListRemove => false,
+            | ListRemove
+            | LikeEscape => false,
         }
     }
 
@@ -3025,10 +3029,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::IsLikePatternMatch {
+            BinaryFunc::LikeEscape => f.write_str("like_escape"),
+            BinaryFunc::IsLikeMatch {
                 case_insensitive: false,
             } => f.write_str("like"),
-            BinaryFunc::IsLikePatternMatch {
+            BinaryFunc::IsLikeMatch {
                 case_insensitive: true,
             } => f.write_str("ilike"),
             BinaryFunc::IsRegexpMatch {
@@ -3356,7 +3361,7 @@ pub enum UnaryFunc {
     ByteLengthBytes,
     ByteLengthString,
     CharLength,
-    IsLikePatternMatch(like_pattern::Matcher),
+    IsLikeMatch(like_pattern::Matcher),
     IsRegexpMatch(Regex),
     RegexpMatch(Regex),
     ExtractInterval(DateTimeUnits),
@@ -3767,7 +3772,7 @@ impl UnaryFunc {
             ByteLengthString => byte_length(a.unwrap_str()),
             ByteLengthBytes => byte_length(a.unwrap_bytes()),
             CharLength => char_length(a),
-            IsLikePatternMatch(matcher) => Ok(is_like_pattern_match_static(a, &matcher)),
+            IsLikeMatch(matcher) => Ok(is_like_match_static(a, &matcher)),
             IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
             RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
             ExtractInterval(units) => date_part_interval_inner::<Numeric>(*units, a),
@@ -3975,7 +3980,7 @@ impl UnaryFunc {
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
-            IsLikePatternMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
+            IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
@@ -4237,7 +4242,7 @@ impl UnaryFunc {
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
-            IsLikePatternMatch(_) | IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
+            IsLikeMatch(_) | IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
             CastStringToJsonb => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
@@ -4519,7 +4524,7 @@ impl UnaryFunc {
             BitLengthString => f.write_str("bit_length"),
             ByteLengthBytes => f.write_str("octet_length"),
             ByteLengthString => f.write_str("octet_length"),
-            IsLikePatternMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
+            IsLikeMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
             IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             ExtractInterval(units) => write!(f, "extract_{}_iv", units),
@@ -4743,22 +4748,29 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
-fn is_like_pattern_match_static<'a>(a: Datum<'a>, needle: &like_pattern::Matcher) -> Datum<'a> {
+fn like_escape<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let pattern = a.unwrap_str();
+    let escape = like_pattern::EscapeBehavior::from_str(b.unwrap_str())?;
+    let normalized = like_pattern::normalize_pattern(pattern, escape)?;
+    Ok(Datum::String(temp_storage.push_string(normalized)))
+}
+
+fn is_like_match_static<'a>(a: Datum<'a>, needle: &like_pattern::Matcher) -> Datum<'a> {
     let haystack = a.unwrap_str();
     Datum::from(needle.is_match(haystack))
 }
 
-fn is_like_pattern_match_dynamic<'a>(
+fn is_like_match_dynamic<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     case_insensitive: bool,
 ) -> Result<Datum<'a>, EvalError> {
     let haystack = a.unwrap_str();
-    let needle = like_pattern::compile(
-        b.unwrap_str(),
-        case_insensitive,
-        like_pattern::EscapeBehavior::default(),
-    )?;
+    let needle = like_pattern::compile(b.unwrap_str(), case_insensitive)?;
     Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }
 

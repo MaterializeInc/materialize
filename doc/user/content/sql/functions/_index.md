@@ -48,8 +48,8 @@ Operator | Computes
 `a IS NOT FALSE` | `a` is not false, requiring `a` to be a boolean
 `a IS UNKNOWN` | `a = NULL`, requiring `a` to be a boolean
 `a IS NOT UNKNOWN` | `a != NULL`, requiring `a` to be a boolean
-`a LIKE match_expr` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
-`a ILIKE match_expr` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`a LIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`a ILIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 
 ### Numbers
 
