@@ -3111,6 +3111,7 @@ dependencies = [
  "flate2",
  "futures",
  "globset",
+ "hex",
  "inotify",
  "itertools",
  "lazy_static",
@@ -3642,6 +3643,7 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-dataflow-types",
  "mz-ore",
  "mz-pgrepr",
  "mz-repr",
@@ -3747,6 +3749,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-arn",
+ "bytes",
  "chrono",
  "csv",
  "datadriven",
