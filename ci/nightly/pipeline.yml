@@ -27,6 +27,7 @@ steps:
           - { value: cluster-testdrive }
           - { value: proxy }
           - { value: testdrive-workers-1 }
+          - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
           - { value: persistence-testdrive }
           - { value: feature-benchmark }
@@ -139,6 +140,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-2, --workers=1]
+
+  - id: testdrive-workers-32
+    label: ":racing_car: testdrive with --workers 32"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          args: [--aws-region=us-east-2, --workers=32]
+    agents:
+      queue: x86_64-large
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
