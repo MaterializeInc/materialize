@@ -436,6 +436,7 @@ where
                                 let as_of_frontier = as_of_frontier.clone();
 
                                 let source_arity = src.desc.typ().arity();
+
                                 let persist_upsert_config = source_persist_config
                                     .as_ref()
                                     .map(|config| config.upsert_config().clone());
@@ -461,7 +462,11 @@ where
                                             as_of_frontier,
                                             &mut linear_operators,
                                             source_arity,
-                                            persist_upsert_config,
+                                            // TODO(guswynn): make debezium upsert work with
+                                            // persistence. See
+                                            // https://github.com/MaterializeInc/materialize/issues/10699z
+                                            // for more info.
+                                            None,
                                             upsert_envelope.clone(),
                                             move |current_values_size| {
                                                 gauge.set(current_values_size)
