@@ -16,6 +16,7 @@ use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
+use mz_dataflow_types::sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode};
 use mz_expr::PartitionId;
 use mz_repr::MessagePayload;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -396,6 +397,116 @@ where
                     } else if matches!(&value, Some(Ok(_))) {
                         n_successes += 1;
                     }
+
+                    eprintln!("GIVING RECORD AT CAP {:?}", cap);
+
+                    session.give(DecodeResult {
+                        key,
+                        value,
+                        position: *position,
+                        upstream_time_millis: *upstream_time_millis,
+                        partition: partition.clone(),
+                        metadata: to_metadata_row(
+                            &metadata_items,
+                            partition.clone(),
+                            *position,
+                            *upstream_time_millis,
+                            headers.as_deref(),
+                        ),
+                    });
+                }
+            });
+            // Matching historical practice, we only log metrics on the value decoder.
+            if n_errors > 0 {
+                value_decoder.log_errors(n_errors);
+            }
+            if n_successes > 0 {
+                value_decoder.log_successes(n_successes);
+            }
+        }
+    });
+    (results, None)
+}
+
+pub fn render_decode_dbz_delimited<G>(
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
+    key_encoding: Option<DataEncoding>,
+    value_encoding: DataEncoding,
+    debug_name: &str,
+    envelope: &DebeziumEnvelope,
+    metadata_items: Vec<IncludedColumnSource>,
+    // Information about optional transformations that can be eagerly done.
+    // If the decoding elects to perform them, it should replace this with
+    // `None`.
+    operators: &mut Option<LinearOperator>,
+    metrics: Metrics,
+) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
+where
+    G: Scope,
+{
+    let op_name = format!(
+        "{}{}DecodeDebeziumDelimited",
+        key_encoding
+            .as_ref()
+            .map(|key_encoding| key_encoding.op_name())
+            .unwrap_or(""),
+        value_encoding.op_name()
+    );
+    let mut key_decoder = key_encoding.map(|key_encoding| {
+        get_decoder(key_encoding, debug_name, operators, true, metrics.clone())
+    });
+
+    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
+
+    let dist: fn(&SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>) -> _ = |x| x.partition.hashed();
+
+    let tx_id_idx = match envelope {
+        DebeziumEnvelope {
+            mode: DebeziumMode::Full(DebeziumDedupProjection { tx_id_idx, .. }),
+            ..
+        }
+        | DebeziumEnvelope {
+            mode: DebeziumMode::Ordered(DebeziumDedupProjection { tx_id_idx, .. }),
+            ..
+        }
+        | DebeziumEnvelope {
+            mode:
+                DebeziumMode::FullInRange {
+                    projection: DebeziumDedupProjection { tx_id_idx, .. },
+                    ..
+                },
+            ..
+        } => *tx_id_idx,
+        _ => None,
+    };
+
+    let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
+        move |input, output| {
+            let mut n_errors = 0;
+            let mut n_successes = 0;
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for SourceOutput {
+                    key,
+                    value,
+                    position,
+                    upstream_time_millis,
+                    partition,
+                } in data.iter()
+                {
+                    let key = key_decoder
+                        .as_mut()
+                        .and_then(|decoder| try_decode(decoder, key.as_ref()));
+
+                    let value = try_decode(&mut value_decoder, value.as_ref());
+
+                    if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                        n_errors += 1;
+                    } else if matches!(&value, Some(Ok(_))) {
+                        n_successes += 1;
+                    }
+
+                    eprintln!("GIVING RECORD AT CAP {:?}", cap);
 
                     session.give(DecodeResult {
                         key,

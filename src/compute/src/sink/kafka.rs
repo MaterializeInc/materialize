@@ -1198,6 +1198,7 @@ where
                     }
 
                     s.sink_state = KafkaSinkStateEnum::Running(consistency_state);
+                    eprintln!("KAFKA SINK FRONTIER INIT: {:?}", frontier);
                 }
             }
 
@@ -1243,6 +1244,7 @@ where
                 .filter(|(ts, _)| !frontier.less_equal(*ts))
                 .map(|(&ts, _)| ts)
                 .collect();
+            eprintln!("KAFKA SINK CLOSED TS: {:?}", closed_ts);
             closed_ts.sort_unstable();
             closed_ts.into_iter().for_each(|ts| {
                 let rows = s.pending_rows.remove(&ts).unwrap();

@@ -338,6 +338,8 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
+    let mut depends_on = vec![];
+
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
             let (broker, topic) = match &kafka.connector {
@@ -628,6 +630,25 @@ pub fn plan_create_source(
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
                 }
                 DbzMode::Plain => {
+                    // XXX(chae): should this be for upsert too?
+                    let tx_metadata = match with_options.remove("tx_metadata") {
+                        Some(Value::String(src)) => {
+                            //let name = scx.allocate_name(normalize::unresolved_object_name(src.clone())?);
+                            // XXX(chae): this seems like I'm breaking a boundary by accessing catalog
+                            let item =
+                                scx.catalog
+                                    .resolve_item(&normalize::unresolved_object_name(
+                                        UnresolvedObjectName::unqualified(&src),
+                                    )?)?;
+                            depends_on.push(item.id());
+                            depends_on.extend(item.uses());
+
+                            Some(item.id())
+                        }
+                        Some(v) => bail!("tx_metadata must be a String found {:?}", v),
+                        None => None,
+                    };
+
                     let dedup_projection = typecheck_debezium_dedup(&value_desc);
 
                     let dedup_mode = match with_options.remove("deduplication") {
@@ -643,16 +664,19 @@ pub fn plan_create_source(
                         "ordered" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
+                    tx_metadata,
                             mode: DebeziumMode::Ordered(dedup_projection?),
                         }),
                         "full" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
+                    tx_metadata,
                             mode: DebeziumMode::Full(dedup_projection?),
                         }),
                         "none" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
+                    tx_metadata,
                             mode: DebeziumMode::None,
                         }),
                         "full_in_range" => {
@@ -711,6 +735,7 @@ pub fn plan_create_source(
                                     UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                                         before_idx,
                                         after_idx,
+                    tx_metadata,
                                         mode: DebeziumMode::FullInRange {
                                             start,
                                             end,
@@ -871,6 +896,7 @@ pub fn plan_create_source(
             timeline,
         },
         desc,
+        depends_on,
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
@@ -1017,12 +1043,29 @@ fn typecheck_debezium_dedup(
         },
         None => bail!("'total_order' field missing from tx record"),
     };
+
+    let tx_id = tx_fields
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.0.as_str() == "id");
+    let tx_id_idx = match tx_id {
+        Some((idx, (_, ty))) => match &ty.scalar_type {
+            ScalarType::String => Some(idx),
+            _ => None, //bail!("'total_order' column must be an bigint"),
+        },
+        None => None, //bail!("'total_order' field missing from tx record"),
+    };
+    eprintln!(
+        "TX IDX: {:?}, TX ID: {:?}, TX ID IDX: {:?}",
+        transaction_idx, tx_id, tx_id_idx
+    );
     Ok(DebeziumDedupProjection {
         source_idx,
         snapshot_idx,
         source_projection,
         transaction_idx,
         total_order_idx,
+        tx_id_idx,
     })
 }
 

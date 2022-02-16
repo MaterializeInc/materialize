@@ -426,6 +426,7 @@ pub mod sources {
     use uuid::Uuid;
 
     use crate::gen::postgres_source::PostgresSourceDetails;
+    use mz_expr::GlobalId;
     use mz_kafka_util::KafkaAddrs;
     use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
 
@@ -897,6 +898,7 @@ pub mod sources {
         /// The column index containing the `after` row
         pub after_idx: usize,
         pub mode: DebeziumMode,
+        pub tx_metadata: Option<GlobalId>,
     }
 
     /// Ordered means we can trust Debezium high water marks
@@ -955,6 +957,9 @@ pub mod sources {
         pub transaction_idx: usize,
         /// The record index of the `transaction.total_order` field
         pub total_order_idx: usize,
+
+        /// The record index of the `transaction.id` field
+        pub tx_id_idx: Option<usize>,
     }
 
     /// Debezium generates records that contain metadata about the upstream database. The structure of

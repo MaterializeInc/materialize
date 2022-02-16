@@ -12,6 +12,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Add;
 use std::rc::{Rc, Weak};
 
 use differential_dataflow::lattice::Lattice;
@@ -149,6 +150,8 @@ pub(crate) fn import_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
+    // XXX(chae): will contain gloabl id for consistency topic source.  IN source envelope struct.  Generated from planning
+    // Similar to processing an e.g. SELCET from non-materialized Source: DataflowDesc?
     SourceInstanceDesc {
         description: src,
         arguments:
@@ -243,7 +246,7 @@ where
             // whose contents will be concatenated and inserted along the collection.
             let mut error_collections = Vec::<Collection<_, _, Diff>>::new();
 
-            let source_persist_config = match (persist, storage_state.persist.as_mut()) {
+            let source_persist_config = match (persist.clone(), storage_state.persist.as_mut()) {
                 (Some(persist_desc), Some(persist)) => {
                     Some(get_persist_config(&uid, persist_desc, persist))
                 }
@@ -283,7 +286,7 @@ where
                 timestamp_frequency: ts_frequency,
                 worker_id: scope.index(),
                 worker_count: scope.peers(),
-                logger: materialized_logging,
+                logger: materialized_logging.clone(),
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
@@ -411,6 +414,95 @@ where
                         );
                         needed_tokens.push(Rc::new(token));
                         (oks, None)
+                    } else if let SourceEnvelope::Debezium(dbz_envelope) = &envelope {
+                        // XXX(chae): use global id / storage_state.source_desc to render a nested source and feed that below
+                        // XXX(chae): use timestamps of END tx messages as timestamp for everything in the transaction
+                        // XXX(chae): use dbz deduplication full for tx source
+                        // XXX(chae): add depends_on for Sources in catalog
+                        let source = match ok_source {
+                            SourceType::Delimited(s) => s,
+                            _ => unreachable!("Attempted to create non-delimited dbz source"),
+                        };
+                        let tx_src = match dbz_envelope.tx_metadata {
+                            Some(tx_id) => {
+                                eprintln!("LOOKING UP {:?}", tx_id);
+                                let tx_src_desc = storage_state
+                                    .source_descriptions
+                                    .get(&tx_id)
+                                    .expect("bad spec")
+                                    .clone();
+                                eprintln!("CONENCTING TX METADATA {:?}", tx_id);
+                                let (tx_source, extra_token) = import_source(
+                                    dataflow_debug_name,
+                                    dataflow_id,
+                                    as_of_frontier,
+                                    SourceInstanceDesc {
+                                        description: tx_src_desc,
+                                        operators: linear_operators.clone(),
+                                        persist: persist.clone(),
+                                    },
+                                    storage_state,
+                                    scope,
+                                    materialized_logging.clone(),
+                                    src_id,
+                                );
+                                needed_tokens.push(extra_token);
+                                Some(tx_source)
+                            }
+                            None => None,
+                        };
+                        let (results, extra_token) = render_decode_dbz_delimited(
+                            &source,
+                            key_encoding,
+                            value_encoding,
+                            dataflow_debug_name,
+                            &dbz_envelope,
+                            metadata_columns,
+                            &mut linear_operators,
+                            storage_state.unspecified_metrics.clone(),
+                        );
+                        if let Some(tok) = extra_token {
+                            needed_tokens.push(Rc::new(tok));
+                        }
+                        // REBASEFIXUP
+                        let (stream, errors) = match tx_src {
+                            Some((tx_src_ok, tx_src_err)) => {
+                                let (dbz_render, dbz_err, token) = super::debezium::render_new(
+                                    dbz_envelope,
+                                    &results,
+                                    tx_src_ok,
+                                    dataflow_debug_name.clone(),
+                                    //storage_state.unspecified_metrics.clone(),
+                                    //src_id,
+                                    //dataflow_id,
+                                );
+                                if let Some(tok) = token {
+                                    needed_tokens.push(Rc::new(tok));
+                                }
+                                (dbz_render, dbz_err)
+                            }
+                            None => super::debezium::render(
+                                dbz_envelope,
+                                &results,
+                                dataflow_debug_name.clone(),
+                                //storage_state.unspecified_metrics.clone(),
+                                //src_id,
+                                //dataflow_id,
+                            ),
+                        };
+                        //let (stream, errors) =
+                        //    dbz_render.inner.ok_err(|(res, time, diff)| match res {
+                        //        Ok(v) => {
+                        //            eprintln!("ROW PROCESSED: {:?} {:?} {:?}", v, time, diff);
+                        //            Ok((v, time, diff))
+                        //        }
+                        //        Err(e) => {
+                        //            eprintln!("ROW ERROR PROCESSED: {:?} {:?} {:?}", e, time, diff);
+                        //            Err((e, time, diff))
+                        //        }
+                        //    });
+                        let c = stream.as_collection();
+                        (c, Some(errors.as_collection()))
                     } else {
                         let (results, extra_token) = match ok_source {
                             SourceType::Delimited(source) => render_decode_delimited(
@@ -438,14 +530,8 @@ where
 
                         // render envelopes
                         match &envelope {
-                            SourceEnvelope::Debezium(dbz_envelope) => {
-                                let (stream, errors) = super::debezium::render(
-                                    dbz_envelope,
-                                    &results,
-                                    dataflow_debug_name.clone(),
-                                );
-                                (stream.as_collection(), Some(errors.as_collection()))
-                            }
+                            // XXX(chae): make one big match
+                            SourceEnvelope::Debezium(dbz_envelope) => unreachable!(),
                             SourceEnvelope::Upsert(upsert_envelope) => {
                                 // TODO: use the key envelope to figure out when to add keys.
                                 // The operator currently does it unconditionally

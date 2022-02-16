@@ -68,6 +68,10 @@ struct MyProgress {
     counts: Vec<(Timestamp, usize)>,
 }
 
+// XXX(chae): this is where we read in the tx data from postgress and somehow (?) via Message::Progress group transactions
+// We can't do exactly the same thing for dbz because that's currently at a higher level that wraps the message.
+// XXX: are dbz sources always avro / bytes? does it matter?
+// .    Can you wrap CDC com.materialize.cdc.progress with dbz? probably not -- that seems weird but there's nothing (afaik) that keeps this from happening
 impl AvroDecode for Decoder {
     type Out = Message<Row, Timestamp, Diff>;
     fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
