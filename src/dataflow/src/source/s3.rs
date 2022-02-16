@@ -815,7 +815,7 @@ impl SourceReader for S3SourceReader {
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
         metrics: SourceBaseMetrics,
-    ) -> Result<(S3SourceReader, Option<PartitionId>), anyhow::Error> {
+    ) -> Result<Self, anyhow::Error> {
         let s3_conn = match connector {
             ExternalSourceConnector::S3(s3_conn) => s3_conn,
             _ => {
@@ -894,16 +894,13 @@ impl SourceReader for S3SourceReader {
             (dataflow_rx, shutdowner)
         };
 
-        Ok((
-            S3SourceReader {
-                source_name,
-                id: source_id,
-                receiver_stream: receiver,
-                dataflow_status: shutdowner,
-                offset: S3Offset(0),
-            },
-            Some(PartitionId::None),
-        ))
+        Ok(S3SourceReader {
+            source_name,
+            id: source_id,
+            receiver_stream: receiver,
+            dataflow_status: shutdowner,
+            offset: S3Offset(0),
+        })
     }
 
     fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {

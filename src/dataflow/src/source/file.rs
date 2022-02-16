@@ -78,7 +78,7 @@ impl SourceReader for FileSourceReader {
         encoding: SourceDataEncoding,
         _: Option<Logger>,
         _: SourceBaseMetrics,
-    ) -> Result<(FileSourceReader, Option<PartitionId>), anyhow::Error> {
+    ) -> Result<Self, anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
                 tracing::debug!("creating FileSourceReader worker_id={}", worker_id);
@@ -160,14 +160,11 @@ impl SourceReader for FileSourceReader {
             _ => unreachable!(),
         };
 
-        Ok((
-            FileSourceReader {
-                id: source_id,
-                receiver_stream: receiver,
-                current_file_offset: FileOffset { offset: 0 },
-            },
-            Some(PartitionId::None),
-        ))
+        Ok(FileSourceReader {
+            id: source_id,
+            receiver_stream: receiver,
+            current_file_offset: FileOffset { offset: 0 },
+        })
     }
 
     fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
