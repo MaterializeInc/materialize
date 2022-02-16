@@ -22,7 +22,7 @@ use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{ColumnName, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
@@ -340,6 +340,11 @@ pub enum CatalogType {
     Map {
         key_id: GlobalId,
         value_id: GlobalId,
+    },
+    Record {
+        /// The names and types of the fields of the record, in order from left
+        /// to right.
+        fields: Vec<(ColumnName, GlobalId)>,
     },
     Numeric,
     Oid,
