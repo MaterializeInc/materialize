@@ -70,6 +70,7 @@ use crate::names::{
     resolve_names_data_type, DatabaseSpecifier, FullName, ResolvedDataType, SchemaName,
 };
 use crate::normalize;
+use crate::normalize::ident;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -2092,128 +2093,98 @@ pub fn plan_create_type(
         as_type,
         with_options,
     } = stmt;
-
-    let mut with_options = normalize::option_objects(&with_options);
-    let mut ids = vec![];
-
-    let option_keys = match as_type {
-        CreateTypeAs::List => vec!["element_type"],
-        CreateTypeAs::Map => vec!["key_type", "value_type"],
-        _ => vec![],
-    };
-
-    // TODO(phemberger): might need to consider stable sort order here
-    let v = with_options.keys().cloned().collect_vec();
-    let v2 = v.iter().map(|k| k.as_str()).collect_vec();
-    let mut record_field_names = vec![];
-
-    if let CreateTypeAs::Record = as_type {
-        for (key, field_type) in with_options {
-            let item = match field_type {
-                SqlOption::DataType { data_type, .. } => {
-                    let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
-                    ids.extend(dt_ids);
-                    record_field_names.push(ColumnName::from(key));
-                    match data_type {
-                        ResolvedDataType::Named {
-                            name,
-                            id,
-                            modifiers,
-                            print_id: _,
-                        } => {
-                            if !modifiers.is_empty() {
-                                bail!(
-                                "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
+    fn ensure_valid_data_type(
+        scx: &StatementContext,
+        data_type: ResolvedDataType,
+        as_type: CreateTypeAs,
+        key: &str,
+    ) -> Result<(), anyhow::Error> {
+        let item = match data_type {
+            ResolvedDataType::Named {
+                name,
+                id,
+                modifiers,
+                print_id: _,
+            } => {
+                if !modifiers.is_empty() {
+                    bail!(
+                        "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
                                 {}, you must use the default type",
-                                as_type.to_string().quoted(),
-                                key,
-                                name
-                            )
-                            }
-                            scx.catalog.get_item_by_id(&id)
-                        }
-                        d => bail!(
-                        "CREATE TYPE ... AS {}option {} can only use named data types, but \
-                        found unnamed data type {}. Use CREATE TYPE to create a named type first",
                         as_type.to_string().quoted(),
                         key,
-                        d.to_ast_string(),
-                    ),
-                    }
+                        name
+                    );
                 }
-                _ => bail!("{} must be a data type", key),
-            };
-            match scx.catalog.get_item_by_id(&item.id()).type_details() {
-                None => bail!(
+                scx.catalog.get_item_by_id(&id)
+            }
+            d => bail!(
+                "CREATE TYPE ... AS {}option {} can only use named data types, but \
+                        found unnamed data type {}. Use CREATE TYPE to create a named type first",
+                as_type.to_string().quoted(),
+                key,
+                d.to_ast_string(),
+            ),
+        };
+
+        match scx.catalog.get_item_by_id(&item.id()).type_details() {
+            None => bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
                 item.name(),
                 item.item_type()
             ),
-                Some(CatalogTypeDetails {
-                         typ: CatalogType::Char,
-                         ..
-                     }) if as_type == CreateTypeAs::List => {
-                    bail_unsupported!("char list")
-                }
-                _ => {}
+            Some(CatalogTypeDetails {
+                typ: CatalogType::Char,
+                ..
+            }) if as_type == CreateTypeAs::List => {
+                bail_unsupported!("char list")
             }
-        }
-    } else {
-        for key in option_keys {
-            let item = match with_options.remove(&key.to_string()) {
-                Some(SqlOption::DataType { data_type, .. }) => {
-                    let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
-                    ids.extend(dt_ids);
-                    match data_type {
-                        ResolvedDataType::Named {
-                            name,
-                            id,
-                            modifiers,
-                            print_id: _,
-                        } => {
-                            if !modifiers.is_empty() {
-                                bail!(
-                                "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
-                                {}, you must use the default type",
-                                as_type.to_string().quoted(),
-                                key,
-                                name
-                            )
-                            }
-                            scx.catalog.get_item_by_id(&id)
-                        }
-                        d => bail!(
-                        "CREATE TYPE ... AS {}option {} can only use named data types, but \
-                        found unnamed data type {}. Use CREATE TYPE to create a named type first",
-                        as_type.to_string().quoted(),
-                        key,
-                        d.to_ast_string(),
-                    ),
-                    }
-                }
-                Some(_) => bail!("{} must be a data type", key),
-                None => bail!("{} parameter required", key),
-            };
-            match scx.catalog.get_item_by_id(&item.id()).type_details() {
-                None => bail!(
-                "{} must be of class type, but received {} which is of class {}",
-                key,
-                item.name(),
-                item.item_type()
-            ),
-                Some(CatalogTypeDetails {
-                         typ: CatalogType::Char,
-                         ..
-                     }) if as_type == CreateTypeAs::List => {
-                    bail_unsupported!("char list")
-                }
-                _ => {}
-            }
+            _ => {}
         }
 
-        normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
+        Ok(())
     }
+
+    let mut ids = vec![];
+    let mut record_field_names = vec![];
+    match as_type {
+        CreateTypeAs::List | CreateTypeAs::Map => {
+            let mut with_options = normalize::option_objects(&with_options);
+            let option_keys = match as_type {
+                CreateTypeAs::List => vec!["element_type"],
+                CreateTypeAs::Map => vec!["key_type", "value_type"],
+                _ => vec![],
+            };
+
+            for key in option_keys {
+                match with_options.remove(&key.to_string()) {
+                    Some(SqlOption::DataType { data_type, .. }) => {
+                        let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
+                        ids.extend(dt_ids);
+                        ensure_valid_data_type(scx, data_type, as_type, key)?;
+                    }
+                    Some(_) => bail!("{} must be a data type", key),
+                    None => bail!("{} parameter required", key),
+                };
+            }
+
+            normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
+        }
+        CreateTypeAs::Record => {
+            for sql_option in with_options {
+                let (key, field_type) = (ident(sql_option.name().clone()), sql_option.clone());
+                match field_type {
+                    SqlOption::DataType { data_type, .. } => {
+                        let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
+                        ids.extend(dt_ids);
+                        record_field_names.push(ColumnName::from(key.clone()));
+                        ensure_valid_data_type(scx, data_type, as_type, &key)?;
+                    }
+                    _ => bail!("{} must be a data type", key),
+                };
+            }
+        }
+    };
 
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     if scx.catalog.item_exists(&name) {
@@ -2240,11 +2211,12 @@ pub fn plan_create_type(
                 key_id,
                 value_id: *ids.get(1).expect("value"),
             }
-        },
-        CreateTypeAs::Record => {
-            CatalogType::Record {
-                fields: record_field_names.into_iter().zip(ids.iter().cloned()).collect_vec(),
-            }
+        }
+        CreateTypeAs::Record => CatalogType::Record {
+            fields: record_field_names
+                .into_iter()
+                .zip(ids.iter().cloned())
+                .collect_vec(),
         },
     };
 

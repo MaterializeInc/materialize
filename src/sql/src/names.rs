@@ -309,7 +309,6 @@ impl<'a> NameResolver<'a> {
         &mut self,
         data_type: <Raw as AstInfo>::DataType,
     ) -> Result<<Aug as AstInfo>::DataType, PlanError> {
-        // TODO(phemberger): might need to add an UnresolvedDataType::Record change here
         match data_type {
             UnresolvedDataType::Array(elem_type) => {
                 let name = elem_type.to_string();

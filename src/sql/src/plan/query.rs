@@ -4313,20 +4313,23 @@ fn scalar_type_from_catalog(
                 }),
                 CatalogType::Record { fields } => {
                     let mut scalars = vec![];
-                    for (column, id) in fields.to_owned() {
-                        let scalar = scalar_type_from_catalog(scx, id, &[])?;
-                        scalars.push(
-                            (column, ColumnType {
+                    for (column, id) in fields {
+                        let scalar = scalar_type_from_catalog(scx, *id, &[])?;
+                        scalars.push((
+                            column.clone(),
+                            ColumnType {
                                 scalar_type: scalar,
                                 nullable: false,
-                            }));
+                            },
+                        ));
                     }
+                    let catalog_item = scx.catalog.get_item_by_id(&id);
                     Ok(ScalarType::Record {
                         fields: scalars,
-                        custom_name: Some("special-custom-name".to_string()),
-                        custom_oid: None,
+                        custom_name: Some(catalog_item.name().item.clone()),
+                        custom_oid: Some(catalog_item.oid()),
                     })
-                },
+                }
                 CatalogType::Bool => Ok(ScalarType::Bool),
                 CatalogType::Bytes => Ok(ScalarType::Bytes),
                 CatalogType::Char1 => Ok(ScalarType::Char {
