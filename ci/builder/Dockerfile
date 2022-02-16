@@ -143,6 +143,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=1.33.1" cargo-deb \
     && cargo install --root /usr/local --version "=0.9.1" cargo-deny \
     && cargo install --root /usr/local --version "=0.1.10" cargo2junit \
+    && cargo install --root /usr/local --version "=0.1.26" cargo-udeps  --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache
 
 # Link the system lld into the cross-compiling sysroot.
