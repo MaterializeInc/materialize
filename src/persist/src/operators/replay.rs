@@ -19,6 +19,7 @@ use timely::{Data as TimelyData, PartialOrder};
 use crate::client::DecodedSnapshot;
 use crate::error::Error;
 use crate::indexed::Snapshot;
+use crate::operators::DEFAULT_OUTPUTS_PER_YIELD;
 
 /// Extension trait for [`Stream`].
 pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -27,6 +28,19 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
         &self,
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
         as_of_frontier: &Antichain<u64>,
+    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
+        self.replay_yield(snapshot, as_of_frontier, DEFAULT_OUTPUTS_PER_YIELD)
+    }
+
+    /// Emits each record in a snapshot, yielding periodically.
+    ///
+    /// This yields after `outputs_per_yield` outputs to allow downstream
+    /// operators to reduce down the data and limit max memory usage.
+    fn replay_yield(
+        &self,
+        snapshot: Result<DecodedSnapshot<K, V>, Error>,
+        as_of_frontier: &Antichain<u64>,
+        outputs_per_yield: usize,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
 }
 
@@ -36,10 +50,11 @@ where
     K: TimelyData + Codec,
     V: TimelyData + Codec,
 {
-    fn replay(
+    fn replay_yield(
         &self,
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
         as_of_frontier: &Antichain<u64>,
+        outputs_per_yield: usize,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
         // TODO: This currently works by only emitting the persisted
         // data on worker 0 because that was the simplest thing to do
@@ -52,37 +67,36 @@ where
         let result_stream: Stream<G, Result<((K, V), u64, isize), Error>> = operator::source(
             self,
             "Replay",
-            move |cap, _info| {
+            move |cap, info| {
+                let activator = self.activator_for(&info.address[..]);
                 let mut snapshot_cap = if active_worker {
-                    Some((snapshot, cap))
+                    Some((snapshot.map(|s| (s.since(), s.into_iter())), cap))
                 } else {
                     None
                 };
 
                 move |output| {
-                    let (snapshot, cap) = match snapshot_cap.take() {
+                    let mut done = true;
+                    let (snapshot, cap) = match snapshot_cap.as_mut() {
                         Some(x) => x,
-                        None => return, // We were already invoked and consumed our snapshot.
+                        None => return, // We already consumed our snapshot.
                     };
 
                     let mut session = output.session(&cap);
 
                     match snapshot {
-                        Ok(snapshot) => {
-                            let snapshot_since = snapshot.since();
-
-                            if PartialOrder::less_than(&as_of_frontier, &snapshot_since) {
-                                session.give(Err(Error::String(format!(
+                        Ok((snapshot_since, _))
+                            if PartialOrder::less_than(&as_of_frontier, &snapshot_since) =>
+                        {
+                            session.give(Err(Error::String(format!(
                                     "replaying persisted data: snapshot since ({:?}) is beyond expected as_of ({:?})",
                                     snapshot_since, as_of_frontier
                                 ))));
-
-                                return;
-                            }
-
-                            // TODO: Periodically yield to let the rest of the dataflow
-                            // reduce this down.
-                            for x in snapshot.into_iter() {
+                        }
+                        Ok((snapshot_since, snapshot_iter)) => {
+                            // NB: This `idx` from enumerate resets back to 0
+                            // each time the operator is run.
+                            for (idx, x) in snapshot_iter.enumerate() {
                                 if let Ok((_, ts, _)) = &x {
                                     // The raw update data held internally in the
                                     // snapshot may not be physically compacted up to
@@ -92,6 +106,10 @@ where
                                     debug_assert!(snapshot_since.less_equal(ts));
                                 }
                                 session.give(x);
+                                if idx + 1 >= outputs_per_yield {
+                                    done = false;
+                                    break;
+                                }
                             }
                         }
                         Err(e) => {
@@ -100,6 +118,12 @@ where
                                 e
                             ))));
                         }
+                    }
+
+                    if done {
+                        snapshot_cap.take();
+                    } else {
+                        activator.activate();
                     }
                 }
             },
@@ -138,8 +162,9 @@ where
 #[cfg(test)]
 mod tests {
 
+    use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, OkErr};
+    use timely::dataflow::operators::{Capture, OkErr, Operator};
     use timely::progress::Antichain;
 
     use crate::error::Error;
@@ -296,6 +321,78 @@ mod tests {
         assert_eq!(
             errs,
             vec!["replaying persisted data: snapshot since (Antichain { elements: [5] }) is beyond expected as_of (Antichain { elements: [0] })".to_string()]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn replay_batching() -> Result<(), Error> {
+        const OUTPUTS_PER_YIELD: usize = 3;
+        const NUM_WRITES: u64 = 100u64;
+        let mut registry = MemRegistry::new();
+        let p = registry.runtime_no_reentrance()?;
+
+        let (write, _) = p.create_or_load("1");
+        for i in 1..=NUM_WRITES {
+            write
+                .write(&[((format!("{:03}", i), ()), i, 1)])
+                .recv()
+                .expect("write was successful");
+        }
+        write
+            .seal(NUM_WRITES + 1)
+            .recv()
+            .expect("seal was successful");
+
+        let (oks, errs) = timely::execute_directly(move |worker| {
+            let (oks, errs) = worker.dataflow(|scope| {
+                let (_, read) = p.create_or_load::<String, ()>("1");
+                let (ok_stream, err_stream) = scope
+                    .replay_yield(read.snapshot(), &Antichain::from_elem(0), OUTPUTS_PER_YIELD)
+                    .ok_err(split_ok_err);
+                // Preserve the batching structure out of replay so we can
+                // assert on it.
+                let ok_stream = ok_stream.unary(Pipeline, "Batches", move |_, _| {
+                    move |input, output| {
+                        input.for_each(|time, data| {
+                            let mut batch = Vec::new();
+                            data.swap(&mut batch);
+                            output.session(&time).give(batch);
+                        });
+                    }
+                });
+                (ok_stream.capture(), err_stream.capture())
+            });
+
+            (oks, errs)
+        });
+
+        assert_eq!(
+            errs.extract()
+                .into_iter()
+                .flat_map(|(_time, data)| data.into_iter().map(|(err, _ts, _diff)| err))
+                .collect::<Vec<_>>(),
+            Vec::<String>::new()
+        );
+
+        // Verify that the batches are all <= the yield size.
+        let mut actual = oks
+            .extract()
+            .into_iter()
+            .flat_map(|(_, batches)| {
+                batches.into_iter().flat_map(|batch| {
+                    assert!(batch.len() <= OUTPUTS_PER_YIELD);
+                    batch
+                })
+            })
+            .collect::<Vec<_>>();
+        actual.sort_by_key(|((k, _), _, _)| k.clone());
+
+        let expected = (1..=NUM_WRITES)
+            .map(|x| ((format!("{:03}", x), ()), x, 1))
+            .collect::<Vec<_>>();
+        // Verify that the flattened contents are what we expect.
+        assert_eq!(actual, expected);
 
         Ok(())
     }

@@ -128,7 +128,7 @@ impl SourceReader for KinesisSourceReader {
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
         base_metrics: SourceBaseMetrics,
-    ) -> Result<(Self, Option<PartitionId>), anyhow::Error> {
+    ) -> Result<Self, anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kinesis(kc) => kc,
             _ => unreachable!(),
@@ -136,19 +136,16 @@ impl SourceReader for KinesisSourceReader {
 
         let state = block_on(create_state(&base_metrics.kinesis, kc, aws_external_id));
         match state {
-            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
-                KinesisSourceReader {
-                    kinesis_client,
-                    shard_queue,
-                    last_checked_shards: Instant::now(),
-                    buffered_messages: VecDeque::new(),
-                    shard_set,
-                    stream_name,
-                    processed_message_count: 0,
-                    base_metrics: base_metrics.kinesis,
-                },
-                Some(PartitionId::None),
-            )),
+            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
+                kinesis_client,
+                shard_queue,
+                last_checked_shards: Instant::now(),
+                buffered_messages: VecDeque::new(),
+                shard_set,
+                stream_name,
+                processed_message_count: 0,
+                base_metrics: base_metrics.kinesis,
+            }),
             Err(e) => Err(anyhow!("{}", e)),
         }
     }

@@ -375,7 +375,7 @@ pub(crate) trait SourceReader {
         encoding: SourceDataEncoding,
         logger: Option<Logger>,
         metrics: crate::source::metrics::SourceBaseMetrics,
-    ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
+    ) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
 
@@ -1129,7 +1129,7 @@ where
                 logger,
                 base_metrics.clone(),
             ) {
-                Ok((source_reader, _delete_me)) => Some(source_reader),
+                Ok(source_reader) => Some(source_reader),
                 Err(e) => {
                     error!("Failed to create source: {}", e);
                     None
