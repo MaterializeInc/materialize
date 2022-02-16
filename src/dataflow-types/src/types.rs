@@ -344,6 +344,7 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+    use crate::gen::postgres_source::PostgresSourceDetails;
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
@@ -1396,7 +1397,7 @@ pub mod sources {
         pub conn: String,
         pub publication: String,
         pub slot_name: String,
-        pub details: String,
+        pub details: PostgresSourceDetails,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -23,6 +23,7 @@ dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-iterator = "0.7.0"
+hex = "0.4.3"
 flate2 = "1.0.22"
 futures = "0.3.21"
 globset = "0.4.8"

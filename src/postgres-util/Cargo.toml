@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.55"
+mz-dataflow-types = { path = "../dataflow-types" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }

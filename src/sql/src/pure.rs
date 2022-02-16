@@ -30,7 +30,8 @@ use tokio::task;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
-use mz_dataflow_types::postgres_source::{PostgresColumn, PostgresSourceDetails, PostgresTable};
+use mz_dataflow_types::postgres_source::PostgresSourceDetails;
+use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
 };
@@ -38,8 +39,6 @@ use mz_repr::strconv;
 use mz_sql_parser::parser::parse_data_type;
 
 use prost::Message;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
-use protobuf_native::MessageLite;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
@@ -206,34 +205,11 @@ pub fn purify(
                     // verify that we can connect upstream and snapshot publication metadata
                     let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
 
-                    let mut details_proto = PostgresSourceDetails {
-                        tables: vec![],
-                        slot: match slot {
-                            Some(s) => s.to_owned(),
-                            None => "".to_string(),
-                        },
+                    let details_proto = PostgresSourceDetails {
+                        tables: tables.into_iter().map(|t| t.into()).collect(),
+                        slot: slot.clone().expect("slot must exist"),
                     };
-                    for t in tables {
-                        let proto_t = PostgresTable {
-                            name: t.name,
-                            namespace: t.namespace,
-                            relation_id: t.rel_id.try_into()?,
-                            columns: t
-                                .schema
-                                .iter()
-                                .map(|c| PostgresColumn {
-                                    name: c.name.clone().into_string(),
-                                    type_oid: 0,
-                                    type_mod: 0,
-                                    nullable: false,
-                                    primary_key: false,
-                                })
-                                .collect_vec(),
-                        };
-                        details_proto.tables.push(proto_t);
-                    }
-                    let encoded = details_proto.encode_to_vec();
-                    *details = Some(hex::encode(encoded));
+                    *details = Some(hex::encode(details_proto.encode_to_vec()));
                 }
                 CreateSourceConnector::PubNub { .. } => (),
             }

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,6 +16,7 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::{pin_mut, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
+use mz_postgres_util::TableInfo;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
@@ -27,6 +29,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{info, warn};
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
+use mz_dataflow_types::postgres_source::{PostgresColumn, PostgresTable};
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use mz_repr::{Datum, Row};
 
@@ -48,6 +51,7 @@ pub struct PostgresSourceReader {
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
+    source_tables: HashMap<i32, PostgresTable>,
 }
 
 trait ErrorExt {
@@ -130,10 +134,41 @@ impl PostgresSourceReader {
     ) -> Self {
         Self {
             source_name: source_name.clone(),
+            source_tables: connector
+                .details
+                .clone()
+                .tables
+                .into_iter()
+                .map(|t| (t.relation_id.clone(), t))
+                .collect(),
             connector,
             lsn: 0.into(),
             metrics: PgSourceMetrics::new(metrics, source_name),
         }
+    }
+
+    /// Validates that all expected tables exist in the publication tables and they have the same schema
+    fn validate_tables(&self, tables: Vec<TableInfo>) -> Result<(), anyhow::Error> {
+        let pub_tables: HashMap<i32, PostgresTable> = tables
+            .into_iter()
+            .map(|t| (t.rel_id.try_into().unwrap(), PostgresTable::from(t)))
+            .collect();
+        for (id, schema) in self.source_tables.iter() {
+            if let Some(pub_schema) = pub_tables.get(id) {
+                if pub_schema != schema {
+                    bail!("Schema for table {} differs, recreate materialized source to use new schema", schema.name)
+                } else {
+                    continue;
+                }
+            } else {
+                bail!(
+                    "Publication missing expected table {} with oid {}",
+                    schema.name,
+                    id
+                )
+            }
+        }
+        Ok(())
     }
 
     /// Creates the replication slot and produces the initial snapshot of the data
@@ -162,6 +197,8 @@ impl PostgresSourceReader {
             mz_postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
                 .await
         );
+        // Validate publication tables against the state snapshot
+        try_fatal!(self.validate_tables(publication_tables));
 
         // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
@@ -196,8 +233,8 @@ impl PostgresSourceReader {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-        for info in publication_tables {
-            let relation_id: Datum = (info.rel_id as i32).into();
+        for info in &self.source_tables.values().collect::<Vec<&PostgresTable>>() {
+            let relation_id: Datum = (info.relation_id).into();
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -216,7 +253,7 @@ impl PostgresSourceReader {
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw(info.schema.len() as i32);
+                let mut raw_values = parser.iter_raw(info.columns.len() as i32);
                 try_fatal!(mz_row.push_list_with(|rp| -> Result<(), anyhow::Error> {
                     while let Some(raw_value) = raw_values.next() {
                         let value = std::str::from_utf8(raw_value?)?;
@@ -355,6 +392,9 @@ impl PostgresSourceReader {
                         Insert(insert) => {
                             self.metrics.inserts.inc();
                             let rel_id = insert.rel_id();
+                            if !self.source_tables.contains_key(&rel_id.try_into().unwrap()) {
+                                continue;
+                            }
                             let new_tuple = insert.tuple().tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(row);
@@ -362,6 +402,9 @@ impl PostgresSourceReader {
                         Update(update) => {
                             self.metrics.updates.inc();
                             let rel_id = update.rel_id();
+                            if !self.source_tables.contains_key(&rel_id.try_into().unwrap()) {
+                                continue;
+                            }
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
                                 .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
@@ -387,6 +430,9 @@ impl PostgresSourceReader {
                         Delete(delete) => {
                             self.metrics.deletes.inc();
                             let rel_id = delete.rel_id();
+                            if !self.source_tables.contains_key(&rel_id.try_into().unwrap()) {
+                                continue;
+                            }
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
                                 .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
@@ -409,7 +455,52 @@ impl PostgresSourceReader {
                             }
                             self.metrics.lsn.set(self.lsn.into());
                         }
-                        Origin(_) | Relation(_) | Type(_) => {
+                        Relation(relation) => {
+                            let rel_id = relation.rel_id();
+                            if let Some(source_table) =
+                                self.source_tables.get(&rel_id.try_into().unwrap())
+                            {
+                                // Start with the cheapest check first, this will catch the majority of alters
+                                if source_table.columns.len() != relation.columns().len() {
+                                    return Err(Fatal(anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        source_table.name,
+                                        source_table.relation_id
+                                    )));
+                                }
+                                // todo(nharring): use an array instead of vec to avoid heap allocation
+                                let cols: Vec<PostgresColumn> = relation
+                                    .columns()
+                                    .into_iter()
+                                    .map(|c| PostgresColumn {
+                                        name: c.name().unwrap().to_string(),
+                                        type_oid: c.type_id(),
+                                        type_mod: c.type_modifier(),
+                                        nullable: bool::default(),
+                                        primary_key: bool::default(),
+                                    })
+                                    .collect();
+                                // Relation messages do not include nullability/primary_key data
+                                // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
+                                if !source_table.columns.iter().zip(cols.iter()).all(
+                                    |(src, rel)| {
+                                        src.name == rel.name
+                                            && src.type_oid == rel.type_oid
+                                            && src.type_mod == rel.type_mod
+                                    },
+                                ) {
+                                    return Err(Fatal(anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        source_table.name,
+                                        source_table.relation_id
+                                    )));
+                                }
+                            } else {
+                                // We do not care about this table so ignore the message entirely
+                                continue;
+                            }
+                        }
+                        Origin(_) | Type(_) => {
                             self.metrics.ignored.inc();
                         }
                         Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    prost_build::Config::new()
-        .compile_protos(&["postgres_source.proto"], &["src"])
-        .unwrap();
+    let mut cfg = prost_build::Config::new();
+    cfg.type_attribute(".", "#[derive(Eq, serde::Serialize, serde::Deserialize)]");
+    cfg.compile_protos(&["postgres_source.proto"], &["src"]).unwrap();
 }
