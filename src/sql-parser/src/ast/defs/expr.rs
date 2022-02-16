@@ -277,18 +277,21 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 negated,
             } => {
                 f.write_node(&expr);
-                if *negated {
-                    f.write_str(" NOT");
-                }
-                if *case_insensitive {
-                    f.write_str(" ILIKE ");
-                } else {
-                    f.write_str(" LIKE ");
-                }
-                f.write_node(&pattern);
-                if let Some(escape) = escape {
-                    f.write_str(" ESCAPE ");
-                    f.write_node(escape);
+                f.write_str(match (*case_insensitive, *negated) {
+                    (false, false) => " ~~ ",
+                    (false, true) => " !~~ ",
+                    (true, false) => " ~~* ",
+                    (true, true) => " !~~* ",
+                });
+                match escape {
+                    Some(escape) => {
+                        f.write_str("like_escape(");
+                        f.write_node(&pattern);
+                        f.write_str(", ");
+                        f.write_node(escape);
+                        f.write_str(")");
+                    }
+                    None => f.write_node(&pattern),
                 }
             }
             Expr::Between {
