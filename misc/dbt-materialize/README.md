@@ -2,32 +2,45 @@
 
 [dbt] adapter for [Materialize].
 
+For a complete step-by-step guide on how to use dbt and Materialize, check the [documentation](https://materialize.com/docs/guides/dbt/).
+
 ## Installation
 
-dbt-materialize is available on [PyPI]. To install the latest version via pip,
+`dbt-materialize` is available on [PyPI]. To install the latest version via `pip` (optionally using a virtual environment),
 run:
 
 ```nofmt
-pip install dbt-materialize
+python3 -m venv dbt-venv         # create the virtual environment
+source dbt-venv/bin/activate     # activate the virtual environment
+pip install dbt-materialize      # install the adapter
 ```
 
 ## Requirements
 
 <!-- If you update this, bump the constraint in connections.py too. -->
-dbt-materialize requires Materialize v0.20.0+.
+`dbt-materialize` requires Materialize v0.20.0+.
 
 ## Configuring your profile
 
-[Materialize] is based on the PostgreSQL database protocol, so use the
-[dbt-postgres settings](https://docs.getdbt.com/docs/profile-postgres) in your
-connection profile, with the following alterations:
+To connect to a Materialize instance, use the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize) in your
+connection profile:
 
 ```yml
-type: materialize
-user: materialize
+dbt-materialize:
+  target: dev
+  outputs:
+    dev:
+      type: materialize
+      threads: 1
+      host: [host]
+      port: [port]
+      user: materialize
+      pass: [password]
+      dbname: [database]
+      schema: [name of your dbt schema]
 ```
 
-Complete sample profiles can be found in
+Complete sample profiles (including for [Materialize Cloud](https://materialize.com/docs/cloud/get-started-with-cloud/#sign-up)) can be found in
 [sample_profiles.yml](dbt/include/materialize/sample_profiles.yml).
 
 ## Supported Features
