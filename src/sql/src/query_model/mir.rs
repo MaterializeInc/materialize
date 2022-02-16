@@ -254,12 +254,18 @@ impl<'a> Lowerer<'a> {
 
                         // 2) Lower the predicates as a filter following the
                         //    join.
-                        inner_join = inner_join.filter(
-                            box_struct
-                                .predicates
-                                .iter()
-                                .map(|p| Self::lower_expression(p, &column_map)),
+                        let lowered_predicates = box_struct
+                            .predicates
+                            .iter()
+                            .map(|p| Self::lower_expression(p, &column_map))
+                            .collect_vec();
+                        let equijoin_keys = crate::plan::lowering::derive_equijoin_cols(
+                            oa,
+                            la,
+                            ra,
+                            lowered_predicates.clone(),
                         );
+                        inner_join = inner_join.filter(lowered_predicates.into_iter());
 
                         // 3) Calculate preserved rows
                         // This corresponds to the general join case in lowering.rs

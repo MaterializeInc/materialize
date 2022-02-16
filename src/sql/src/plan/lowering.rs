@@ -1505,30 +1505,20 @@ impl AggregateExpr {
     }
 }
 
-/// Attempts an efficient outer join, if `on` has equijoin structure.
-fn attempt_outer_join(
-    left: mz_expr::MirRelationExpr,
-    right: mz_expr::MirRelationExpr,
-    on: mz_expr::MirScalarExpr,
-    kind: JoinKind,
+/// If the on clause of an outer join is an equijoin, figure out the join keys.
+///
+/// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs
+/// respectively.
+pub(crate) fn derive_equijoin_cols(
     oa: usize,
-    id_gen: &mut mz_ore::id_gen::IdGen,
-) -> Option<mz_expr::MirRelationExpr> {
+    la: usize,
+    ra: usize,
+    on: Vec<mz_expr::MirScalarExpr>,
+) -> Option<(Vec<usize>, Vec<usize>)> {
     use mz_expr::BinaryFunc;
-
-    // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
-    // correspond to an outer context: we should do the outer join independently
-    // for each prefix. In the case that `on` is just some equality tests between
-    // columns of `left` and `right`, we can employ a relatively simple plan.
-
-    let la = left.arity() - oa;
-    let lt = left.typ();
-    let ra = right.arity() - oa;
-    let rt = right.typ();
-
     // Deconstruct predicates that may be ands of multiple conditions.
     let mut predicates = Vec::new();
-    let mut todo = vec![on.clone()];
+    let mut todo = on;
     while let Some(next) = todo.pop() {
         if let mz_expr::MirScalarExpr::CallBinary {
             expr1,
@@ -1568,8 +1558,37 @@ fn attempt_outer_join(
     }
     // If any predicates were not column equivs, give up.
     if l_keys.len() < predicates.len() {
+        None
+    } else {
+        Some((l_keys, r_keys))
+    }
+}
+
+/// Attempts an efficient outer join, if `on` has equijoin structure.
+fn attempt_outer_join(
+    left: mz_expr::MirRelationExpr,
+    right: mz_expr::MirRelationExpr,
+    on: mz_expr::MirScalarExpr,
+    kind: JoinKind,
+    oa: usize,
+    id_gen: &mut mz_ore::id_gen::IdGen,
+) -> Option<mz_expr::MirRelationExpr> {
+    // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
+    // correspond to an outer context: we should do the outer join independently
+    // for each prefix. In the case that `on` is just some equality tests between
+    // columns of `left` and `right`, we can employ a relatively simple plan.
+
+    let la = left.arity() - oa;
+    let lt = left.typ();
+    let ra = right.arity() - oa;
+    let rt = right.typ();
+
+    let equijoin_keys = derive_equijoin_cols(oa, la, ra, vec![on.clone()]);
+    if equijoin_keys.is_none() {
         return None;
     }
+
+    let (l_keys, r_keys) = equijoin_keys.unwrap();
 
     // If we've gotten this far, we can do the clever thing.
     // We'll want to use left and right multiple times
