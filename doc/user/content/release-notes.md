@@ -125,6 +125,10 @@ changes that have not yet been documented.
 - Allow setting `standard_conforming_strings` to its default value of `on`.
   Setting it to `off` is still not supported.
 
+- Support sequences of subscript operations on [`array`] values when
+  indexing/accessing individual elements (as opposed to taking slices/ranges of
+  values) {{% gh 9815 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 

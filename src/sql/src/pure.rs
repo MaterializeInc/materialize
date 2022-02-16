@@ -43,8 +43,8 @@ use crate::ast::{
     CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
     CsvColumns, DbzMode, Envelope, Expr, Format, Ident, Op, ProtobufSchema, Query, Raw, RawName,
     Select, SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption,
-    Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
-    WithOption, WithOptionValue,
+    Statement, SubscriptPosition, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
+    ViewDefinition, WithOption, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -322,14 +322,18 @@ pub fn purify(
                                 let data_type = parse_data_type(&ty)?;
                                 projection.push(SelectItem::Expr {
                                     expr: Expr::Cast {
-                                        expr: Box::new(Expr::SubscriptScalar {
+                                        expr: Box::new(Expr::Subscript {
                                             expr: Box::new(Expr::Identifier(vec![Ident::new(
                                                 "row_data",
                                             )])),
-                                            subscript: Box::new(Expr::Value(Value::Number(
-                                                // LIST is one based
-                                                (i + 1).to_string(),
-                                            ))),
+                                            positions: vec![SubscriptPosition {
+                                                start: Some(Expr::Value(Value::Number(
+                                                    // LIST is one based
+                                                    (i + 1).to_string(),
+                                                ))),
+                                                end: None,
+                                                explicit_slice: false,
+                                            }],
                                         }),
                                         data_type,
                                     },
