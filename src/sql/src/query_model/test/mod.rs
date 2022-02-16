@@ -15,7 +15,7 @@ use crate::plan::StatementContext;
 use mz_expr_test_util::generate_explanation;
 use mz_lowertest::*;
 
-use crate::query_model;
+use crate::query_model::{Model, QGMError};
 use catalog::TestCatalog;
 
 use lazy_static::lazy_static;
@@ -45,10 +45,7 @@ lazy_static! {
 }
 
 /// Convert the input string to a Query Graph Model.
-fn convert_input_to_model(
-    input: &str,
-    catalog: &TestCatalog,
-) -> Result<query_model::Model, String> {
+fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, String> {
     // TODO (#9347): Support parsing specs for HirRelationExpr.
     // TODO (#10518): Support parsing specs for QGM.
     // match parse_input_as_qgm(input) {
@@ -58,7 +55,7 @@ fn convert_input_to_model(
     //         Ok(hir) => hir,
     //         Err(err2) =>
     //      }
-    //      query_model::Model::from(hir)
+    //      Model::from(hir)
     //   }
     // }
     match mz_sql_parser::parser::parse_statements(input) {
@@ -75,7 +72,7 @@ fn convert_input_to_model(
                     Ok(planned_query) => planned_query,
                     Err(e) => return Err(format!("unable to plan query: {}: {}", input, e)),
                 };
-                Ok(query_model::Model::from(planned_query.expr))
+                Result::<Model, QGMError>::from(planned_query.expr).map_err(|e| e.into())
             } else {
                 Err(format!("invalid query: {}", input))
             }
