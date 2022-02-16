@@ -48,7 +48,7 @@ EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 =
 | Join %0 %1 %2 (= #0 #4) (= #1 #3)
 | | implementation = Differential %2 %0.(#0) %1.(#1)
 | Filter (#0 <= #2)
-| Project (#0..#2, #1, #0, #5)
+| Project (#0..=#2, #1, #0, #5)
 
 EOF
 
@@ -124,7 +124,7 @@ EXPLAIN SELECT * FROM lineitem
 | Join %0 %1 %2 (= #0 #8) (= datetots(#11) (#5 - 9 months))
 | | implementation = Differential %2 %0.() %1.(#0, datetots(#3))
 | Filter (#5 != #11), (#14 >= #10)
-| Project (#0..#7, #0, #9..#14)
+| Project (#0..=#7, #0, #9..=#14)
 
 EOF
 
@@ -248,7 +248,7 @@ EXPLAIN SELECT *
 %3 =
 | Join %0 %1 %2 (= #4 #10) (= #5 #11)
 | | implementation = Differential %2 %0.() %1.(#2, #3)
-| Project (#0..#9, #4, #5, #12..#14)
+| Project (#0..=#9, #4, #5, #12..=#14)
 
 EOF
 

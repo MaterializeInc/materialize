@@ -79,7 +79,7 @@ select a, b, a from (select 1 as a, 2 as b);
 | Map 1, 2
 | Project (#0, #1)
 | Map #0, #1, #0
-| Project (#2..#4)
+| Project (#2..=#4)
 ----
 ----
 
@@ -154,9 +154,9 @@ from (select 10 as a, 5 as b, 'world' as c, 'realm' as d) x
 | Join %0 %1
 | | implementation = Unimplemented
 | Map 10, 5, "world", "realm"
-| Project (#0..#3)
+| Project (#0..=#3)
 | Map #0, #1, #2, #3, if (#0 > #1) then {#2} else {lpad(#3, i32toi64(4), "ab")}
-| Project (#4..#8)
+| Project (#4..=#8)
 | Map #4
 | Project (#5)
 ----
@@ -189,7 +189,7 @@ select * from x;
 | Map #0, #1, #2
 | | types = (Int32, Int64?, Int32?, Int32, Int64?, Int32?)
 | | keys = ()
-| Project (#3..#5)
+| Project (#3..=#5)
 | | types = (Int32, Int64?, Int32?)
 | | keys = ()
 ----
@@ -221,7 +221,7 @@ c from x where x.b is not null) z on y.a = z.b
 | Map #0, #1, #2
 | | types = (Int32, Int64?, Int32?, Int32, Int64?, Int32?)
 | | keys = ()
-| Project (#3..#5)
+| Project (#3..=#5)
 | | types = (Int32, Int64?, Int32?)
 | | keys = ()
 | Map #0, #2
@@ -247,7 +247,7 @@ c from x where x.b is not null) z on y.a = z.b
 | Map #0, #1, #2
 | | types = (Int32, Int64, Int32?, Int32, Int64, Int32?)
 | | keys = ()
-| Project (#3..#5)
+| Project (#3..=#5)
 | | types = (Int32, Int64, Int32?)
 | | keys = ()
 | Map #1, #2
@@ -262,7 +262,7 @@ c from x where x.b is not null) z on y.a = z.b
 | | implementation = Unimplemented
 | | types = (Int32, Int32?, Int64, Int32?)
 | | keys = ()
-| Project (#0..#3)
+| Project (#0..=#3)
 | | types = (Int32, Int32?, Int64, Int32?)
 | | keys = ()
 | Filter (i32toi64(#0) = #2)
@@ -271,7 +271,7 @@ c from x where x.b is not null) z on y.a = z.b
 | Map #0, #1, #2, #3
 | | types = (Int32, Int32?, Int64, Int32?, Int32, Int32?, Int64, Int32?)
 | | keys = ()
-| Project (#4..#7)
+| Project (#4..=#7)
 | | types = (Int32, Int32?, Int64, Int32?)
 | | keys = ()
 | Map #1, #3
@@ -349,12 +349,12 @@ select a, b, a from (select 1 as a, 2 as b) where (select true);
 %14 =
 | Join %2 %13
 | | implementation = Unimplemented
-| Project (#0..#2)
+| Project (#0..=#2)
 | Filter #2
 | Map #0, #1
 | Project (#3, #4)
 | Map #0, #1, #0
-| Project (#2..#4)
+| Project (#2..=#4)
 ----
 ----
 
@@ -372,7 +372,7 @@ select distinct c, b, a from x;
 | Join %0 %1
 | | implementation = Unimplemented
 | Map #2, #1, #0
-| Project (#3..#5)
+| Project (#3..=#5)
 | Distinct group=(#0, #1, #2)
 ----
 ----
@@ -410,7 +410,7 @@ select b from x group by c, b;
 | Join %0 %1
 | | implementation = Unimplemented
 | Map #0, #1, #2, #2, #1
-| Project (#3..#7)
+| Project (#3..=#7)
 | Map #3, #4
 | Project (#5, #6)
 | Distinct group=(#0, #1)
@@ -434,15 +434,15 @@ select min(a), c, count(*), b, max(a) from x group by c, b;
 | Join %0 %1
 | | implementation = Unimplemented
 | Map #0, #1, #2, #2, #1
-| Project (#3..#7)
+| Project (#3..=#7)
 | Map #3, #4, #0, true
-| Project (#5..#8)
+| Project (#5..=#8)
 | Reduce group=(#0, #1)
 | | agg min(#2)
 | | agg count(#3)
 | | agg max(#2)
-| Project (#0..#4)
+| Project (#0..=#4)
 | Map #2, #0, #3, #1, #4
-| Project (#5..#9)
+| Project (#5..=#9)
 ----
 ----

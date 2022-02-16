@@ -321,7 +321,7 @@ GROUP BY 1,
 | | agg count(true)
 | | agg min(#2)
 | | agg min(#0)
-| Project (#0..#4, #3)
+| Project (#0..=#4, #3)
 
 EOF
 
@@ -364,7 +364,7 @@ GROUP BY 1,
 %0 =
 | Get materialize.public.lineitem (u9)
 | Filter (#3 != 1), (#3 != 2), (#3 != 6)
-| Project (#2..#5, #12)
+| Project (#2..=#5, #12)
 | ArrangeBy (#4)
 
 %1 =
@@ -379,7 +379,7 @@ GROUP BY 1,
 | Join %0 %1 %2 (= #4 #9) (= #6 #14)
 | | implementation = Differential %2.(#0) %1.(#1) %0.(#4)
 | Filter (#19 < #8), (#19 <= #3)
-| Project (#0..#3, #17)
+| Project (#0..=#3, #17)
 | Reduce group=((#2 * #3), #4)
 | | agg max(#1)
 | | agg max(#0)
@@ -420,7 +420,7 @@ WHERE l_commitDATE >= '1998-03-22'
 %2 = Let l0 =
 | Join %0 %1 (= #2 #5)
 | | implementation = Differential %1 %0.(#2)
-| Project (#0..#4)
+| Project (#0..=#4)
 
 %3 = Let l1 =
 | Get materialize.public.lineitem (u9)
@@ -616,7 +616,7 @@ GROUP BY 1,
 | Reduce group=(#1)
 | | agg min(#0)
 | | agg count(true)
-| Project (#0, #0..#2)
+| Project (#0, #0..=#2)
 
 EOF
 

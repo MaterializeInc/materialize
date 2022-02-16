@@ -42,7 +42,7 @@ FROM x
 %0 =
 | Get materialize.public.x (u1)
 | Map strtojsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")
-| Project (#3..#5)
+| Project (#3..=#5)
 
 EOF
 
