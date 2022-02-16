@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_select() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = model.make_box(qgm::get(0).into());
         {
             let mut b = model.get_mut_box(g_id);
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_outer_join() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = model.make_box(qgm::get(0).into());
         {
             let mut b = model.get_mut_box(g_id);
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_union() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let g_ids = (0..=2)
             .map(|id| {
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_exists_subquery() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let g_ids = (0..=1)
             .map(|id| {
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn test_scalar_subquery() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let g_ids = (0..=1)
             .map(|id| {

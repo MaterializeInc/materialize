@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Generates a Query Graph Model from a [HirRelationExpr].
+//! Generates a Query Graph Model from a [`HirRelationExpr`].
 //!
 //! The public interface consists of the [`From<HirRelationExpr>`]
 //! implementation for [`Result<Model, QGMError>`].
@@ -26,10 +26,11 @@ use crate::query_model::model::{
 impl TryFrom<HirRelationExpr> for Model {
     type Error = QGMError;
     fn try_from(expr: HirRelationExpr) -> Result<Self, Self::Error> {
-        FromHir::generate(expr)
+        FromHir::default().generate(expr)
     }
 }
 
+#[derive(Default)]
 struct FromHir {
     model: Model,
     /// The stack of context boxes for resolving offset-based column references.
@@ -41,15 +42,9 @@ struct FromHir {
 
 impl FromHir {
     /// Generates a Query Graph Model for representing the given query.
-    fn generate(expr: HirRelationExpr) -> Result<Model, QGMError> {
-        let mut generator = FromHir {
-            model: Model::new(),
-            context_stack: Vec::new(),
-            gets_seen: HashMap::new(),
-        };
-
-        generator.model.top_box = generator.generate_select(expr)?;
-        Ok(generator.model)
+    fn generate(mut self, expr: HirRelationExpr) -> Result<Model, QGMError> {
+        self.model.top_box = self.generate_select(expr)?;
+        Ok(self.model)
     }
 
     /// Generates a sub-graph representing the given expression, ensuring
