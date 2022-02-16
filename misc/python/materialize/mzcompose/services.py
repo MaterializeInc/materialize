@@ -405,7 +405,6 @@ class Postgres(Service):
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
         config.update(
             {
-                "mzbuild": mzbuild,
                 "command": command,
                 "ports": [port],
                 "environment": environment,
