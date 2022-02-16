@@ -1559,6 +1559,7 @@ impl<'a> ScalarType {
                 value_type: t,
                 custom_oid,
             } => custom_oid.is_some() || t.is_custom_type(),
+            // TODO(phemberger): also need to check every field within the record
             Record { custom_oid, .. } => custom_oid.is_some(),
             _ => false,
         }
