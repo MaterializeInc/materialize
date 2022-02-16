@@ -66,3 +66,7 @@ uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [build-dependencies]
 prost-build = "0.9.1"
+
+[package.metadata.cargo-udeps.ignore]
+# only used on linux
+normal = ["inotify"]

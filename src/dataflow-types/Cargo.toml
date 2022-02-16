@@ -28,7 +28,6 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore" }
-mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 num_enum = "0.5.6"

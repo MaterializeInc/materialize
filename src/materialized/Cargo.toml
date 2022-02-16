@@ -144,3 +144,6 @@ walkdir = "2.3.2"
 # access to the file system.
 dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["krb5-src"]

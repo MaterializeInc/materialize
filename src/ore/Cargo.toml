@@ -42,7 +42,6 @@ tokio-openssl = { version = "0.6.3", optional = true }
 tracing-subscriber = { version = "0.3.7", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
 
 [dev-dependencies]
-crossbeam-utils = "0.8.7"
 tokio = { version = "1.16.1", features = ["macros"] }
 
 [features]
