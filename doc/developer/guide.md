@@ -268,14 +268,22 @@ own document. See [Developer guide: testing](guide-testing.md).
 CI performs the lawful evil task of ensuring "good code style" with the
 following tools:
 
-Tool      | Use                     | Run locally with
-----------|-------------------------|-------------------
-[Clippy]  | Rust semantic nits      | `./bin/check`
-[rustfmt] | Rust code formatter     | `cargo fmt`
-Linter    | General formatting nits | `./bin/lint`
+Tool                  | Use                     | Run locally with
+----------------------|-------------------------|-------------------
+[Clippy]              | Rust semantic nits      | `./bin/check`
+[rustfmt]             | Rust code formatter     | `cargo fmt`
+Linter                | General formatting nits | `./bin/lint`
+[Unused dependencies] | Check for unused deps   | `./bin/unused-deps`
 
 See also the [style guide](style.md) for some additional soft
 recommendations.
+
+### Unused dependencies
+
+Use `.bin/unused-deps`. This is also run in ci; use this
+[guide][https://github.com/est31/cargo-udeps#ignoring-some-of-the-dependencies]
+for information about how to ignore false-positives. Common examples are
+dependencies only used on certain platforms.
 
 ## Submitting and reviewing changes
 
@@ -347,6 +355,7 @@ bin/crate-diagram --roots sql,dataflow
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
 [Clippy]: https://github.com/rust-lang/rust-clippy
+[Unused dependencies]: https://github.com/est31/cargo-udeps
 [CMake]: https://cmake.org
 [Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
 [Confluent Platform]: https://www.confluent.io/product/confluent-platform/

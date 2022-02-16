@@ -146,4 +146,6 @@ dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["krb5-src"]
+# krb5 used to build a binary
+# sysctl only used on macos
+normal = ["krb5-src", "sysctl"]
