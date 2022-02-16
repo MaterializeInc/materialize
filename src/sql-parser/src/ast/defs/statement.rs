@@ -791,10 +791,11 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
 impl_display_t!(CreateTypeStatement);
 
 /// `CREATE TYPE .. AS <TYPE>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CreateTypeAs {
     List,
     Map,
+    Record,
 }
 
 impl AstDisplay for CreateTypeAs {
@@ -802,6 +803,7 @@ impl AstDisplay for CreateTypeAs {
         match self {
             CreateTypeAs::List => f.write_str("LIST "),
             CreateTypeAs::Map => f.write_str("MAP "),
+            CreateTypeAs::Record => f.write_str("RECORD "),
         }
     }
 }

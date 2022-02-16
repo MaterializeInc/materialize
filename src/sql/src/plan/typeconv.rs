@@ -497,6 +497,30 @@ fn get_cast(
                     custom_oid: oid_r,
                 },
             ) => oid_l == oid_r && embedded_value_equality(&ccx, &l, &r),
+            (
+                Record {
+                    fields: fields_l,
+                    custom_oid: oid_l,
+                    ..
+                },
+                Record {
+                    fields: fields_r,
+                    custom_oid: oid_r,
+                    ..
+                },
+            ) => {
+                oid_l == oid_r
+                    && fields_l.len() == fields_r.len()
+                    && fields_l
+                        .into_iter()
+                        .map(|(_, ColumnType { scalar_type: t, .. })| t)
+                        .zip(
+                            fields_r
+                                .into_iter()
+                                .map(|(_, ColumnType { scalar_type: t, .. })| t),
+                        )
+                        .all(|(l, r)| embedded_value_equality(&ccx, l, r))
+            }
             (l, r) if ccx == &Implicit => l.base_eq(r),
             (l, r) => l == r,
         }
@@ -520,6 +544,25 @@ fn get_cast(
                 },
             )
             | (Map { value_type: l, .. }, Map { value_type: r, .. }) => structural_equality(&l, &r),
+            (
+                Record {
+                    fields: fields_l, ..
+                },
+                Record {
+                    fields: fields_r, ..
+                },
+            ) => {
+                fields_l.len() == fields_r.len()
+                    && fields_l
+                        .into_iter()
+                        .map(|(_, ColumnType { scalar_type: t, .. })| t)
+                        .zip(
+                            fields_r
+                                .into_iter()
+                                .map(|(_, ColumnType { scalar_type: t, .. })| t),
+                        )
+                        .all(|(l, r)| structural_equality(l, r))
+            }
             (l, r) => l == r,
         }
     }

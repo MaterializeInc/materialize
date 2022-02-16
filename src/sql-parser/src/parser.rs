@@ -758,6 +758,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_composite_type_definition(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
+        let mut fields = vec![];
+        self.expect_token(&Token::LParen)?;
+        loop {
+            if let Some(column_name) = self.consume_identifier() {
+                let data_type = self.parse_data_type()?;
+                fields.push(SqlOption::DataType {
+                    name: column_name,
+                    data_type,
+                });
+            } else {
+                return self.expected(self.peek_pos(), "field name and type", self.peek_token());
+            }
+            if self.consume_token(&Token::Comma) {
+                // Continue.
+            } else if self.consume_token(&Token::RParen) {
+                break;
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "',' or ')' after field definition",
+                    self.peek_token(),
+                );
+            }
+        }
+
+        Ok(fields)
+    }
+
     // Parse calls to trim(), which can take the form:
     // - trim(side 'chars' from 'string')
     // - trim('chars' from 'string')
@@ -2356,21 +2385,34 @@ impl<'a> Parser<'a> {
         self.expect_keyword(TYPE)?;
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
-        let as_type = match self.expect_one_of_keywords(&[LIST, MAP])? {
-            LIST => CreateTypeAs::List,
-            MAP => CreateTypeAs::Map,
-            _ => unreachable!(),
-        };
 
-        self.expect_token(&Token::LParen)?;
-        let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
-        self.expect_token(&Token::RParen)?;
+        if self.peek_keywords(&[LIST, MAP]) {
+            let as_type = match self.expect_one_of_keywords(&[LIST, MAP]) {
+                Ok(LIST) => CreateTypeAs::List,
+                Ok(MAP) => CreateTypeAs::Map,
+                _ => unreachable!(),
+            };
 
-        Ok(Statement::CreateType(CreateTypeStatement {
-            name,
-            as_type,
-            with_options,
-        }))
+            self.expect_token(&Token::LParen)?;
+            let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
+            self.expect_token(&Token::RParen)?;
+
+            Ok(Statement::CreateType(CreateTypeStatement {
+                name,
+                as_type,
+                with_options,
+            }))
+        } else {
+            let result = self.parse_composite_type_definition()?;
+
+            let statement = Statement::CreateType(CreateTypeStatement {
+                name,
+                as_type: CreateTypeAs::Record,
+                with_options: result,
+            });
+
+            Ok(statement)
+        }
     }
 
     fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {

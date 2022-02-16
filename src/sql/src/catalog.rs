@@ -341,14 +341,12 @@ pub enum CatalogType {
         key_id: GlobalId,
         value_id: GlobalId,
     },
-    Record {
-        /// The names and types of the fields of the record, in order from left
-        /// to right.
-        fields: Vec<(ColumnName, GlobalId)>,
-    },
     Numeric,
     Oid,
     Pseudo,
+    Record {
+        fields: Vec<(ColumnName, GlobalId)>,
+    },
     RegClass,
     RegProc,
     RegType,

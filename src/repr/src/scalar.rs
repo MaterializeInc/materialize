@@ -1559,6 +1559,7 @@ impl<'a> ScalarType {
                 value_type: t,
                 custom_oid,
             } => custom_oid.is_some() || t.is_custom_type(),
+            Record { custom_oid, .. } => custom_oid.is_some(),
             _ => false,
         }
     }
