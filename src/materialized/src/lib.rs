@@ -24,6 +24,7 @@ use compile_time_run::run_command_str;
 use futures::StreamExt;
 use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::FronteggAuthentication;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -116,6 +117,8 @@ pub struct Config {
     pub third_party_metrics_listen_addr: Option<SocketAddr>,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
+    /// Materialize Cloud configuration to enable Frontegg JWT user authentication.
+    pub frontegg: Option<FronteggAuthentication>,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
@@ -322,9 +325,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
             metrics_registry: &metrics_registry,
+            frontegg: config.frontegg.clone(),
         });
         let http_server = http::Server::new(http::Config {
             tls: http_tls,
+            frontegg: config.frontegg,
             coord_client: coord_client.clone(),
             metrics_registry,
             global_metrics: metrics,

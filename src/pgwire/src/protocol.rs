@@ -31,6 +31,7 @@ use mz_coord::session::{
 };
 use mz_coord::ExecuteResponse;
 use mz_dataflow_types::PeekResponse;
+use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
@@ -81,6 +82,7 @@ pub struct RunParams<'a, A> {
     pub params: HashMap<String, String>,
     /// The server's metrics.
     pub metrics: &'a Metrics,
+    pub frontegg: Option<&'a FronteggAuthentication>,
 }
 
 /// Runs a pgwire connection to completion.
@@ -100,6 +102,7 @@ pub async fn run<'a, A>(
         version,
         mut params,
         metrics,
+        frontegg,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -156,6 +159,39 @@ where
         }
     }
 
+    if let Some(frontegg) = frontegg {
+        conn.send(BackendMessage::AuthenticationCleartextPassword)
+            .await?;
+        conn.flush().await?;
+        match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => {
+                let res = frontegg
+                    .exchange_password_for_token(&password)
+                    .await
+                    .and_then(|res| frontegg.validate_access_token(&res.access_token));
+                match res {
+                    Ok(claims) if claims.email == user => {}
+                    _ => {
+                        return conn
+                            .send(ErrorResponse::fatal(
+                                SqlState::INVALID_PASSWORD,
+                                "invalid password",
+                            ))
+                            .await;
+                    }
+                }
+            }
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        "expected Password message",
+                    ))
+                    .await
+            }
+        }
+    }
+
     // Construct session.
     let mut session = Session::new(conn.id(), user);
     for (name, value) in params {
@@ -164,7 +200,8 @@ where
     }
 
     // Register session with coordinator.
-    let (mut coord_client, startup) = match coord_client.startup(session).await {
+    let (mut coord_client, startup) = match coord_client.startup(session, frontegg.is_some()).await
+    {
         Ok(startup) => startup,
         Err(e) => {
             return conn
@@ -301,7 +338,8 @@ where
 
             Some(FrontendMessage::CopyData(_))
             | Some(FrontendMessage::CopyDone)
-            | Some(FrontendMessage::CopyFail(_)) => State::Drain,
+            | Some(FrontendMessage::CopyFail(_))
+            | Some(FrontendMessage::Password { .. }) => State::Drain,
             None => State::Done,
         };
 

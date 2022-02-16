@@ -185,6 +185,10 @@ pub enum FrontendMessage {
     CopyDone,
 
     CopyFail(String),
+
+    Password {
+        password: String,
+    },
 }
 
 impl FrontendMessage {
@@ -204,6 +208,7 @@ impl FrontendMessage {
             FrontendMessage::CopyData(_) => "copy_data",
             FrontendMessage::CopyDone => "copy_done",
             FrontendMessage::CopyFail(_) => "copy_fail",
+            FrontendMessage::Password { .. } => "password",
         }
     }
 }
@@ -214,6 +219,7 @@ impl FrontendMessage {
 #[derive(Debug)]
 pub enum BackendMessage {
     AuthenticationOk,
+    AuthenticationCleartextPassword,
     CommandComplete {
         tag: String,
     },

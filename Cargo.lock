@@ -2396,6 +2396,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "078e285eafdfb6c4b434e0d31e8cfcb5115b651496faca5749b88fafd4f23bfd"
 
 [[package]]
+name = "jsonwebtoken"
+version = "8.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "012bb02250fdd38faa5feee63235f7a459974440b9b57593822414c31f92839e"
+dependencies = [
+ "base64",
+ "pem",
+ "ring",
+ "serde",
+ "serde_json",
+ "simple_asn1",
+]
+
+[[package]]
 name = "junit-report"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2630,6 +2644,7 @@ dependencies = [
  "async-trait",
  "atty",
  "backtrace",
+ "base64",
  "bytes",
  "cc",
  "cfg-if",
@@ -2644,12 +2659,15 @@ dependencies = [
  "fallible-iterator",
  "flate2",
  "futures",
+ "headers",
  "hex",
  "hex-literal",
+ "http",
  "hyper",
  "hyper-openssl",
  "include_dir",
  "itertools",
+ "jsonwebtoken",
  "krb5-src",
  "lazy_static",
  "libc",
@@ -2659,6 +2677,7 @@ dependencies = [
  "mz-dataflow",
  "mz-dataflow-types",
  "mz-dataflowd",
+ "mz-frontegg-auth",
  "mz-http-proxy",
  "mz-kafka-util",
  "mz-ore",
@@ -3260,6 +3279,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-frontegg-auth"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "derivative",
+ "jsonwebtoken",
+ "reqwest",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "mz-fuzz"
 version = "0.0.1"
 dependencies = [
@@ -3581,6 +3613,7 @@ dependencies = [
  "mz-coord",
  "mz-dataflow-types",
  "mz-expr",
+ "mz-frontegg-auth",
  "mz-ore",
  "mz-pgcopy",
  "mz-pgrepr",
@@ -4857,6 +4890,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ac73b1112776fc109b2e61909bc46c7e1bf0d7f690ffb1676553acce16d5cda"
 
 [[package]]
+name = "quickcheck"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "588f6378e4dd99458b60ec275b4477add41ce4fa9f64dcba6f15adccb19b50d6"
+dependencies = [
+ "rand",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5374,6 +5416,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e24979f63a11545f5f2c60141afe249d4f19f84581ea2138065e400941d83d3"
 
 [[package]]
+name = "simple_asn1"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a762b1c38b9b990c694b9c2f8abe3372ce6a9ceaae6bca39cfc46e054f45745"
+dependencies = [
+ "num-bigint",
+ "num-traits",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5721,6 +5775,7 @@ dependencies = [
  "itoa 1.0.1",
  "libc",
  "num_threads",
+ "quickcheck",
  "time-macros",
 ]
 

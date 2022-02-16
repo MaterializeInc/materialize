@@ -17,6 +17,7 @@ use std::time::Duration;
 use lazy_static::lazy_static;
 use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use postgres::error::DbError;
@@ -41,6 +42,7 @@ pub struct Config {
     aws_external_id: AwsExternalId,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
+    frontegg: Option<FronteggAuthentication>,
     experimental_mode: bool,
     safe_mode: bool,
     workers: usize,
@@ -54,6 +56,7 @@ impl Default for Config {
             aws_external_id: AwsExternalId::NotProvided,
             logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
+            frontegg: None,
             experimental_mode: false,
             safe_mode: false,
             workers: 1,
@@ -106,6 +109,11 @@ impl Config {
         self.logical_compaction_window = Some(logical_compaction_window);
         self
     }
+
+    pub fn with_frontegg(mut self, frontegg: &FronteggAuthentication) -> Self {
+        self.frontegg = Some(frontegg.clone());
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
@@ -139,6 +147,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         aws_external_id: config.aws_external_id,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
+        frontegg: config.frontegg,
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
         disable_user_indexes: false,

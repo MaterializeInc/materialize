@@ -552,7 +552,8 @@ impl Coordinator {
                             entry.id(),
                             (source_description, Antichain::from_elem(since_ts)),
                         )])
-                        .await;
+                        .await
+                        .unwrap();
                 }
                 CatalogItem::Table(table) => {
                     self.persister
@@ -586,7 +587,8 @@ impl Coordinator {
                             entry.id(),
                             (source_description, Antichain::from_elem(since_ts)),
                         )])
-                        .await;
+                        .await
+                        .unwrap();
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
@@ -1059,6 +1061,7 @@ impl Coordinator {
         match cmd {
             Command::Startup {
                 session,
+                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             } => {
@@ -1070,16 +1073,33 @@ impl Coordinator {
                     return;
                 }
 
-                let catalog = self.catalog.for_session(&session);
-                if catalog.resolve_role(session.user()).is_err() {
-                    let _ = tx.send(Response {
-                        result: Err(CoordError::UnknownLoginRole(session.user().into())),
-                        session,
-                    });
-                    return;
+                if self
+                    .catalog
+                    .for_session(&session)
+                    .resolve_role(session.user())
+                    .is_err()
+                {
+                    if !create_user_if_not_exists {
+                        let _ = tx.send(Response {
+                            result: Err(CoordError::UnknownLoginRole(session.user().into())),
+                            session,
+                        });
+                        return;
+                    }
+                    let plan = CreateRolePlan {
+                        name: session.user().to_string(),
+                    };
+                    if let Err(err) = self.sequence_create_role(plan).await {
+                        let _ = tx.send(Response {
+                            result: Err(err),
+                            session,
+                        });
+                        return;
+                    }
                 }
 
                 let mut messages = vec![];
+                let catalog = self.catalog.for_session(&session);
                 if catalog
                     .resolve_database(catalog.default_database())
                     .is_err()
@@ -1570,7 +1590,8 @@ impl Coordinator {
             self.persisted_table_allow_compaction(&index_since_updates);
             self.dataflow_client
                 .allow_index_compaction(DEFAULT_COMPUTE_INSTANCE_ID, index_since_updates)
-                .await;
+                .await
+                .unwrap();
         }
 
         let source_since_updates: Vec<_> = self
@@ -2220,7 +2241,8 @@ impl Coordinator {
                         table_id,
                         (source_description, Antichain::from_elem(since_ts)),
                     )])
-                    .await;
+                    .await
+                    .unwrap();
                 // Install the dataflow if so required.
                 if let Some(df) = df {
                     let frontiers = self.new_source_frontiers(
@@ -2321,7 +2343,8 @@ impl Coordinator {
 
                 self.dataflow_client
                     .create_sources(source_descriptions)
-                    .await;
+                    .await
+                    .unwrap();
                 self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
@@ -4354,7 +4377,8 @@ impl Coordinator {
         }
         self.dataflow_client
             .create_dataflows(DEFAULT_COMPUTE_INSTANCE_ID, dataflow_plans)
-            .await;
+            .await
+            .unwrap();
     }
 
     /// Finalizes a dataflow.
@@ -4660,11 +4684,13 @@ pub async fn serve(
                     .collect(),
                 log_logging: config.log_logging,
             });
-            handle.block_on(
-                coord
-                    .dataflow_client
-                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
-            );
+            handle
+                .block_on(
+                    coord
+                        .dataflow_client
+                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
+                )
+                .unwrap();
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
@@ -5053,7 +5079,8 @@ pub mod fast_path_peek {
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client
                         .create_dataflows(DEFAULT_COMPUTE_INSTANCE_ID, vec![dataflow])
-                        .await;
+                        .await
+                        .unwrap();
                     // Create an identity MFP operator.
                     let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
                     map_filter_project
@@ -5101,7 +5128,8 @@ pub mod fast_path_peek {
                     finishing.clone(),
                     map_filter_project,
                 )
-                .await;
+                .await
+                .unwrap();
 
             use futures::FutureExt;
             use futures::StreamExt;

@@ -12,6 +12,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::str;
+use std::str::FromStr;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -2203,7 +2204,8 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
-    IsLikePatternMatch { case_insensitive: bool },
+    LikeEscape,
+    IsLikeMatch { case_insensitive: bool },
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
@@ -2250,10 +2252,8 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
-    ListIndex,
-    ListLengthMax { max_dim: usize },
+    ListLengthMax { max_layer: usize },
     ArrayContains,
-    ArrayIndex,
     ArrayLength,
     ArrayLower,
     ArrayRemove,
@@ -2384,8 +2384,9 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(eager!(lte)),
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::IsLikePatternMatch { case_insensitive } => {
-                eager!(is_like_pattern_match_dynamic, *case_insensitive)
+            BinaryFunc::LikeEscape => eager!(like_escape, temp_storage),
+            BinaryFunc::IsLikeMatch { case_insensitive } => {
+                eager!(is_like_match_dynamic, *case_insensitive)
             }
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
                 eager!(is_regexp_match_dynamic, *case_insensitive)
@@ -2501,11 +2502,9 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
-            BinaryFunc::ListIndex => Ok(eager!(list_index)),
-            BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
+            BinaryFunc::ListLengthMax { max_layer } => eager!(list_length_max, *max_layer),
             BinaryFunc::ArrayLength => Ok(eager!(array_length)),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
-            BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
             BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
             BinaryFunc::ArrayRemove => eager!(array_remove, temp_storage),
             BinaryFunc::ArrayUpper => Ok(eager!(array_upper)),
@@ -2551,13 +2550,13 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
-            IsLikePatternMatch { .. } | IsRegexpMatch { .. } => {
+            IsLikeMatch { .. } | IsRegexpMatch { .. } => {
                 // The output can be null if the pattern is invalid.
                 ScalarType::Bool.nullable(true)
             }
 
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Left | Right | Trim
-            | TrimLeading | TrimTrailing => ScalarType::String.nullable(in_nullable),
+            | TrimLeading | TrimTrailing | LikeEscape => ScalarType::String.nullable(in_nullable),
 
             AddInt16 | SubInt16 | MulInt16 | DivInt16 | ModInt16 | BitAndInt16 | BitOrInt16
             | BitXorInt16 | BitShiftLeftInt16 | BitShiftRightInt16 => {
@@ -2651,18 +2650,6 @@ impl BinaryFunc {
                 input1_type.scalar_type.unwrap_map_value_type().clone(),
             ))
             .nullable(true),
-
-            ListIndex => input1_type
-                .scalar_type
-                .unwrap_list_element_type()
-                .clone()
-                .nullable(true),
-
-            ArrayIndex => input1_type
-                .scalar_type
-                .unwrap_array_element_type()
-                .clone()
-                .nullable(true),
 
             ListLengthMax { .. } | ArrayLength | ArrayLower | ArrayUpper => {
                 ScalarType::Int64.nullable(true)
@@ -2880,10 +2867,9 @@ impl BinaryFunc {
             | MapContainsAnyKeys
             | MapContainsMap
             | TextConcat
-            | ListIndex
+            | IsLikeMatch { .. }
             | IsRegexpMatch { .. }
             | ArrayContains
-            | ArrayIndex
             | ArrayLength
             | ArrayLower
             | ArrayUpper
@@ -2891,8 +2877,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
-            IsLikePatternMatch { .. }
-            | ToCharTimestamp
+            ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
             | DateBinTimestampTz
@@ -2934,7 +2919,8 @@ impl BinaryFunc {
             | RepeatString
             | PgGetConstraintdef
             | ArrayRemove
-            | ListRemove => false,
+            | ListRemove
+            | LikeEscape => false,
         }
     }
 
@@ -3025,10 +3011,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::IsLikePatternMatch {
+            BinaryFunc::LikeEscape => f.write_str("like_escape"),
+            BinaryFunc::IsLikeMatch {
                 case_insensitive: false,
             } => f.write_str("like"),
-            BinaryFunc::IsLikePatternMatch {
+            BinaryFunc::IsLikeMatch {
                 case_insensitive: true,
             } => f.write_str("ilike"),
             BinaryFunc::IsRegexpMatch {
@@ -3082,10 +3069,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
-            BinaryFunc::ListIndex => f.write_str("list_index"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
-            BinaryFunc::ArrayIndex => f.write_str("array_index"),
             BinaryFunc::ArrayLength => f.write_str("array_length"),
             BinaryFunc::ArrayLower => f.write_str("array_lower"),
             BinaryFunc::ArrayRemove => f.write_str("array_remove"),
@@ -3356,7 +3341,7 @@ pub enum UnaryFunc {
     ByteLengthBytes,
     ByteLengthString,
     CharLength,
-    IsLikePatternMatch(like_pattern::Matcher),
+    IsLikeMatch(like_pattern::Matcher),
     IsRegexpMatch(Regex),
     RegexpMatch(Regex),
     ExtractInterval(DateTimeUnits),
@@ -3767,7 +3752,7 @@ impl UnaryFunc {
             ByteLengthString => byte_length(a.unwrap_str()),
             ByteLengthBytes => byte_length(a.unwrap_bytes()),
             CharLength => char_length(a),
-            IsLikePatternMatch(matcher) => Ok(is_like_pattern_match_static(a, &matcher)),
+            IsLikeMatch(matcher) => Ok(is_like_match_static(a, &matcher)),
             IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
             RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
             ExtractInterval(units) => date_part_interval_inner::<Numeric>(*units, a),
@@ -3975,7 +3960,7 @@ impl UnaryFunc {
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
-            IsLikePatternMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
+            IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
@@ -4237,7 +4222,7 @@ impl UnaryFunc {
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
-            IsLikePatternMatch(_) | IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
+            IsLikeMatch(_) | IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
             CastStringToJsonb => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
@@ -4519,7 +4504,7 @@ impl UnaryFunc {
             BitLengthString => f.write_str("bit_length"),
             ByteLengthBytes => f.write_str("octet_length"),
             ByteLengthString => f.write_str("octet_length"),
-            IsLikePatternMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
+            IsLikeMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
             IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             ExtractInterval(units) => write!(f, "extract_{}_iv", units),
@@ -4743,22 +4728,29 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
-fn is_like_pattern_match_static<'a>(a: Datum<'a>, needle: &like_pattern::Matcher) -> Datum<'a> {
+fn like_escape<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let pattern = a.unwrap_str();
+    let escape = like_pattern::EscapeBehavior::from_str(b.unwrap_str())?;
+    let normalized = like_pattern::normalize_pattern(pattern, escape)?;
+    Ok(Datum::String(temp_storage.push_string(normalized)))
+}
+
+fn is_like_match_static<'a>(a: Datum<'a>, needle: &like_pattern::Matcher) -> Datum<'a> {
     let haystack = a.unwrap_str();
     Datum::from(needle.is_match(haystack))
 }
 
-fn is_like_pattern_match_dynamic<'a>(
+fn is_like_match_dynamic<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     case_insensitive: bool,
 ) -> Result<Datum<'a>, EvalError> {
     let haystack = a.unwrap_str();
-    let needle = like_pattern::compile(
-        b.unwrap_str(),
-        case_insensitive,
-        like_pattern::EscapeBehavior::default(),
-    )?;
+    let needle = like_pattern::compile(b.unwrap_str(), case_insensitive)?;
     Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }
 
@@ -5133,50 +5125,64 @@ where
     }
 }
 
-fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    // Return value indicates whether this level's slices are empty results.
-    fn slice_and_descend(d: Datum, ranges: &[(usize, usize)], row: &mut Row) -> bool {
-        match ranges {
-            [(start, n), ranges @ ..] if !d.is_null() => {
-                let mut iter = d.unwrap_list().iter().skip(*start).take(*n).peekable();
-                if iter.peek().is_none() {
-                    row.push(Datum::Null);
-                    true
-                } else {
-                    let mut empty_results = true;
-                    let start = row.data().len();
-                    row.push_list_with(|row| {
-                        for d in iter {
-                            // Determine if all higher-dimension slices produced empty results.
-                            empty_results = slice_and_descend(d, ranges, row) && empty_results;
-                        }
-                    });
-
-                    if empty_results {
-                        // If all results were empty, delete the list, insert a
-                        // NULL, and notify lower-order slices that your results
-                        // were empty.
-
-                        // SAFETY: `start` points to a datum boundary because a)
-                        // it comes from a call to `row.data().len()` above,
-                        // and b) recursive calls to `slice_and_descend` will
-                        // not shrink the row. (The recursive calls may write
-                        // data and then erase that data, but a recursive call
-                        // will never erase data that it did not write itself.)
-                        unsafe { row.truncate(start) }
-                        row.push(Datum::Null);
-                    }
-                    empty_results
-                }
-            }
-            _ => {
-                row.push(d);
-                // Slicing a NULL produces an empty result.
-                d.is_null() && ranges.len() > 0
-            }
-        }
+fn array_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    let array = datums[0].unwrap_array();
+    let dims = array.dims();
+    if dims.len() != datums.len() - 1 {
+        // You missed the datums "layer"
+        return Datum::Null;
     }
 
+    let mut final_idx = 0;
+
+    for (
+        ArrayDimension {
+            lower_bound,
+            length,
+        },
+        idx,
+    ) in dims.into_iter().zip_eq(datums[1..].iter())
+    {
+        let idx = idx.unwrap_int64();
+        if idx < lower_bound as i64 {
+            // TODO: How does/should this affect the offset? If this isn't 1,
+            // what is the physical representation of the array?
+            return Datum::Null;
+        }
+
+        final_idx = final_idx * length + (idx as usize - 1);
+    }
+
+    array
+        .elements()
+        .iter()
+        .nth(final_idx)
+        .unwrap_or(Datum::Null)
+}
+
+fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    let mut buf = datums[0];
+
+    for i in datums[1..].iter() {
+        if buf.is_null() {
+            break;
+        }
+
+        let i = i.unwrap_int64();
+        if i < 1 {
+            return Datum::Null;
+        }
+
+        buf = buf
+            .unwrap_list()
+            .iter()
+            .nth(i as usize - 1)
+            .unwrap_or(Datum::Null);
+    }
+    buf
+}
+
+fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     assert_eq!(
         datums.len() % 2,
         1,
@@ -5189,25 +5195,42 @@ fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a>
         one start-end pair"
     );
 
-    let mut ranges = Vec::new();
+    let mut start_idx = 0;
+    let mut total_length = usize::MAX;
+
     for (start, end) in datums[1..].iter().tuples::<(_, _)>() {
         let start = std::cmp::max(start.unwrap_int64(), 1);
         let end = end.unwrap_int64();
 
+        // Result should be empty list.
         if start > end {
-            return Datum::Null;
+            start_idx = 0;
+            total_length = 0;
+            break;
         }
 
-        ranges.push((start as usize - 1, (end - start) as usize + 1));
+        let start_inner = start as usize - 1;
+        // Start index only moves to geq positions.
+        start_idx += start_inner;
+
+        // Length index only moves to leq positions
+        let length_inner = (end - start) as usize + 1;
+        total_length = std::cmp::min(length_inner, total_length - start_inner);
     }
 
+    let iter = datums[0]
+        .unwrap_list()
+        .iter()
+        .skip(start_idx)
+        .take(total_length);
+
     temp_storage.make_datum(|row| {
-        let empty_results = slice_and_descend(datums[0], &ranges, row);
-        // Empty results return an empty list and not NULL.
-        if empty_results {
-            row.truncate_datums(0);
-            row.push(Datum::empty_list());
-        }
+        row.push_list_with(|row| {
+            // if iter is empty, will get the appropriate empty list.
+            for d in iter {
+                row.push(d);
+            }
+        });
     })
 }
 
@@ -5368,18 +5391,6 @@ fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
 }
 
-fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Datum::Null;
-    }
-
-    a.unwrap_list()
-        .iter()
-        .nth(i as usize - 1)
-        .unwrap_or(Datum::Null)
-}
-
 fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let i = match usize::try_from(b.unwrap_int64()) {
         Ok(0) | Err(_) => return Datum::Null,
@@ -5389,18 +5400,6 @@ fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         None => Datum::Null,
         Some(dim) => Datum::Int64(dim.length as i64),
     }
-}
-
-fn array_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Datum::Null;
-    }
-    a.unwrap_array()
-        .elements()
-        .iter()
-        .nth(i as usize - 1)
-        .unwrap_or(Datum::Null)
 }
 
 fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -5457,16 +5456,20 @@ fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Datum<'a>, EvalError> {
-    fn max_len_on_dim<'a>(d: Datum<'a>, on_dim: i64) -> Option<i64> {
+fn list_length_max<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    max_layer: usize,
+) -> Result<Datum<'a>, EvalError> {
+    fn max_len_on_layer<'a>(d: Datum<'a>, on_layer: i64) -> Option<i64> {
         match d {
             Datum::List(i) => {
                 let mut i = i.iter();
-                if on_dim > 1 {
+                if on_layer > 1 {
                     let mut max_len = None;
                     while let Some(Datum::List(i)) = i.next() {
                         max_len =
-                            std::cmp::max(max_len_on_dim(Datum::List(i), on_dim - 1), max_len);
+                            std::cmp::max(max_len_on_layer(Datum::List(i), on_layer - 1), max_len);
                     }
                     max_len
                 } else {
@@ -5480,10 +5483,10 @@ fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Dat
 
     let b = b.unwrap_int64();
 
-    if b as usize > max_dim || b < 1 {
-        Err(EvalError::InvalidDimension { max_dim, val: b })
+    if b as usize > max_layer || b < 1 {
+        Err(EvalError::InvalidLayer { max_layer, val: b })
     } else {
-        Ok(match max_len_on_dim(a, b) {
+        Ok(match max_len_on_layer(a, b) {
             Some(l) => Datum::from(l),
             None => Datum::Null,
         })
@@ -5733,6 +5736,7 @@ pub enum VariadicFunc {
     ArrayToString {
         elem_type: ScalarType,
     },
+    ArrayIndex,
     ListCreate {
         // We need to know the element type to type empty lists.
         elem_type: ScalarType,
@@ -5740,7 +5744,8 @@ pub enum VariadicFunc {
     RecordCreate {
         field_names: Vec<ColumnName>,
     },
-    ListSlice,
+    ListIndex,
+    ListSliceLinear,
     SplitPart,
     RegexpMatch,
     HmacString,
@@ -5787,10 +5792,13 @@ impl VariadicFunc {
             VariadicFunc::ArrayToString { elem_type } => {
                 eager!(array_to_string, elem_type, temp_storage)
             }
+            VariadicFunc::ArrayIndex => Ok(eager!(array_index)),
+
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
             }
-            VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
+            VariadicFunc::ListIndex => Ok(eager!(list_index)),
+            VariadicFunc::ListSliceLinear => Ok(eager!(list_slice_linear, temp_storage)),
             VariadicFunc::SplitPart => eager!(split_part),
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
             VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
@@ -5840,6 +5848,11 @@ impl VariadicFunc {
                 }
             }
             ArrayToString { .. } => ScalarType::String.nullable(true),
+            ArrayIndex => input_types[0]
+                .scalar_type
+                .unwrap_array_element_type()
+                .clone()
+                .nullable(true),
             ListCreate { elem_type } => {
                 // commented out to work around
                 // https://github.com/MaterializeInc/materialize/issues/8963
@@ -5853,7 +5866,12 @@ impl VariadicFunc {
                 }
                 .nullable(false)
             }
-            ListSlice { .. } => input_types[0].scalar_type.clone().nullable(true),
+            ListIndex => input_types[0]
+                .scalar_type
+                .unwrap_list_nth_layer_type(input_types.len() - 1)
+                .clone()
+                .nullable(true),
+            ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(true),
             RecordCreate { field_names } => ScalarType::Record {
                 fields: field_names
                     .clone()
@@ -5909,9 +5927,11 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
             VariadicFunc::ArrayToString { .. } => f.write_str("array_to_string"),
+            VariadicFunc::ArrayIndex => f.write_str("list_index"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
-            VariadicFunc::ListSlice => f.write_str("list_slice"),
+            VariadicFunc::ListIndex => f.write_str("list_index"),
+            VariadicFunc::ListSliceLinear => f.write_str("list_slice_linear"),
             VariadicFunc::SplitPart => f.write_str("split_string"),
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
             VariadicFunc::HmacString | VariadicFunc::HmacBytes => f.write_str("hmac"),

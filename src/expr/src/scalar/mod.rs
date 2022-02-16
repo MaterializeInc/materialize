@@ -343,18 +343,14 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(&relation_type).scalar_type,
                             );
-                        } else if let BinaryFunc::IsLikePatternMatch { case_insensitive } = func {
+                        } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(
-                                    &pattern,
-                                    *case_insensitive,
-                                    like_pattern::EscapeBehavior::default(),
-                                ) {
-                                    Ok(matcher) => expr1
-                                        .take()
-                                        .call_unary(UnaryFunc::IsLikePatternMatch(matcher)),
+                                *e = match like_pattern::compile(&pattern, *case_insensitive) {
+                                    Ok(matcher) => {
+                                        expr1.take().call_unary(UnaryFunc::IsLikeMatch(matcher))
+                                    }
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
                                         e.typ(&relation_type).scalar_type,
@@ -1234,8 +1230,8 @@ pub enum EvalError {
     InvalidTimezone(String),
     InvalidTimezoneInterval,
     InvalidTimezoneConversion,
-    InvalidDimension {
-        max_dim: usize,
+    InvalidLayer {
+        max_layer: usize,
         val: i64,
     },
     InvalidArray(InvalidArrayError),
@@ -1318,10 +1314,10 @@ impl fmt::Display for EvalError {
                 f.write_str("timezone interval must not contain months or years")
             }
             EvalError::InvalidTimezoneConversion => f.write_str("invalid timezone conversion"),
-            EvalError::InvalidDimension { max_dim, val } => write!(
+            EvalError::InvalidLayer { max_layer, val } => write!(
                 f,
-                "invalid dimension: {}; must use value within [1, {}]",
-                val, max_dim
+                "invalid layer: {}; must use value within [1, {}]",
+                val, max_layer
             ),
             EvalError::InvalidArray(e) => e.fmt(f),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),

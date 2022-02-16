@@ -44,6 +44,30 @@ steps:
   - wait: ~
     if: build.source == "ui"
 
+  - id: feature-benchmark
+    label: "Feature benchmark against latest release"
+    timeout_in_minutes: 120
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args:
+            - --other-tag
+            - latest
+
+  - id: feature-benchmark-persistence
+    label: "Feature benchmark against latest release with persistence"
+    timeout_in_minutes: 120
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args:
+            - --other-tag
+            - latest
+            - --this-options
+            - "--persistent-user-tables --persistent-kafka-sources"
+            - --other-options
+            - "--persistent-user-tables --persistent-kafka-sources"
+
   - id: coverage
     label: Code coverage
     timeout_in_minutes: 240
@@ -133,30 +157,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-2, --persistent-user-tables]
-
-  - id: feature-benchmark
-    label: "Feature benchmark against latest release"
-    timeout_in_minutes: 120
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-            - --other-tag
-            - latest
-
-  - id: feature-benchmark-persistence
-    label: "Feature benchmark against latest release with persistence"
-    timeout_in_minutes: 120
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-            - --other-tag
-            - latest
-            - --this-options
-            - "--persistent-user-tables --persistent-kafka-sources"
-            - --other-options
-            - "--persistent-user-tables --persistent-kafka-sources"
 
   - id: aws-config
     label: "AWS credentials and role assumption"

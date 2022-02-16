@@ -1844,6 +1844,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::CharLength, 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
             },
+            "like_escape" => Scalar {
+                params!(String, String) => BinaryFunc::LikeEscape, 1637;
+            },
             "ln" => Scalar {
                 params!(Float64) => UnaryFunc::Ln(func::Ln), 1341;
                 params!(Numeric) => UnaryFunc::LnNumeric(func::LnNumeric), 1734;
@@ -2555,12 +2558,12 @@ lazy_static! {
             "list_cat" => Scalar {
                 vec![ListAny, ListAny] => BinaryFunc::ListListConcat => ListAny, oid::FUNC_LIST_CAT_OID;
             },
-            "list_ndims" => Scalar {
+            "list_n_layers" => Scalar {
                 vec![ListAny] => Operation::unary(|ecx, e| {
-                    ecx.require_experimental_mode("list_ndims")?;
-                    let d = ecx.scalar_type(&e).unwrap_list_n_dims();
+                    ecx.require_experimental_mode("list_n_layers")?;
+                    let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                     Ok(HirScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
-                }) => Int32, oid::FUNC_LIST_NDIMS_OID;
+                }) => Int32, oid::FUNC_LIST_N_LAYERS_OID;
             },
             "list_length" => Scalar {
                 vec![ListAny] => UnaryFunc::ListLength => Int32, oid::FUNC_LIST_LENGTH_OID;
@@ -2568,8 +2571,8 @@ lazy_static! {
             "list_length_max" => Scalar {
                 vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
                     ecx.require_experimental_mode("list_length_max")?;
-                    let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
-                    Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
+                    let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
+                    Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
                 }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
             },
             "list_prepend" => Scalar {
@@ -2943,24 +2946,24 @@ lazy_static! {
 
             // ILIKE
             "~~*" => Scalar {
-                params!(String, String) => IsLikePatternMatch { case_insensitive: true }, 1627;
+                params!(String, String) => IsLikeMatch { case_insensitive: true }, 1627;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
+                        .call_binary(rhs, IsLikeMatch { case_insensitive: true })
                     )
                 }), 1629;
             },
             "!~~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
-                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
+                        .call_binary(rhs, IsLikeMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not(func::Not)))
                 }) => Bool, 1628;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                        .call_binary(rhs, IsLikeMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }) => Bool, 1630;
@@ -2969,24 +2972,24 @@ lazy_static! {
 
             // LIKE
             "~~" => Scalar {
-                params!(String, String) => IsLikePatternMatch { case_insensitive: false }, 1209;
+                params!(String, String) => IsLikeMatch { case_insensitive: false }, 1209;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                        .call_binary(rhs, IsLikeMatch { case_insensitive: false })
                     )
                 }), 1211;
             },
             "!~~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
-                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                        .call_binary(rhs, IsLikeMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not(func::Not)))
                 }) => Bool, 1210;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                        .call_binary(rhs, IsLikeMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }) => Bool, 1212;

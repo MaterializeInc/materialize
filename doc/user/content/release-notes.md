@@ -125,6 +125,10 @@ changes that have not yet been documented.
 - Allow setting `standard_conforming_strings` to its default value of `on`.
   Setting it to `off` is still not supported.
 
+- Support sequences of subscript operations on [`array`] values when
+  indexing/accessing individual elements (as opposed to taking slices/ranges of
+  values) {{% gh 9815 %}}.
+
 - Add support for `ARRAY(<subquery>)` constructor {{% gh 10700 %}}.
 
 {{< comment >}}
@@ -204,6 +208,8 @@ boundary don't silently merge their release notes into the wrong place.
   Kafka topic has more than one partition {{% gh 10375 %}}. Previous versions of
   Materialize would lose data unless the `deduplication = 'full'` option was
   specified.
+
+- Add support for `ESCAPE` clauses in `LIKE` & `ILIKE` expressions.
 
 - Improve the performance of SQL `LIKE` expressions.
 

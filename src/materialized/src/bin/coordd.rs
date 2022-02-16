@@ -137,9 +137,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             tls: None,
             coord_client: coord_client.clone(),
             metrics_registry: &metrics_registry,
+            frontegg: None,
         });
         let http_server = http::Server::new(http::Config {
             tls: None,
+            frontegg: None,
             coord_client,
             metrics_registry,
             global_metrics: metrics,

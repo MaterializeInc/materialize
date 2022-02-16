@@ -206,8 +206,8 @@ SELECT LIST[1,2,3,4,5][3:] AS three_to_five;
  {3,4,5}
 ```
 
-If the first index exceeds the list's maximum index, the operation returns
-_NULL_:
+If the first index exceeds the list's maximum index, the operation returns an
+empty list:
 
 ```sql
 SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
@@ -215,7 +215,7 @@ SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
 ```nofmt
  exceed_index
 --------------
-
+ {}
 ```
 
 If the last index exceeds the list’s maximum index, the operation returns all
@@ -227,34 +227,20 @@ SELECT LIST[1,2,3,4,5][2:10] AS two_to_end;
 ```nofmt
  two_to_end
 ------------
- {3,4,5}
+ {2,3,4,5}
 ```
 
-#### Layered slices
-
-{{< experimental v0.5.1 >}}
-Layered slices
-{{< /experimental >}}
-
-To slice on layers beyond the first, indicate the range you want to slice along
-each layer, separating the ranges with commas:
+Performing successive slices behaves more like a traditional programming
+language taking slices of an array, rather than PostgreSQL's slicing, which
+descends into each layer.
 
 ```sql
-SELECT LIST[[1,2], [3,4]][1:2, 2:2] AS slice_second_lyr;
+SELECT LIST[1,2,3,4,5][2:][2:3] AS successive;
 ```
 ```nofmt
- slice_second_lyr
-------------------
- {{2},{4}}
-````
-
-You can only slice into as many layers as the list contains:
-
-```sql
-SELECT LIST[[1,2], [3,4]][1:2, 2:2, 1:1] AS failed_third_dim_slice;
-```
-```nofmt
-ERROR:  cannot slice into 3 layers; list only has 2 layers
+ successive
+------------
+ {3,4}
 ```
 
 ### Output format
@@ -434,8 +420,8 @@ ERROR:  cannot subscript type text
 ##### Accessing ranges of elements
 
 **Lists** support accessing ranges of elements via [slicing](#slicing-ranges).
-[Layered slicing](#layered-slices) (slicing into a layer beyond the first) is
-expressed as a list of comma-separated ranges inside a single square bracket.
+However, lists do not currently support PostgreSQL-style slicing, which
+descends into layers in each slice.
 
 **Arrays** require each element of a dimension to have the same length. For
 example, if the first element in a 2D list has a length of 2, all subsequent

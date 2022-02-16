@@ -33,6 +33,7 @@ askama = { version = "0.11.0", default-features = false, features = ["config", "
 async-trait = "0.1.52"
 atty = "0.2.14"
 backtrace = "0.3.64"
+base64 = "0.13.0"
 cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.0.14", features = ["wrap_help", "env", "derive"] }
@@ -42,7 +43,9 @@ crossbeam-channel = "0.5.2"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
+headers = "0.3.5"
 hex = "0.4.3"
+http = "0.2.6"
 hyper = { version = "0.14.17", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
 include_dir = "0.7.2"
@@ -55,6 +58,7 @@ mz-coord = { path = "../coord" }
 mz-dataflow = { path = "../dataflow" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-dataflowd = { path = "../dataflowd" }
+mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgwire = { path = "../pgwire" }
@@ -103,6 +107,7 @@ bytes = "1.1.0"
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.3"
+jsonwebtoken = "8.0.1"
 mz-coordtest = { path = "../coordtest" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-pgrepr = { path = "../pgrepr" }

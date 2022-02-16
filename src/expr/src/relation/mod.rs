@@ -26,8 +26,8 @@ use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, ScalarType
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::{
-    func as scalar_func, BinaryFunc, DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id,
-    LocalId, MirScalarExpr, UnaryFunc, VariadicFunc,
+    func as scalar_func, DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId,
+    MirScalarExpr, UnaryFunc, VariadicFunc,
 };
 
 pub mod canonicalize;
@@ -1973,16 +1973,21 @@ impl AggregateExpr {
 
             // RowNumber takes a list of records and outputs a list containing exactly 1 element
             AggregateFunc::RowNumber { .. } => {
-                let record = self
+                let list = self
                     .expr
                     .clone()
                     // extract the list within the record
-                    .call_unary(UnaryFunc::RecordGet(0))
-                    // extract the expression within the list
-                    .call_binary(
+                    .call_unary(UnaryFunc::RecordGet(0));
+
+                // extract the expression within the list
+                let record = MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListIndex,
+                    exprs: vec![
+                        list,
                         MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                        BinaryFunc::ListIndex,
-                    );
+                    ],
+                };
+
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
                         elem_type: self
