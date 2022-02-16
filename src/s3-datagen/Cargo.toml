@@ -17,4 +17,4 @@ mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ore = { path = "../ore" }
 tokio = { version = "1.16.1", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.30"
-tracing-subscriber = { version = "0.3.7", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.8", default-features = false, features = ["env-filter", "fmt"] }
