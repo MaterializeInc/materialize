@@ -277,7 +277,7 @@ mod tests {
     /// [`BoxType::TableFunction`], and [`BoxType::Values`] boxes (happy case).
     #[test]
     fn test_invalid_get_table_fn_values_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_get = model.make_box(qgm::get(1).into());
         let box_table_fn = model.make_box(TableFunction::default().into());
@@ -296,7 +296,7 @@ mod tests {
     /// [`BoxType::TableFunction`], and [`BoxType::Values`] boxes (bad case).
     #[test]
     fn test_invalid_get_table_fn_values_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_get = model.make_box(qgm::get(1).into());
@@ -323,7 +323,7 @@ mod tests {
     /// [`BoxType::Except`], and [`BoxType::Intersect`] boxes (happy case).
     #[test]
     fn test_invalid_union_except_intersect_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_union = model.make_box(BoxType::Union);
@@ -345,7 +345,7 @@ mod tests {
     /// [`BoxType::Except`], and [`BoxType::Intersect`] boxes (bad case).
     #[test]
     fn test_invalid_union_except_intersect_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_union = model.make_box(BoxType::Union);
@@ -374,7 +374,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Grouping`] boxes (happy case).
     #[test]
     fn test_invalid_grouping_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
@@ -392,7 +392,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Grouping`] boxes (bad case).
     #[test]
     fn test_invalid_grouping_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_grouping = model.make_box(Grouping::default().into());
@@ -418,7 +418,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Select`] boxes (happy case).
     #[test]
     fn test_invalid_select_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
@@ -434,7 +434,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Select`] boxes (bad case).
     #[test]
     fn test_invalid_select_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
@@ -455,7 +455,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::OuterJoin`] boxes (happy case).
     #[test]
     fn test_outer_join_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_lhs = model.make_box(qgm::get(0).into());
         let box_rhs = model.make_box(qgm::get(1).into());
@@ -474,7 +474,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::OuterJoin`] boxes (bad case).
     #[test]
     fn test_outer_join_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_lhs = model.make_box(qgm::get(0).into());
         let box_rhs = model.make_box(qgm::get(1).into());

@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_select_1() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = add_get(&mut model);
         let b_id = add_select(&mut model, g_id, |input| {
             vec![
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_select_2() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = add_get(&mut model);
         let b_id = add_select(&mut model, g_id, |input| {
             vec![
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_select_3() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = add_get(&mut model);
         let b_id = add_select(&mut model, g_id, |input| {
             vec![
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_select_4() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = add_get(&mut model);
         let b_id = add_select(&mut model, g_id, |input| {
             vec![
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_left_outer_join_1() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = add_get(&mut model);
         let b_id = add_left_outer_join(&mut model, g_id, g_id, |lhs, rhs| {
             vec![
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_full_outer_join_1() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = add_get(&mut model);
         let b_id = add_full_outer_join(&mut model, g_id, g_id, |lhs, rhs| {
             vec![
