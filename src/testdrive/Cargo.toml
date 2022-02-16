@@ -71,4 +71,5 @@ assert_cmd = "2.0.4"
 predicates = "2.1.1"
 
 [package.metadata.cargo-udeps.ignore]
+# used to build a binary
 normal = ["krb5-src"]
