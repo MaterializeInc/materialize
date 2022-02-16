@@ -12,9 +12,6 @@ use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::rc::Rc;
 
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::trace::cursor::Cursor;
-use differential_dataflow::trace::BatchReader;
 use differential_dataflow::Collection;
 
 use timely::dataflow::channels::pact::Pipeline;
@@ -60,22 +57,13 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let scope = sinked_collection.scope();
-        use differential_dataflow::Hashable;
-        // `active_worker` indicates the index of the worker that receives all data.
-        let active_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
         // An encapsulation of the Tail response protocol.
         // Used to send rows and progress messages,
         // and alert if the dataflow was dropped before completing.
-        // Set to `None` for instances that should not produce output.
-        let tail_protocol_handle = Rc::new(RefCell::new(if active_worker {
-            Some(TailProtocol {
-                sink_id,
-                tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
-            })
-        } else {
-            None
-        }));
+        let tail_protocol_handle = Rc::new(RefCell::new(Some(TailProtocol {
+            sink_id,
+            tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
+        })));
         let tail_protocol_weak = Rc::downgrade(&tail_protocol_handle);
 
         tail(
@@ -83,7 +71,6 @@ where
             sink_id,
             sink.as_of.clone(),
             tail_protocol_handle,
-            active_worker,
         );
 
         // Inform the coordinator that we have been dropped,
@@ -102,79 +89,45 @@ fn tail<G>(
     sink_id: GlobalId,
     as_of: SinkAsOf,
     tail_protocol_handle: Rc<RefCell<Option<TailProtocol>>>,
-    active_worker: bool,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    // make sure all data is routed to one worker by keying on the sink id
-    let batches = sinked_collection
-        .map(move |(k, v)| {
-            assert!(k.is_none(), "tail does not support keys");
-            let v = v.expect("tail must have values");
-            (sink_id, v)
-        })
-        .arrange_by_key()
-        .stream;
-
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
 
-    batches.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
-        input.for_each(|_, batches| {
-            let mut results = vec![];
-            for batch in batches.iter() {
-                let mut cursor = batch.cursor();
-                while cursor.key_valid(&batch) {
-                    while cursor.val_valid(&batch) {
-                        let row = cursor.val(&batch);
-                        cursor.map_times(&batch, |time, diff| {
-                            let diff = *diff;
-                            let should_emit = if as_of.strict {
-                                as_of.frontier.less_than(time)
-                            } else {
-                                as_of.frontier.less_equal(time)
-                            };
-                            if should_emit {
-                                results.push((row.clone(), *time, diff));
-                            }
-                        });
-                        cursor.step_val(&batch);
+    sinked_collection
+        .inner
+        .sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
+            input.for_each(|_, rows| {
+                let mut results = vec![];
+                for ((k, v), time, diff) in rows.iter() {
+                    assert!(k.is_none(), "tail does not support keys");
+                    let row = v.as_ref().expect("tail must have values");
+                    let should_emit = if as_of.strict {
+                        as_of.frontier.less_than(time)
+                    } else {
+                        as_of.frontier.less_equal(time)
+                    };
+                    if should_emit {
+                        results.push((*time, row.clone(), *diff));
                     }
-                    cursor.step_key(&batch);
                 }
-            }
 
-            if active_worker {
                 // Emit data if configured, otherwise it is an error to have data to send.
                 if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
                     tail_protocol.send_rows(results);
                 }
-            } else {
-                assert!(
-                    results.is_empty(),
-                    "Observed data at inactive TAIL instance"
-                );
+            });
+
+            let progress = update_progress(&mut input_frontier, input.frontier().frontier());
+
+            // Only emit updates if this operator/worker received actual data for emission.
+            if let (Some(tail_protocol), Some(progress)) =
+                (tail_protocol_handle.borrow_mut().deref_mut(), progress)
+            {
+                tail_protocol.send_progress(progress);
             }
-
-            if let Some(batch) = batches.last() {
-                let progress = update_progress(&mut input_frontier, batch.desc.upper().borrow());
-                if let (Some(tail_protocol), Some(progress)) =
-                    (tail_protocol_handle.borrow_mut().deref_mut(), progress)
-                {
-                    tail_protocol.send_progress(progress);
-                }
-            }
-        });
-
-        let progress = update_progress(&mut input_frontier, input.frontier().frontier());
-
-        // Only emit updates if this operator/worker received actual data for emission.
-        if let (Some(tail_protocol), Some(progress)) =
-            (tail_protocol_handle.borrow_mut().deref_mut(), progress)
-        {
-            tail_protocol.send_progress(progress);
-        }
-    })
+        })
 }
 
 /// A type that guides the transmission of rows back to the coordinator.
@@ -206,7 +159,7 @@ impl TailProtocol {
     }
 
     /// Send further rows as responses.
-    fn send_rows(&mut self, rows: Vec<(Row, Timestamp, Diff)>) {
+    fn send_rows(&mut self, rows: Vec<(Timestamp, Row, Diff)>) {
         let buffer = self
             .tail_response_buffer
             .as_mut()

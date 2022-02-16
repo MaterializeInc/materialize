@@ -77,11 +77,11 @@ impl PendingTail {
                 // Sort results by time. We use stable sort here because it will produce deterministic
                 // results since the cursor will always produce rows in the same order.
                 // TODO: Is sorting necessary?
-                rows.sort_by_key(|(_, time, _)| *time);
+                rows.sort_by_key(|(time, _, _)| *time);
 
                 let rows = rows
                     .into_iter()
-                    .map(|(row, time, diff)| {
+                    .map(|(time, row, diff)| {
                         packer.push(Datum::from(numeric::Numeric::from(time)));
                         if self.emit_progress {
                             // When sinking with PROGRESS, the output
