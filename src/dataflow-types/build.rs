@@ -10,5 +10,6 @@
 fn main() {
     let mut cfg = prost_build::Config::new();
     cfg.type_attribute(".", "#[derive(Eq, serde::Serialize, serde::Deserialize)]");
-    cfg.compile_protos(&["postgres_source.proto"], &["src"]).unwrap();
+    cfg.compile_protos(&["postgres_source.proto"], &["src"])
+        .unwrap();
 }
