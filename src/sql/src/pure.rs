@@ -42,9 +42,8 @@ use crate::ast::{
     CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
     CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
     CsvColumns, DbzMode, Envelope, Expr, Format, Ident, Op, ProtobufSchema, Query, Raw, RawName,
-    Select, SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption,
-    Statement, SubscriptPosition, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
-    ViewDefinition, WithOption, WithOptionValue,
+    Select, SelectItem, SetExpr, SqlOption, Statement, SubscriptPosition, TableFactor,
+    TableWithJoins, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -92,7 +91,7 @@ pub fn purify(
             format,
             envelope,
             with_options,
-            include_metadata,
+            include_metadata: _,
             ..
         }) = &mut stmt
         {
@@ -215,21 +214,6 @@ pub fn purify(
                 with_options,
             )
             .await?;
-
-            if include_metadata.iter().any(|i| {
-                matches!(
-                    i,
-                    SourceIncludeMetadata {
-                        ty: SourceIncludeMetadataType::Key,
-                        ..
-                    }
-                )
-            }) && !matches!(format, CreateSourceFormat::KeyValue { .. })
-            {
-                bail!(
-                    "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT"
-                );
-            }
         }
 
         if let Statement::CreateViews(CreateViewsStatement { definitions, .. }) = &mut stmt {
