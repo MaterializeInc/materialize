@@ -374,16 +374,11 @@ FROM x,
 | Project (#0, #1, #3)
 | Filter (#1 = #2)
 
-%14 = Let l6 =
+%14 =
 | Get %13 (l5)
-| Project (#0, #1)
-| Distinct group=(#0, #1)
 
 %15 =
-| Get %13 (l5)
-
-%16 =
-| Join %2 %15 (= #0 #1)
+| Join %2 %14 (= #0 #1)
 | | implementation = Unimplemented
 | Project (#0, #2, #3)
 | Filter true

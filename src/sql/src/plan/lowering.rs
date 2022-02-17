@@ -508,15 +508,17 @@ impl HirRelationExpr {
                             // more efficiently rendered than in general. This can return `None` if
                             // such a plan is not possible, for example if `on` does not describe an
                             // equijoin between columns of `left` and `right`.
-                            if let Some(joined) = attempt_outer_join(
-                                get_left.clone(),
-                                get_right.clone(),
-                                on.clone(),
-                                kind.clone(),
-                                oa,
-                                id_gen,
-                            ) {
-                                return joined;
+                            if kind != JoinKind::Inner {
+                                if let Some(joined) = attempt_outer_join(
+                                    get_left.clone(),
+                                    get_right.clone(),
+                                    on.clone(),
+                                    kind.clone(),
+                                    oa,
+                                    id_gen,
+                                ) {
+                                    return joined;
+                                }
                             }
 
                             // Otherwise, perform a more general join.
