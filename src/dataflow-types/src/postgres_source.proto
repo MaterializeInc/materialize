@@ -14,7 +14,7 @@ package postgres_source;
 message PostgresTable {
     string name = 1;
     string namespace = 2;
-    int32 relation_id = 3;
+    uint32 relation_id = 3;
     repeated PostgresColumn columns = 4;
 }
 

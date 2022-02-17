@@ -68,7 +68,7 @@ impl From<TableInfo> for PostgresTable {
         PostgresTable {
             name: t.name,
             namespace: t.namespace,
-            relation_id: t.rel_id.try_into().unwrap(),
+            relation_id: t.rel_id,
             columns: t.schema.into_iter().map(|c| c.into()).collect(),
         }
     }
@@ -77,7 +77,7 @@ impl From<TableInfo> for PostgresTable {
 impl From<PostgresTable> for TableInfo {
     fn from(t: PostgresTable) -> TableInfo {
         TableInfo {
-            rel_id: t.relation_id.try_into().unwrap(),
+            rel_id: t.relation_id,
             namespace: t.namespace,
             name: t.name,
             schema: t.columns.into_iter().map(|c| c.into()).collect(),

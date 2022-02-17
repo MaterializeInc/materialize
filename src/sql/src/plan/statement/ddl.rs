@@ -521,8 +521,7 @@ pub fn plan_create_source(
                 details: PostgresSourceDetails::decode(Bytes::from(hex::decode(
                     details
                         .as_ref()
-                        .expect("Postgres source must provide associated details")
-                        .clone(),
+                        .expect("Postgres source must provide associated details"),
                 )?))?,
             });
 
