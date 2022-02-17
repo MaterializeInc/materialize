@@ -33,7 +33,7 @@ create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
+        'INDEX' index_name 'ON' obj_name '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
         | 'DEFAULT INDEX ON' obj_name
     )
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
