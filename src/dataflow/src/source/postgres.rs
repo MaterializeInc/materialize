@@ -51,7 +51,7 @@ pub struct PostgresSourceReader {
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
-    source_tables: HashMap<i32, PostgresTable>,
+    source_tables: HashMap<u32, PostgresTable>,
 }
 
 trait ErrorExt {
@@ -134,13 +134,13 @@ impl PostgresSourceReader {
     ) -> Self {
         Self {
             source_id,
-            source_tables: connector
-                .details
-                .clone()
-                .tables
-                .into_iter()
-                .map(|t| (t.relation_id.clone(), t))
-                .collect(),
+            source_tables: HashMap::from_iter(
+                connector
+                    .details
+                    .tables
+                    .iter()
+                    .map(|t| (t.relation_id, t.clone())),
+            ),
             connector,
             lsn: 0.into(),
             metrics: PgSourceMetrics::new(metrics, source_id),
@@ -149,16 +149,14 @@ impl PostgresSourceReader {
 
     /// Validates that all expected tables exist in the publication tables and they have the same schema
     fn validate_tables(&self, tables: Vec<TableInfo>) -> Result<(), anyhow::Error> {
-        let pub_tables: HashMap<i32, PostgresTable> = tables
+        let pub_tables: HashMap<u32, PostgresTable> = tables
             .into_iter()
-            .map(|t| (t.rel_id.try_into().unwrap(), PostgresTable::from(t)))
+            .map(|t| (t.rel_id, PostgresTable::from(t)))
             .collect();
         for (id, schema) in self.source_tables.iter() {
             if let Some(pub_schema) = pub_tables.get(id) {
                 if pub_schema != schema {
                     bail!("Schema for table {} differs, recreate materialized source to use new schema", schema.name)
-                } else {
-                    continue;
                 }
             } else {
                 bail!(
@@ -233,8 +231,8 @@ impl PostgresSourceReader {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-        for info in &self.source_tables.values().collect::<Vec<&PostgresTable>>() {
-            let relation_id: Datum = (info.relation_id).into();
+        for info in self.source_tables.values() {
+            let relation_id: Datum = (i32::try_from(info.relation_id).unwrap()).into();
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -395,7 +393,7 @@ impl PostgresSourceReader {
                         Insert(insert) => {
                             self.metrics.inserts.inc();
                             let rel_id = insert.rel_id();
-                            if !self.source_tables.contains_key(&rel_id.try_into().unwrap()) {
+                            if !self.source_tables.contains_key(&rel_id) {
                                 continue;
                             }
                             let new_tuple = insert.tuple().tuple_data();
@@ -405,7 +403,7 @@ impl PostgresSourceReader {
                         Update(update) => {
                             self.metrics.updates.inc();
                             let rel_id = update.rel_id();
-                            if !self.source_tables.contains_key(&rel_id.try_into().unwrap()) {
+                            if !self.source_tables.contains_key(&rel_id) {
                                 continue;
                             }
                             let old_tuple = try_fatal!(update
@@ -433,7 +431,7 @@ impl PostgresSourceReader {
                         Delete(delete) => {
                             self.metrics.deletes.inc();
                             let rel_id = delete.rel_id();
-                            if !self.source_tables.contains_key(&rel_id.try_into().unwrap()) {
+                            if !self.source_tables.contains_key(&rel_id) {
                                 continue;
                             }
                             let old_tuple = try_fatal!(delete
@@ -460,9 +458,7 @@ impl PostgresSourceReader {
                         }
                         Relation(relation) => {
                             let rel_id = relation.rel_id();
-                            if let Some(source_table) =
-                                self.source_tables.get(&rel_id.try_into().unwrap())
-                            {
+                            if let Some(source_table) = self.source_tables.get(&rel_id) {
                                 // Start with the cheapest check first, this will catch the majority of alters
                                 if source_table.columns.len() != relation.columns().len() {
                                     return Err(Fatal(anyhow!(
@@ -472,26 +468,20 @@ impl PostgresSourceReader {
                                     )));
                                 }
                                 // todo(nharring): use an array instead of vec to avoid heap allocation
-                                let cols: Vec<PostgresColumn> = relation
-                                    .columns()
-                                    .into_iter()
-                                    .map(|c| PostgresColumn {
-                                        name: c.name().unwrap().to_string(),
-                                        type_oid: c.type_id(),
-                                        type_mod: c.type_modifier(),
-                                        nullable: bool::default(),
-                                        primary_key: bool::default(),
-                                    })
-                                    .collect();
+                                let cols = relation.columns().into_iter().map(|c| PostgresColumn {
+                                    name: c.name().unwrap().to_string(),
+                                    type_oid: c.type_id(),
+                                    type_mod: c.type_modifier(),
+                                    nullable: bool::default(),
+                                    primary_key: bool::default(),
+                                });
                                 // Relation messages do not include nullability/primary_key data
                                 // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
-                                if !source_table.columns.iter().zip(cols.iter()).all(
-                                    |(src, rel)| {
-                                        src.name == rel.name
-                                            && src.type_oid == rel.type_oid
-                                            && src.type_mod == rel.type_mod
-                                    },
-                                ) {
+                                if !source_table.columns.iter().zip(cols).all(|(src, rel)| {
+                                    src.name == rel.name
+                                        && src.type_oid == rel.type_oid
+                                        && src.type_mod == rel.type_mod
+                                }) {
                                     return Err(Fatal(anyhow!(
                                         "source table {} with oid {} has been altered",
                                         source_table.name,

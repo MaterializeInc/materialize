@@ -17,7 +17,6 @@ enum-kinds = "0.5.1"
 futures = "0.3.21"
 globset = "0.4.8"
 hex = "0.4.3"
-mz-interchange = { path = "../interchange" }
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
@@ -26,6 +25,7 @@ mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
+mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgrepr = { path = "../pgrepr" }
