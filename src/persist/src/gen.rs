@@ -47,7 +47,7 @@ impl ProtoMeta {
     /// ```
     // TODO: Once this gets bumped to 8, we can clean up:
     // - The TODO in Blob::Cache.check_meta_build_version.
-    pub const ENCODING_VERSION: u8 = 9;
+    pub const ENCODING_VERSION: u8 = 10;
 
     /// The [Self::ENCODING_VERSION] of this previously encoded ProtoMeta.
     ///

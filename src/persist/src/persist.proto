@@ -55,7 +55,7 @@ message ProtoUnsealedBatchMeta {
 }
 
 message ProtoTraceBatchMeta {
-    string key = 1;
+    repeated string keys = 1;
     ProtoBatchFormat format = 5;
     ProtoU64Description desc = 2;
     uint64 size_bytes = 3;
@@ -75,7 +75,7 @@ message ProtoU64Description {
 message ProtoBatchInline {
     oneof batch_type {
         ProtoUnsealedBatchInline unsealed = 1;
-        ProtoTraceBatchInline trace = 2;
+        ProtoTraceBatchPartInline trace = 2;
     }
 }
 
@@ -89,9 +89,15 @@ message ProtoUnsealedBatchInline {
     reserved 1, 4, 5, 6;
 }
 
-message ProtoTraceBatchInline {
+message ProtoTraceBatchPartInline {
     ProtoBatchFormat format = 5;
+    // TraceBatchParts can contain partial data for a given trace batch, and so
+    // this desc means only that the records contained in this part have to
+    // abide by the constraints in the description. There may be other parts
+    // for the same trace batch with the same description. However, there will
+    // be only one trace batch with the same description and index.
     ProtoU64Description desc = 2;
+    uint64 index = 6;
 
     // These are used in ProtoUnsealedBatchMeta and, for now, we're not using
     // them here in case we want to back out of this being two separate protos.

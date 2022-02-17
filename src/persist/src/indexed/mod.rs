@@ -832,8 +832,10 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
                         }
                     }
                     for batch in arrangement.trace_batches.iter() {
-                        if !keys.contains(&batch.key) {
-                            return Err(Error::from("key missing in trace batch"));
+                        for key in batch.keys.iter() {
+                            if !keys.contains(key) {
+                                return Err(Error::from("key missing in trace batch"));
+                            }
                         }
                     }
                 }
@@ -1794,7 +1796,7 @@ mod tests {
         // not match the one currently in flight)
         let mut response = futures_executor::block_on(request.run_async(&maintainer).recv());
         if let MaintenanceRes::CompactTrace((_, Ok(response))) = &mut response {
-            response.req.b0.key = "unexpected".into();
+            response.req.b0.keys = vec!["unexpected".into()];
         }
         i.handle_maintenance_res(response);
         assert_eq!(i.drain_pending(), Ok(()));
