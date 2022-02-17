@@ -499,6 +499,15 @@ impl SessionClient {
             .expect("coordinator unexpectedly gone");
     }
 
+    // Like `terminate`, but permits the session to not be present, assuming it was
+    // terminated by the coordinator.
+    pub async fn terminate_allow_no_session(self) {
+        if self.session.is_none() {
+            return;
+        }
+        self.terminate().await
+    }
+
     /// Returns a mutable reference to the session bound to this client.
     pub fn session(&mut self) -> &mut Session {
         self.session.as_mut().unwrap()

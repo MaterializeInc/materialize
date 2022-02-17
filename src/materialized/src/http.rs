@@ -367,12 +367,6 @@ async fn validate_http_frontegg_authentication(
         anyhow::bail!("expected authorization");
     };
 
-    let claims = frontegg.validate_access_token(&jwt)?;
-    // If a username was specified, make sure it matches the JWT email.
-    if let Some(http_user) = http_user {
-        if http_user != claims.email {
-            anyhow::bail!("HTTP Authorization user and JWT email do not match");
-        }
-    }
+    let claims = frontegg.validate_access_token(&jwt, http_user.as_deref())?;
     Ok(claims.email)
 }

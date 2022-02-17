@@ -44,7 +44,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::metric;
 use mz_ore::metrics::ThirdPartyMetric;
@@ -509,12 +509,13 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let frontegg = args
         .frontegg_tenant
         .map(|tenant_id| {
-            FronteggAuthentication::new(
-                args.frontegg_api_token_url.unwrap(),
-                args.frontegg_jwk.unwrap().as_bytes(),
+            FronteggAuthentication::new(FronteggConfig {
+                admin_api_token_url: args.frontegg_api_token_url.unwrap(),
+                jwk_rsa_pem: args.frontegg_jwk.unwrap().as_bytes(),
                 tenant_id,
-                mz_ore::now::SYSTEM_TIME.clone(),
-            )
+                now: mz_ore::now::SYSTEM_TIME.clone(),
+                refresh_before_secs: 60,
+            })
         })
         .transpose()?;
 

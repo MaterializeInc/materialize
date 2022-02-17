@@ -1139,7 +1139,7 @@ impl Coordinator {
                     },
                 );
 
-                ClientTransmitter::new(tx).send(
+                ClientTransmitter::new(tx, self.internal_cmd_tx.clone()).send(
                     Ok(StartupResponse {
                         messages,
                         secret_key,
@@ -1300,7 +1300,7 @@ impl Coordinator {
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
                                     session,
-                                    tx: ClientTransmitter::new(tx),
+                                    tx: ClientTransmitter::new(tx, internal_cmd_tx.clone()),
                                     result,
                                     params,
                                 }))
@@ -1391,7 +1391,7 @@ impl Coordinator {
                 session,
                 tx,
             } => {
-                let tx = ClientTransmitter::new(tx);
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                 self.sequence_end_transaction(tx, session, action).await;
             }
 

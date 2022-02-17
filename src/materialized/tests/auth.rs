@@ -16,8 +16,10 @@ use std::fs;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use headers::{Authorization, Header, HeaderMapExt};
 use hyper::client::HttpConnector;
@@ -27,7 +29,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, EncodingKey};
-use mz_ore::now::NowFn;
+use mz_ore::now::SYSTEM_TIME;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -48,8 +50,13 @@ use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use materialized::TlsMode;
-use mz_frontegg_auth::{ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication};
+use mz_frontegg_auth::{
+    ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
+    REFRESH_SUFFIX,
+};
 use mz_ore::assert_contains;
+use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
 
 use crate::util::PostgresErrorExt;
@@ -311,41 +318,81 @@ fn start_mzcloud(
     tenant_id: Uuid,
     users: HashMap<(String, String), String>,
     now: NowFn,
+    expires_in_secs: i64,
 ) -> Result<MzCloudServer, anyhow::Error> {
+    let refreshes = Arc::new(Mutex::new(0u64));
+    let enable_refresh = Arc::new(AtomicBool::new(true));
     #[derive(Clone)]
     struct Context {
         encoding_key: EncodingKey,
         tenant_id: Uuid,
         users: HashMap<(String, String), String>,
         now: NowFn,
+        expires_in_secs: i64,
+        // Uuid -> email
+        refresh_tokens: Arc<Mutex<HashMap<String, String>>>,
+        refreshes: Arc<Mutex<u64>>,
+        enable_refresh: Arc<AtomicBool>,
     }
     let context = Context {
         encoding_key,
         tenant_id,
         users,
         now,
+        expires_in_secs,
+        refresh_tokens: Arc::new(Mutex::new(HashMap::new())),
+        refreshes: Arc::clone(&refreshes),
+        enable_refresh: Arc::clone(&enable_refresh),
     };
     async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-        let body = body::to_bytes(req.into_body()).await.unwrap();
-        let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
-        let email = match context
-            .users
-            .get(&(args.client_id.to_string(), args.secret.to_string()))
-        {
-            Some(email) => email,
-            None => {
-                return Ok(Response::builder()
-                    .status(400)
-                    .body(Body::from("unknown user"))
-                    .unwrap())
+        let (parts, body) = req.into_parts();
+        let body = body::to_bytes(body).await.unwrap();
+        let email: String = if parts.uri.path().ends_with(REFRESH_SUFFIX) {
+            // Always count refresh attempts, even if enable_refresh is false.
+            *context.refreshes.lock().unwrap() += 1;
+            let args: RefreshToken = serde_json::from_slice(&body).unwrap();
+            match (
+                context
+                    .refresh_tokens
+                    .lock()
+                    .unwrap()
+                    .get(&args.refresh_token),
+                context.enable_refresh.load(Ordering::Relaxed),
+            ) {
+                (Some(email), true) => email.to_string(),
+                _ => {
+                    return Ok(Response::builder()
+                        .status(400)
+                        .body(Body::from("unknown refresh token"))
+                        .unwrap())
+                }
+            }
+        } else {
+            let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
+            match context
+                .users
+                .get(&(args.client_id.to_string(), args.secret.to_string()))
+            {
+                Some(email) => email.to_string(),
+                None => {
+                    return Ok(Response::builder()
+                        .status(400)
+                        .body(Body::from("unknown user"))
+                        .unwrap())
+                }
             }
         };
+        let refresh_token = Uuid::new_v4().to_string();
+        context
+            .refresh_tokens
+            .lock()
+            .unwrap()
+            .insert(refresh_token.clone(), email.clone());
         let access_token = jsonwebtoken::encode(
             &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
             &Claims {
-                // This expire time is usually in advance of now, but our tests don't need that yet.
-                exp: context.now.as_secs(),
-                email: email.to_string(),
+                exp: context.now.as_secs() + context.expires_in_secs,
+                email,
                 tenant_id: context.tenant_id,
                 roles: Vec::new(),
                 permissions: Vec::new(),
@@ -357,7 +404,7 @@ fn start_mzcloud(
             expires: "".to_string(),
             expires_in: 0,
             access_token,
-            refresh_token: "".to_string(),
+            refresh_token,
         };
         Ok(Response::new(Body::from(
             serde_json::to_vec(&resp).unwrap(),
@@ -377,12 +424,16 @@ fn start_mzcloud(
     let _handle = runtime.spawn_named(|| "mzcloud-mock-server", server);
     Ok(MzCloudServer {
         url,
+        refreshes,
+        enable_refresh,
         _runtime: runtime,
     })
 }
 
 struct MzCloudServer {
     url: String,
+    refreshes: Arc<Mutex<u64>>,
+    enable_refresh: Arc<AtomicBool>,
     _runtime: Arc<Runtime>,
 }
 
@@ -390,6 +441,111 @@ fn make_header<H: Header>(h: H) -> HeaderMap {
     let mut map = HeaderMap::new();
     map.typed_insert(h);
     map
+}
+
+#[test]
+fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
+    // This function verifies that the background expiry refresh task runs. This
+    // is done by starting a web server that awaits the refresh request, which the
+    // test waits for.
+
+    mz_ore::test::init_logging();
+
+    let ca = Ca::new()?;
+    let (server_cert, server_key) =
+        ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let users = HashMap::from([(
+        (client_id.to_string(), secret.to_string()),
+        "user@_.com".to_string(),
+    )]);
+    let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
+
+    const EXPIRES_IN_SECS: u64 = 2;
+    const REFRESH_BEFORE_SECS: u64 = 1;
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        SYSTEM_TIME.clone(),
+        EXPIRES_IN_SECS as i64,
+    )?;
+    let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
+        admin_api_token_url: frontegg_server.url.clone(),
+        jwk_rsa_pem: &ca.pkey.public_key_to_pem()?,
+        tenant_id,
+        now: SYSTEM_TIME.clone(),
+        refresh_before_secs: REFRESH_BEFORE_SECS as i64,
+    })?;
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("{client_id}{secret}");
+
+    let wait_for_refresh = || {
+        let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
+        Retry::default()
+            .factor(1.0)
+            .max_duration(Duration::from_secs(EXPIRES_IN_SECS + 1))
+            .retry(|_| {
+                let refreshes = *frontegg_server.refreshes.lock().unwrap();
+                if refreshes == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected refresh count {}, got {}",
+                        expected, refreshes
+                    ))
+                }
+            })
+            .unwrap();
+    };
+
+    let config = util::Config::default()
+        .with_tls(TlsMode::Require, &server_cert, &server_key)
+        .with_frontegg(&frontegg_auth);
+    let server = util::start_server(config)?;
+
+    let mut pg_client = server
+        .pg_config()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+
+    // Wait for a couple refreshes to happen.
+    wait_for_refresh();
+    wait_for_refresh();
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+
+    // Disable giving out more refresh tokens.
+    frontegg_server
+        .enable_refresh
+        .store(false, Ordering::Relaxed);
+    wait_for_refresh();
+    // Sleep until the expiry future should resolve.
+    std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS - REFRESH_BEFORE_SECS));
+    assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
+
+    Ok(())
 }
 
 #[allow(clippy::unit_arg)]
@@ -445,7 +601,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     )
     .unwrap();
     let expired_claims = {
-        let mut claims = claims.clone();
+        let mut claims = claims;
         claims.exp = 0;
         claims
     };
@@ -455,13 +611,14 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
         &encoding_key,
     )
     .unwrap();
-    let frontegg_server = start_mzcloud(encoding_key, tenant_id, users, now.clone())?;
-    let frontegg_auth = FronteggAuthentication::new(
-        frontegg_server.url,
-        &ca.pkey.public_key_to_pem()?,
+    let frontegg_server = start_mzcloud(encoding_key, tenant_id, users, now.clone(), 1_000)?;
+    let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
+        admin_api_token_url: frontegg_server.url,
+        jwk_rsa_pem: &ca.pkey.public_key_to_pem()?,
         tenant_id,
         now,
-    )?;
+        refresh_before_secs: 0,
+    })?;
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
