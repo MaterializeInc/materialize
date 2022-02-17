@@ -41,12 +41,14 @@ impl Default for Interval {
     }
 }
 
-impl std::ops::Neg for Interval {
-    type Output = Self;
-    fn neg(self) -> Self {
-        Self {
-            months: -self.months,
-            duration: -self.duration,
+impl num_traits::ops::checked::CheckedNeg for Interval {
+    fn checked_neg(&self) -> Option<Self> {
+        if let (Some(months), Some(duration)) =
+            (self.months.checked_neg(), self.duration.checked_neg())
+        {
+            Some(Self { months, duration })
+        } else {
+            None
         }
     }
 }

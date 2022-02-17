@@ -889,3 +889,9 @@ query T
 SELECT INTERVAL '1 millenniums 2 centuries 3 decades 4 years'
 ----
 1234 years
+
+query error interval out of range
+SELECT -INTERVAL '-2147483648 months';
+
+query error interval out of range
+SELECT INTERVAL '-1 months' - INTERVAL '-2147483648 months';

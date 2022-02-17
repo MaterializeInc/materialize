@@ -24,6 +24,7 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use num::traits::CheckedNeg;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -314,6 +315,13 @@ where
         .checked_add_signed(b.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
     Ok(T::from_date_time(dt).into())
+}
+
+fn sub_timestamplike_interval<'a, T>(a: T, b: Datum) -> Result<Datum<'a>, EvalError>
+where
+    T: TimestampLike,
+{
+    neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i))
 }
 
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -707,8 +715,9 @@ fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_interval()
-        .checked_add(&-b.unwrap_interval())
+    b.unwrap_interval()
+        .checked_neg()
+        .and_then(|b| b.checked_add(&a.unwrap_interval()))
         .ok_or(EvalError::IntervalOutOfRange)
         .map(Datum::from)
 }
@@ -718,7 +727,11 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let interval = b.unwrap_interval();
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
-    let dt = add_timestamp_months(dt, -interval.months)?;
+    let dt = interval
+        .months
+        .checked_neg()
+        .ok_or(EvalError::IntervalOutOfRange)
+        .and_then(|months| add_timestamp_months(dt, months))?;
 
     Ok(Datum::Timestamp(
         dt.checked_sub_signed(interval.duration_as_chrono())
@@ -955,8 +968,14 @@ fn mod_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::Numeric(a))
 }
 
-pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_interval())
+pub fn neg_interval(a: Datum) -> Result<Datum, EvalError> {
+    neg_interval_inner(a).map(Datum::from)
+}
+
+fn neg_interval_inner(a: Datum) -> Result<Interval, EvalError> {
+    a.unwrap_interval()
+        .checked_neg()
+        .ok_or(EvalError::IntervalOutOfRange)
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
@@ -2341,16 +2360,10 @@ impl BinaryFunc {
             BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
             BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
             BinaryFunc::SubTimestampInterval => {
-                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
-                    a.unwrap_timestamp(),
-                    -b.unwrap_interval(),
-                ))
+                eager!(|a: Datum, b: Datum| sub_timestamplike_interval(a.unwrap_timestamp(), b))
             }
             BinaryFunc::SubTimestampTzInterval => {
-                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
-                    a.unwrap_timestamptz(),
-                    -b.unwrap_interval(),
-                ))
+                eager!(|a: Datum, b: Datum| sub_timestamplike_interval(a.unwrap_timestamptz(), b))
             }
             BinaryFunc::SubInterval => eager!(sub_interval),
             BinaryFunc::SubDate => Ok(eager!(sub_date)),

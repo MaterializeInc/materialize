@@ -8,7 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use chrono::NaiveTime;
+use num::traits::CheckedNeg;
 
+use crate::EvalError;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 
@@ -48,7 +50,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
-    fn neg_interval(i: Interval) -> Interval {
-        -i
+    fn neg_interval(i: Interval) -> Result<Interval, EvalError> {
+        i.checked_neg().ok_or(EvalError::IntervalOutOfRange)
     }
 );
