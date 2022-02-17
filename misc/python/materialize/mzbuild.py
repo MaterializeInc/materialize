@@ -87,15 +87,6 @@ class RepositoryDetails:
         return self.root / "target-xcompile" / xcompile.target(self.arch)
 
 
-def docker_images() -> Set[str]:
-    """List the Docker images available on the local machine."""
-    return set(
-        spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
-        .strip()
-        .split("\n")
-    )
-
-
 def is_docker_image_pushed(name: str) -> bool:
     """Check whether the named image is pushed to Docker Hub.
 
@@ -661,14 +652,11 @@ class DependencySet:
         The provided `dependencies` must be topologically sorted.
         """
         self._dependencies: Dict[str, ResolvedImage] = {}
-        known_images = docker_images()
         for d in dependencies:
-            image = ResolvedImage(
+            self._dependencies[d.name] = ResolvedImage(
                 image=d,
                 dependencies=(self._dependencies[d0] for d0 in d.depends_on),
             )
-            image.acquired = image.spec() in known_images
-            self._dependencies[d.name] = image
 
     def acquire(self) -> None:
         """Download or build all of the images in the dependency set that do not
