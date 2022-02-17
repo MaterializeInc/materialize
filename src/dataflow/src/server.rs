@@ -10,7 +10,7 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::anyhow;
@@ -47,7 +47,9 @@ pub mod boundary;
 mod compute_state;
 mod metrics;
 mod storage_state;
+pub mod tcp_boundary;
 
+use crate::server::tcp_boundary::TcpEventLinkServer;
 use boundary::{ComputeReplay, StorageCapture};
 use compute_state::ActiveComputeState;
 pub(crate) use compute_state::ComputeState;
@@ -113,6 +115,12 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let aws_external_id = config.aws_external_id.clone();
+    let source_server = TcpEventLinkServer::new();
+    let boundaries = (0..config.workers)
+        .into_iter()
+        .map(|_| Some(source_server.handle()))
+        .collect::<Vec<_>>();
+    let boundaries = Arc::new(Mutex::new(boundaries));
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let _tokio_guard = tokio_executor.enter();
         let (response_tx, command_rx) = channels.lock().unwrap()
@@ -154,7 +162,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 timely_worker_index,
                 timely_worker_peers,
             },
-            boundary: boundary::EventLinkBoundary::new(),
+            // boundary: boundary::EventLinkBoundary::new(),
+            boundary: boundaries.lock().unwrap()[worker_idx].take().unwrap(),
             command_rx,
             response_tx,
             command_metrics: server_metrics.for_worker_id(worker_idx),
