@@ -27,6 +27,7 @@ use futures_executor::block_on;
 use futures_util::FutureExt;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
+use tracing::{debug, trace};
 use uuid::Uuid;
 
 use mz_aws_util::config::AwsConfig;
@@ -218,7 +219,7 @@ impl S3BlobCore {
         } else {
             first_part.parts_count()
         };
-        tracing::trace!(
+        trace!(
             "s3 download first header took {:?} ({} parts)",
             start_overall.elapsed(),
             num_parts
@@ -295,13 +296,12 @@ impl S3BlobCore {
 
                 let min_header_elapsed = min_header_elapsed.observe(this_header_elapsed);
                 if this_header_elapsed >= min_header_elapsed * 8 {
-                    tracing::debug!(
+                    debug!(
                         "s3 download part header took {:?} more than 8x the min {:?}",
-                        this_header_elapsed,
-                        min_header_elapsed
+                        this_header_elapsed, min_header_elapsed
                     );
                 } else {
-                    tracing::trace!("s3 download part header took {:?}", this_header_elapsed);
+                    trace!("s3 download part header took {:?}", this_header_elapsed);
                 }
 
                 let start_part_body = Instant::now();
@@ -317,7 +317,7 @@ impl S3BlobCore {
                     ),
                 );
             }
-            tracing::trace!(
+            trace!(
                 "s3 download part headers took {:?} ({} parts)",
                 start_headers.elapsed(),
                 num_parts
@@ -338,13 +338,12 @@ impl S3BlobCore {
 
             let min_body_elapsed = min_body_elapsed.observe(this_body_elapsed);
             if this_body_elapsed >= min_body_elapsed * 8 {
-                tracing::debug!(
+                debug!(
                     "s3 download part body took {:?} more than 8x the min {:?}",
-                    this_body_elapsed,
-                    min_body_elapsed
+                    this_body_elapsed, min_body_elapsed
                 );
             } else {
-                tracing::trace!("s3 download part body took {:?}", this_body_elapsed);
+                trace!("s3 download part body took {:?}", this_body_elapsed);
             }
 
             // TODO: It'd be lovely if we could push these copies into the
@@ -368,18 +367,18 @@ impl S3BlobCore {
             part_body_res.copy_to_slice(&mut val[part_range]);
             body_copy_elapsed += start_body_copy.elapsed();
         }
-        tracing::trace!(
+        trace!(
             "s3 download part bodies took {:?} ({} parts)",
             start_bodies.elapsed(),
             num_parts
         );
-        tracing::trace!(
+        trace!(
             "s3 copy part bodies took {:?} ({} parts)",
             body_copy_elapsed,
             num_parts
         );
 
-        tracing::debug!(
+        debug!(
             "s3 GetObject took {:?} ({} parts)",
             start_overall.elapsed(),
             num_parts
@@ -496,7 +495,7 @@ impl S3Blob {
             .send()
             .await
             .map_err(|err| Error::from(err.to_string()))?;
-        tracing::debug!(
+        debug!(
             "s3 PutObject single done {}b / {:?}",
             value_len,
             start_overall.elapsed()
@@ -510,7 +509,7 @@ impl S3Blob {
         let path = self.core.get_path(key);
 
         // Start the multi part request and get an upload id.
-        tracing::trace!("s3 PutObject multi start {}b", value.len());
+        trace!("s3 PutObject multi start {}b", value.len());
         let upload_res = client
             .create_multipart_upload()
             .bucket(&self.core.bucket)
@@ -523,7 +522,7 @@ impl S3Blob {
                 "create_multipart_upload response missing upload_id"
             ))
         })?;
-        tracing::trace!(
+        trace!(
             "s3 create_multipart_upload took {:?}",
             start_overall.elapsed()
         );
@@ -591,16 +590,15 @@ impl S3Blob {
 
             let min_part_elapsed = min_part_elapsed.observe(this_part_elapsed);
             if this_part_elapsed >= min_part_elapsed * 8 {
-                tracing::debug!(
+                debug!(
                     "s3 upload_part took {:?} more than 8x the min {:?}",
-                    this_part_elapsed,
-                    min_part_elapsed
+                    this_part_elapsed, min_part_elapsed
                 );
             } else {
-                tracing::trace!("s3 upload_part took {:?}", this_part_elapsed);
+                trace!("s3 upload_part took {:?}", this_part_elapsed);
             }
         }
-        tracing::trace!(
+        trace!(
             "s3 upload_parts overall took {:?} ({} parts)",
             start_parts.elapsed(),
             parts_len
@@ -631,12 +629,12 @@ impl S3Blob {
             .send()
             .await
             .map_err(|err| Error::from(format!("complete_multipart_upload err: {}", err)))?;
-        tracing::trace!(
+        trace!(
             "s3 complete_multipart_upload took {:?}",
             start_complete.elapsed()
         );
 
-        tracing::debug!(
+        debug!(
             "s3 PutObject multi done {}b / {:?} ({} parts)",
             value.len(),
             start_overall.elapsed(),
@@ -871,6 +869,7 @@ impl MinElapsed {
 mod tests {
     use crate::error::Error;
     use crate::storage::tests::blob_impl_test;
+    use tracing::info;
 
     use super::*;
 
@@ -880,7 +879,7 @@ mod tests {
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {
-                tracing::info!(
+                info!(
                     "{} env not set: skipping test that uses external service",
                     S3BlobConfig::EXTERNAL_TESTS_S3_BUCKET
                 );

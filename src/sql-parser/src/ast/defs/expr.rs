@@ -182,6 +182,7 @@ pub enum Expr<T: AstInfo> {
     },
     /// `ARRAY[<expr>*]`
     Array(Vec<Expr<T>>),
+    ArraySubquery(Box<Query<T>>),
     /// `LIST[<expr>*]`
     List(Vec<Expr<T>>),
     ListSubquery(Box<Query<T>>),
@@ -457,6 +458,11 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     }
                 }
                 f.write_str("]");
+            }
+            Expr::ArraySubquery(s) => {
+                f.write_str("ARRAY(");
+                f.write_node(&s);
+                f.write_str(")");
             }
             Expr::List(exprs) => {
                 let mut exprs = exprs.iter().peekable();

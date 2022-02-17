@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
+use tracing::error;
 
 use crate::client::SourceConnector;
 use crate::client::{
@@ -321,7 +322,7 @@ impl<C: Client> Controller<C> {
         for id in identifiers.iter() {
             if !self.source_descriptions.contains_key(id) {
                 // This isn't an unrecoverable error, just .. probably wrong.
-                tracing::error!("Source id {} dropped without first being created", id);
+                error!("Source id {} dropped without first being created", id);
             } else {
                 self.source_descriptions.insert(*id, None);
             }

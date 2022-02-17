@@ -35,11 +35,13 @@ use crate::gen::persist::{
     ProtoStreamRegistration, ProtoTraceBatchInline, ProtoTraceBatchMeta, ProtoU64Antichain,
     ProtoU64Description, ProtoUnsealedBatchInline, ProtoUnsealedBatchMeta,
 };
+use crate::indexed::arrangement::UnsealedSnapshot;
+use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::parquet::{
     decode_trace_parquet, decode_unsealed_parquet, encode_trace_parquet, encode_unsealed_parquet,
 };
 use crate::indexed::columnar::ColumnarRecords;
-use crate::storage::SeqNo;
+use crate::storage::{BlobRead, SeqNo};
 
 /// An internally unique id for a persisted stream. External users identify
 /// streams with a string, which is then mapped internally to this.
@@ -186,6 +188,33 @@ pub struct TraceBatchMeta {
     pub level: u64,
     /// Size of the encoded batch.
     pub size_bytes: u64,
+}
+
+/// The metadata necessary to reconstruct an [UnsealedSnapshot].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsealedSnapshotMeta {
+    /// A closed lower bound on the times of contained updates.
+    pub ts_lower: Antichain<u64>,
+    /// An open upper bound on the times of the contained updates.
+    pub ts_upper: Antichain<u64>,
+    /// The batches making up the snapshot.
+    pub batches: Vec<UnsealedBatchMeta>,
+}
+
+impl UnsealedSnapshotMeta {
+    /// Creates an UnsealedSnapshot by kicking off the necessary blob fetches.
+    pub fn fetch<B: BlobRead>(self, blob: &BlobCache<B>) -> UnsealedSnapshot {
+        let batches = self
+            .batches
+            .into_iter()
+            .map(|x| blob.get_unsealed_batch_async(&x.key, CacheHint::MaybeAdd))
+            .collect();
+        UnsealedSnapshot {
+            ts_lower: self.ts_lower,
+            ts_upper: self.ts_upper,
+            batches,
+        }
+    }
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]

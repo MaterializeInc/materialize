@@ -15,6 +15,7 @@ use aws_sdk_s3::model::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_sdk_s3::SdkError;
 use clap::Parser;
 use futures::stream::{self, StreamExt, TryStreamExt};
+use tracing::event;
 use tracing::{error, info, Level};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
@@ -130,7 +131,7 @@ async fn run() -> anyhow::Result<()> {
                     },
                 ..
             } => {
-                tracing::event!(Level::INFO, bucket = %args.bucket, "reusing existing bucket");
+                event!(Level::INFO, bucket = %args.bucket, "reusing existing bucket");
                 Ok(())
             }
             _ => Err(e),

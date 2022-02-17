@@ -132,6 +132,8 @@ changes that have not yet been documented.
 
 - Add support for `ESCAPE` clauses in `LIKE` and `ILIKE` expressions.
 
+- Add support for `ARRAY(<subquery>)` constructor {{% gh 10700 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 

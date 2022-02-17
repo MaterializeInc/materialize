@@ -639,8 +639,8 @@ pub enum AggregateFunc {
     JsonbObjectAgg {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates `Datum::List`s whose first element is a `Datum::Array` into a
-    /// single `Datum::Array`. The other elements are columns used by `order_by`.
+    /// Accumulates `Datum::Array`s of `ScalarType::Record` whose first element is a `Datum::Array`
+    /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
         order_by: Vec<ColumnOrder>,
     },

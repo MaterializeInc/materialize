@@ -45,7 +45,7 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use prometheus::core::{AtomicI64, AtomicU64};
-use tracing::error;
+use tracing::{debug, error, trace};
 
 use mz_repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
@@ -1000,14 +1000,14 @@ where
 
                 let starting_offsets = source_persist.get_starting_offsets(valid_bindings.iter());
 
-                tracing::debug!(
+                debug!(
                     "In {}, initial (restored) source offsets: {:?}. upper_seal_ts = {}",
                     name,
                     starting_offsets,
                     source_persist.config.upper_seal_ts,
                 );
 
-                tracing::debug!(
+                debug!(
                     "In {}, initial (restored) timestamp bindings: valid_bindings: {:?}, retractions: {:?}",
                     name,
                     valid_bindings, retractions
@@ -1054,7 +1054,7 @@ where
                             );
                         },
                         Some(existing_binding) => {
-                            tracing::debug!(
+                            debug!(
                                 "Filtered out timestamp binding {:?} from persistence because we already have {:?}.",
                                 (source_ts, assigned_ts),
                                 existing_binding
@@ -1525,7 +1525,7 @@ fn maybe_emit_timestamp_bindings(
     // wasteful but we don't expect large numbers of bindings.
     let mut to_emit = to_emit.collect::<Vec<_>>();
 
-    tracing::trace!(
+    trace!(
         "In {} (worker {}), emitting new timestamp bindings: {:?}, cap: {:?}",
         source_name,
         worker_id,
