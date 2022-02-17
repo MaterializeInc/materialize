@@ -490,12 +490,18 @@ impl Client for LocalClient {
 /// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
 pub mod partitioned {
 
+    use std::collections::hash_map::Entry;
     use std::collections::HashMap;
+    use std::iter::Fuse;
 
     use async_trait::async_trait;
 
     use mz_expr::GlobalId;
-    use mz_repr::Timestamp;
+    use mz_repr::{Diff, Row, Timestamp};
+    use timely::order::PartialOrder;
+    use timely::progress::{Antichain, ChangeBatch};
+
+    use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
     use super::{Command, PeekResponse, Response};
@@ -533,11 +539,16 @@ pub mod partitioned {
 
         async fn recv(&mut self) -> Option<Response> {
             use futures::StreamExt;
+            if let Some(stashed) = self.state.stashed_responses.next() {
+                return Some(stashed);
+            }
             self.cursor = (self.cursor + 1) % self.shards.len();
             let mut stream = super::SelectStream::new(&mut self.shards[..], self.cursor);
             while let Some((index, response)) = stream.next().await {
-                let message = self.state.absorb_response(index, response);
-                if let Some(message) = message {
+                let messages = self.state.absorb_response(index, response).fuse();
+                assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
+                self.state.stashed_responses = messages;
+                if let Some(message) = self.state.stashed_responses.next() {
                     return Some(message);
                 }
             }
@@ -547,6 +558,97 @@ pub mod partitioned {
     }
 
     use timely::progress::frontier::MutableAntichain;
+
+    /// Buffer for partial results for a `TAIL`.
+    /// This exists so we can consolidate rows and
+    /// sort them by timestamp before passing them to the consumer
+    /// (currently, coord.rs).
+    struct PendingTail {
+        /// `frontiers[i]` is an antichain representing the times at which we may
+        /// still receive results from worker `i`.
+        frontiers: HashMap<usize, Antichain<Timestamp>>,
+        /// Consolidated frontiers
+        change_batch: ChangeBatch<Timestamp>,
+        /// The results (possibly unsorted) which have not yet been delivered.
+        buffer: Vec<(Timestamp, Row, Diff)>,
+        /// The number of unique shard IDs expected.
+        parts: usize,
+        /// The last progress message that has been reported to the consumer.
+        reported_frontier: Antichain<Timestamp>,
+    }
+
+    impl PendingTail {
+        /// Return all the updates with time less than `upper`,
+        /// in sorted and consolidated representation.
+        pub fn consolidate_up_to(
+            &mut self,
+            upper: Antichain<Timestamp>,
+        ) -> Vec<(Timestamp, Row, Diff)> {
+            differential_dataflow::consolidation::consolidate_updates(&mut self.buffer);
+            let split_point = self
+                .buffer
+                .partition_point(|(t, _, _)| !upper.less_equal(t));
+            self.buffer.drain(0..split_point).collect()
+        }
+
+        pub fn push_data<I: IntoIterator<Item = (Timestamp, Row, Diff)>>(&mut self, data: I) {
+            self.buffer.extend(data);
+        }
+
+        pub fn record_progress(
+            &mut self,
+            shard_id: usize,
+            progress: Antichain<Timestamp>,
+        ) -> Option<Antichain<Timestamp>> {
+            // In the future, we can probably replace all this logic with the use of a `MutableAntichain`.
+            // We would need to have the tail workers report both their old frontier and their new frontier, rather
+            // than just the latter. But this will all be subsumed anyway by the proposed refactor to make TAILs
+            // behave like PEEKs.
+            match self.frontiers.entry(shard_id) {
+                Entry::Occupied(mut oe) => {
+                    for element in oe.get().elements() {
+                        self.change_batch.update(*element, -1);
+                    }
+                    assert!(
+                        PartialOrder::less_than(oe.get(), &progress),
+                        "Timestamps should advance"
+                    );
+                    for element in progress.elements() {
+                        self.change_batch.update(*element, 1);
+                    }
+                    oe.insert(progress);
+                }
+                Entry::Vacant(ve) => {
+                    for element in progress.elements() {
+                        self.change_batch.update(*element, 1);
+                    }
+                    ve.insert(progress);
+                }
+            }
+            assert!(self.frontiers.len() <= self.parts);
+            if self.frontiers.len() == self.parts {
+                self.change_batch.compact();
+                let mut min_frontier = Antichain::new();
+                if let Some(time) = self.change_batch.iter().next().map(|(time, _)| *time) {
+                    min_frontier.insert(time);
+                }
+
+                // assert!(self.reported_frontier.less_equal(&min_frontier));
+                assert!(PartialOrder::less_equal(
+                    &self.reported_frontier,
+                    &min_frontier
+                ));
+                if PartialOrder::less_than(&self.reported_frontier, &min_frontier) {
+                    self.reported_frontier = min_frontier.clone();
+                    Some(min_frontier)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+    }
 
     /// Maintained state for sharded dataflow clients.
     ///
@@ -559,15 +661,27 @@ pub mod partitioned {
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
+        /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
+        /// back until their timestamps are complete.
+        ///
+        /// `None` is a sentinel value indicating that the tail has been dropped and no
+        /// further messages should be forwarded.
+        pending_tails: HashMap<GlobalId, Option<PendingTail>>,
+        /// The next responses to return immediately, if any
+        stashed_responses: Fuse<Box<dyn Iterator<Item = Response> + Send>>,
     }
 
     impl PartitionedClientState {
         /// Instantiates a new client state machine wrapping a number of parts.
         pub fn new(parts: usize) -> Self {
+            let stashed_responses: Box<dyn Iterator<Item = Response> + Send> =
+                Box::new(None.into_iter());
             Self {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
+                pending_tails: Default::default(),
+                stashed_responses: stashed_responses.fuse(),
             }
         }
 
@@ -598,7 +712,11 @@ pub mod partitioned {
         }
 
         /// Absorbs a response, and produces response that should be emitted.
-        pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
+        pub fn absorb_response(
+            &mut self,
+            shard_id: usize,
+            message: Response,
+        ) -> Box<dyn Iterator<Item = Response> + Send> {
             match message {
                 Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
                     assert_eq!(instance, super::DEFAULT_COMPUTE_INSTANCE_ID);
@@ -623,10 +741,13 @@ pub mod partitioned {
                         }
                     }
 
-                    Some(Response::Compute(
-                        ComputeResponse::FrontierUppers(list),
-                        instance,
-                    ))
+                    Box::new(
+                        Some(Response::Compute(
+                            ComputeResponse::FrontierUppers(list),
+                            instance,
+                        ))
+                        .into_iter(),
+                    )
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
@@ -638,9 +759,12 @@ pub mod partitioned {
                             changes.clear();
                         }
                     }
-                    Some(Response::Storage(StorageResponse::TimestampBindings(
-                        feedback,
-                    )))
+                    Box::new(
+                        Some(Response::Storage(StorageResponse::TimestampBindings(
+                            feedback,
+                        )))
+                        .into_iter(),
+                    )
                 }
                 Response::Compute(
                     ComputeResponse::PeekResponse(connection, response),
@@ -669,18 +793,93 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&connection);
-                        Some(Response::Compute(
-                            ComputeResponse::PeekResponse(connection, response),
-                            instance,
-                        ))
+                        Box::new(
+                            Some(Response::Compute(
+                                ComputeResponse::PeekResponse(connection, response),
+                                instance,
+                            ))
+                            .into_iter(),
+                        )
                     } else {
-                        None
+                        Box::new(None.into_iter())
                     }
                 }
-                message => {
-                    // TimestampBindings and TailResponses are mirrored out,
-                    // as they do not seem to contain worker-specific information.
-                    Some(message)
+                Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
+                    let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
+                        Some(PendingTail {
+                            frontiers: HashMap::new(),
+                            change_batch: Default::default(),
+                            buffer: Vec::new(),
+                            parts: self.parts,
+                            reported_frontier: Antichain::from_elem(0),
+                        })
+                    });
+
+                    let entry = match maybe_entry {
+                        None => {
+                            // This tail has been dropped;
+                            // we should permanently block
+                            // any messages from it
+                            return Box::new(None.into_iter());
+                        }
+                        Some(entry) => entry,
+                    };
+
+                    let responses: Box<dyn Iterator<Item = Response> + Send> = match response {
+                        TailResponse::Progress(frontier) => {
+                            if let Some(new_frontier) = entry.record_progress(shard_id, frontier) {
+                                let data = entry.consolidate_up_to(new_frontier.clone());
+                                let progress_response = TailResponse::Progress(new_frontier);
+                                if data.is_empty() {
+                                    Box::new(
+                                        Some(Response::Compute(
+                                            ComputeResponse::TailResponse(id, progress_response),
+                                            instance,
+                                        ))
+                                        .into_iter(),
+                                    )
+                                } else {
+                                    // Return the data first, then the progress message.
+                                    Box::new(
+                                        [
+                                            Response::Compute(
+                                                ComputeResponse::TailResponse(
+                                                    id,
+                                                    TailResponse::Rows(data),
+                                                ),
+                                                instance,
+                                            ),
+                                            Response::Compute(
+                                                ComputeResponse::TailResponse(
+                                                    id,
+                                                    progress_response,
+                                                ),
+                                                instance,
+                                            ),
+                                        ]
+                                        .into_iter(),
+                                    )
+                                }
+                            } else {
+                                Box::new(None.into_iter())
+                            }
+                        }
+                        TailResponse::Rows(rows) => {
+                            entry.push_data(rows);
+                            Box::new(None.into_iter())
+                        }
+                        TailResponse::Dropped => {
+                            *maybe_entry = None;
+                            Box::new(
+                                Some(Response::Compute(
+                                    ComputeResponse::TailResponse(id, TailResponse::Dropped),
+                                    instance,
+                                ))
+                                .into_iter(),
+                            )
+                        }
+                    };
+                    responses
                 }
             }
         }

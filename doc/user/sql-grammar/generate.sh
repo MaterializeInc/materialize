@@ -29,7 +29,7 @@ mkdir scratch
 (
     cd scratch
     unzip -j ../diagrams.zip
-    rm ../diagrams.zip rr-1.62.svg index.html
+    rm ./diagrams.zip rr-1.62.svg index.html
     for f in *; do
         # Rewrite any underscores in filenames to hyphens, for consistency with
         # other Hugo partials.

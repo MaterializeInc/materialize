@@ -9,6 +9,7 @@
 
 mod attribute;
 mod dot;
+mod error;
 mod hir;
 mod mir;
 mod model;
@@ -17,5 +18,6 @@ mod rewrite;
 mod test;
 mod validator;
 
+pub use error::QGMError;
 pub use model::{BoxId, DistinctOperation, Model, QuantifierId};
 pub use validator::{ValidationError, ValidationResult};

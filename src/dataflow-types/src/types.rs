@@ -55,7 +55,7 @@ pub enum TailResponse {
     /// An empty antichain indicates the end.
     Progress(Antichain<Timestamp>),
     /// Rows that should be returned in order to the client.
-    Rows(Vec<(Row, Timestamp, Diff)>),
+    Rows(Vec<(Timestamp, Row, Diff)>),
     /// The TAIL dataflow was dropped before completing. Indicates the end.
     Dropped,
 }

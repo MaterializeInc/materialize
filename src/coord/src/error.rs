@@ -15,6 +15,7 @@ use mz_expr::EvalError;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::NotNullViolation;
+use mz_sql::query_model::QGMError;
 use mz_transform::TransformError;
 
 use crate::catalog;
@@ -79,6 +80,8 @@ pub enum CoordError {
     Persistence(mz_persist::error::Error),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
+    /// An error occurred in the QGM stage of the optimizer.
+    QGM(QGMError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
@@ -97,7 +100,7 @@ pub enum CoordError {
     SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
     TailOnlyTransaction,
-    /// An error occurred in the optimizer.
+    /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
     /// The named cursor does not exist.
     UnknownCursor(String),
@@ -347,6 +350,7 @@ impl fmt::Display for CoordError {
             CoordError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
+            CoordError::QGM(e) => e.fmt(f),
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
@@ -407,6 +411,12 @@ impl From<EvalError> for CoordError {
 impl From<mz_sql::catalog::CatalogError> for CoordError {
     fn from(e: mz_sql::catalog::CatalogError) -> CoordError {
         CoordError::SqlCatalog(e)
+    }
+}
+
+impl From<QGMError> for CoordError {
+    fn from(e: QGMError) -> CoordError {
+        CoordError::QGM(e)
     }
 }
 
