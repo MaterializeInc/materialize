@@ -25,10 +25,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{error, trace, warn};
 
 use crate::error::Error;
@@ -46,20 +44,25 @@ use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, BlobRead, Log, SeqNo};
 use crate::unreliable::UnreliableBlob;
 
+/// The description of a persisted stream.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamDesc {
+    /// The external name of this stream.
+    pub name: String,
+    /// The upper of this stream.
+    pub upper: Antichain<u64>,
+    /// The since of this stream.
+    pub since: Antichain<u64>,
+}
+
 /// A read-only input to the persist state machine.
 #[derive(Debug)]
 pub enum CmdRead {
     /// Loads the arrangement with the given external stream name, returning the
     /// corresponding internal stream id.
     Load(String, (String, String), PFutureHandle<Option<Id>>),
-    /// Returns a [Description] of the stream identified by `id_str`.
-    //
-    // TODO: We might want to think about returning only the compaction frontier
-    // (since) and seal timestamp (upper) here. Description seems more oriented
-    // towards describing batches, and in our case the lower is always
-    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
-    // create our own Description-like return type for this.
-    GetDescription(String, PFutureHandle<Description<u64>>),
+    /// Returns the [StreamDesc] of every active (non-deleted) stream.
+    GetDescriptions(PFutureHandle<HashMap<Id, StreamDesc>>),
     /// Returns a [Snapshot] for the given id.
     Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
     /// Registers a callback to be invoked on successful writes and seals.
@@ -83,7 +86,7 @@ impl CmdRead {
     pub fn fill_err_runtime_shutdown(self) {
         match self {
             CmdRead::Load(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-            CmdRead::GetDescription(_, res) => res.fill(Err(Error::RuntimeShutdown)),
+            CmdRead::GetDescriptions(res) => res.fill(Err(Error::RuntimeShutdown)),
             CmdRead::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
             CmdRead::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
             CmdRead::Stop(res) => {
@@ -610,9 +613,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                     self.state.do_load(&name, &key_codec_name, &val_codec_name)
                 })())
             }
-            Cmd::Read(CmdRead::GetDescription(name, res)) => res.fill((|| {
+            Cmd::Read(CmdRead::GetDescriptions(res)) => res.fill((|| {
                 self.drain_pending()?;
-                self.state.do_get_description(&name)
+                self.state.do_get_descriptions()
             })()),
             Cmd::Read(CmdRead::Snapshot(id, res)) => res.fill((|| {
                 self.drain_pending()?;
@@ -650,9 +653,9 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
                 // We validated that pending was empty above.
                 self.state.do_load(&name, &key_codec_name, &val_codec_name)
             }),
-            CmdRead::GetDescription(name, res) => res.fill({
+            CmdRead::GetDescriptions(res) => res.fill({
                 // We validated that pending was empty above.
-                self.state.do_get_description(&name)
+                self.state.do_get_descriptions()
             }),
             CmdRead::Snapshot(id, res) => res.fill({
                 // We validated that pending was empty above.
@@ -1303,21 +1306,18 @@ impl AppliedState {
         Ok(())
     }
 
-    fn do_get_description(&self, name: &str) -> Result<Description<u64>, Error> {
-        let registration = self.id_mapping.iter().find(|s| s.name == name);
-        match registration {
-            Some(registration) => {
-                let arrangement = self
-                    .arrangements
-                    .get(&registration.id)
-                    .expect("missing trace");
-                let upper = arrangement.get_seal();
-                let since = arrangement.since();
-                let lower = Antichain::from_elem(u64::minimum());
-                Ok(Description::new(lower, upper, since))
-            }
-            None => Err(Error::UnknownRegistration(name.to_string())),
+    fn do_get_descriptions(&self) -> Result<HashMap<Id, StreamDesc>, Error> {
+        let mut descs = HashMap::with_capacity(self.id_mapping.len());
+        for x in self.id_mapping.iter() {
+            let arrangement = self.arrangements.get(&x.id).expect("missing arrangement");
+            let desc = StreamDesc {
+                name: x.name.clone(),
+                upper: arrangement.get_seal(),
+                since: arrangement.since(),
+            };
+            descs.insert(x.id, desc);
         }
+        Ok(descs)
     }
 
     fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), String> {

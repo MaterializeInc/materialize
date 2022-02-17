@@ -283,7 +283,7 @@ impl PersisterWithConfig {
         // element, because we only allow `u64` timestamps, but the return value suggests there
         // could be more. Also: if the frontiers are truly multi-dimensional in the future, the
         // logic that determines a common upper seal timestamp will become a bit more complicated.
-        let since_ts = description.since().iter().exactly_one().map_err(|_| {
+        let since_ts = description.since.iter().exactly_one().map_err(|_| {
             format!("expected exactly one element in the persist compaction frontier")
         })?;
 
@@ -486,12 +486,12 @@ fn stream_desc_from_name(
     // Also: if the frontiers are truly multi-dimensional in the future, the logic that determines
     // a common upper seal timestamp will become a bit more complicated.
     let upper_seal_ts = description
-        .upper()
+        .upper
         .iter()
         .exactly_one()
         .map_err(|_| format!("expected exactly one element in the persist upper frontier"))?;
     let since_ts =
-        description.since().iter().exactly_one().map_err(|_| {
+        description.since.iter().exactly_one().map_err(|_| {
             format!("expected exactly one element in the persist compaction frontier")
         })?;
     Ok((name, *since_ts, *upper_seal_ts))
