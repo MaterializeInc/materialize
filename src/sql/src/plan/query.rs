@@ -3399,7 +3399,7 @@ where
 
     if is_unsupported_type(&elem_type) {
         bail_unsupported!(format!(
-            "{}{}",
+            "cannot build array from subquery because return type {}{}",
             ecx.humanize_scalar_type(&elem_type),
             vector_type_string
         ));
