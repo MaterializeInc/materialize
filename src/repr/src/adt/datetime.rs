@@ -559,7 +559,6 @@ impl ParsedDateTime {
                     .and_then(|m_f_us| {
                         div_and_round(m_f_us, DateTimeFieldValue::FRACTION_MULTIPLIER)
                     })
-                    .and_then(|m_f_us| i64::try_from(m_f_us).ok())
                     .and_then(|m_f_us| micros.checked_add(m_f_us))
                     .ok_or_else(|| {
                         format!(
@@ -595,7 +594,6 @@ impl ParsedDateTime {
                     .and_then(|t_f_us| {
                         div_and_round(t_f_us, DateTimeFieldValue::FRACTION_MULTIPLIER)
                     })
-                    .and_then(|t_f_us| i64::try_from(t_f_us).ok())
                     .and_then(|t_f_us| micros.checked_add(t_f_us))
                     .ok_or_else(|| {
                         format!(
