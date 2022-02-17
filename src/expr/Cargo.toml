@@ -33,7 +33,6 @@ num-iter = "0.1.42"
 num_enum = "0.5.6"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 paste = "1.0.0"
-pdqselect = "0.1.1"
 regex = "1.5.4"
 regex-syntax = "0.6.25"
 serde = { version = "1.0.136", features = ["derive"] }

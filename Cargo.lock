@@ -3248,7 +3248,6 @@ dependencies = [
  "num_enum",
  "ordered-float",
  "paste",
- "pdqselect",
  "proc-macro2",
  "regex",
  "regex-syntax",
