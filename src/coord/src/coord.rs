@@ -4945,7 +4945,7 @@ pub mod fast_path_peek {
 
     use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use mz_dataflow_types::PeekResponseUnary;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, num::NonZeroUsize};
 
     use crate::CoordError;
     use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
