@@ -118,6 +118,10 @@ changes that have not yet been documented.
 
 - Add support for `ARRAY(<subquery>)` constructor {{% gh 10700 %}}.
 
+- `INCLUDE KEY AS` ([see this for more details](/sql/create-source/avro-kafka#avro-format-details)
+  now works when using [`ENVELOPE UPSERT`](/sql/create-source/avro-kafka#upsert-envelope-details)
+  {{% gh 10730 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 
