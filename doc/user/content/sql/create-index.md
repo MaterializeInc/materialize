@@ -40,7 +40,7 @@ Field | Use
 **DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view). This provides a simple method to convert a non-materialized object to a materialized one.
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source or view on which you want to create an index.
-_col&lowbar;ref_**...** | The columns to use as the key into the index.
+_col&lowbar;expr_**...** | The expressions to use as the key for the index.
 _field_ | The name of the option you want to set.
 _val_ | The value for the option.
 
@@ -59,31 +59,32 @@ The following option is valid within the `WITH` clause:
 
 ### Restrictions
 
-- You can only index some subset of columns from the view's embedded `SELECT`
-  statement's returned columns. For example, if your view embedded `SELECT a, b,
-  c...`, you can only index `{a, b, c}`, even if the source you're reading from
-  contains additional columns.
+- You can only reference the columns available in the `SELECT` list of the query
+  that defines the view. For example, if your view was defined as `SELECT a, b
+  FROM src`, you can only reference columns `a` and `b`, even if `src` contains
+  additional columns.
 
 - You cannot exclude any columns from being in the index's "value" set. For
-  example, if your view embedded `SELECT a, b, c...`, all indexes will contain
-  `{a, b, c}` as their values.
+  example, if your view is defined as `SELECT a, b FROM ...`, all indexes will
+  contain `{a, b}` as their values.
 
-    If you want to create an index that only stores a subset of these columns,
-    consider creating another materialized view that uses `SELECT some_subset
-    FROM this_view...`.
+  If you want to create an index that only stores a subset of these columns,
+  consider creating another materialized view that uses `SELECT some_subset
+  FROM this_view...`.
 
 ### Structure
 
 Indexes in Materialize have the following structure for each unique row:
 
 ```nofmt
-((tuple of indexed columns), (tuple of the row, i.e. stored columns))
+((tuple of indexed expressions), (tuple of the row, i.e. stored columns))
 ```
 
-#### Indexed columns vs. stored columns
+#### Indexed expressions vs. stored columns
 
-Automatically created indexes will use all columns as key columns for the index,
-unless Materialize is provided or can infer a unique key for the source or view.
+Automatically created indexes will use all columns as key expressions for the
+index, unless Materialize is provided or can infer a unique key for the source
+or view.
 
 For instance, unique keys can be...
 
@@ -95,7 +96,7 @@ For instance, unique keys can be...
     For example, joining a view with unique keys against a second, where the join
     constraint uses foreign keys.
 
-When creating your own indexes, you can choose the indexed columns.
+When creating your own indexes, you can choose the indexed expressions.
 
 ### Memory footprint
 
