@@ -236,12 +236,11 @@ impl<'a> Lowerer<'a> {
                 let rhs_id = *q_iter.next().unwrap();
                 let lhs =
                     self.lower_quantifier(lhs_id, get_outer.clone(), outer_column_map, id_gen);
-                let lt = lhs.typ();
-                let la = lt.arity() - oa;
-                let rhs =
-                    self.lower_quantifier(rhs_id, get_outer.clone(), outer_column_map, id_gen);
-                let rt = rhs.typ();
-                let ra = rt.arity() - oa;
+                let lt = lhs.typ().column_types.into_iter().skip(oa).collect_vec();
+                let la = lt.len();
+                let rhs = self.lower_quantifier(rhs_id, get_outer, outer_column_map, id_gen);
+                let rt = rhs.typ().column_types.into_iter().skip(oa).collect_vec();
+                let ra = rt.len();
 
                 lhs.let_in(id_gen, |id_gen, get_lhs| {
                     rhs.let_in(id_gen, |id_gen, get_rhs| {
@@ -268,54 +267,132 @@ impl<'a> Lowerer<'a> {
                         inner_join = inner_join.filter(lowered_predicates.into_iter());
 
                         // 3) Calculate preserved rows
-                        // This corresponds to the general join case in lowering.rs
-                        // TODO: support the equijoin case.
                         let mut result = inner_join.let_in(id_gen, |id_gen, get_join| {
                             let mut result = get_join.clone();
-                            if self.model.get_quantifier(lhs_id).quantifier_type
-                                == QuantifierType::PreservedForeach
-                            {
-                                let left_outer = get_lhs.anti_lookup(
-                                    id_gen,
-                                    get_join.clone(),
-                                    rt.column_types
-                                        .into_iter()
-                                        .skip(oa)
-                                        .map(|typ| (Datum::Null, typ.nullable(true)))
-                                        .collect(),
-                                );
-                                result = result.union(left_outer);
-                            }
-                            if self.model.get_quantifier(rhs_id).quantifier_type
-                                == QuantifierType::PreservedForeach
-                            {
-                                let right_outer = get_rhs
-                                    .anti_lookup(
-                                        id_gen,
-                                        get_join
-                                            // need to swap left and right to make the anti_lookup work
+                            if let Some((l_keys, r_keys)) = equijoin_keys {
+                                // Equijoin case
+
+                                // A collection of keys present in both left and right collections.
+                                let both_keys = get_join
+                                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                                    .distinct();
+                                both_keys.let_in(id_gen, |_id_gen, get_both| {
+                                    if self.model.get_quantifier(lhs_id).quantifier_type
+                                        == QuantifierType::PreservedForeach
+                                    {
+                                        // Rows in `left` that are matched in the inner equijoin.
+                                        let left_present = mz_expr::MirRelationExpr::join(
+                                            vec![get_lhs.clone(), get_both.clone()],
+                                            (0..oa)
+                                                .chain(l_keys.clone())
+                                                .enumerate()
+                                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                                .collect::<Vec<_>>(),
+                                        )
+                                        .project((0..(oa + la)).collect());
+
+                                        // Determine the types of nulls to use as filler.
+                                        let right_fill = rt
+                                            .into_iter()
+                                            .map(|typ| {
+                                                mz_expr::MirScalarExpr::literal_null(
+                                                    typ.scalar_type,
+                                                )
+                                            })
+                                            .collect();
+
+                                        // Add to `result` absent elements, filled with typed nulls.
+                                        result = left_present
+                                            .negate()
+                                            .union(get_lhs.clone())
+                                            .map(right_fill)
+                                            .union(result);
+                                    }
+
+                                    if self.model.get_quantifier(rhs_id).quantifier_type
+                                        == QuantifierType::PreservedForeach
+                                    {
+                                        // Rows in `right` that are matched in the inner equijoin.
+                                        let right_present = mz_expr::MirRelationExpr::join(
+                                            vec![get_rhs.clone(), get_both],
+                                            (0..oa)
+                                                .chain(r_keys.clone())
+                                                .enumerate()
+                                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                                .collect::<Vec<_>>(),
+                                        )
+                                        .project((0..(oa + ra)).collect());
+
+                                        // Determine the types of nulls to use as filler.
+                                        let left_fill = lt
+                                            .into_iter()
+                                            .map(|typ| {
+                                                mz_expr::MirScalarExpr::literal_null(
+                                                    typ.scalar_type,
+                                                )
+                                            })
+                                            .collect();
+
+                                        // Add to `result` absent elemetns, prepended with typed nulls.
+                                        result = right_present
+                                            .negate()
+                                            .union(get_rhs.clone())
+                                            .map(left_fill)
+                                            // Permute left fill before right values.
                                             .project(
                                                 (0..oa)
-                                                    .chain((oa + la)..(oa + la + ra))
-                                                    .chain((oa)..(oa + la))
+                                                    .chain(oa + ra..oa + ra + la)
+                                                    .chain(oa..oa + ra)
                                                     .collect(),
-                                            ),
-                                        lt.column_types
-                                            .into_iter()
-                                            .skip(oa)
+                                            )
+                                            .union(result)
+                                    }
+
+                                    result
+                                })
+                            } else {
+                                // General join case
+                                if self.model.get_quantifier(lhs_id).quantifier_type
+                                    == QuantifierType::PreservedForeach
+                                {
+                                    let left_outer = get_lhs.anti_lookup(
+                                        id_gen,
+                                        get_join.clone(),
+                                        rt.into_iter()
                                             .map(|typ| (Datum::Null, typ.nullable(true)))
                                             .collect(),
-                                    )
-                                    // swap left and right back again
-                                    .project(
-                                        (0..oa)
-                                            .chain((oa + ra)..(oa + ra + la))
-                                            .chain((oa)..(oa + ra))
-                                            .collect(),
                                     );
-                                result = result.union(right_outer);
+                                    result = result.union(left_outer);
+                                }
+                                if self.model.get_quantifier(rhs_id).quantifier_type
+                                    == QuantifierType::PreservedForeach
+                                {
+                                    let right_outer = get_rhs
+                                        .anti_lookup(
+                                            id_gen,
+                                            get_join
+                                                // need to swap left and right to make the anti_lookup work
+                                                .project(
+                                                    (0..oa)
+                                                        .chain((oa + la)..(oa + la + ra))
+                                                        .chain((oa)..(oa + la))
+                                                        .collect(),
+                                                ),
+                                            lt.into_iter()
+                                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                                .collect(),
+                                        )
+                                        // swap left and right back again
+                                        .project(
+                                            (0..oa)
+                                                .chain((oa + ra)..(oa + ra + la))
+                                                .chain((oa)..(oa + ra))
+                                                .collect(),
+                                        );
+                                    result = result.union(right_outer);
+                                }
+                                result
                             }
-                            result
                         });
                         // 4) Lower the project component.
                         if !the_box.columns.is_empty() {

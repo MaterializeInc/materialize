@@ -482,14 +482,14 @@ impl HirRelationExpr {
                     // depending on the type of join.
                     let oa = get_outer.arity();
                     let left = left.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
-                    let lt = left.typ();
-                    let la = left.arity() - oa;
+                    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+                    let la = lt.len();
                     left.let_in(id_gen, |id_gen, get_left| {
                         let right_col_map = col_map.enter_scope(0);
                         let right =
                             right.applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map);
-                        let rt = right.typ();
-                        let ra = right.arity() - oa;
+                        let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+                        let ra = rt.len();
                         right.let_in(id_gen, |id_gen, get_right| {
                             let mut product = SR::join(
                                 vec![get_left.clone(), get_right.clone()],
@@ -536,9 +536,7 @@ impl HirRelationExpr {
                                     let left_outer = get_left.clone().anti_lookup(
                                         id_gen,
                                         get_join.clone(),
-                                        rt.column_types
-                                            .into_iter()
-                                            .skip(oa)
+                                        rt.into_iter()
                                             .map(|typ| (Datum::Null, typ.nullable(true)))
                                             .collect(),
                                     );
@@ -557,9 +555,7 @@ impl HirRelationExpr {
                                                         .chain((oa)..(oa + la))
                                                         .collect(),
                                                 ),
-                                            lt.column_types
-                                                .into_iter()
-                                                .skip(oa)
+                                            lt.into_iter()
                                                 .map(|typ| (Datum::Null, typ.nullable(true)))
                                                 .collect(),
                                         )
@@ -1578,10 +1574,10 @@ fn attempt_outer_join(
     // for each prefix. In the case that `on` is just some equality tests between
     // columns of `left` and `right`, we can employ a relatively simple plan.
 
-    let la = left.arity() - oa;
-    let lt = left.typ();
-    let ra = right.arity() - oa;
-    let rt = right.typ();
+    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+    let la = lt.len();
+    let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+    let ra = rt.len();
 
     let equijoin_keys = derive_equijoin_cols(oa, la, ra, vec![on.clone()]);
     if equijoin_keys.is_none() {
@@ -1641,9 +1637,7 @@ fn attempt_outer_join(
 
                         // Determine the types of nulls to use as filler.
                         let right_fill = rt
-                            .column_types
                             .into_iter()
-                            .skip(oa)
                             .map(|typ| mz_expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
@@ -1669,9 +1663,7 @@ fn attempt_outer_join(
 
                         // Determine the types of nulls to use as filler.
                         let left_fill = lt
-                            .column_types
                             .into_iter()
-                            .skip(oa)
                             .map(|typ| mz_expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 

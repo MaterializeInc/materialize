@@ -658,3 +658,171 @@ select * from x full join y on x.a > y.b
 | Project (#5..#9)
 ----
 ----
+
+lower
+select x.a, x.b, y.a from x right join y on x.a = y.b and x.c = y.a
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 =
+| Get ? (u1)
+
+%4 = Let l2 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 = Let l3 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0..#4)
+| Filter ((#0 = #4) && (#2 = #3))
+
+%6 = Let l4 =
+| Get %5 (l3)
+| Project (#2, #0)
+| Distinct group=(#0, #1)
+
+%7 =
+| Join %4 %6 (= #0 #2) (= #1 #3)
+| | implementation = Unimplemented
+| Project (#0, #1)
+| Negate
+
+%8 =
+| Union %7 %4
+| Map null, null, null
+| Project (#2..#4, #0, #1)
+
+%9 =
+| Union %8 %5
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+| Map #0, #1, #3
+| Project (#5..#7)
+----
+----
+
+lower
+select * from x left join y on x.a = y.b
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 =
+| Get ? (u1)
+
+%4 = Let l2 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 = Let l3 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0..#4)
+| Filter (#0 = #4)
+
+%6 = Let l4 =
+| Get %5 (l3)
+| Project (#0)
+| Distinct group=(#0)
+
+%7 =
+| Join %2 %6 (= #0 #3)
+| | implementation = Unimplemented
+| Project (#0..#2)
+| Negate
+
+%8 =
+| Union %7 %2
+| Map null, null
+
+%9 =
+| Union %8 %5
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+----
+----
+
+end_to_end
+select * from x full outer join y on x.a = y.b
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 =
+| Get ? (u1)
+
+%4 = Let l2 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 = Let l3 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0..#4)
+| Filter (#0 = #4)
+
+%6 = Let l4 =
+| Get %5 (l3)
+| Project (#0)
+| Distinct group=(#0)
+
+%7 =
+| Join %4 %6 (= #1 #2)
+| | implementation = Unimplemented
+| Project (#0, #1)
+| Negate
+
+%8 =
+| Union %7 %4
+| Map null, null, null
+| Project (#2..#4, #0, #1)
+
+%9 =
+| Join %2 %6 (= #0 #3)
+| | implementation = Unimplemented
+| Project (#0..#2)
+| Negate
+
+%10 =
+| Union %9 %2
+| Map null, null
+
+%11 =
+| Union %10 %5
+
+%12 =
+| Union %8 %11
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+| Map #0, #1, #2, #3, #4
+| Project (#5..#9)
+----
+----
