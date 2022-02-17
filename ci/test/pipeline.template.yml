@@ -68,14 +68,15 @@ steps:
     agents:
       queue: mac
 
-  - id: unused-deps
-    label: Unused dependencies
-    command: bin/ci-builder run nightly bin/unused-deps
-    inputs:
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - "**/*.rs"
-    timeout_in_minutes: 30
+# TODO(guswynn): investigate flakiness of reading files
+#  - id: unused-deps
+#    label: Unused dependencies
+#    command: bin/ci-builder run nightly bin/unused-deps
+#   inputs:
+#     - Cargo.lock
+#     - "**/Cargo.toml"
+#     - "**/*.rs"
+#   timeout_in_minutes: 30
 
   - id: lint-docs
     label: Lint docs
