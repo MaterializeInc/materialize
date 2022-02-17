@@ -393,7 +393,7 @@ lazy_static! {
                 let ty = from_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastRecordToString { ty }))
             }),
-            (Record, Record) => Assignment: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+            (Record, Record) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let mut cast_exprs = vec![];
                 for (f, t) in from_type.unwrap_record_element_type().iter().zip_eq(to_type.unwrap_record_element_type()) {
                     cast_exprs.push(plan_hypothetical_cast(ecx, ccx, f, t)?);
