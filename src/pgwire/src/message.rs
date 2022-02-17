@@ -361,6 +361,7 @@ impl ErrorResponse {
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             CoordError::Persistence(_) => SqlState::INTERNAL_ERROR,
             CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
+            CoordError::QGM(_) => SqlState::INTERNAL_ERROR,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             CoordError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,

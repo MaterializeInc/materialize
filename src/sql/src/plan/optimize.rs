@@ -9,7 +9,7 @@
 
 ///! This module defines the API and logic for running optimization pipelines.
 use crate::plan::expr::HirRelationExpr;
-use crate::query_model::Model;
+use crate::query_model::{Model, QGMError};
 
 use super::StatementContext;
 
@@ -42,17 +42,28 @@ impl HirRelationExpr {
     /// The optimization path is fully-determined by the values of the feature flag defined in the [`OptimizerConfig`].
     pub fn optimize_and_lower(self, config: &OptimizerConfig) -> mz_expr::MirRelationExpr {
         if config.qgm_optimizations {
-            // create a query graph model from this HirRelationExpr
-            let model = Model::from(self);
-
-            // @todo: perform optimizing algebraic rewrites on the qgm
-            // ...
-
-            // decorrelate and lower the optimized query graph model into a MirRelationExpr
-            model.into()
+            // try to go through the QGM path
+            self.clone().try_qgm_path().unwrap_or_else(|e| {
+                println!("Falling back to direct HIR ⇒ MIR due to QGM error: {}", e);
+                self.lower()
+            })
         } else {
             // directly decorrelate and lower into a MirRelationExpr
             self.lower()
         }
+    }
+
+    /// Attempt an optimization path from HIR to MIR that goes through a QGM representation.
+    ///
+    /// Return `Result::Err` if the path is not possible.
+    fn try_qgm_path(self) -> Result<mz_expr::MirRelationExpr, QGMError> {
+        // create a query graph model from this HirRelationExpr
+        let mut model = Result::<Model, QGMError>::from(self)?;
+
+        // perform optimizing algebraic rewrites on the qgm
+        model.optimize();
+
+        // decorrelate and lower the optimized query graph model into a MirRelationExpr
+        Ok(model.into())
     }
 }

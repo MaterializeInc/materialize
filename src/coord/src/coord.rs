@@ -3619,12 +3619,14 @@ impl Coordinator {
             }
             ExplainStage::QueryGraph => {
                 // TODO add type information to the output graph
-                let model = mz_sql::query_model::Model::from(raw_plan);
+                type Model = Result<mz_sql::query_model::Model, mz_sql::query_model::QGMError>;
+                let model = Model::from(raw_plan)?;
                 model.as_dot("")?
             }
             ExplainStage::OptimizedQueryGraph => {
                 // TODO add type information to the output graph
-                let mut model = mz_sql::query_model::Model::from(raw_plan);
+                type Model = Result<mz_sql::query_model::Model, mz_sql::query_model::QGMError>;
+                let mut model = Model::from(raw_plan)?;
                 model.optimize();
                 model.as_dot("")?
             }

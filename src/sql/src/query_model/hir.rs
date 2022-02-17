@@ -10,22 +10,21 @@
 //! Generates a Query Graph Model from a [HirRelationExpr].
 //!
 //! The public interface consists of the [`From<HirRelationExpr>`]
-//! implementation of for [`Model`].
+//! implementation for [`Result<Model, QGMError>`].
 
 use itertools::Itertools;
 use std::collections::HashMap;
 
+use crate::plan::expr::HirRelationExpr;
 use crate::plan::expr::{HirScalarExpr, JoinKind};
+use crate::query_model::error::QGMError;
 use crate::query_model::model::{
     BaseColumn, BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, DistinctOperation, Get,
-    Grouping, OuterJoin, QuantifierType, Select, Values,
+    Grouping, Model, OuterJoin, QuantifierType, Select, Values,
 };
-use crate::query_model::Model;
 
-use crate::plan::expr::HirRelationExpr;
-
-impl From<HirRelationExpr> for Model {
-    fn from(expr: HirRelationExpr) -> Model {
+impl From<HirRelationExpr> for Result<Model, QGMError> {
+    fn from(expr: HirRelationExpr) -> Self {
         FromHir::generate(expr)
     }
 }
@@ -41,32 +40,33 @@ struct FromHir {
 
 impl FromHir {
     /// Generates a Query Graph Model for representing the given query.
-    fn generate(expr: HirRelationExpr) -> Model {
+    fn generate(expr: HirRelationExpr) -> Result<Model, QGMError> {
         let mut generator = FromHir {
             model: Model::new(),
             context_stack: Vec::new(),
             gets_seen: HashMap::new(),
         };
-        generator.model.top_box = generator.generate_select(expr);
-        generator.model
+
+        generator.model.top_box = generator.generate_select(expr)?;
+        Ok(generator.model)
     }
 
     /// Generates a sub-graph representing the given expression, ensuring
     /// that the resulting graph starts with a Select box.
-    fn generate_select(&mut self, expr: HirRelationExpr) -> BoxId {
-        let mut box_id = self.generate_internal(expr);
+    fn generate_select(&mut self, expr: HirRelationExpr) -> Result<BoxId, QGMError> {
+        let mut box_id = self.generate_internal(expr)?;
         if !self.model.get_box(box_id).is_select() {
             box_id = self.wrap_within_select(box_id);
         }
-        box_id
+        Ok(box_id)
     }
 
     /// Generates a sub-graph representing the given expression.
-    fn generate_internal(&mut self, expr: HirRelationExpr) -> BoxId {
+    fn generate_internal(&mut self, expr: HirRelationExpr) -> Result<BoxId, QGMError> {
         match expr {
             HirRelationExpr::Get { id, typ } => {
                 if let Some(box_id) = self.gets_seen.get(&id) {
-                    return *box_id;
+                    return Ok(*box_id);
                 }
                 if let mz_expr::Id::Global(id) = id {
                     let result = self.model.make_box(BoxType::Get(Get {
@@ -85,11 +85,14 @@ impl FromHir {
                                 alias: None,
                             },
                         ));
-                    result
+                    Ok(result)
                 } else {
-                    // Other id variants should not be present in the
-                    // HirRelationExpr.
-                    panic!("unsupported get id {:?}", id);
+                    // Other id variants should not be present in the HirRelationExpr.
+                    // Tn theory, this should be `unreachable!(...)`, but we return an
+                    // Error just to be safe here.
+                    let expr = HirRelationExpr::Get { id, typ };
+                    let msg = String::from("Unexpected Id variant in Get");
+                    Err(QGMError::UnsupportedHirRelationExpr { expr, msg })
                 }
             }
             HirRelationExpr::Let {
@@ -99,24 +102,30 @@ impl FromHir {
                 body,
             } => {
                 let id = mz_expr::Id::Local(id);
-                let value_box = self.generate_internal(*value);
-                let prev_value = self.gets_seen.insert(id.clone(), value_box);
-                let body_box = self.generate_internal(*body);
+                let value_box_id = self.generate_internal(*value)?;
+                let prev_value = self.gets_seen.insert(id.clone(), value_box_id);
+                let body_box_id = self.generate_internal(*body)?;
                 if let Some(prev_value) = prev_value {
                     self.gets_seen.insert(id, prev_value);
                 } else {
                     self.gets_seen.remove(&id);
                 }
-                body_box
+                Ok(body_box_id)
             }
             HirRelationExpr::Constant { rows, typ } => {
-                assert!(typ.arity() == 0, "expressions are not yet supported",);
-                self.model.make_box(BoxType::Values(Values {
-                    rows: rows.iter().map(|_| Vec::new()).collect_vec(),
-                }))
+                if typ.arity() == 0 {
+                    let values_box_id = self.model.make_box(BoxType::Values(Values {
+                        rows: rows.iter().map(|_| Vec::new()).collect_vec(),
+                    }));
+                    Ok(values_box_id)
+                } else {
+                    let expr = HirRelationExpr::Constant { rows, typ };
+                    let msg = String::from("Cannot convert Constant with arity > 0 to QGM");
+                    Err(QGMError::UnsupportedHirRelationExpr { expr, msg })
+                }
             }
             HirRelationExpr::Map { input, mut scalars } => {
-                let mut box_id = self.generate_internal(*input);
+                let mut box_id = self.generate_internal(*input)?;
                 // We could install the predicates in `input_box` if it happened
                 // to be a `Select` box. However, that would require pushing down
                 // the predicates through its projection, since the predicates are
@@ -145,7 +154,7 @@ impl FromHir {
 
                     // 2) Add the scalars in the batch to the box.
                     for scalar in scalars.drain(0..end_idx) {
-                        let expr = self.generate_expr(scalar, box_id);
+                        let expr = self.generate_expr(scalar, box_id)?;
                         let mut b = self.model.get_mut_box(box_id);
                         b.add_column(expr);
                     }
@@ -157,13 +166,13 @@ impl FromHir {
                     }
                     box_id = self.wrap_within_select(box_id);
                 }
-                box_id
+                Ok(box_id)
             }
             HirRelationExpr::Distinct { input } => {
-                let select_id = self.generate_select(*input);
+                let select_id = self.generate_select(*input)?;
                 let mut select_box = self.model.get_mut_box(select_id);
                 select_box.distinct = DistinctOperation::Enforce;
-                select_id
+                Ok(select_id)
             }
             HirRelationExpr::Reduce {
                 input,
@@ -174,7 +183,7 @@ impl FromHir {
                 // An intermediate Select Box is generated between the input box and
                 // the resulting grouping box so that the grouping key and the arguments
                 // of the aggregations contain only column references
-                let input_box_id = self.generate_internal(*input);
+                let input_box_id = self.generate_internal(*input)?;
                 let select_id = self.model.make_select_box();
                 let input_q_id =
                     self.model
@@ -211,7 +220,7 @@ impl FromHir {
                 for aggregate in aggregates.into_iter() {
                     // Any computed expression passed as an argument of an aggregate
                     // function is computed by the input select box.
-                    let input_expr = self.generate_expr(*aggregate.expr, select_id);
+                    let input_expr = self.generate_expr(*aggregate.expr, select_id)?;
                     let position = self
                         .model
                         .get_mut_box(select_id)
@@ -235,10 +244,10 @@ impl FromHir {
                 if let BoxType::Grouping(g) = &mut self.model.get_mut_box(group_box_id).box_type {
                     g.key.extend(key);
                 }
-                group_box_id
+                Ok(group_box_id)
             }
             HirRelationExpr::Filter { input, predicates } => {
-                let input_box = self.generate_internal(*input);
+                let input_box = self.generate_internal(*input)?;
                 // We could install the predicates in `input_box` if it happened
                 // to be a `Select` box. However, that would require pushing down
                 // the predicates through its projection, since the predicates are
@@ -247,14 +256,14 @@ impl FromHir {
                 // predicate, and let normalization tranforms simplify the graph.
                 let select_id = self.wrap_within_select(input_box);
                 for predicate in predicates {
-                    let expr = self.generate_expr(predicate, select_id);
+                    let expr = self.generate_expr(predicate, select_id)?;
                     self.add_predicate(select_id, expr);
                 }
-                select_id
+                Ok(select_id)
             }
 
             HirRelationExpr::Project { input, outputs } => {
-                let input_box_id = self.generate_internal(*input);
+                let input_box_id = self.generate_internal(*input)?;
                 let select_id = self.model.make_select_box();
                 let quantifier_id =
                     self.model
@@ -266,7 +275,7 @@ impl FromHir {
                         position,
                     }));
                 }
-                select_id
+                Ok(select_id)
             }
             HirRelationExpr::Join {
                 left,
@@ -299,28 +308,30 @@ impl FromHir {
                 let join_box = self.model.make_box(box_type);
 
                 // Left box
-                let left_box = self.generate_internal(*left);
+                let left_box = self.generate_internal(*left)?;
                 self.model.make_quantifier(left_q_type, left_box, join_box);
 
                 // Right box
-                let right_box = self.within_context(join_box, &mut |generator| -> BoxId {
+                let right_box = self.within_context(join_box, &mut |generator| {
                     let right = right.take();
                     generator.generate_internal(right)
-                });
+                })?;
                 self.model
                     .make_quantifier(right_q_type, right_box, join_box);
 
                 // ON clause
-                let predicate = self.generate_expr(on, join_box);
+                let predicate = self.generate_expr(on, join_box)?;
                 self.add_predicate(join_box, predicate);
 
                 // Default projection
                 self.model.get_mut_box(join_box).add_all_input_columns();
 
-                join_box
+                Ok(join_box)
             }
-
-            _ => panic!("unsupported expression type {:?}", expr),
+            expr => {
+                let msg = String::from("Unsupported HirRelationExpr variant in QGM conversion");
+                Err(QGMError::UnsupportedHirRelationExpr { expr, msg })
+            }
         }
     }
 
@@ -338,51 +349,60 @@ impl FromHir {
     ///
     /// Note that this method may add new quantifiers to the box for subquery
     /// expressions.
-    fn generate_expr(&mut self, expr: HirScalarExpr, context_box: BoxId) -> BoxScalarExpr {
+    fn generate_expr(
+        &mut self,
+        expr: HirScalarExpr,
+        context_box: BoxId,
+    ) -> Result<BoxScalarExpr, QGMError> {
         match expr {
-            HirScalarExpr::Literal(row, col_type) => BoxScalarExpr::Literal(row, col_type),
+            HirScalarExpr::Literal(row, col_type) => Ok(BoxScalarExpr::Literal(row, col_type)),
             HirScalarExpr::Column(c) => {
                 let context_box = match c.level {
                     0 => context_box,
                     _ => self.context_stack[self.context_stack.len() - c.level],
                 };
-                BoxScalarExpr::ColumnReference(self.find_column_within_box(context_box, c.column))
+                Ok(BoxScalarExpr::ColumnReference(
+                    self.find_column_within_box(context_box, c.column),
+                ))
             }
-            HirScalarExpr::CallNullary(func) => BoxScalarExpr::CallNullary(func),
-            HirScalarExpr::CallUnary { func, expr } => BoxScalarExpr::CallUnary {
+            HirScalarExpr::CallNullary(func) => Ok(BoxScalarExpr::CallNullary(func)),
+            HirScalarExpr::CallUnary { func, expr } => Ok(BoxScalarExpr::CallUnary {
                 func,
-                expr: Box::new(self.generate_expr(*expr, context_box)),
-            },
-            HirScalarExpr::CallBinary { func, expr1, expr2 } => BoxScalarExpr::CallBinary {
+                expr: Box::new(self.generate_expr(*expr, context_box)?),
+            }),
+            HirScalarExpr::CallBinary { func, expr1, expr2 } => Ok(BoxScalarExpr::CallBinary {
                 func,
-                expr1: Box::new(self.generate_expr(*expr1, context_box)),
-                expr2: Box::new(self.generate_expr(*expr2, context_box)),
-            },
-            HirScalarExpr::CallVariadic { func, exprs } => BoxScalarExpr::CallVariadic {
+                expr1: Box::new(self.generate_expr(*expr1, context_box)?),
+                expr2: Box::new(self.generate_expr(*expr2, context_box)?),
+            }),
+            HirScalarExpr::CallVariadic { func, exprs } => Ok(BoxScalarExpr::CallVariadic {
                 func,
                 exprs: exprs
                     .into_iter()
                     .map(|expr| self.generate_expr(expr, context_box))
-                    .collect::<Vec<_>>(),
-            },
-            HirScalarExpr::If { cond, then, els } => BoxScalarExpr::If {
-                cond: Box::new(self.generate_expr(*cond, context_box)),
-                then: Box::new(self.generate_expr(*then, context_box)),
-                els: Box::new(self.generate_expr(*els, context_box)),
-            },
+                    .collect::<Result<Vec<_>, _>>()?,
+            }),
+            HirScalarExpr::If { cond, then, els } => Ok(BoxScalarExpr::If {
+                cond: Box::new(self.generate_expr(*cond, context_box)?),
+                then: Box::new(self.generate_expr(*then, context_box)?),
+                els: Box::new(self.generate_expr(*els, context_box)?),
+            }),
             HirScalarExpr::Select(mut expr) => {
-                let box_id = self.within_context(context_box, &mut move |generator| -> BoxId {
+                let box_id = self.within_context(context_box, &mut move |generator| {
                     generator.generate_select(expr.take())
-                });
+                })?;
                 let quantifier_id =
                     self.model
                         .make_quantifier(QuantifierType::Scalar, box_id, context_box);
-                BoxScalarExpr::ColumnReference(ColumnReference {
+                Ok(BoxScalarExpr::ColumnReference(ColumnReference {
                     quantifier_id,
                     position: 0,
-                })
+                }))
             }
-            _ => panic!("unsupported expression type {:?}", expr),
+            expr => {
+                let msg = String::from("Unsupported HirScalarExpr variant in QGM conversion");
+                Err(QGMError::UnsupportedHirScalarExpr { expr, msg })
+            }
         }
     }
 
