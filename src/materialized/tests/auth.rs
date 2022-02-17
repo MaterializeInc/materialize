@@ -17,6 +17,7 @@ use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use headers::{Authorization, Header, HeaderMapExt};
 use hyper::client::HttpConnector;
@@ -26,6 +27,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, EncodingKey};
+use mz_ore::now::NowFn;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -308,17 +310,20 @@ fn start_mzcloud(
     encoding_key: EncodingKey,
     tenant_id: Uuid,
     users: HashMap<(String, String), String>,
+    now: NowFn,
 ) -> Result<MzCloudServer, anyhow::Error> {
     #[derive(Clone)]
     struct Context {
         encoding_key: EncodingKey,
         tenant_id: Uuid,
         users: HashMap<(String, String), String>,
+        now: NowFn,
     }
     let context = Context {
         encoding_key,
         tenant_id,
         users,
+        now,
     };
     async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let body = body::to_bytes(req.into_body()).await.unwrap();
@@ -338,7 +343,8 @@ fn start_mzcloud(
         let access_token = jsonwebtoken::encode(
             &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
             &Claims {
-                exp: i64::MAX,
+                // This expire time is usually in advance of now, but our tests don't need that yet.
+                exp: context.now.as_secs(),
                 email: email.to_string(),
                 tenant_id: context.tenant_id,
                 roles: Vec::new(),
@@ -409,35 +415,52 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
         "user@_.com".to_string(),
     )]);
     let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
+    let timestamp = Arc::new(Mutex::new(500_000));
+    let now = {
+        let timestamp = Arc::clone(&timestamp);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let claims = Claims {
+        exp: 1000,
+        email: "user@_.com".to_string(),
+        tenant_id,
+        roles: Vec::new(),
+        permissions: Vec::new(),
+    };
     let frontegg_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
-        &Claims {
-            exp: i64::MAX,
-            email: "user@_.com".to_string(),
-            tenant_id,
-            roles: Vec::new(),
-            permissions: Vec::new(),
-        },
+        &claims,
         &encoding_key,
     )
     .unwrap();
+    let bad_tenant_claims = {
+        let mut claims = claims.clone();
+        claims.tenant_id = Uuid::new_v4();
+        claims
+    };
     let bad_tenant_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
-        &Claims {
-            exp: i64::MAX,
-            email: "user@_.com".to_string(),
-            tenant_id: Uuid::new_v4(),
-            roles: Vec::new(),
-            permissions: Vec::new(),
-        },
+        &bad_tenant_claims,
         &encoding_key,
     )
     .unwrap();
-    let frontegg_server = start_mzcloud(encoding_key, tenant_id, users)?;
+    let expired_claims = {
+        let mut claims = claims.clone();
+        claims.exp = 0;
+        claims
+    };
+    let expired_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &expired_claims,
+        &encoding_key,
+    )
+    .unwrap();
+    let frontegg_server = start_mzcloud(encoding_key, tenant_id, users, now.clone())?;
     let frontegg_auth = FronteggAuthentication::new(
         frontegg_server.url,
         &ca.pkey.public_key_to_pem()?,
         tenant_id,
+        now,
     )?;
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("{client_id}{secret}");
@@ -698,6 +721,17 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 user: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&bad_tenant_jwt).unwrap()),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Expired.
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::bearer(&expired_jwt).unwrap()),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));

@@ -12,13 +12,17 @@ use derivative::Derivative;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use uuid::Uuid;
 
+use mz_ore::now::NowFn;
+
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
 pub struct FronteggAuthentication {
-    pub admin_api_token_url: String,
+    admin_api_token_url: String,
     #[derivative(Debug = "ignore")]
-    pub decoding_key: DecodingKey,
-    pub tenant_id: Uuid,
+    decoding_key: DecodingKey,
+    tenant_id: Uuid,
+    now: NowFn,
+    validation: Validation,
 }
 
 impl FronteggAuthentication {
@@ -28,12 +32,18 @@ impl FronteggAuthentication {
         admin_api_token_url: String,
         jwk_rsa_pem: &[u8],
         tenant_id: Uuid,
+        now: NowFn,
     ) -> Result<Self, anyhow::Error> {
         let decoding_key = DecodingKey::from_rsa_pem(&jwk_rsa_pem)?;
+        let mut validation = Validation::new(Algorithm::RS256);
+        // We validate with our own now function.
+        validation.validate_exp = false;
         Ok(Self {
             admin_api_token_url,
             decoding_key,
             tenant_id,
+            now,
+            validation,
         })
     }
 
@@ -100,11 +110,10 @@ impl FronteggAuthentication {
 
     /// Validates an access token and its `tenant_id`.
     pub fn validate_access_token(&self, token: &str) -> Result<Claims, anyhow::Error> {
-        let msg = decode::<Claims>(
-            &token,
-            &self.decoding_key,
-            &Validation::new(Algorithm::RS256),
-        )?;
+        let msg = decode::<Claims>(&token, &self.decoding_key, &self.validation)?;
+        if msg.claims.exp < self.now.as_secs() {
+            bail!("token expired")
+        }
         if msg.claims.tenant_id != self.tenant_id {
             bail!("tenant ids don't match")
         }
@@ -130,7 +139,7 @@ pub struct ApiTokenResponse {
 
 // TODO: Do we care about the sub? Do we need to validate the sub or other
 // things, even if unused?
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Claims {
     pub exp: i64,

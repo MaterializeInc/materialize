@@ -513,6 +513,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 args.frontegg_api_token_url.unwrap(),
                 args.frontegg_jwk.unwrap().as_bytes(),
                 tenant_id,
+                mz_ore::now::SYSTEM_TIME.clone(),
             )
         })
         .transpose()?;
