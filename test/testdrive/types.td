@@ -188,16 +188,20 @@ varchar          system
 
 > CREATE TYPE int_list_c AS LIST (element_type=int4);
 > CREATE TYPE int_map_c AS MAP (key_type=text, value_type=int4);
+> CREATE TYPE int_record_c AS (i1 int, i2 int, i3 int);
 
 # User-defined types can use other user-defined types
 > CREATE TYPE int_list_list_c AS LIST (element_type=int_list_c);
+> CREATE TYPE int_record_record_c AS (j1 int, j2 int_record_c);
 
 > SHOW FULL TYPES
-name            type
----------------------
-int_list_c      user
-int_map_c       user
-int_list_list_c user
+name                type
+------------------------
+int_list_c          user
+int_map_c           user
+int_list_list_c     user
+int_record_c        user
+int_record_record_c user
 
 # Allow creating tables using custom types
 > CREATE TABLE custom_types (a int_list_c, b int_map_c);
@@ -210,19 +214,25 @@ int_list_list_c user
 
 > INSERT INTO custom_types_2 VALUES (LIST[ARRAY[1]]);
 
+> CREATE TABLE custom_types_3 (a int_record_c, b int_record_record_c);
+
+> INSERT INTO custom_types_3 VALUES (ROW(9, 8, 7), ROW(6, ROW(5, 4, 3)));
+
 # Custom types are namespaced objects
 > CREATE SCHEMA other;
 
 > CREATE TYPE other.other_int_list_c AS LIST (element_type=int4);
 > CREATE TYPE other.other_int_map_c AS MAP (key_type=text, value_type=int4);
+> CREATE TYPE other.other_record_c AS (a int, b text);
 
 > SHOW FULL TYPES FROM other;
 name                type
 -------------------------
 other_int_list_c    user
 other_int_map_c     user
+other_record_c      user
 
-> CREATE TABLE custom_types_3 (a other.other_int_list_c, b other.other_int_map_c);
+> CREATE TABLE custom_types_4 (a other.other_int_list_c, b other.other_int_map_c);
 
 > CREATE TYPE int_list_map AS MAP (key_type=text, value_type=other.other_int_list_c)
 
