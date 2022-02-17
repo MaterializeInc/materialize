@@ -2190,7 +2190,7 @@ impl RowSetFinishing {
         let mut remaining = limit;
         let mut row_packer = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
-        for (row, count) in rows {
+        for (row, count) in &rows[offset_nth_row..] {
             if remaining == 0 {
                 break;
             }
