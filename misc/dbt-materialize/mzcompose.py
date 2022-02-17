@@ -21,7 +21,13 @@ SERVICES = [
         {
             "mzbuild": "dbt-materialize",
             "depends_on": ["test-certs"],
-            "volumes": ["secrets:/secrets"],
+            "environment": [
+                "TMPDIR=/share/tmp",
+            ],
+            "volumes": [
+                "secrets:/secrets",
+                "tmp:/share/tmp",
+            ],
         },
     ),
 ]
@@ -83,11 +89,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 options=test_case.materialized_options,
                 image=test_case.materialized_image,
                 depends_on=["test-certs"],
-                volumes=["secrets:/secrets"],
+                volumes_extra=["secrets:/secrets"],
             )
 
             with c.test_case(test_case.name):
                 with c.override(materialized):
+                    c.down()
                     c.up("materialized")
                     c.wait_for_tcp(host="materialized", port=6875)
                     c.run(
