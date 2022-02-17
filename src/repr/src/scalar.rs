@@ -1600,7 +1600,6 @@ impl<'a> ScalarType {
                     custom_oid: oid_r,
                 },
             ) => l.base_eq(r) && oid_l == oid_r,
-
             (Array(a), Array(b)) => a.base_eq(b),
             (
                 Record {

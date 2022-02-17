@@ -2386,32 +2386,33 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
 
-        if self.peek_keywords(&[LIST, MAP]) {
-            let as_type = match self.expect_one_of_keywords(&[LIST, MAP]) {
-                Ok(LIST) => CreateTypeAs::List,
-                Ok(MAP) => CreateTypeAs::Map,
-                _ => unreachable!(),
-            };
+        let as_type = match self.expect_one_of_keywords(&[LIST, MAP]) {
+            Ok(LIST) => CreateTypeAs::List,
+            Ok(MAP) => CreateTypeAs::Map,
+            _ => CreateTypeAs::Record,
+        };
 
-            self.expect_token(&Token::LParen)?;
-            let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
-            self.expect_token(&Token::RParen)?;
+        match as_type {
+            CreateTypeAs::List | CreateTypeAs::Map => {
+                self.expect_token(&Token::LParen)?;
+                let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
+                self.expect_token(&Token::RParen)?;
 
-            Ok(Statement::CreateType(CreateTypeStatement {
-                name,
-                as_type,
-                with_options,
-            }))
-        } else {
-            let result = self.parse_composite_type_definition()?;
+                Ok(Statement::CreateType(CreateTypeStatement {
+                    name,
+                    as_type,
+                    with_options,
+                }))
+            }
+            CreateTypeAs::Record => {
+                let result = self.parse_composite_type_definition()?;
 
-            let statement = Statement::CreateType(CreateTypeStatement {
-                name,
-                as_type: CreateTypeAs::Record,
-                with_options: result,
-            });
-
-            Ok(statement)
+                Ok(Statement::CreateType(CreateTypeStatement {
+                    name,
+                    as_type: CreateTypeAs::Record,
+                    with_options: result,
+                }))
+            }
         }
     }
 
