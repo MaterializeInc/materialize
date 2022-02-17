@@ -1199,6 +1199,71 @@ SELECT LIST(WITH usps AS (SELECT 42) SELECT LIST[customer.id, LIST[customer.firs
 =>
 Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: ListSubquery(Query { ctes: [Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: Select(Select { distinct: None, projection: [Expr { expr: List([Identifier([Ident("customer"), Ident("id")]), List([Identifier([Ident("customer"), Ident("first_name")]), Identifier([Ident("customer"), Ident("last_name")])]), List([List([Identifier([Ident("customer"), Ident("zip")])])])]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("user")])), alias: None }, join_operator: Inner(On(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("customer"), Ident("id")]), expr2: Some(Identifier([Ident("user"), Ident("id")])) })) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("12")) }), offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
+parse-statement
+SELECT LIST(
+  WITH usps AS (SELECT 42)
+    SELECT * FROM usps
+)
+----
+SELECT LIST(WITH usps AS (SELECT 42) SELECT * FROM usps)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: ListSubquery(Query { ctes: [Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("usps")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# Array subqueries
+parse-statement
+SELECT ARRAY[1, 2, 3]
+----
+SELECT ARRAY[1, 2, 3]
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Array([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT ARRAY(SELECT 1)
+----
+SELECT ARRAY(SELECT 1)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: ArraySubquery(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT ARRAY(SELECT 2 * 10)
+----
+SELECT ARRAY(SELECT 2 * 10)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: ArraySubquery(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: [], op: "*" }, expr1: Value(Number("2")), expr2: Some(Value(Number("10"))) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT ARRAY(SELECT customer.id FROM customer JOIN user on customer.id = user.id LIMIT 12)
+----
+SELECT ARRAY(SELECT customer.id FROM customer JOIN user ON customer.id = user.id LIMIT 12)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: ArraySubquery(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("customer"), Ident("id")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("user")])), alias: None }, join_operator: Inner(On(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("customer"), Ident("id")]), expr2: Some(Identifier([Ident("user"), Ident("id")])) })) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("12")) }), offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT ARRAY(
+  WITH usps AS (SELECT 42)
+    SELECT
+      ARRAY[customer.id,
+      ARRAY[customer.first_name, customer.last_name],
+      ARRAY[ARRAY[customer.zip]]]
+    FROM
+      customer
+    JOIN user on customer.id = user.id
+  LIMIT 12)
+----
+SELECT ARRAY(WITH usps AS (SELECT 42) SELECT ARRAY[customer.id, ARRAY[customer.first_name, customer.last_name], ARRAY[ARRAY[customer.zip]]] FROM customer JOIN user ON customer.id = user.id LIMIT 12)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: ArraySubquery(Query { ctes: [Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: Select(Select { distinct: None, projection: [Expr { expr: Array([Identifier([Ident("customer"), Ident("id")]), Array([Identifier([Ident("customer"), Ident("first_name")]), Identifier([Ident("customer"), Ident("last_name")])]), Array([Array([Identifier([Ident("customer"), Ident("zip")])])])]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("user")])), alias: None }, join_operator: Inner(On(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("customer"), Ident("id")]), expr2: Some(Identifier([Ident("user"), Ident("id")])) })) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("12")) }), offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT ARRAY(
+  WITH usps AS (SELECT 42)
+    SELECT * FROM usps
+)
+----
+SELECT ARRAY(WITH usps AS (SELECT 42) SELECT * FROM usps)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: ArraySubquery(Query { ctes: [Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("usps")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
 parse-statement roundtrip
 SELECT count(DISTINCT *) FROM foo
 ----

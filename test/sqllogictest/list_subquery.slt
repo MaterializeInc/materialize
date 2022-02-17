@@ -43,8 +43,10 @@ SELECT LIST[LIST(SELECT x FROM xs)]::text
 ----
 {{1,1,2}}
 
-statement ok
+query T
 SELECT LIST(SELECT x FROM xs LIMIT 2)::text
+----
+{1,1}
 
 query T
 SELECT LIST(SELECT x FROM xs ORDER BY x DESC)::text
@@ -135,20 +137,21 @@ query error Expected subselect to return 1 column, got 2 columns
 SELECT LIST(SELECT first_name, last_name FROM customer)::text
 
 # Verify nested lists
-query error LIST expression cannot be cast to uniform type: text list vs integer list
-SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
-
 query T
-SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id::text]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+SELECT LIST(SELECT LIST[customer.first_name] FROM customer)::text
 ----
-{{alice,lasta},{10003},{1}}
-{{charlie,lastc},{11217},{3}}
+{{bob},{alice},{charlie}}
 
 # Check CTE syntax can be included in a query
 query T
 SELECT LIST(WITH usps AS (SELECT 42) SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id::text]] FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2)::text
 ----
 {{{alice,lasta},{10003},{1}},{{charlie,lastc},{11217},{3}}}
+
+query T
+SELECT LIST(WITH usps AS (SELECT 42) SELECT * FROM usps)::text
+----
+{42}
 
 statement ok
 CREATE TABLE qs (q int not null)
