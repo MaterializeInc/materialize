@@ -13,4 +13,5 @@
 //! * `From<HirRelationExpr>` implemenation for `Result<Model, QGMError>`.
 //! * `From<Model>` implemenation for `HirRelationExpr`.
 
+mod hir_from_qgm;
 mod qgm_from_hir;
