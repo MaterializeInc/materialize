@@ -30,7 +30,7 @@ use mz_coord::session::{
     TransactionStatus,
 };
 use mz_coord::ExecuteResponse;
-use mz_dataflow_types::{PeekResponse, PeekResponseUnary};
+use mz_dataflow_types::PeekResponseUnary;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;

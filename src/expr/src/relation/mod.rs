@@ -2117,8 +2117,14 @@ impl RowSetFinishing {
             && self.project.iter().copied().eq(0..arity)
     }
     /// Determines the index of the (Row, count) pair, and the
-    /// index into the count within that paiir, corresponding to a particular offset
-    fn get_offset(&self, rows: &[(Row, NonZeroUsize)]) -> (usize, usize) {
+    /// index into the count within that pair, corresponding to a particular offset.
+    ///
+    /// For example, if `self.offset` is 42, and `rows` is
+    /// `&[(_, 10), (_, 17), (_, 20), (_, 11)]`,
+    /// then this function will return `(2, 15)`, because after applying
+    /// the offset, we will start at the row/diff pair in position 2,
+    /// and skip 15 of the 20 rows that that entry represents.
+    fn find_offset(&self, rows: &[(Row, NonZeroUsize)]) -> (usize, usize) {
         let mut offset_remaining = self.offset;
         for (i, (_, count)) in rows.iter().enumerate() {
             let count = count.get();
@@ -2145,7 +2151,7 @@ impl RowSetFinishing {
         };
         rows.sort_by(sort_by);
 
-        let (offset_nth_row, offset_kth_copy) = self.get_offset(&rows);
+        let (offset_nth_row, offset_kth_copy) = self.find_offset(&rows);
 
         // Adjust the first returned row's count to account for the offset.
         if let Some((_, nth_diff)) = rows.get_mut(offset_nth_row) {
@@ -2158,25 +2164,28 @@ impl RowSetFinishing {
         }
 
         let limit = self.limit.unwrap_or(std::usize::MAX);
-        // Compute the capacity, so we only have to allocate once.
-        // This will be at most `self.limit`, but might be less, if there are
-        // fewer rows remaining.
-        let return_size = {
-            let mut total = 0;
-            let mut nth_row = offset_nth_row;
-            loop {
-                if nth_row == rows.len() {
-                    break total;
+
+        // The code below is logically equivalent to:
+        //
+        // let mut total = 0;
+        // for (_, count) in &rows[offset_nth_row..] {
+        //     total += count.get();
+        // }
+        // let return_size = std::cmp::min(total, limit);
+        //
+        // but it breaks early if the limit is reached, instead of scanning the entire code.
+        let return_size = rows[offset_nth_row..]
+            .iter()
+            .try_fold(0, |sum, (_, count)| {
+                let new_sum = sum + count.get();
+                if new_sum > limit {
+                    None
+                } else {
+                    Some(new_sum)
                 }
-                let (_, count) = &rows[nth_row];
-                let count = count.get();
-                total += count;
-                nth_row += 1;
-                if total >= limit {
-                    break limit;
-                }
-            }
-        };
+            })
+            .unwrap_or(limit);
+
         let mut ret = Vec::with_capacity(return_size);
         let mut remaining = limit;
         let mut row_packer = Row::default();
