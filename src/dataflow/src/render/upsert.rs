@@ -48,7 +48,7 @@ struct UpsertSourceData {
 /// When `persist_config` is `Some` this will write upsert state to the configured persistent
 /// collection and restore state from it. This does now, however, seal the backing collection. It
 /// is the responsibility of the caller to ensure that the collection is sealed up.
-pub(crate) fn upsert<G, P>(
+pub(crate) fn upsert<G>(
     source_name: &str,
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
@@ -59,14 +59,12 @@ pub(crate) fn upsert<G, P>(
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
     >,
     upsert_envelope: UpsertEnvelope,
-    post_process: P,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    P: Fn(u64) + 'static,
 {
     // Currently, the upsert-specific transformations run in the
     // following order:
@@ -155,7 +153,6 @@ where
                 as_of_frontier,
                 source_arity,
                 upsert_envelope,
-                post_process,
             );
 
             let upsert_errs = operator::empty(&stream.scope());
@@ -294,18 +291,16 @@ fn evaluate(
 }
 
 /// Internal core upsert logic.
-fn upsert_core<G, P>(
+fn upsert_core<G>(
     stream: &Stream<G, DecodeResult>,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
-    post_process: P,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
 where
     G: Scope<Timestamp = Timestamp>,
-    P: Fn(u64) + 'static,
 {
     let result_stream = stream.unary_frontier(
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
@@ -512,7 +507,6 @@ where
                 for time in removed_times {
                     to_send.remove(&time);
                 }
-                post_process(current_values.len() as u64);
             }
         },
     );

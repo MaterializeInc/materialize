@@ -437,43 +437,26 @@ where
 
                                 let source_arity = src.desc.typ().arity();
 
-                                let persist_upsert_config = source_persist_config
-                                    .as_ref()
-                                    .map(|config| config.upsert_config().clone());
-
-                                let (upsert_ok, upsert_err) = match upsert_envelope.style {
-                                    UpsertStyle::Default(_) => super::upsert::upsert(
-                                        &upsert_operator_name,
-                                        &transformed_results,
-                                        as_of_frontier,
-                                        &mut linear_operators,
-                                        source_arity,
-                                        persist_upsert_config,
-                                        upsert_envelope.clone(),
-                                        |_| {},
-                                    ),
-                                    UpsertStyle::Debezium { .. } => {
-                                        let gauge = storage_state
-                                            .metrics
-                                            .debezium_upsert_count_for(src_id, dataflow_id);
-                                        super::upsert::upsert(
-                                            &upsert_operator_name,
-                                            &transformed_results,
-                                            as_of_frontier,
-                                            &mut linear_operators,
-                                            source_arity,
+                                let (upsert_ok, upsert_err) = super::upsert::upsert(
+                                    &upsert_operator_name,
+                                    &transformed_results,
+                                    as_of_frontier,
+                                    &mut linear_operators,
+                                    source_arity,
+                                    match upsert_envelope.style {
+                                        UpsertStyle::Default(_) => source_persist_config
+                                            .as_ref()
+                                            .map(|config| config.upsert_config().clone()),
+                                        UpsertStyle::Debezium { .. } => {
                                             // TODO(guswynn): make debezium upsert work with
                                             // persistence. See
                                             // https://github.com/MaterializeInc/materialize/issues/10699z
                                             // for more info.
-                                            None,
-                                            upsert_envelope.clone(),
-                                            move |current_values_size| {
-                                                gauge.set(current_values_size)
-                                            },
-                                        )
-                                    }
-                                };
+                                            None
+                                        }
+                                    },
+                                    upsert_envelope.clone(),
+                                );
 
                                 // When persistence is enabled we need to seal up both the
                                 // timestamp bindings and the upsert state. Otherwise, just
