@@ -24,7 +24,10 @@ mz_options = "--persistent-user-tables --persistent-kafka-sources --disable-pers
 mz_default = Materialized(options=mz_options)
 
 mz_logical_compaction_window_off = Materialized(
-    options=f"{mz_options} --logical-compaction-window=off"
+    # We need to use 1s and not 100ms here as otherwise validate_timestamp_bindings()
+    # dominates the CPU see #10740
+    timestamp_frequency="1s",
+    options=f"{mz_options} --logical-compaction-window=off",
 )
 
 mz_disable_user_indexes = Materialized(
