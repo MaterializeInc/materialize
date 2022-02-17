@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use differential_dataflow::trace::Description;
 use mz_persist_types::Codec;
 use timely::progress::Antichain;
+use tracing::error;
 
 use crate::error::Error;
 use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
@@ -776,7 +777,7 @@ struct StopRuntimeOnDrop {
 impl Drop for StopRuntimeOnDrop {
     fn drop(&mut self) {
         if let Err(err) = self.stop() {
-            tracing::error!("error while stopping dropped persist runtime: {}", err);
+            error!("error while stopping dropped persist runtime: {}", err);
         }
     }
 }

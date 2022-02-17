@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::time::Instant;
+use tracing::info;
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp};
@@ -70,7 +71,7 @@ impl Validator {
     }
 
     fn step(&mut self, s: Step) {
-        tracing::info!("step: {:?}", &s);
+        info!("step: {:?}", &s);
         match s.res {
             Res::Write(WriteReq::Single(req), res) => self.step_write_single(&s.meta, req, res),
             Res::Write(WriteReq::Multi(req), res) => self.step_write_multi(&s.meta, req, res),

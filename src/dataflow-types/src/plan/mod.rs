@@ -21,6 +21,7 @@ use mz_expr::permutation_for_arrangement;
 use reduce::{KeyValPlan, ReducePlan};
 use threshold::ThresholdPlan;
 use top_k::TopKPlan;
+use tracing::error;
 
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -598,7 +599,7 @@ impl Plan {
                             // we shouldn't plan delta joins at all if not all of the required arrangements
                             // are available. Print an error message, to increase the chances that
                             // the user will tell us about this.
-                            tracing::error!("Arrangements depended on by delta join alarmingly absent: {:?}
+                            error!("Arrangements depended on by delta join alarmingly absent: {:?}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing);
                         } else {
                             // It's fine and expected that linear joins don't have all their arrangements available up front,

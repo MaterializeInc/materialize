@@ -24,7 +24,7 @@ use globset::GlobBuilder;
 use itertools::Itertools;
 use regex::Regex;
 use reqwest::Url;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use mz_dataflow_types::{
     sinks::{
@@ -1807,7 +1807,7 @@ pub fn plan_create_sink(
                 if key.not_enforced && envelope == SinkEnvelope::Upsert {
                     // TODO: We should report a warning notice back to the user via the pgwire
                     // protocol. See https://github.com/MaterializeInc/materialize/issues/9333.
-                    tracing::warn!(
+                    warn!(
                         "Verification of upsert key disabled for sink '{}' via 'NOT ENFORCED'. This is potentially dangerous and can lead to crashing materialize when the specified key is not in fact a unique key of the sinked view.",
                         name
                     );

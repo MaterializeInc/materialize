@@ -14,6 +14,8 @@ use std::future::Future;
 use askama::Template;
 use futures::future;
 use hyper::{Body, Method, Request, Response, StatusCode};
+#[cfg(feature = "dev-web")]
+use tracing::debug;
 
 use crate::http::util;
 use crate::BUILD_INFO;
@@ -79,7 +81,7 @@ fn get_static_file(path: &str) -> Option<Body> {
     match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
         Ok(contents) => Some(Body::from(contents)),
         Err(e) => {
-            tracing::debug!("dev-web failed to load static file: {}: {}", path, e);
+            debug!("dev-web failed to load static file: {}: {}", path, e);
             None
         }
     }

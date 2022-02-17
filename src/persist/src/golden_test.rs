@@ -14,6 +14,7 @@ use mz_ore::test::init_logging;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tokio::runtime::Runtime as AsyncRuntime;
+use tracing::{debug, error, info};
 
 use crate::client::RuntimeClient;
 use crate::error::{Error, ErrorLog};
@@ -127,17 +128,17 @@ fn golden() -> Result<(), Error> {
     let (current, raw_blobs) = current_state(&reqs)?;
     let golden = golden_state(DATAZ).map_err(|e| {
         for req in reqs.iter() {
-            tracing::debug!("req {:?}", req);
+            debug!("req {:?}", req);
         }
-        tracing::info!("current impl blob state: {}", raw_blobs);
+        info!("current impl blob state: {}", raw_blobs);
         e
     })?;
 
     if golden != current {
         for req in reqs {
-            tracing::debug!("req {:?}", req);
+            debug!("req {:?}", req);
         }
-        tracing::info!("current impl blob state: {}", raw_blobs);
+        info!("current impl blob state: {}", raw_blobs);
         assert_eq!(golden, current);
     }
 
@@ -148,7 +149,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
     let async_runtime = Arc::new(AsyncRuntime::new()?);
     let mut blob = MemBlob::new_no_reentrance("");
     if let Err(err) = async_runtime.block_on(Blobs::deserialize_to(blob_json, &mut blob)) {
-        tracing::error!("error deserializing golden: {}", err);
+        error!("error deserializing golden: {}", err);
     }
     let mut persist = runtime::start(
         RuntimeConfig::for_tests(),

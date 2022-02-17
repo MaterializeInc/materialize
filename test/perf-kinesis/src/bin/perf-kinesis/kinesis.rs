@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use aws_sdk_kinesis::model::{PutRecordsRequestEntry, StreamStatus};
 use aws_sdk_kinesis::{Blob, SdkError};
+use tracing::info;
 
 use mz_ore::retry::Retry;
 use mz_test_util::generator;
@@ -107,14 +108,13 @@ pub async fn generate_and_put_records(
         if elapsed < Duration::from_secs(1) {
             thread::sleep(Duration::from_secs(1) - elapsed);
         } else {
-            tracing::info!(
+            info!(
                 "Expected to put {} records in 1s, took {:#?}",
-                records_per_second,
-                elapsed
+                records_per_second, elapsed
             );
         }
     }
-    tracing::info!(
+    info!(
         "Generated and put {} records in {} milliseconds.",
         put_record_count,
         timer.elapsed().as_millis()
@@ -170,7 +170,7 @@ pub async fn put_records_one_second(
                 if err.is_kms_throttling_exception()
                     || err.is_provisioned_throughput_exceeded_exception() =>
             {
-                tracing::info!("Hit non-fatal error, continuing: {}", err);
+                info!("Hit non-fatal error, continuing: {}", err);
             }
             Err(SdkError::ServiceError { err, .. })
                 if err
@@ -178,7 +178,7 @@ pub async fn put_records_one_second(
                     .unwrap_or("")
                     .contains("The security token included in the request is expired") =>
             {
-                tracing::info!(
+                info!(
                     "{:?}. Getting a new aws_sdk_kinesis::Client.",
                     err.message()
                 );
@@ -206,6 +206,6 @@ pub async fn delete_stream(
         .send()
         .await
         .context("deleting Kinesis stream")?;
-    tracing::info!("Deleted Kinesis stream: {}", &stream_name);
+    info!("Deleted Kinesis stream: {}", &stream_name);
     Ok(())
 }
