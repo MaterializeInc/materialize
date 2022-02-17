@@ -107,9 +107,9 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
-- **Breaking change.** Store days separately in [`interval`](/sql/types/interval). 
+- **Breaking change.** Store days separately in [`interval`](/sql/types/interval).
   Unlike the previous version, Hours are never converted to days. This
-  means that an Interval of 24 hours will not be equal to an Interval 
+  means that an Interval of 24 hours will not be equal to an Interval
   of 1 day, you cannot subtract hours from days, and when ordering
   Intervals d days > h hours for all d,h {{% gh 10708 %}}.
 
