@@ -2601,6 +2601,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(&ScalarType::String),
                 self.humanize_scalar_type(value_type)
             ),
+            Record {
+                custom_name: Some(name),
+                ..
+            } => name.clone(),
             Record { fields, .. } => format!(
                 "record({})",
                 fields
