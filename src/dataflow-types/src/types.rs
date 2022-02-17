@@ -357,9 +357,9 @@ pub mod sources {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
+    use crate::gen::postgres_source::PostgresSourceDetails;
     use mz_kafka_util::KafkaAddrs;
     use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
-    use crate::gen::postgres_source::PostgresSourceDetails;
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {

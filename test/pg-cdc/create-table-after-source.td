@@ -35,4 +35,3 @@ INSERT INTO t1 VALUES (1);
 
 # To keep this test passing we expect no result here, since that is now what we get
 > SELECT * FROM t1;
-
