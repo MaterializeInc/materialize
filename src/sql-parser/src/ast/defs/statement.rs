@@ -18,8 +18,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
 use itertools::Itertools;
+use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
@@ -794,19 +794,20 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
                 f.write_str("( ");
 
                 // TODO(phemberger): hmm do we create a separate field to store ColumnDefs directly?
-                let column_defs = &self.with_options.iter().map(|option| {
-                    match option {
-                        SqlOption::DataType { name, data_type } => {
-                            Some(ColumnDef::<T> {
-                                name: name.clone(),
-                                data_type: data_type.clone(),
-                                collation: None,
-                                options: vec![],
-                            })
-                        }
-                        _ => None
-                    }
-                }).flatten().collect_vec();
+                let column_defs = &self
+                    .with_options
+                    .iter()
+                    .map(|option| match option {
+                        SqlOption::DataType { name, data_type } => Some(ColumnDef::<T> {
+                            name: name.clone(),
+                            data_type: data_type.clone(),
+                            collation: None,
+                            options: vec![],
+                        }),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect_vec();
 
                 if !column_defs.is_empty() {
                     f.write_node(&display::comma_separated(&column_defs));

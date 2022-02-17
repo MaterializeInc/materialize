@@ -4319,7 +4319,7 @@ fn scalar_type_from_catalog(
                             column.clone(),
                             ColumnType {
                                 scalar_type: scalar,
-                                nullable: false,
+                                nullable: true,
                             },
                         ));
                     }

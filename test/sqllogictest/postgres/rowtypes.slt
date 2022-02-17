@@ -1,0 +1,58 @@
+# Copyright 1994, Regents of the University of California.
+# Copyright 1996-2021 PostgreSQL Global Development Group.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the regression test suite in PostgreSQL.
+# The original file was retrieved on February 17, 2022 from:
+#
+#     https://github.com/postgres/postgres/blob/c30f54ad732ca5c8762bb68bbe0f51de9137dd72/src/test/regress/sql/rowtypes.sql
+#
+# The original source code is subject to the terms of the PostgreSQL
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Make both a standalone composite type and a table rowtype
+statement ok
+create type complex as (r float8, i float8);
+
+statement ok
+create temp table fullname (first text, last text);
+
+# Nested composite
+statement ok
+create type quad as (c1 complex, c2 complex);
+
+# Some simple tests of conversions and row construction
+query T
+select (1.1, 2.2)::complex
+----
+(1.1,2.2)
+
+query T
+select ROW((1.1, 2.2), ROW(3.3, NULL))::quad
+----
+ ("(1.1,2.2)","(3.3,)")
+
+query TT
+select (1.1,2.2)::complex, row((3.3,4.4),(5.5,null))::quad;
+----
+(1.1,2.2) ("(3.3,4.4)","(5.5,)")
+
+query T
+select ROW(ROW(1.1, 2.2), ROW(3.3, 4.4))::quad
+----
+ ("(1.1,2.2)","(3.3,4.4)")
+
+query T
+select ROW((1.1, 2.2), ROW(3.3, 4.4)::complex)::quad
+----
+ ("(1.1,2.2)","(3.3,4.4)")
