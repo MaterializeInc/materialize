@@ -17,6 +17,7 @@
 use async_trait::async_trait;
 
 use mz_dataflow_types::client::{partitioned::Partitioned, Client, Command, Response};
+use tracing::trace;
 
 /// A convenience type for compatibility.
 pub struct RemoteClient {
@@ -39,7 +40,7 @@ impl RemoteClient {
 #[async_trait(?Send)]
 impl Client for RemoteClient {
     async fn send(&mut self, cmd: Command) {
-        tracing::trace!("Broadcasting dataflow command: {:?}", cmd);
+        trace!("Broadcasting dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {

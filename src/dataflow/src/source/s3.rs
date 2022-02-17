@@ -54,6 +54,7 @@ use mz_expr::{PartitionId, SourceInstanceId};
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::MessagePayload;
+use tracing::{debug, error, trace, warn};
 
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
@@ -153,7 +154,7 @@ async fn download_objects_task(
             status = shutdown_rx.changed() => {
                 if status.is_ok() {
                     if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        tracing::debug!("source_id={} download_objects received dataflow shutdown message", source_id);
+                        debug!("source_id={} download_objects received dataflow shutdown message", source_id);
                         break;
                     }
                 }
@@ -166,11 +167,9 @@ async fn download_objects_task(
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
                     if bi.keys.contains(&msg.key) {
                         bi.metrics.objects_duplicate.inc();
-                        tracing::debug!(
+                        debug!(
                             "source_id={} skipping object because it was already seen: {}/{}",
-                            source_id,
-                            msg.bucket,
-                            msg.key
+                            source_id, msg.bucket, msg.key
                         );
                         continue;
                     }
@@ -201,11 +200,9 @@ async fn download_objects_task(
                     Ok(update) => {
                         let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
                         bucket_info.metrics.inc(1, update.bytes, update.messages);
-                        tracing::debug!(
+                        debug!(
                             "source_id={} successfully downloaded {}/{}",
-                            source_id,
-                            msg.bucket,
-                            msg.key
+                            source_id, msg.bucket, msg.key
                         );
                         bucket_info.keys.insert(msg.key);
                     }
@@ -236,7 +233,7 @@ async fn download_objects_task(
             }
         }
     }
-    tracing::debug!("source_id={} exiting download objects task", source_id);
+    debug!("source_id={} exiting download objects task", source_id);
 }
 
 async fn scan_bucket_task(
@@ -262,11 +259,9 @@ async fn scan_bucket_task(
     let is_literal_object = glob.is_some() && prefix.as_deref() == glob.map(|g| g.glob().glob());
     if is_literal_object {
         let key = glob.unwrap().glob().glob();
-        tracing::debug!(
+        debug!(
             "source_id={} downloading single object from s3 bucket={} key={}",
-            source_id,
-            bucket,
-            key
+            source_id, bucket, key
         );
         if let Err(e) = tx
             .send(Ok(KeyInfo {
@@ -275,19 +270,17 @@ async fn scan_bucket_task(
             }))
             .await
         {
-            tracing::debug!(
+            debug!(
                 "source_id={} Unable to send single key to downloader: {}",
-                source_id,
-                e
+                source_id, e
             );
         };
 
         return;
     } else {
-        tracing::debug!(
+        debug!(
             "source_id={} scanning bucket to find objects to download bucket={}",
-            source_id,
-            bucket
+            source_id, bucket
         );
     }
 
@@ -325,7 +318,7 @@ async fn scan_bucket_task(
                         match res {
                             Ok(_) => scan_metrics.objects_discovered.inc(),
                             Err(e) => {
-                                tracing::debug!("unable to send keys to downloader: {}", e);
+                                debug!("unable to send keys to downloader: {}", e);
                                 break;
                             }
                         }
@@ -343,16 +336,15 @@ async fn scan_bucket_task(
                     err,
                 }))
                 .await
-                .unwrap_or_else(|e| tracing::debug!("Source queue has been shut down: {}", e));
+                .unwrap_or_else(|e| debug!("Source queue has been shut down: {}", e));
 
                 break;
             }
         }
     }
-    tracing::debug!(
+    debug!(
         "source_id={} exiting bucket scan task bucket={}",
-        source_id,
-        bucket
+        source_id, bucket
     );
 }
 
@@ -366,10 +358,9 @@ async fn read_sqs_task(
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
 ) {
-    tracing::debug!(
+    debug!(
         "source_id={} starting read sqs task queue={}",
-        source_id,
-        queue,
+        source_id, queue,
     );
 
     let config = aws_config.load(aws_external_id).await;
@@ -383,12 +374,12 @@ async fn read_sqs_task(
             if let Some(url) = response.queue_url {
                 url
             } else {
-                tracing::error!("Empty queue url response for queue {}", queue);
+                error!("Empty queue url response for queue {}", queue);
                 return;
             }
         }
         Err(e) => {
-            tracing::error!("Unable to retrieve queue url for queue {}: {}", queue, e);
+            error!("Unable to retrieve queue url for queue {}: {}", queue, e);
             return;
         }
     };
@@ -410,7 +401,7 @@ async fn read_sqs_task(
             status = shutdown_rx.changed() => {
                 if status.is_ok() {
                     if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        tracing::debug!("source_id={} scan_sqs received dataflow shutdown message", source_id);
+                        debug!("source_id={} scan_sqs received dataflow shutdown message", source_id);
                         break;
                     }
                 }
@@ -474,14 +465,12 @@ async fn read_sqs_task(
             Err(e) => {
                 allowed_errors -= 1;
                 if allowed_errors == 0 {
-                    tracing::error!("failed to read from SQS queue {}: {}", queue, e);
+                    error!("failed to read from SQS queue {}: {}", queue, e);
                     break;
                 } else {
-                    tracing::warn!(
+                    warn!(
                         "unable to read from SQS queue {}: {} ({} retries remaining)",
-                        queue,
-                        e,
-                        allowed_errors
+                        queue, e, allowed_errors
                     );
                 }
 
@@ -489,7 +478,7 @@ async fn read_sqs_task(
             }
         }
     }
-    tracing::debug!("source_id={} exiting sqs reader queue={}", source_id, queue);
+    debug!("source_id={} exiting sqs reader queue={}", source_id, queue);
 }
 
 /// Send the relevant parts of the message to the download objects task
@@ -512,15 +501,14 @@ async fn process_message(
         match event {
             Ok(event) => {
                 if event.records.is_empty() {
-                    tracing::debug!(
+                    debug!(
                         "source_id={} sqs event is surprisingly empty {:#?}",
-                        source_id,
-                        event
+                        source_id, event
                     );
                 }
 
                 for record in event.records {
-                    tracing::trace!(
+                    trace!(
                         "source_id={} processing message from sqs for key={} type={:?}",
                         source_id,
                         record.s3.object.key,
@@ -552,7 +540,7 @@ async fn process_message(
                                 key: key.clone(),
                             });
                             if tx.send(ki).await.is_err() {
-                                tracing::debug!(
+                                debug!(
                                     "source_id={} sqs reader is closed, marking message as visible",
                                     source_id
                                 );
@@ -566,13 +554,12 @@ async fn process_message(
                 let test: Result<TestEvent, _> = serde_json::from_str(&body);
                 match test {
                     Ok(_) => {
-                        tracing::trace!("got test event for new queue");
+                        trace!("got test event for new queue");
                     }
                     Err(_) => {
-                        tracing::error!(
+                        error!(
                             "[customer-data] Unrecognized message from SQS queue {}: {}",
-                            queue_url,
-                            body,
+                            queue_url, body,
                         )
                     }
                 }
@@ -591,10 +578,9 @@ async fn process_message(
         .send()
         .await
     {
-        tracing::warn!(
+        warn!(
             "source_id={} Error deleting processed SQS message: {}",
-            source_id,
-            e
+            source_id, e
         )
     }
 
@@ -672,12 +658,9 @@ async fn download_object(
         let range = if offset == 0 {
             None
         } else {
-            tracing::debug!(
+            debug!(
                 "Failed to download object: {}/{} attempt={} read={}",
-                bucket,
-                key,
-                state.i,
-                offset,
+                bucket, key, state.i, offset,
             );
             Some(format!("bytes={}-", offset))
         };
@@ -704,9 +687,9 @@ async fn download_object(
                 ("gzip", Compression::Gzip) => (),
                 ("identity", Compression::None) => (),
                 ("identity" | "gzip", _) => {
-                    tracing::debug!("object {} has mismatched Content-Encoding: {}", key, s)
+                    debug!("object {} has mismatched Content-Encoding: {}", key, s)
                 }
-                _ => tracing::debug!("object {} has unrecognized Content-Encoding: {}", key, s),
+                _ => debug!("object {} has unrecognized Content-Encoding: {}", key, s),
             }
         }
 
@@ -721,7 +704,7 @@ async fn download_object(
     match reader.fill_buf().await {
         Ok(buf) => {
             if buf.is_empty() {
-                tracing::trace!("source_id={} empty object {}/{}", source_id, bucket, key);
+                trace!("source_id={} empty object {}/{}", source_id, bucket, key);
                 return Ok(Default::default());
             }
         }
@@ -736,12 +719,9 @@ async fn download_object(
         }
     };
 
-    tracing::debug!(
+    debug!(
         "source_id={} {}/{} download_result={:?}",
-        source_id,
-        bucket,
-        key,
-        download_result,
+        source_id, bucket, key, download_result,
     );
 
     if download_result.is_ok() {
@@ -787,7 +767,7 @@ where
         }
     }
 
-    tracing::trace!(
+    trace!(
         "source_id={} finished sending object to dataflow chunks={} bytes={}",
         source_id,
         chunks,
@@ -847,11 +827,9 @@ impl SourceReader for S3SourceReader {
             for key_source in s3_conn.key_sources {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
-                        tracing::debug!(
+                        debug!(
                             "source_id={} reading s3 bucket={} worker={}",
-                            source_id,
-                            bucket,
-                            worker_id
+                            source_id, bucket, worker_id
                         );
                         // TODO(guswynn): see if we can avoid this formatting
                         let task_name = format!("s3_scan:{}:{}", source_id, bucket);
@@ -869,11 +847,9 @@ impl SourceReader for S3SourceReader {
                         );
                     }
                     S3KeySource::SqsNotifications { queue } => {
-                        tracing::debug!(
+                        debug!(
                             "source_id={} reading sqs queue={} worker={}",
-                            source_id,
-                            queue,
-                            worker_id
+                            source_id, queue, worker_id
                         );
                         task::spawn(
                             || format!("s3_read_sqs:{}", source_id),
@@ -917,11 +893,9 @@ impl SourceReader for S3SourceReader {
             }
             Some(Some(Err(e))) => match e {
                 S3Error::GetObjectError { .. } => {
-                    tracing::warn!(
+                    warn!(
                         "when reading source '{}' ({}): {}",
-                        self.source_name,
-                        self.id,
-                        e
+                        self.source_name, self.id, e
                     );
                     Ok(NextMessage::Pending)
                 }
@@ -935,9 +909,9 @@ impl SourceReader for S3SourceReader {
 
 impl Drop for S3SourceReader {
     fn drop(&mut self) {
-        tracing::debug!("source_id={} Dropping S3SourceReader", self.id);
+        debug!("source_id={} Dropping S3SourceReader", self.id);
         if self.dataflow_status.send(DataflowStatus::Stopped).is_err() {
-            tracing::debug!("source_id={} already shutdown", self.id);
+            debug!("source_id={} already shutdown", self.id);
         };
     }
 }
@@ -962,7 +936,7 @@ async fn release_messages(
                 .filter_map(|m| m.receipt_handle)
                 .enumerate()
                 .map(|(i, receipt_handle)| {
-                    tracing::debug!(
+                    debug!(
                         "source_id={} releasing message unprocessed_key={}",
                         source_id,
                         failed_key.as_deref().unwrap_or("<none>")
@@ -979,7 +953,7 @@ async fn release_messages(
         .send()
         .await
     {
-        tracing::warn!("unexpected error releasing SQS messages: {}", e);
+        warn!("unexpected error releasing SQS messages: {}", e);
     };
 }
 

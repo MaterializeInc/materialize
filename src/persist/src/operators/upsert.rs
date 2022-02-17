@@ -21,6 +21,7 @@ use timely::dataflow::operators::{Concat, Map, OkErr};
 use timely::dataflow::operators::{Delay, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tracing::trace;
 
 use crate::client::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
@@ -170,11 +171,7 @@ where
                     state_input.for_each(|_time, data| {
                         data.swap(&mut state_input_buffer);
                         for state_update in state_input_buffer.drain(..) {
-                            tracing::trace!(
-                                "In {}, restored upsert: {:?}",
-                                operator_name,
-                                state_update
-                            );
+                            trace!("In {}, restored upsert: {:?}", operator_name, state_update);
 
                             differential_state_ingester
                                 .as_mut()
@@ -194,7 +191,7 @@ where
                             .finish();
                         current_values.extend(initial_state.into_iter());
 
-                        tracing::trace!(
+                        trace!(
                             "In {}, initial (restored) upsert state: {:?}",
                             operator_name,
                             current_values.iter().take(10).collect::<Vec<_>>()

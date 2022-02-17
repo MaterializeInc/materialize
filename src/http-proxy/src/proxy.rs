@@ -26,6 +26,7 @@ use std::str::FromStr;
 use http::uri::{Authority, Uri};
 use ipnet::IpNet;
 use lazy_static::lazy_static;
+use tracing::warn;
 
 use self::matchers::{DomainMatcher, IpMatcher};
 
@@ -42,7 +43,7 @@ fn load_system_config() -> ProxyConfig {
         match val {
             Some(Ok(val)) => Some(val),
             Some(Err(e)) => {
-                tracing::warn!("ignoring invalid configuration for {}: {}", names[0], e);
+                warn!("ignoring invalid configuration for {}: {}", names[0], e);
                 None
             }
             None => None,
@@ -53,7 +54,7 @@ fn load_system_config() -> ProxyConfig {
         match get_any_env(names)?.parse() {
             Ok(uri) => Some(uri),
             Err(e) => {
-                tracing::warn!("ignoring invalid configuration for {}: {}", names[0], e);
+                warn!("ignoring invalid configuration for {}: {}", names[0], e);
                 None
             }
         }

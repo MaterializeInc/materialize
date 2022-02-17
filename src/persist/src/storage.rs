@@ -17,6 +17,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::error::Error;
 use crate::gen::persist::ProtoMeta;
@@ -40,7 +41,7 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
         Ok(())
     } else if current_version > persisted_version {
         // Delete all the keys, as we are upgrading to a new version.
-        tracing::info!(
+        info!(
             "Persistence beta detected version mismatch. Deleting all previously persisted data as part of upgrade from version {} to {}.",
             persisted_version,
             current_version

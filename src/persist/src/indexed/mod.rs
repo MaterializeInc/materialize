@@ -29,6 +29,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use tracing::{error, trace, warn};
 
 use crate::error::Error;
 use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
@@ -346,10 +347,10 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
                 //
                 // TODO: Regression test for this.
                 if let Err(err) = log.close() {
-                    tracing::warn!("error closing log: {}", err);
+                    warn!("error closing log: {}", err);
                 }
                 if let Err(err) = blob.close() {
-                    tracing::warn!("error closing blob: {}", err);
+                    warn!("error closing blob: {}", err);
                 }
                 err
             })?
@@ -801,9 +802,9 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
                     // This is a test and we've almost certainly used
                     // UnreliableBlob to make storage unavailable, log it at a
                     // lower level to keep test output a little less spammy.
-                    tracing::trace!("unable to read back persisted metadata: {:?}", e);
+                    trace!("unable to read back persisted metadata: {:?}", e);
                 } else {
-                    tracing::error!("unable to read back persisted metadata: {:?}", e);
+                    error!("unable to read back persisted metadata: {:?}", e);
                 }
             }
         }
@@ -839,9 +840,9 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
                     // This is a test and we've almost certainly used
                     // UnreliableBlob to make storage unavailable, log it at a
                     // lower level to keep test output a little less spammy.
-                    tracing::trace!("unable to read back persisted metadata: {:?}", e);
+                    trace!("unable to read back persisted metadata: {:?}", e);
                 } else {
-                    tracing::error!("unable to read back persisted metadata: {:?}", e);
+                    error!("unable to read back persisted metadata: {:?}", e);
                 }
             }
         }
@@ -1100,7 +1101,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 // TODO: revisit whether we need to move this to a different log level
                 // depending on how spammy it ends up being. Alternatively, we
                 // may want to rate-limit our logging here.
-                tracing::warn!("error running step: {:?}", e);
+                warn!("error running step: {:?}", e);
                 vec![]
             }
             Ok(reqs) => reqs,

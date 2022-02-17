@@ -14,6 +14,7 @@ use std::io::Read;
 use std::rc::Rc;
 
 use ordered_float::OrderedFloat;
+use tracing::trace;
 use uuid::Uuid;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
@@ -84,7 +85,7 @@ impl Decoder {
             )
         })?;
         let result = self.packer.finish_and_reuse();
-        tracing::trace!(
+        trace!(
             "[customer-data] Decoded row {:?} in {}",
             result,
             self.debug_name

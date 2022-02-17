@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use tracing::error;
 
 use mz_build_info::BuildInfo;
 use mz_ore::metrics::MetricsRegistry;
@@ -250,10 +251,10 @@ impl RuntimeHandle {
                     // stopped, so we can return an Ok. This is surprising,
                     // though, so log a message. Unfortunately, there isn't
                     // really a way to put the panic message in this log.
-                    tracing::error!("persist runtime thread panic'd");
+                    error!("persist runtime thread panic'd");
                 }
                 if let Err(err) = block_on(ticker_handle) {
-                    tracing::error!("persist ticker thread error'd: {:?}", err);
+                    error!("persist ticker thread error'd: {:?}", err);
                 }
                 // Thread a copy of the Arc<AsyncRuntime> being used to drive
                 // ticker_handle to make sure the runtime doesn't shut down before
@@ -269,7 +270,7 @@ impl RuntimeHandle {
                     // stopped, so we can return an Ok. This is surprising,
                     // though, so log a message. Unfortunately, there isn't
                     // really a way to put the panic message in this log.
-                    tracing::error!("persist runtime thread panic'd");
+                    error!("persist runtime thread panic'd");
                 }
             }
         }

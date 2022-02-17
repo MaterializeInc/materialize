@@ -20,7 +20,7 @@ use inotify::{EventMask, Inotify, WatchMask};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_repr::MessagePayload;
 use timely::scheduling::SyncActivator;
-use tracing::error;
+use tracing::{debug, error, trace};
 
 use mz_avro::Block;
 use mz_avro::BlockIter;
@@ -81,7 +81,7 @@ impl SourceReader for FileSourceReader {
     ) -> Result<Self, anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
-                tracing::debug!("creating FileSourceReader worker_id={}", worker_id);
+                debug!("creating FileSourceReader worker_id={}", worker_id);
                 let ctor = |fi| {
                     let mut br = std::io::BufReader::new(fi);
                     Ok(std::iter::from_fn(move || {
@@ -117,7 +117,7 @@ impl SourceReader for FileSourceReader {
                 rx
             }
             ExternalSourceConnector::AvroOcf(fc) => {
-                tracing::debug!("creating Avro FileSourceReader worker_id={}", worker_id);
+                debug!("creating Avro FileSourceReader worker_id={}", worker_id);
                 let value_encoding = match &encoding {
                     SourceDataEncoding::Single(enc) => enc,
                     SourceDataEncoding::KeyValue { .. } => {
@@ -203,7 +203,7 @@ pub fn read_file_task<Ctor, I, Err>(
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {
-    tracing::trace!("reading file {}", path.display());
+    trace!("reading file {}", path.display());
     let file = match std::fs::File::open(&path).with_context(|| {
         format!(
             "file source: unable to open file at path {}",
@@ -419,5 +419,5 @@ fn send_records<I, Out, Err>(
             activator.activate().expect("activation failed");
         }
     }
-    tracing::trace!("sent {} records to reader", records);
+    trace!("sent {} records to reader", records);
 }
