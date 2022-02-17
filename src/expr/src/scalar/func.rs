@@ -1922,9 +1922,7 @@ where
             "stride must be greater than zero".to_string(),
         ))
     } else {
-        i64::try_from(stride.micros).map_err(|_| {
-            EvalError::DateBinOutOfRange("stride cannot exceed 2^63 nanoseconds".to_string())
-        })
+        Ok(stride.micros)
     }?;
 
     // Make sure the returned timestamp is at the start of the bin, even if the
