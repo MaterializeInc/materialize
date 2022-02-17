@@ -3316,6 +3316,7 @@ fn plan_list_subquery(
                 },
             )
         },
+        "list",
     )
 }
 
@@ -3343,6 +3344,7 @@ fn plan_array_subquery(
         |elem_type| {
             HirScalarExpr::literal(Datum::empty_array(), ScalarType::Array(Box::new(elem_type)))
         },
+        "[]",
     )
 }
 
@@ -3355,6 +3357,7 @@ fn plan_vector_like_subquery<F1, F2, F3, F4>(
     aggregate_concat: F3,
     binary_concat: BinaryFunc,
     empty_literal: F4,
+    vector_type_string: &str,
 ) -> Result<CoercibleScalarExpr, PlanError>
 where
     F1: Fn(&ScalarType) -> bool,
@@ -3395,7 +3398,11 @@ where
         .scalar_type();
 
     if is_unsupported_type(&elem_type) {
-        bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type)));
+        bail_unsupported!(format!(
+            "{}{}",
+            ecx.humanize_scalar_type(&elem_type),
+            vector_type_string
+        ));
     }
 
     // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
