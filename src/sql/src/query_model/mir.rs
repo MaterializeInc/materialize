@@ -333,7 +333,7 @@ impl<'a> Lowerer<'a> {
                                             })
                                             .collect();
 
-                                        // Add to `result` absent elemetns, prepended with typed nulls.
+                                        // Add to `result` absent elements, prepended with typed nulls.
                                         result = right_present
                                             .negate()
                                             .union(get_rhs.clone())
@@ -473,8 +473,13 @@ impl<'a> Lowerer<'a> {
         inputs: Vec<(QuantifierId, mz_expr::MirRelationExpr)>,
     ) -> (mz_expr::MirRelationExpr, ColumnMap) {
         let (quantifiers, join_inputs): (Vec<_>, Vec<_>) = inputs.into_iter().unzip();
-        let join = if join_inputs.len() == 1 {
-            join_inputs.into_iter().next().unwrap()
+        let (join, input_mapper) = if join_inputs.len() == 1 {
+            let only_input = join_inputs.into_iter().next().unwrap();
+            let input_mapper = mz_expr::JoinInputMapper::new_from_input_arities(vec![
+                outer_arity,
+                only_input.arity() - outer_arity,
+            ]);
+            (only_input, input_mapper)
         } else {
             Self::join_on_prefix(join_inputs, outer_arity)
         };
@@ -482,21 +487,16 @@ impl<'a> Lowerer<'a> {
         // Generate a column map with the projection of the join plus the
         // columns from the outer context.
         let mut column_map = outer_column_map.clone();
-        let mut next_column = outer_arity;
-        for q_id in quantifiers.iter() {
-            let input_box = self.model.get_quantifier(*q_id).input_box;
-            let arity = self.model.get_box(input_box).columns.len();
-            for c in 0..arity {
+        for (index, q_id) in quantifiers.iter().enumerate() {
+            for c in input_mapper.global_columns(index + 1) {
                 column_map.insert(
                     ColumnReference {
                         quantifier_id: *q_id,
-                        position: c,
+                        position: input_mapper.map_column_to_local(c).0,
                     },
-                    next_column + c,
+                    c,
                 );
             }
-
-            next_column += arity;
         }
 
         (join, column_map)
@@ -572,7 +572,7 @@ impl<'a> Lowerer<'a> {
     fn join_on_prefix(
         join_inputs: Vec<mz_expr::MirRelationExpr>,
         prefix_length: usize,
-    ) -> mz_expr::MirRelationExpr {
+    ) -> (mz_expr::MirRelationExpr, mz_expr::JoinInputMapper) {
         let input_mapper = mz_expr::JoinInputMapper::new(&join_inputs);
         // Join on the outer columns
         let equivalences = (0..prefix_length)
@@ -591,18 +591,27 @@ impl<'a> Lowerer<'a> {
         // Project only one copy of the outer columns
         let projection = (0..prefix_length)
             .chain(
-                join_inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, input)| {
-                        (prefix_length..input.arity())
+                (0..join_inputs.len())
+                    .map(|index| {
+                        (prefix_length..input_mapper.input_arity(index))
                             .map(|c| input_mapper.map_column_to_global(c, index))
                             .collect_vec()
                     })
                     .flatten(),
             )
             .collect_vec();
-        mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection)
+        (
+            mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection),
+            mz_expr::JoinInputMapper::new_from_input_arities(
+                std::iter::once(prefix_length)
+                    .chain(
+                        (0..input_mapper.total_inputs())
+                            .into_iter()
+                            .map(|i| input_mapper.input_arity(i) - prefix_length),
+                    )
+                    .collect_vec(),
+            ),
+        )
     }
 
     /// Lowers a scalar expression, resolving the column references using

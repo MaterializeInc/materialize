@@ -1501,6 +1501,7 @@ impl AggregateExpr {
     }
 }
 
+// TODO: move this to the `mz_expr` crate.
 /// If the on clause of an outer join is an equijoin, figure out the join keys.
 ///
 /// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs
@@ -1512,6 +1513,10 @@ pub(crate) fn derive_equijoin_cols(
     on: Vec<mz_expr::MirScalarExpr>,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
     use mz_expr::BinaryFunc;
+    // TODO: Replace this predicate deconstruction with
+    // `mz_expr::canonicalize::canonicalize_predicates`, which will also enable
+    // treating select * from lhs left join rhs on lhs.id = rhs.id and true as
+    // an equijoin.
     // Deconstruct predicates that may be ands of multiple conditions.
     let mut predicates = Vec::new();
     let mut todo = on;
