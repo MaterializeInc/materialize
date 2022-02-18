@@ -20,6 +20,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
+    sources::{UpsertEnvelope, UpsertStyle},
     DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails,
 };
 use mz_expr::{EvalError, MirScalarExpr};
@@ -52,12 +53,12 @@ pub(crate) fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
-    key_arity: usize,
     // Full arity, including the key columns
     source_arity: usize,
     persist_config: Option<
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
     >,
+    upsert_envelope: UpsertEnvelope,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
@@ -147,11 +148,11 @@ where
         None => {
             let upsert_output = upsert_core(
                 stream,
-                key_arity,
-                source_arity,
                 predicates,
                 position_or,
                 as_of_frontier,
+                source_arity,
+                upsert_envelope,
             );
 
             let upsert_errs = operator::empty(&stream.scope());
@@ -292,11 +293,11 @@ fn evaluate(
 /// Internal core upsert logic.
 fn upsert_core<G>(
     stream: &Stream<G, DecodeResult>,
-    key_arity: usize,
-    source_arity: usize,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
+    source_arity: usize,
+    upsert_envelope: UpsertEnvelope,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -389,38 +390,55 @@ where
                                 Some(Ok(decoded_key)) => {
                                     let decoded_value = match data.raw_data.value {
                                         None => Ok(None),
-                                        Some(value) => value.and_then(|row| {
-                                            let mut datums = Vec::with_capacity(source_arity);
+                                        Some(value) => match value {
+                                            Ok(row) => {
+                                                let envelope_value = match upsert_envelope.style {
+                                                    UpsertStyle::Debezium { after_idx } => {
+                                                        match row.iter().nth(after_idx).unwrap() {
+                                                            Datum::List(after) => {
+                                                                let mut datums = Vec::with_capacity(
+                                                                    source_arity,
+                                                                );
+                                                                datums.extend(after.iter());
+                                                                Some(datums)
+                                                            }
+                                                            Datum::Null => None,
+                                                            d => panic!(
+                                                                "type error: expected record, \
+                                                                        found {:?}",
+                                                                d
+                                                            ),
+                                                        }
+                                                    }
+                                                    UpsertStyle::Default(_) => {
+                                                        let mut datums =
+                                                            Vec::with_capacity(source_arity);
+                                                        datums.extend(decoded_key.iter());
+                                                        datums.extend(row.iter());
+                                                        Some(datums)
+                                                    }
+                                                };
 
-                                            // The datums we send to `evaluate` contain the keys
-                                            // and the values in order, so indexing works
-                                            datums.extend(decoded_key.iter());
-
-                                            datums.extend(row.iter());
-                                            datums.extend(data.metadata.iter());
-                                            evaluate(
-                                                &datums,
-                                                &predicates,
-                                                &position_or,
-                                                &mut row_packer,
-                                            )
-                                            .map_err(DataflowError::from)
-                                        }),
+                                                if let Some(mut datums) = envelope_value {
+                                                    datums.extend(data.metadata.iter());
+                                                    evaluate(
+                                                        &datums,
+                                                        &predicates,
+                                                        &position_or,
+                                                        &mut row_packer,
+                                                    )
+                                                    .map_err(DataflowError::from)
+                                                } else {
+                                                    Ok(None)
+                                                }
+                                            }
+                                            Err(err) => Err(err),
+                                        },
                                     };
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
                                     // We store errors as well as non-None values, so that they can be
                                     // retracted if new rows show up for the same key.
                                     let new_value = decoded_value.transpose();
-
-                                    let repack_value = |row: Row, row_packer: &mut Row| {
-                                        // Re-use a `Row` to
-                                        // rebuild a full `Row` with both keys and values, before we
-                                        // send them out of this operator
-                                        row_packer.clear();
-                                        row_packer.extend(decoded_key.iter());
-                                        row_packer.extend(row.iter());
-                                        row_packer.finish_and_reuse()
-                                    };
 
                                     let old_value = if let Some(new_value) = &new_value {
                                         // Thin out the row to not contain a copy of the
@@ -428,19 +446,35 @@ where
                                         let thinned_value = new_value
                                             .as_ref()
                                             .map(|full_row| {
-                                                row_packer.clear();
-                                                row_packer.extend(full_row.iter().skip(key_arity));
-                                                row_packer.finish_and_reuse()
+                                                thin(
+                                                    &upsert_envelope.key_indices,
+                                                    &full_row,
+                                                    &mut row_packer,
+                                                )
                                             })
                                             .map_err(|e| e.clone());
                                         current_values
                                             .insert(decoded_key.clone(), thinned_value)
                                             .map(|res| {
-                                                res.map(|v| repack_value(v, &mut row_packer))
+                                                res.map(|v| {
+                                                    rehydrate(
+                                                        &upsert_envelope.key_indices,
+                                                        &decoded_key,
+                                                        &v,
+                                                        &mut row_packer,
+                                                    )
+                                                })
                                             })
                                     } else {
                                         current_values.remove(&decoded_key).map(|res| {
-                                            res.map(|v| repack_value(v, &mut row_packer))
+                                            res.map(|v| {
+                                                rehydrate(
+                                                    &upsert_envelope.key_indices,
+                                                    &decoded_key,
+                                                    &v,
+                                                    &mut row_packer,
+                                                )
+                                            })
                                         })
                                     };
 
@@ -478,4 +512,145 @@ where
     );
 
     result_stream
+}
+
+/// `thin` uses information from the source description to find which indexes in the row
+/// are keys and skip them.
+fn thin(key_indices: &[usize], value: &Row, row_packer: &mut Row) -> Row {
+    row_packer.clear();
+    let values = &mut value.iter();
+    let mut next_idx = 0;
+    for &key_idx in key_indices {
+        // First, push the datums that are before `key_idx`
+        row_packer.extend(values.take(key_idx - next_idx));
+        // Then, skip this key datum
+        values.next().unwrap();
+        next_idx = key_idx + 1;
+    }
+    // Finally, push any columns after the last key index
+    row_packer.extend(values);
+
+    row_packer.finish_and_reuse()
+}
+
+/// `rehydrate` uses information from the source description to find which indexes in the row
+/// are keys and add them back in in the right places.
+fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row {
+    row_packer.clear();
+    let values = &mut thinned_value.iter();
+    let mut next_idx = 0;
+    for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
+        // First, push the datums that are before `key_idx`
+        row_packer.extend(values.take(key_idx - next_idx));
+        // Then, push this key datum
+        row_packer.push(key_datum);
+        next_idx = key_idx + 1;
+    }
+    // Finally, push any columns after the last key index
+    row_packer.extend(values);
+
+    row_packer.finish_and_reuse()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rehydrate_thin_first() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![0];
+        let key = Row::pack([Datum::String("key")]);
+
+        let thinned = Row::pack([Datum::String("two")]);
+
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+
+        assert_eq!(
+            rehydrated,
+            Row::pack([Datum::String("key"), Datum::String("two"),])
+        );
+
+        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+    }
+
+    #[test]
+    fn test_rehydrate_thin_middle() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![2];
+        let key = Row::pack([Datum::String("key")]);
+
+        let thinned = Row::pack([
+            Datum::String("one"),
+            Datum::String("two"),
+            Datum::String("four"),
+        ]);
+
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+
+        assert_eq!(
+            rehydrated,
+            Row::pack([
+                Datum::String("one"),
+                Datum::String("two"),
+                Datum::String("key"),
+                Datum::String("four"),
+            ])
+        );
+
+        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+    }
+
+    #[test]
+    fn test_rehydrate_thin_multiple() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![2, 4];
+        let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
+
+        let thinned = Row::pack([
+            Datum::String("one"),
+            Datum::String("two"),
+            Datum::String("four"),
+            Datum::String("six"),
+        ]);
+
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+
+        assert_eq!(
+            rehydrated,
+            Row::pack([
+                Datum::String("one"),
+                Datum::String("two"),
+                Datum::String("key1"),
+                Datum::String("four"),
+                Datum::String("key2"),
+                Datum::String("six"),
+            ])
+        );
+
+        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+    }
+
+    #[test]
+    fn test_thin_end() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![2];
+
+        assert_eq!(
+            thin(
+                &key_indices,
+                &Row::pack([
+                    Datum::String("one"),
+                    Datum::String("two"),
+                    Datum::String("key"),
+                ]),
+                &mut packer
+            ),
+            Row::pack([Datum::String("one"), Datum::String("two")]),
+        );
+    }
 }

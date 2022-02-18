@@ -13,94 +13,33 @@ use std::str::FromStr;
 
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
-use differential_dataflow::AsCollection;
-use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::{OkErr, Operator};
+use timely::dataflow::{Scope, ScopeParent, Stream};
 use tracing::{debug, error, info, warn};
 
 use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
     DataflowError, DecodeError,
 };
-use mz_expr::GlobalId;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, Row, Timestamp};
 
-use crate::metrics::Metrics;
 use crate::source::DecodeResult;
 
 pub(crate) fn render<G: Scope>(
     envelope: &DebeziumEnvelope,
     input: &Stream<G, DecodeResult>,
     debug_name: String,
-    metrics: Metrics,
-    src_id: GlobalId,
-    dataflow_id: usize,
-) -> Collection<G, Result<Row, DataflowError>, Diff> {
+) -> (
+    Stream<G, (Row, Timestamp, Diff)>,
+    Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
+)
+where
+    G: ScopeParent<Timestamp = Timestamp>,
+{
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     match envelope.mode {
-        DebeziumMode::Upsert => {
-            let gauge = metrics.debezium_upsert_count_for(src_id, dataflow_id);
-            input
-                .unary(Pipeline, "envelope-debezium-upsert", move |_, _| {
-                    let mut current_values = HashMap::new();
-                    let mut data = vec![];
-                    move |input, output| {
-                        while let Some((cap, refmut_data)) = input.next() {
-                            let mut session = output.session(&cap);
-                            refmut_data.swap(&mut data);
-                            for result in data.drain(..) {
-                                let key = match result.key {
-                                    Some(Ok(key)) => key,
-                                    Some(Err(err)) => {
-                                        session.give((Err(err.into()), cap.time().clone(), 1));
-                                        continue;
-                                    }
-                                    None => continue,
-                                };
-
-                                // Ignore out of order updates that have been already overwritten
-                                if let Some((_, position)) = current_values.get(&key) {
-                                    if result.position < *position {
-                                        continue;
-                                    }
-                                }
-
-                                let value = match result.value {
-                                    Some(Ok(row)) => match row.iter().nth(after_idx).unwrap() {
-                                        Datum::List(after) => {
-                                            let mut row = Row::pack(&after);
-                                            row.extend(result.metadata.iter());
-                                            Some(Ok(row))
-                                        }
-                                        Datum::Null => None,
-                                        d => {
-                                            panic!("type error: expected record, found {:?}", d)
-                                        }
-                                    },
-                                    Some(Err(err)) => Some(Err(DataflowError::from(err))),
-                                    None => continue,
-                                };
-
-                                let retraction = match value {
-                                    Some(value) => {
-                                        session.give((value.clone(), cap.time().clone(), 1));
-                                        current_values.insert(key, (value, result.position))
-                                    }
-                                    None => current_values.remove(&key),
-                                };
-
-                                if let Some((value, _)) = retraction {
-                                    session.give((value, cap.time().clone(), -1));
-                                }
-                            }
-                        }
-                        gauge.set(current_values.len() as u64);
-                    }
-                })
-                .as_collection()
-        }
+        // TODO(guswynn): !!! Correctly deduplicate even in the upsert case
         _ => input
             .unary(Pipeline, "envelope-debezium", move |_, _| {
                 let mut dedup_state = HashMap::new();
@@ -172,7 +111,10 @@ pub(crate) fn render<G: Scope>(
                     }
                 }
             })
-            .as_collection(),
+            .ok_err(|(res, time, diff)| match res {
+                Ok(v) => Ok((v, time, diff)),
+                Err(e) => Err((e, time, diff)),
+            }),
     }
 }
 
@@ -353,7 +295,7 @@ impl DebeziumDeduplicationState {
                 Some(TrackFull::from_keys_in_range(start, end, pad_start)),
                 projection,
             ),
-            DebeziumMode::None | DebeziumMode::Upsert => return None,
+            DebeziumMode::None => return None,
         };
         Some(DebeziumDeduplicationState {
             last_position_and_offset: None,

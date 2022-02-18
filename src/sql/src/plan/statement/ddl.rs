@@ -40,6 +40,7 @@ use mz_dataflow_types::{
         DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
         KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
         PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
+        UnplannedSourceEnvelope, UpsertStyle,
     },
 };
 use mz_expr::GlobalId;
@@ -569,18 +570,16 @@ pub fn plan_create_source(
     let envelope = match &envelope {
         // TODO: fixup key envelope
         mz_sql_parser::ast::Envelope::None => {
-            SourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
+            UnplannedSourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
         }
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
-            let dbz_envelope = match mode {
-                DbzMode::Upsert => DebeziumEnvelope {
-                    before_idx,
-                    after_idx,
-                    mode: DebeziumMode::Upsert,
-                },
+            match mode {
+                DbzMode::Upsert => {
+                    UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
+                }
                 DbzMode::Plain => {
                     let dedup_projection = typecheck_debezium_dedup(&value_desc);
 
@@ -594,21 +593,21 @@ pub fn plan_create_source(
                     };
 
                     match dedup_mode.as_ref() {
-                        "ordered" => DebeziumEnvelope {
+                        "ordered" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
                             mode: DebeziumMode::Ordered(dedup_projection?),
-                        },
-                        "full" => DebeziumEnvelope {
+                        }),
+                        "full" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
                             mode: DebeziumMode::Full(dedup_projection?),
-                        },
-                        "none" => DebeziumEnvelope {
+                        }),
+                        "none" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
                             mode: DebeziumMode::None,
-                        },
+                        }),
                         "full_in_range" => {
                             let parse_datetime = |s: &str| {
                                 let formats = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
@@ -662,7 +661,7 @@ pub fn plan_create_source(
                                             ),
                                         };
 
-                                    DebeziumEnvelope {
+                                    UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                                         before_idx,
                                         after_idx,
                                         mode: DebeziumMode::FullInRange {
@@ -671,7 +670,7 @@ pub fn plan_create_source(
                                             pad_start,
                                             projection: dedup_projection?,
                                         }
-                                    }
+                                    })
                                 }
                                 _ => bail!(
                                     "deduplication full_in_range requires both \
@@ -684,9 +683,7 @@ pub fn plan_create_source(
                         ),
                     }
                 }
-            };
-
-            SourceEnvelope::Debezium(dbz_envelope)
+            }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
             if encoding.key_ref().is_none() {
@@ -697,7 +694,7 @@ pub fn plan_create_source(
                 Some(DataEncoding::Avro(_)) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
                 _ => key_envelope.unwrap_or(KeyEnvelope::LegacyUpsert),
             };
-            SourceEnvelope::Upsert(key_envelope)
+            UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
             //TODO check that key envelope is not set
@@ -710,15 +707,16 @@ pub fn plan_create_source(
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
-            SourceEnvelope::CdcV2
+            UnplannedSourceEnvelope::CdcV2
         }
     };
 
     // TODO(petrosagg): remove this inconsistency once INCLUDE (offset) syntax is implemented
     let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
     let metadata_columns = external_connector.metadata_columns(include_defaults);
+    let metadata_column_types = external_connector.metadata_column_types(include_defaults);
     let metadata_desc = included_column_desc(metadata_columns.clone());
-    let mut desc = envelope.desc(key_desc, value_desc, metadata_desc)?;
+    let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
     // Append default metadata columns if column aliases were provided but do not include them.
     //
@@ -827,6 +825,7 @@ pub fn plan_create_source(
             connector: external_connector,
             encoding,
             envelope,
+            metadata_columns: metadata_column_types,
             ts_frequency,
             timeline,
         },
