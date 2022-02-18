@@ -967,6 +967,30 @@ SELECT * FROM generate_series('2020-01-01 22:00:00'::TIMESTAMPTZ, '2021-01-01 00
 query error step size cannot equal zero
 SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '0 day');
 
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2022-01-03 00:00:00'::TIMESTAMP, '1 month -30 day') ORDER BY 1;
+
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2022-01-03 00:00:00'::TIMESTAMP, '1 day -24 hr') ORDER BY 1;
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-05 00:00:00'::TIMESTAMP, '1 day -12 hrs') ORDER BY 1;
+----
+2021-01-01 03:00:00
+2021-01-01 15:00:00
+2021-01-02 03:00:00
+2021-01-02 15:00:00
+2021-01-03 03:00:00
+2021-01-03 15:00:00
+2021-01-04 03:00:00
+2021-01-04 15:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-02-01 00:00:00'::TIMESTAMP, '1 month -15 days') ORDER BY 1;
+----
+2021-01-01 03:00:00
+2021-01-17 03:00:00
+
 # Test ROWS FROM
 
 query I colnames
