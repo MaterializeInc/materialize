@@ -39,6 +39,34 @@ pub struct Decoder {
     packer: Row,
 }
 
+#[cfg(test)]
+mod tests {
+    use futures::executor::block_on;
+
+    use crate::avro::Decoder;
+    use mz_repr::{Datum, Row};
+
+    #[test]
+    fn test_error_followed_by_success() {
+        let schema = r#"{
+"type": "record",
+"name": "test",
+"fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
+}"#;
+        let mut decoder = Decoder::new(&schema, None, "Test".to_string(), false).unwrap();
+        // This is not a valid Avro blob for the given schema
+        let mut bad_bytes: &[u8] = &[0];
+        assert!(block_on(decoder.decode(&mut bad_bytes)).is_err());
+        // This is the blob that will make both ints in the value zero.
+        let mut good_bytes: &[u8] = &[0, 0];
+        // The decode should succeed with the correct value.
+        assert_eq!(
+            block_on(decoder.decode(&mut good_bytes)).unwrap(),
+            Row::pack([Datum::Int32(0), Datum::Int32(0)])
+        );
+    }
+}
+
 impl Decoder {
     /// Creates a new `Decoder`
     ///
@@ -65,6 +93,11 @@ impl Decoder {
 
     /// Decodes Avro-encoded `bytes` into a `Row`.
     pub async fn decode(&mut self, bytes: &mut &[u8]) -> anyhow::Result<Row> {
+        // Clear out any bytes that might be left over from
+        // an earlier run. This can happen if the
+        // `dsr.deserialize` call returns an error,
+        // causing us to return early.
+        self.packer.clear();
         let (bytes2, resolved_schema, csr_schema_id) = self.csr_avro.resolve(bytes).await?;
         *bytes = bytes2;
         let dec = AvroFlatDecoder {
