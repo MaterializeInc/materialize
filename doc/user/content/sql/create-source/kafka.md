@@ -225,9 +225,6 @@ CREATE MATERIALIZED SOURCE kafka_ssl
   );
 ```
 
-Note that:
-
-- To connect to a Confluent Schema Registry using SSL, it must use the same certificate authority (CA) as the Kafka broker.
 
 #### SSL `WITH` options
 
