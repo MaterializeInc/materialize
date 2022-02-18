@@ -356,6 +356,9 @@ select ROW() = ROW();
 #select row(1,1.1) = any (array[ row(7,7.7), row(1,1.1), row(0,0.0) ]);
 #select row(1,1.1) = any (array[ row(7,7.7), row(1,1.0), row(0,0.0) ]);
 
+
+## Binary comparison functions between row types
+
 statement ok
 create type testtype1 as (a int, b int);
 
@@ -427,6 +430,8 @@ true
 statement ok
 create type testtype3 as (a int, b text);
 
+# note: error message here differs from postgres, which is
+# more specific about whether column type or count mismatched
 query error no overload
 select row(1, 2)::testtype1 < row(1, 'abc')::testtype3;
 
@@ -442,15 +447,29 @@ select row(1, 2)::testtype1 < row(1)::testtype5;
 query error no overload
 select row(1, 2)::testtype1 <> row(1)::testtype5;
 
+# just for fun, let's try everything at once. let's combine some
+# implicit + explicit casts + field access over nested structs
+# that are structurally equivalent, but not the same. at the end
+# of the day, postgres/we should be doing nothing more than
+# field-by-field comparison of each row, regardless of named type.
+
 statement ok
 create type testtype6 as (inner testtype1);
 
+statement ok
+create type testtype8 as (f1 int, f2 int);
+
 query B
-select row(4,2)::testtype1 > (row(row(4,1))::testtype6).inner;
+select row(4,2)::testtype8 > (row(row(4,1))::testtype6).inner;
 ----
 true
 
 query B
-select row(4,2)::testtype1 > (row(row(4,2))::testtype6).inner;
+select row(4,2)::testtype8 > (row(row(4,2))::testtype6).inner;
 ----
 false
+
+query B
+select row(4,2)::testtype8 = (row(row(4,2))::testtype6).inner;
+----
+true
