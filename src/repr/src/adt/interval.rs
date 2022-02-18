@@ -48,9 +48,11 @@ impl Default for Interval {
 
 impl num_traits::ops::checked::CheckedNeg for Interval {
     fn checked_neg(&self) -> Option<Self> {
-        if let (Some(months), Some(days), Some(micros)) =
-            (self.months.checked_neg(), self.days.checked_neg(), self.micros.checked_neg())
-        {
+        if let (Some(months), Some(days), Some(micros)) = (
+            self.months.checked_neg(),
+            self.days.checked_neg(),
+            self.micros.checked_neg(),
+        ) {
             Self::new(months, days, micros).ok()
         } else {
             None
