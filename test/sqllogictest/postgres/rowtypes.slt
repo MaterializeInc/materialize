@@ -24,6 +24,7 @@
 ##    * toasted references
 ##    * functional notation
 ##    * ordering of rowtypes with non-comparable fields
+##    * binary representation operators
 
 mode cockroach
 
@@ -168,7 +169,6 @@ query B
 select ROW(1,2) in (ROW(3,4), ROW(1,2::int8));
 ----
 true
-
 
 statement ok
 CREATE SOURCE tenk1_src FROM FILE 'test/sqllogictest/postgres/testdata/tenk.data'
@@ -359,8 +359,98 @@ select ROW() = ROW();
 statement ok
 create type testtype1 as (a int, b int);
 
-## TODO(phemberger): figure out how to make named types comparable
-#query B
-#select row(1, 2)::testtype1 < row(1, 3)::testtype1;
-#----
-#true
+query B
+select row(1, 2)::testtype1 < row(1, 3)::testtype1;
+----
+true
+
+query B
+select row(1, 2)::testtype1 <= row(1, 3)::testtype1;
+----
+true
+
+query B
+select row(1, 2)::testtype1 = row(1, 2)::testtype1;
+----
+true
+
+query B
+select row(1, 2)::testtype1 <> row(1, 3)::testtype1;
+----
+true
+
+query B
+select row(1, 3)::testtype1 >= row(1, 2)::testtype1;
+----
+true
+
+query B
+select row(1, 3)::testtype1 > row(1, 2)::testtype1;
+----
+true
+
+query B
+select row(1, -2)::testtype1 < row(1, -3)::testtype1;
+----
+false
+
+query B
+select row(1, -2)::testtype1 <= row(1, -3)::testtype1;
+----
+false
+
+query B
+select row(1, -2)::testtype1 = row(1, -3)::testtype1;
+----
+false
+
+query B
+select row(1, -2)::testtype1 <> row(1, -2)::testtype1;
+----
+false
+
+query B
+select row(1, -3)::testtype1 >= row(1, -2)::testtype1;
+----
+false
+
+query B
+select row(1, -3)::testtype1 > row(1, -2)::testtype1;
+----
+false
+
+query B
+select row(1, -2)::testtype1 < row(1, 3)::testtype1;
+----
+true
+
+statement ok
+create type testtype3 as (a int, b text);
+
+query error no overload
+select row(1, 2)::testtype1 < row(1, 'abc')::testtype3;
+
+query error no overload
+select row(1, 2)::testtype1 <> row(1, 'abc')::testtype3;
+
+statement ok
+create type testtype5 as (a int);
+
+query error no overload
+select row(1, 2)::testtype1 < row(1)::testtype5;
+
+query error no overload
+select row(1, 2)::testtype1 <> row(1)::testtype5;
+
+statement ok
+create type testtype6 as (inner testtype1);
+
+query B
+select row(4,2)::testtype1 > (row(row(4,1))::testtype6).inner;
+----
+true
+
+query B
+select row(4,2)::testtype1 > (row(row(4,2))::testtype6).inner;
+----
+false
