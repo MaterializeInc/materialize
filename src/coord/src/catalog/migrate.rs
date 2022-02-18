@@ -13,13 +13,16 @@ use anyhow::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use mz_repr::strconv;
+use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use semver::Version;
 use tokio::fs::File;
 use tracing::warn;
 
+use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_ore::collections::CollectionExt;
+use mz_postgres_util::publication_info;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::{self, VisitMut};
 use mz_sql::ast::{
@@ -83,7 +86,6 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         // non-semver versions are less than that.
         Err(_) => Version::new(0, 0, 0),
     };
-
     let mut tx = storage.transaction()?;
     // First, do basic AST -> AST transformations.
     rewrite_items(&tx, |stmt| {
@@ -102,6 +104,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_20_0 {
             ast_rewrite_ccsr_with_options_to_compiled_0_20_0(stmt)?;
+            ast_rewrite_pgcdc_with_details_0_21_0(stmt)?;
         }
         Ok(())
     })?;
@@ -140,6 +143,42 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+// Connects to source postgres database, captures state of the publication and
+// serializes this into a string in the `details` field. This is the same logic
+// used during purification starting in 0.21.0
+fn ast_rewrite_pgcdc_with_details_0_21_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    if let Statement::CreateSource(CreateSourceStatement { connector, .. }) = stmt {
+        match connector {
+            CreateSourceConnector::Postgres {
+                conn,
+                publication,
+                slot,
+                details,
+            } => {
+                // Assume existing details are correct
+                if details.is_some() {
+                    return Ok(());
+                }
+                let res = block_on(publication_info(conn, publication));
+                match res {
+                    Ok(tables) => {
+                        let details_proto = PostgresSourceDetails {
+                            tables: tables.into_iter().map(|t| t.into()).collect(),
+                            slot: slot.clone().expect("slot must exist"),
+                        };
+                        *details = Some(hex::encode(details_proto.encode_to_vec()));
+                    }
+                    Err(e) => bail!(e),
+                }
+            }
+            _ => (),
+        }
+    }
+    Ok(())
+}
 
 // Copies `ssl_` options to CSR connectors that defaulted to Kafka ssl values
 // from when that was the default
