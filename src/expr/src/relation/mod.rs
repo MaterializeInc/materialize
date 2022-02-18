@@ -1146,9 +1146,13 @@ impl MirRelationExpr {
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
-        default: Vec<(Datum, ColumnType)>,
+        default: Vec<(Datum, ScalarType)>,
     ) -> MirRelationExpr {
-        assert_eq!(keys_and_values.arity() - self.arity(), default.len());
+        let (data, column_types): (Vec<_>, Vec<_>) = default
+            .into_iter()
+            .map(|(datum, scalar_type)| (datum, scalar_type.nullable(datum.is_null())))
+            .unzip();
+        assert_eq!(keys_and_values.arity() - self.arity(), data.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
             MirRelationExpr::join(
                 vec![
@@ -1171,8 +1175,8 @@ impl MirRelationExpr {
             // potential predicate pushdown and elision in the
             // optimizer.
             .product(MirRelationExpr::constant(
-                vec![default.iter().map(|(datum, _)| *datum).collect()],
-                RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
+                vec![data],
+                RelationType::new(column_types),
             ))
         })
     }
@@ -1187,7 +1191,7 @@ impl MirRelationExpr {
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
-        default: Vec<(Datum<'static>, ColumnType)>,
+        default: Vec<(Datum<'static>, ScalarType)>,
     ) -> MirRelationExpr {
         keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
             get_keys_and_values.clone().union(self.anti_lookup(

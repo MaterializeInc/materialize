@@ -175,12 +175,7 @@ impl<'a> Lowerer<'a> {
                     let input_type = input.typ();
                     let default = aggregates
                         .iter()
-                        .map(|agg| {
-                            (
-                                agg.func.default(),
-                                agg.typ(&input_type).nullable(agg.func.default().is_null()),
-                            )
-                        })
+                        .map(|agg| (agg.func.default(), agg.typ(&input_type).scalar_type))
                         .collect_vec();
 
                     input = SR::Reduce {
@@ -382,7 +377,7 @@ impl<'a> Lowerer<'a> {
                                         id_gen,
                                         get_join.clone(),
                                         rt.into_iter()
-                                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                                            .map(|typ| (Datum::Null, typ.scalar_type))
                                             .collect(),
                                     );
                                     result = result.union(left_outer);
@@ -402,7 +397,7 @@ impl<'a> Lowerer<'a> {
                                                         .collect(),
                                                 ),
                                             lt.into_iter()
-                                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                                .map(|typ| (Datum::Null, typ.scalar_type))
                                                 .collect(),
                                         )
                                         // swap left and right back again
@@ -563,7 +558,7 @@ impl<'a> Lowerer<'a> {
                     get_select.union(errors)
                 });
                 // append Null to anything that didn't return any rows
-                let default = vec![(Datum::Null, col_type.nullable(true))];
+                let default = vec![(Datum::Null, col_type.scalar_type)];
                 input = get_outer.lookup(id_gen, guarded, default);
             }
             _ => panic!("Unsupported quantifier type"),

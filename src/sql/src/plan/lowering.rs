@@ -457,7 +457,7 @@ impl HirRelationExpr {
                                 .column_types
                                 .into_iter()
                                 .skip(get_left.arity())
-                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                .map(|typ| (Datum::Null, typ.scalar_type))
                                 .collect();
                             get_left.lookup(id_gen, join, default)
                         } else {
@@ -537,7 +537,7 @@ impl HirRelationExpr {
                                         id_gen,
                                         get_join.clone(),
                                         rt.into_iter()
-                                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                                            .map(|typ| (Datum::Null, typ.scalar_type))
                                             .collect(),
                                     );
                                     result = result.union(left_outer);
@@ -556,7 +556,7 @@ impl HirRelationExpr {
                                                         .collect(),
                                                 ),
                                             lt.into_iter()
-                                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                                .map(|typ| (Datum::Null, typ.scalar_type))
                                                 .collect(),
                                         )
                                         // swap left and right back again
@@ -610,12 +610,7 @@ impl HirRelationExpr {
                     let input_type = input.typ();
                     let default = applied_aggregates
                         .iter()
-                        .map(|agg| {
-                            (
-                                agg.func.default(),
-                                agg.typ(&input_type).nullable(agg.func.default().is_null()),
-                            )
-                        })
+                        .map(|agg| (agg.func.default(), agg.typ(&input_type).scalar_type))
                         .collect();
                     // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
                     let mut reduced =
@@ -1436,7 +1431,7 @@ fn apply_scalar_subquery(
                 get_select.union(errors)
             });
             // append Null to anything that didn't return any rows
-            let default = vec![(Datum::Null, col_type.nullable(true))];
+            let default = vec![(Datum::Null, col_type.scalar_type)];
             get_inner.lookup(id_gen, guarded, default)
         },
     )
@@ -1473,8 +1468,7 @@ fn apply_existential_subquery(
                     RelationType::new(vec![ScalarType::Bool.nullable(false)]),
                 ));
             // append False to anything that didn't return any rows
-            let default = vec![(Datum::False, ScalarType::Bool.nullable(false))];
-            get_inner.lookup(id_gen, exists, default)
+            get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
         },
     )
 }
