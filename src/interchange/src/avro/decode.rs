@@ -65,6 +65,7 @@ impl Decoder {
 
     /// Decodes Avro-encoded `bytes` into a `Row`.
     pub async fn decode(&mut self, bytes: &mut &[u8]) -> anyhow::Result<Row> {
+        self.packer.truncate_datums(0);
         let (bytes2, resolved_schema, csr_schema_id) = self.csr_avro.resolve(bytes).await?;
         *bytes = bytes2;
         let dec = AvroFlatDecoder {
