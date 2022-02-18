@@ -4428,24 +4428,6 @@ impl Coordinator {
             );
         }
 
-        // For each produced arrangement, start tracking the arrangement with
-        // a compaction frontier of at least `since`.
-        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            let frontiers = self.new_index_frontiers(
-                *global_id,
-                since.elements().to_vec(),
-                self.logical_compaction_window_ms,
-            );
-            self.indexes.insert(*global_id, frontiers);
-        }
-
-        // TODO: Produce "valid from" information for each sink.
-        // For each sink, ... do nothing because we don't yield `since` for sinks.
-        // for (global_id, _description) in dataflow.sink_exports.iter() {
-        //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
-        //     self.sink_info[global_id].valid_from(&since);
-        // }
-
         // Ensure that the dataflow's `as_of` is at least `since`.
         if let Some(as_of) = &mut dataflow.as_of {
             // It should not be possible to request an invalid time. SINK doesn't support
@@ -4461,6 +4443,26 @@ impl Coordinator {
             // Bind the since frontier to the dataflow description.
             dataflow.set_as_of(since);
         }
+
+        // Capture `as_of` to initialize the `since` frontiers of indexes.
+        let as_of = dataflow.as_of.clone().unwrap();
+
+        // For each produced arrangement, start tracking the arrangement with
+        // a compaction frontier of at least `since`.
+        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
+            let frontiers = self.new_index_frontiers(
+                *global_id,
+                as_of.elements().to_vec(),
+                self.logical_compaction_window_ms,
+            );
+            self.indexes.insert(*global_id, frontiers);
+        }
+
+        // TODO: Produce "valid from" information for each sink.
+        // For each sink, ... do nothing because we don't yield `since` for sinks.
+        // for (global_id, _description) in dataflow.sink_exports.iter() {
+        //     unimplemented!()
+        // }
 
         mz_dataflow_types::Plan::finalize_dataflow(dataflow)
             .expect("Dataflow planning failed; unrecoverable error")
