@@ -823,12 +823,12 @@ SELECT format_type(6000, -100);
 query T
 SELECT format_type(1700, 0);
 ----
-numeric(65535,65532)
+numeric
 
 query T
 SELECT format_type(1700, 3);
 ----
-numeric(65535,65535)
+numeric
 
 query T
 SELECT format_type(1700, 4);
@@ -853,7 +853,7 @@ numeric(38,0)
 query T
 SELECT format_type(1700, 2490371);
 ----
-numeric(37,65535)
+numeric(37,-1)
 
 query T
 SELECT format_type(1700, 2490373);

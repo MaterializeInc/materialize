@@ -34,6 +34,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
+use mz_ore::option::OptionExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_repr::adt::array::ArrayDimension;
@@ -2344,7 +2345,7 @@ pub enum BinaryFunc {
     ListRemove,
     DigestString,
     DigestBytes,
-    MzRenderTypemod,
+    MzRenderTypmod,
     Encode,
     Decode,
     LogNumeric,
@@ -2588,7 +2589,7 @@ impl BinaryFunc {
             BinaryFunc::ListRemove => Ok(eager!(list_remove, temp_storage)),
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
-            BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
+            BinaryFunc::MzRenderTypmod => eager!(mz_render_typmod, temp_storage),
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
@@ -2697,7 +2698,7 @@ impl BinaryFunc {
 
             SubTime => ScalarType::Interval.nullable(true),
 
-            MzRenderTypemod | TextConcat => ScalarType::String.nullable(in_nullable),
+            MzRenderTypmod | TextConcat => ScalarType::String.nullable(in_nullable),
 
             JsonbGetInt64 { stringify: true }
             | JsonbGetString { stringify: true }
@@ -2983,7 +2984,7 @@ impl BinaryFunc {
             | ListLengthMax { .. }
             | DigestString
             | DigestBytes
-            | MzRenderTypemod
+            | MzRenderTypmod
             | Encode
             | Decode
             | LogNumeric
@@ -3154,7 +3155,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::ListRemove => f.write_str("list_remove"),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
-            BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
+            BinaryFunc::MzRenderTypmod => f.write_str("mz_render_typmod"),
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
             BinaryFunc::LogNumeric => f.write_str("log"),
@@ -5806,31 +5807,18 @@ fn digest_inner<'a>(
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
-fn mz_render_typemod<'a>(
+fn mz_render_typmod<'a>(
     oid: Datum<'a>,
     typmod: Datum<'a>,
     temp_storage: &'a RowArena,
-) -> Datum<'a> {
+) -> Result<Datum<'a>, EvalError> {
     let oid = oid.unwrap_int32();
-    let mut typmod = typmod.unwrap_int32();
-    let typmod_base = 65_536;
-
-    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric { .. })) && typmod >= 0 {
-        typmod -= 4;
-        if typmod < 0 {
-            temp_storage.push_string(format!("({},{})", 65_535, typmod_base + typmod))
-        } else {
-            temp_storage.push_string(format!(
-                "({},{})",
-                typmod / typmod_base,
-                typmod % typmod_base
-            ))
-        }
-    } else {
-        ""
-    };
-
-    Datum::String(inner)
+    let typmod = typmod.unwrap_int32();
+    let typ = Type::from_oid_and_typmod(oid as u32, typmod);
+    let constraint = typ.as_ref().and_then(|typ| typ.constraint());
+    Ok(Datum::String(
+        temp_storage.push_string(constraint.display_or("").to_string()),
+    ))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
