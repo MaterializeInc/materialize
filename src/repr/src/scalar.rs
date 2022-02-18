@@ -1466,6 +1466,25 @@ impl<'a> ScalarType {
                 value_type: Box::new(value_type.default_embedded_value()),
                 custom_oid: None,
             },
+            Record { fields, .. } => {
+                let default_embedded_field_values = fields
+                    .iter()
+                    .map(|(column_name, column_type)| {
+                        (
+                            column_name.clone(),
+                            ColumnType {
+                                scalar_type: column_type.scalar_type.default_embedded_value(),
+                                nullable: column_type.nullable,
+                            },
+                        )
+                    })
+                    .collect_vec();
+                Record {
+                    fields: default_embedded_field_values,
+                    custom_name: None,
+                    custom_oid: None,
+                }
+            }
             Array(a) => Array(Box::new(a.default_embedded_value())),
             Numeric { .. } => Numeric { max_scale: None },
             // Char's default length should not be `Some(1)`, but instead `None`
