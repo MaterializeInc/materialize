@@ -35,12 +35,12 @@ use crate::gen::persist::{
     ProtoStreamRegistration, ProtoTraceBatchMeta, ProtoTraceBatchPartInline, ProtoU64Antichain,
     ProtoU64Description, ProtoUnsealedBatchInline, ProtoUnsealedBatchMeta,
 };
-use crate::indexed::arrangement::UnsealedSnapshot;
 use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::parquet::{
     decode_trace_parquet, decode_unsealed_parquet, encode_trace_parquet, encode_unsealed_parquet,
 };
 use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::snapshot::UnsealedSnapshot;
 use crate::storage::{BlobRead, SeqNo};
 
 /// An internally unique id for a persisted stream. External users identify

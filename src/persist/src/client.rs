@@ -21,11 +21,11 @@ use timely::progress::Antichain;
 use tracing::error;
 
 use crate::error::Error;
-use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Cmd, CmdRead, ListenEvent, Snapshot, StreamDesc};
+use crate::indexed::snapshot::{ArrangementSnapshot, ArrangementSnapshotIter, Snapshot};
+use crate::indexed::{Cmd, CmdRead, ListenEvent, StreamDesc};
 use crate::pfuture::PFuture;
 use crate::runtime::{RuntimeCmd, RuntimeHandle, RuntimeId};
 use crate::storage::SeqNo;

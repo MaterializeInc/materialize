@@ -17,10 +17,10 @@ pub mod cache;
 pub mod columnar;
 pub mod encoding;
 pub mod metrics;
+pub mod snapshot;
 
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,7 +30,7 @@ use timely::progress::Antichain;
 use tracing::{error, trace, warn};
 
 use crate::error::Error;
-use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
+use crate::indexed::arrangement::Arrangement;
 use crate::indexed::background::{CompactTraceReq, CompactTraceRes, Maintainer};
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecords;
@@ -39,6 +39,7 @@ use crate::indexed::encoding::{
     UnsealedBatchMeta,
 };
 use crate::indexed::metrics::Metrics;
+use crate::indexed::snapshot::ArrangementSnapshot;
 use crate::mem::MemBlob;
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, BlobRead, Log, SeqNo};
@@ -63,7 +64,7 @@ pub enum CmdRead {
     Load(String, (String, String), PFutureHandle<Option<Id>>),
     /// Returns the [StreamDesc] of every active (non-deleted) stream.
     GetDescriptions(PFutureHandle<HashMap<Id, StreamDesc>>),
-    /// Returns a [Snapshot] for the given id.
+    /// Returns a [crate::indexed::snapshot::Snapshot] for the given id.
     Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
     /// Registers a callback to be invoked on successful writes and seals.
     ///
@@ -1412,43 +1413,6 @@ pub enum ListenEvent {
     Sealed(u64),
 }
 
-/// An isolated, consistent read of previously written (Key, Value, Time, i64)
-/// updates.
-//
-// TODO: This <K, V> allows Snapshot to be generic over both IndexedSnapshot
-// (and friends) and DecodedSnapshot, but does that get us anything?
-pub trait Snapshot<K, V>: Sized {
-    /// The kind of iterator we are turning this into.
-    type Iter: Iterator<Item = Result<((K, V), u64, i64), Error>>;
-
-    /// Returns a set of `num_iters` [Iterator]s that each output roughly
-    /// `1/num_iters` of the data represented by this snapshot.
-    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter>;
-
-    /// Returns a single [Iterator] that outputs the data represented by this
-    /// snapshot.
-    fn into_iter(self) -> Self::Iter {
-        let mut iters = self.into_iters(NonZeroUsize::new(1).unwrap());
-        assert_eq!(iters.len(), 1);
-        iters.remove(0)
-    }
-}
-
-/// Extension methods on `Snapshot<K, V>` for use in tests.
-#[cfg(test)]
-pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
-    /// A full read of the data in the snapshot.
-    fn read_to_end(self) -> Result<Vec<((K, V), u64, i64)>, Error> {
-        let iter = self.into_iter();
-        let mut buf = iter.collect::<Result<Vec<_>, Error>>()?;
-        buf.sort();
-        Ok(buf)
-    }
-}
-
-#[cfg(test)]
-impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
-
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -1457,7 +1421,7 @@ mod tests {
 
     use crate::error::Error;
     use crate::indexed::columnar::ColumnarRecordsVec;
-    use crate::indexed::SnapshotExt;
+    use crate::indexed::snapshot::SnapshotExt;
     use crate::mem::{MemBlob, MemLog, MemRegistry};
     use crate::pfuture::PFuture;
     use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};

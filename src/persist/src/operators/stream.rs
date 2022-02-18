@@ -510,7 +510,8 @@ mod tests {
     use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::error::Error;
-    use crate::indexed::{ListenEvent, SnapshotExt};
+    use crate::indexed::snapshot::SnapshotExt;
+    use crate::indexed::ListenEvent;
     use crate::mem::MemRegistry;
     use crate::unreliable::UnreliableHandle;
 
