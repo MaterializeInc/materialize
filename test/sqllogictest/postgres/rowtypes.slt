@@ -473,3 +473,30 @@ query B
 select row(4,2)::testtype8 = (row(row(4,2))::testtype6).inner;
 ----
 true
+
+# TODO: we don't support aliasing into a rowtype
+# anonymous rowtypes in coldeflists (column definition lists)
+#select q.a, q.b = row(2), q.c = array[row(3)], q.d = row(row(4)) from
+#    unnest(array[row(1, row(2), array[row(3)], row(row(4))),
+#                 row(2, row(3), array[row(4)], row(row(5)))])
+#      as q(a int, b record, c record[], d record);
+
+# IS [NOT] NULL should not recurse into nested composites
+#select r, r is null as isnull, r is not null as isnotnull
+#from (values (1,row(1,2)), (1,row(null,null)), (1,null),
+#             (null,row(1,2)), (null,row(null,null)), (null,null) ) r(a,b);
+#
+#select r, r is null as isnull, r is not null as isnotnull
+#from (values (1,row(1,2)), (1,row(null,null)), (1,null),
+#             (null,row(1,2)), (null,row(null,null)), (null,null) ) r(a,b);
+#
+#explain (verbose, costs off)
+#with r(a,b) as materialized
+#  (values (1,row(1,2)), (1,row(null,null)), (1,null),
+#          (null,row(1,2)), (null,row(null,null)), (null,null) )
+#select r, r is null as isnull, r is not null as isnotnull from r;
+#
+#with r(a,b) as materialized
+#  (values (1,row(1,2)), (1,row(null,null)), (1,null),
+#          (null,row(1,2)), (null,row(null,null)), (null,null) )
+#select r, r is null as isnull, r is not null as isnotnull from r;
