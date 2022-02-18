@@ -571,8 +571,21 @@ class Composition:
         """
         self.invoke("up", *(["--detach"] if detach else []), *services)
 
+    def down(self, destroy_volumes: bool = True) -> None:
+        """Stop and remove resources.
+
+        Delegates to `docker-compose down`. See that command's help for details.
+
+        Args:
+            destroy_volumes: Remove named volumes and anonymous volumes attached
+                to containers.
+        """
+        self.invoke("down", *(["--volumes"] if destroy_volumes else []))
+
     def stop(self, *services: str) -> None:
         """Stop the docker containers for the named services.
+
+        Delegates to `docker-compose stop`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.

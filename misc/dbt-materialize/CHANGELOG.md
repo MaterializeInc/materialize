@@ -1,6 +1,11 @@
 # dbt-materialize Changelog
 
-## 1.0.2.post2 - 2021-02-14
+## 1.0.1.post3 - 2021-02-17
+
+* Fix a bug introduced in v1.0.1.post1 that prevented use of the custom
+  materialization types (`sink`, `source`, `index`, and `materializedview`).
+
+## 1.0.1.post2 - 2021-02-14
 
 * Execute hooks that specify `transaction: true` ([#7675]). In particular, this
   includes hooks that are configured as a simple string.
