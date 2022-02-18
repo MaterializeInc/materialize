@@ -531,7 +531,6 @@ mod tests {
     use timely::progress::Antichain;
 
     use crate::client::{MultiWriteHandle, StreamWriteHandle};
-    use crate::indexed::snapshot::SnapshotExt;
     use crate::indexed::StreamDesc;
     use crate::mem::{MemMultiRegistry, MemRegistry};
     use crate::operators::source::PersistedSource;

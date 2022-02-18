@@ -391,8 +391,7 @@ impl Arrangement {
         req: DrainUnsealedReq,
     ) -> Result<DrainUnsealedRes, Error> {
         let snap = req.snap.clone().fetch(&blob);
-        let mut updates = snap
-            .into_iter()
+        let mut updates = Snapshot::<Vec<u8>, Vec<u8>>::into_iter(snap)
             .collect::<Result<Vec<_>, Error>>()
             .map_err(|err| format!("failed to fetch snapshot: {}", err))?;
 

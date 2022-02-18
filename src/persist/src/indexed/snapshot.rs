@@ -11,10 +11,12 @@
 //! updates.
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
+use mz_persist_types::Codec;
 use timely::progress::Antichain;
 
 use crate::error::Error;
@@ -46,11 +48,11 @@ pub trait Snapshot<K, V>: Sized {
     }
 }
 
-/// Extension methods on `Snapshot<K, V>` for use in tests.
+/// Extension methods on `Snapshot<Vec<u8>, Vec<u8>>` for use in tests.
 #[cfg(test)]
-pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
+pub trait SnapshotExt: Snapshot<Vec<u8>, Vec<u8>> + Sized {
     /// A full read of the data in the snapshot.
-    fn read_to_end(self) -> Result<Vec<((K, V), u64, i64)>, Error> {
+    fn read_to_end(self) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, i64)>, Error> {
         let iter = self.into_iter();
         let mut buf = iter.collect::<Result<Vec<_>, Error>>()?;
         buf.sort();
@@ -59,7 +61,31 @@ pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
 }
 
 #[cfg(test)]
-impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
+impl<S: Snapshot<Vec<u8>, Vec<u8>> + Sized> SnapshotExt for S {}
+
+/// A type that can be decoded as the K or V of a Snapshot.
+///
+/// It would be natural for Snapshot to bound these K and V parameters with
+/// [Codec]. However, we use Snapshot internally in unsealed draining and trace
+/// compaction. Those currently operate directly on the encoded K and V bytes
+/// and so decoding them is inappropriate. If we do make this change, then
+/// SnapshotToOwned can be deleted.
+pub trait SnapshotToOwned: Sized {
+    /// Decode this from an encoded K or V from a Snapshot.
+    fn snapshot_to_owned(raw: &[u8]) -> Self;
+}
+
+impl SnapshotToOwned for Vec<u8> {
+    fn snapshot_to_owned(raw: &[u8]) -> Self {
+        raw.to_owned()
+    }
+}
+
+impl<T: Codec> SnapshotToOwned for Result<T, String> {
+    fn snapshot_to_owned(raw: &[u8]) -> Self {
+        <T as Codec>::decode(raw)
+    }
+}
 
 /// A consistent snapshot of the data that is currently _physically_ in the
 /// unsealed bucket of a persistent [crate::indexed::arrangement::Arrangement].
@@ -72,8 +98,8 @@ pub struct UnsealedSnapshot {
     pub(crate) batches: Vec<PFuture<Arc<BlobUnsealedBatch>>>,
 }
 
-impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
-    type Iter = UnsealedSnapshotIter;
+impl<K: SnapshotToOwned, V: SnapshotToOwned> Snapshot<K, V> for UnsealedSnapshot {
+    type Iter = UnsealedSnapshotIter<K, V>;
 
     fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
         let mut iters = Vec::with_capacity(num_iters.get());
@@ -94,16 +120,16 @@ impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
 
 /// An [Iterator] representing one part of the data in a [UnsealedSnapshot].
 #[derive(Debug)]
-pub struct UnsealedSnapshotIter {
+pub struct UnsealedSnapshotIter<K, V> {
     /// A closed lower bound on the times of contained updates.
     ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     ts_upper: Antichain<u64>,
-    iter: BatchesIter<BlobUnsealedBatch>,
+    iter: BatchesIter<K, V, BlobUnsealedBatch>,
 }
 
-impl Iterator for UnsealedSnapshotIter {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
+impl<K: SnapshotToOwned, V: SnapshotToOwned> Iterator for UnsealedSnapshotIter<K, V> {
+    type Item = Result<((K, V), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -136,8 +162,8 @@ pub struct TraceSnapshot {
     pub(crate) batches: Vec<PFuture<Arc<BlobTraceBatchPart>>>,
 }
 
-impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
-    type Iter = TraceSnapshotIter;
+impl<K: SnapshotToOwned, V: SnapshotToOwned> Snapshot<K, V> for TraceSnapshot {
+    type Iter = TraceSnapshotIter<K, V>;
 
     fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
         let mut iters = Vec::with_capacity(num_iters.get());
@@ -156,12 +182,12 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 
 /// An [Iterator] representing one part of the data in a [TraceSnapshot].
 #[derive(Debug)]
-pub struct TraceSnapshotIter {
-    iter: BatchesIter<BlobTraceBatchPart>,
+pub struct TraceSnapshotIter<K, V> {
+    iter: BatchesIter<K, V, BlobTraceBatchPart>,
 }
 
-impl Iterator for TraceSnapshotIter {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
+impl<K: SnapshotToOwned, V: SnapshotToOwned> Iterator for TraceSnapshotIter<K, V> {
+    type Item = Result<((K, V), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
@@ -200,10 +226,10 @@ impl ArrangementSnapshot {
     }
 }
 
-impl Snapshot<Vec<u8>, Vec<u8>> for ArrangementSnapshot {
-    type Iter = ArrangementSnapshotIter;
+impl<K: SnapshotToOwned, V: SnapshotToOwned> Snapshot<K, V> for ArrangementSnapshot {
+    type Iter = ArrangementSnapshotIter<K, V>;
 
-    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<ArrangementSnapshotIter> {
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
         let since = self.since();
         let ArrangementSnapshot(unsealed, trace, _, _) = self;
         let unsealed_iters = unsealed.into_iters(num_iters);
@@ -228,13 +254,13 @@ impl Snapshot<Vec<u8>, Vec<u8>> for ArrangementSnapshot {
 // This intentionally chains trace before unsealed so we get the data in roughly
 // increasing timestamp order, but it's unclear if this is in any way important.
 #[derive(Debug)]
-pub struct ArrangementSnapshotIter {
+pub struct ArrangementSnapshotIter<K, V> {
     since: Antichain<u64>,
-    iter: std::iter::Chain<TraceSnapshotIter, UnsealedSnapshotIter>,
+    iter: std::iter::Chain<TraceSnapshotIter<K, V>, UnsealedSnapshotIter<K, V>>,
 }
 
-impl Iterator for ArrangementSnapshotIter {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
+impl<K: SnapshotToOwned, V: SnapshotToOwned> Iterator for ArrangementSnapshotIter<K, V> {
+    type Item = Result<((K, V), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|x| {
@@ -276,26 +302,30 @@ impl BatchesIterBatch for BlobTraceBatchPart {
 // in roughly increasing timestamp order, but it's unclear if this is in any way
 // important.
 #[derive(Debug)]
-struct BatchesIter<B: BatchesIterBatch> {
+struct BatchesIter<K, V, B: BatchesIterBatch> {
     record_idx: usize,
     chunk_idx: usize,
     current: Option<Arc<B>>,
     batches: VecDeque<PFuture<Arc<B>>>,
+    _phantom: PhantomData<(K, V)>,
 }
 
-impl<B: BatchesIterBatch> Default for BatchesIter<B> {
+impl<K, V, B: BatchesIterBatch> Default for BatchesIter<K, V, B> {
     fn default() -> Self {
         Self {
             record_idx: Default::default(),
             chunk_idx: Default::default(),
             current: Default::default(),
             batches: Default::default(),
+            _phantom: Default::default(),
         }
     }
 }
 
-impl<B: BatchesIterBatch> Iterator for BatchesIter<B> {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
+impl<K: SnapshotToOwned, V: SnapshotToOwned, B: BatchesIterBatch> Iterator
+    for BatchesIter<K, V, B>
+{
+    type Item = Result<((K, V), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -334,7 +364,11 @@ impl<B: BatchesIterBatch> Iterator for BatchesIter<B> {
                     continue;
                 }
             };
-            return Some(Ok(((k.to_owned(), v.to_owned()), t, d)));
+            return Some(Ok((
+                (K::snapshot_to_owned(k), V::snapshot_to_owned(v)),
+                t,
+                d,
+            )));
         }
     }
 }
