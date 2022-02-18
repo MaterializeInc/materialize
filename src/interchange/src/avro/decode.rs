@@ -97,7 +97,7 @@ impl Decoder {
         // an earlier run. This can happen if the
         // `dsr.deserialize` call returns an error,
         // causing us to return early.
-        self.packer.truncate_datums(0);
+        self.packer.clear();
         let (bytes2, resolved_schema, csr_schema_id) = self.csr_avro.resolve(bytes).await?;
         *bytes = bytes2;
         let dec = AvroFlatDecoder {
