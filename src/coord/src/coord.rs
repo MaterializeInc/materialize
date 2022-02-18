@@ -3371,7 +3371,7 @@ impl Coordinator {
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
-        let timestamp = match when {
+        let timestamp: Timestamp = match when {
             // Explicitly requested timestamps should be respected.
             PeekWhen::AtTimestamp(mut timestamp) => {
                 let temp_storage = RowArena::new();
@@ -3438,50 +3438,51 @@ impl Coordinator {
                     });
                 }
 
-                let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
-                    // If the view depends on any tables, we enforce
-                    // linearizability by choosing the latest input time.
-                    self.get_local_read_ts()
-                } else {
-                    let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
-                    // We peek at the largest element not in advance of `upper`, which
-                    // involves a subtraction. If `upper` contains a zero timestamp there
-                    // is no "prior" answer, and we do not want to peek at it as it risks
-                    // hanging awaiting the response to data that may never arrive.
-                    //
-                    // The .get(0) here breaks the antichain abstraction by assuming this antichain
-                    // has 0 or 1 elements in it. It happens to work because we use a timestamp
-                    // type that meets that assumption, but would break if we used a more general
-                    // timestamp.
-                    if let Some(candidate) = upper.elements().get(0) {
-                        if *candidate > 0 {
-                            candidate.saturating_sub(1)
-                        } else {
-                            let unstarted = index_ids
-                                .into_iter()
-                                .filter(|id| {
-                                    self.indexes
-                                        .upper_of(id)
-                                        .expect("id not found")
-                                        .less_equal(&0)
-                                })
-                                .collect::<Vec<_>>();
-                            return Err(CoordError::IncompleteTimestamp(unstarted));
-                        }
+                // Initialize candidate to the minimum correct time.
+                let mut candidate = Timestamp::minimum();
+                candidate.advance_by(since.borrow());
+
+                // Compute a timestamp to which we should advance the candidate (if it is in
+                // advance).
+                let advance_to: Timestamp =
+                    if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                        // If the view depends on any tables, we enforce linearizability by choosing
+                        // the latest input time.  If the candidate is already advanced past read_ts
+                        // due to the since work above (if joined with some other view), a peek will
+                        // be put into pending until something closes the table timestamp. That
+                        // occurs if a user does certain table operations, or otherwise by the
+                        // advance_local_inputs_loop task (and so the pending peek could wait up to 1
+                        // second before the table timestamp is closed). We do not need to worry about
+                        // telling the table linearizability stuff about this future timestamp because
+                        // by the time the read is served the table linearizability time will have
+                        // advanced already.
+                        self.get_local_read_ts()
                     } else {
-                        // A complete trace can be read in its final form with this time.
+                        let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
+                        // We peek at the largest element not in advance of `upper`, which
+                        // involves a subtraction. If `upper` contains a zero timestamp there
+                        // is no "prior" answer, and we do not want to peek at it as it risks
+                        // hanging awaiting the response to data that may never arrive.
                         //
-                        // This should only happen for literals that have no sources
-                        Timestamp::max_value()
-                    }
-                };
-                // If the candidate is not beyond the valid `since` frontier,
-                // force it to become so as best as we can. If `since` is empty
-                // this will be a no-op, as there is no valid time, but that should
-                // then be caught below.
-                if !since.less_equal(&candidate) {
-                    candidate.advance_by(since.borrow());
-                }
+                        // The .get(0) here breaks the antichain abstraction by assuming this antichain
+                        // has 0 or 1 elements in it. It happens to work because we use a timestamp
+                        // type that meets that assumption, but would break if we used a more general
+                        // timestamp.
+                        if let Some(candidate) = upper.elements().get(0) {
+                            if *candidate > Timestamp::minimum() {
+                                candidate.saturating_sub(1)
+                            } else {
+                                Timestamp::minimum()
+                            }
+                        } else {
+                            // A complete trace can be read in its final form with this time.
+                            //
+                            // This should only happen for literals that have no sources or sources that
+                            // are known to have completed (non-tailed files for example).
+                            Timestamp::MAX
+                        }
+                    };
+                candidate.join_assign(&advance_to);
                 candidate
             }
         };
