@@ -27,7 +27,7 @@
 02:03:00
 
 > SELECT * FROM interval_hour;
-"5 days 03:00:00"
+"123:00:00"
 
 > SELECT * FROM interval_day;
 "123 days"
