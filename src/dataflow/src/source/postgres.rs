@@ -26,7 +26,7 @@ use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use mz_dataflow_types::postgres_source::{PostgresColumn, PostgresTable};
@@ -156,9 +156,14 @@ impl PostgresSourceReader {
         for (id, schema) in self.source_tables.iter() {
             if let Some(pub_schema) = pub_tables.get(id) {
                 if pub_schema != schema {
+                    error!(
+                        "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                        schema, pub_schema
+                    );
                     bail!("Schema for table {} differs, recreate materialized source to use new schema", schema.name)
                 }
             } else {
+                error!("publication missing table: {} with id {}", schema.name, id);
                 bail!(
                     "Publication missing expected table {} with oid {}",
                     schema.name,
@@ -461,14 +466,17 @@ impl PostgresSourceReader {
                             if let Some(source_table) = self.source_tables.get(&rel_id) {
                                 // Start with the cheapest check first, this will catch the majority of alters
                                 if source_table.columns.len() != relation.columns().len() {
+                                    error!(
+                                        "alter table detected on {} with id {}",
+                                        source_table.name, source_table.relation_id
+                                    );
                                     return Err(Fatal(anyhow!(
                                         "source table {} with oid {} has been altered",
                                         source_table.name,
                                         source_table.relation_id
                                     )));
                                 }
-                                // todo(nharring): use an array instead of vec to avoid heap allocation
-                                let cols = relation.columns().into_iter().map(|c| PostgresColumn {
+                                let cols = relation.columns().iter().map(|c| PostgresColumn {
                                     name: c.name().unwrap().to_string(),
                                     type_oid: c.type_id(),
                                     type_mod: c.type_modifier(),
@@ -482,6 +490,7 @@ impl PostgresSourceReader {
                                         && src.type_oid == rel.type_oid
                                         && src.type_mod == rel.type_mod
                                 }) {
+                                    error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.relation_id, source_table.columns, relation.columns());
                                     return Err(Fatal(anyhow!(
                                         "source table {} with oid {} has been altered",
                                         source_table.name,
