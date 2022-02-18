@@ -1083,13 +1083,12 @@ pub mod sources {
     ///
     /// Eventually we will require `INCLUDE <metadata>` for everything.
     pub fn provide_default_metadata(
-        envelope: either::Either<&SourceEnvelope, &UnplannedSourceEnvelope>,
+        envelope: &UnplannedSourceEnvelope,
         encoding: &encoding::DataEncoding,
     ) -> bool {
         let is_avro = matches!(encoding, encoding::DataEncoding::Avro(_));
         let is_stateless_dbz = match envelope {
-            either::Either::Left(SourceEnvelope::Debezium(_))
-            | either::Either::Right(UnplannedSourceEnvelope::Debezium(_)) => true,
+            UnplannedSourceEnvelope::Debezium(_) => true,
             _ => false,
         };
 
@@ -1120,6 +1119,7 @@ pub mod sources {
             connector: ExternalSourceConnector,
             encoding: encoding::SourceDataEncoding,
             envelope: SourceEnvelope,
+            metadata_columns: Vec<IncludedColumnSource>,
             ts_frequency: Duration,
             timeline: Timeline,
         },

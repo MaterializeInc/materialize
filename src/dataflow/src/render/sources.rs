@@ -183,6 +183,7 @@ where
             connector,
             encoding,
             envelope,
+            metadata_columns,
             ts_frequency,
             timeline: _,
         } => {
@@ -343,15 +344,6 @@ where
                         SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
                         SourceDataEncoding::Single(value) => (None, value),
                     };
-
-                    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
-                    // syntax is implemented
-                    //
-                    // Default metadata is mostly configured in planning, but we need it here for upsert
-                    let default_metadata =
-                        provide_default_metadata(either::Either::Left(&envelope), &value_encoding);
-
-                    let metadata_columns = connector.metadata_column_types(default_metadata);
 
                     // CDCv2 can't quite be slotted in to the below code, since it determines
                     // its own diffs/timestamps as part of decoding.

@@ -712,9 +712,9 @@ pub fn plan_create_source(
     };
 
     // TODO(petrosagg): remove this inconsistency once INCLUDE (offset) syntax is implemented
-    let include_defaults =
-        provide_default_metadata(either::Either::Right(&envelope), encoding.value_ref());
+    let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
     let metadata_columns = external_connector.metadata_columns(include_defaults);
+    let metadata_column_types = external_connector.metadata_column_types(include_defaults);
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
@@ -825,6 +825,7 @@ pub fn plan_create_source(
             connector: external_connector,
             encoding,
             envelope,
+            metadata_columns: metadata_column_types,
             ts_frequency,
             timeline,
         },
