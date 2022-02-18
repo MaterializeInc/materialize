@@ -11,7 +11,17 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use timely::scheduling::Activator;
+use std::sync::{Arc, Mutex};
+use timely::dataflow::Scope;
+use timely::scheduling::{Activator, SyncActivator};
+
+pub trait ActivatorTrait {
+    fn activate(&self);
+
+    fn ack(&self);
+
+    fn register<S: Scope>(&self, scope: &mut S, path: &[usize]);
+}
 
 /// An shared handle to multiple activators with support for triggering and acknowledging
 /// activations.
@@ -65,6 +75,20 @@ impl RcActivator {
     }
 }
 
+impl ActivatorTrait for RcActivator {
+    fn activate(&self) {
+        self.activate()
+    }
+
+    fn ack(&self) {
+        self.ack()
+    }
+
+    fn register<S: Scope>(&self, scope: &mut S, path: &[usize]) {
+        self.register(scope.activator_for(path))
+    }
+}
+
 #[derive(Debug)]
 struct ActivatorInner {
     activated: usize,
@@ -95,6 +119,94 @@ impl ActivatorInner {
         if self.activated == self.threshold {
             for activator in &self.activators {
                 activator.activate();
+            }
+        }
+    }
+
+    fn ack(&mut self) {
+        self.activated = 0;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ArcActivator {
+    inner: Arc<Mutex<ArcActivatorInner>>,
+}
+
+impl ArcActivator {
+    /// Construct a new [ArcActivator] with the given name and threshold.
+    ///
+    /// The threshold determines now many activations to ignore until scheduling the activation.
+    pub fn new(name: String, threshold: usize) -> Self {
+        let inner = ArcActivatorInner::new(name, threshold);
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+
+    /// Register an additional [Activator] with this [RcActivator].
+    pub fn register(&self, activator: SyncActivator) {
+        self.inner.lock().unwrap().register(activator)
+    }
+
+    /// Activate all contained activators.
+    ///
+    /// The implementation is free to ignore activations and only release them once a sufficient
+    /// volume has been accumulated.
+    pub fn activate(&self) {
+        self.inner.lock().unwrap().activate()
+    }
+
+    /// Acknowledge the activation, which enables new activations to be scheduled.
+    pub fn ack(&self) {
+        self.inner.lock().unwrap().ack()
+    }
+}
+
+impl ActivatorTrait for ArcActivator {
+    fn activate(&self) {
+        self.activate()
+    }
+
+    fn ack(&self) {
+        self.ack()
+    }
+
+    fn register<S: Scope>(&self, scope: &mut S, path: &[usize]) {
+        self.register(scope.sync_activator_for(path))
+    }
+}
+
+#[derive(Debug)]
+struct ArcActivatorInner {
+    activated: usize,
+    activators: Vec<SyncActivator>,
+    _name: String,
+    threshold: usize,
+}
+
+impl ArcActivatorInner {
+    fn new(name: String, threshold: usize) -> Self {
+        Self {
+            _name: name,
+            threshold,
+            activated: 0,
+            activators: Vec::new(),
+        }
+    }
+
+    fn register(&mut self, activator: SyncActivator) {
+        self.activators.push(activator)
+    }
+
+    fn activate(&mut self) {
+        if self.activators.is_empty() {
+            return;
+        }
+        self.activated += 1;
+        if self.activated == self.threshold {
+            for activator in &self.activators {
+                activator.activate().unwrap();
             }
         }
     }

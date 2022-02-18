@@ -49,7 +49,9 @@ mod metrics;
 mod storage_state;
 pub mod tcp_boundary;
 
-use crate::server::tcp_boundary::TcpEventLinkServer;
+use crate::server::tcp_boundary::client::TcpEventLinkClient;
+use crate::server::tcp_boundary::server::TcpEventLinkServer;
+use crate::server::tcp_boundary::TcpBoundary;
 use boundary::{ComputeReplay, StorageCapture};
 use compute_state::ActiveComputeState;
 pub(crate) use compute_state::ComputeState;
@@ -115,10 +117,13 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let aws_external_id = config.aws_external_id.clone();
-    let source_server = TcpEventLinkServer::new();
+    let addr = "127.0.0.1:45678".parse::<std::net::SocketAddr>().unwrap();
+    let (source_server_handle, _thread) = TcpEventLinkServer::serve(addr.clone());
+    let (compute_client_handle, _thread) = TcpEventLinkClient::connect(addr.clone());
+    let boundary = TcpBoundary::new(source_server_handle, compute_client_handle);
     let boundaries = (0..config.workers)
         .into_iter()
-        .map(|_| Some(source_server.handle()))
+        .map(|_| Some(boundary.clone()))
         .collect::<Vec<_>>();
     let boundaries = Arc::new(Mutex::new(boundaries));
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
