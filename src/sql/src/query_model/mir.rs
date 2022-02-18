@@ -483,10 +483,9 @@ impl<'a> Lowerer<'a> {
         let (quantifiers, join_inputs): (Vec<_>, Vec<_>) = inputs.into_iter().unzip();
         let (join, input_mapper) = if join_inputs.len() == 1 {
             let only_input = join_inputs.into_iter().next().unwrap();
-            let input_mapper = mz_expr::JoinInputMapper::new_from_input_arities(vec![
-                outer_arity,
-                only_input.arity() - outer_arity,
-            ]);
+            let input_mapper = mz_expr::JoinInputMapper::new_from_input_arities(
+                [outer_arity, only_input.arity() - outer_arity].into_iter(),
+            );
             (only_input, input_mapper)
         } else {
             Self::join_on_prefix(join_inputs, outer_arity)
@@ -644,13 +643,11 @@ impl<'a> Lowerer<'a> {
         (
             mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection),
             mz_expr::JoinInputMapper::new_from_input_arities(
-                std::iter::once(prefix_length)
-                    .chain(
-                        (0..input_mapper.total_inputs())
-                            .into_iter()
-                            .map(|i| input_mapper.input_arity(i) - prefix_length),
-                    )
-                    .collect_vec(),
+                std::iter::once(prefix_length).chain(
+                    (0..input_mapper.total_inputs())
+                        .into_iter()
+                        .map(|i| input_mapper.input_arity(i) - prefix_length),
+                ),
             ),
         )
     }
