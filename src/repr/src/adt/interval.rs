@@ -321,7 +321,7 @@ impl Interval {
     /// Truncate the "tail" of the interval, removing all time units less than `f`.
     /// # Arguments
     /// - `f`: Round the interval down to the specified time unit.
-    /// - `fsec_max_precision`: If `Some(x)`, keep only `x` places of nanosecond precision.
+    /// - `fsec_max_precision`: If `Some(x)`, keep only `x` places of microsecond precision.
     ///    Must be `(0,6)`.
     ///
     /// # Errors
@@ -342,7 +342,7 @@ impl Interval {
                 self.days = 0;
                 self.micros = 0;
             }
-            // Round nanoseconds.
+            // Round microseconds.
             Second => {
                 let default_precision = 6;
                 let precision = match fsec_max_precision {

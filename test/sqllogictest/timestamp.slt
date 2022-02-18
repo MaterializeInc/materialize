@@ -125,7 +125,7 @@ query error stride must be greater than zero
 SELECT date_bin('-2 days'::interval, timestamp '1970-01-01 01:00:00' , timestamp '1970-01-01 00:00:00');
 
 # max stride caught
-query error stride cannot exceed 2\^63 nanoseconds
+query error stride cannot exceed
 SELECT date_bin('9223372037 s'::interval, timestamp '2020-02-01 01:01:01', timestamp '2020-02-01 00:02:30');
 
 # max diff caught

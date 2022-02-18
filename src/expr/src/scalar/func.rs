@@ -1913,16 +1913,22 @@ pub fn date_bin<'a, T>(stride: Interval, source: T, origin: T) -> Result<Datum<'
 where
     T: TimestampLike,
 {
-    let stride_ns = if stride.months != 0 {
-        Err(EvalError::DateBinOutOfRange(
+    if stride.months != 0 {
+        return Err(EvalError::DateBinOutOfRange(
             "timestamps cannot be binned into intervals containing months or years".to_string(),
-        ))
-    } else if stride.micros <= 0 {
-        Err(EvalError::DateBinOutOfRange(
+        ));
+    }
+
+    let stride_ns = match stride.duration_as_chrono().num_nanoseconds() {
+        Some(ns) if ns <= 0 => Err(EvalError::DateBinOutOfRange(
             "stride must be greater than zero".to_string(),
-        ))
-    } else {
-        Ok(stride.micros)
+        )),
+        Some(ns) => Ok(ns),
+        None => Err(EvalError::DateBinOutOfRange(format!(
+            "stride cannot exceed {}/{} nanoseconds",
+            i64::MAX,
+            i64::MIN,
+        ))),
     }?;
 
     // Make sure the returned timestamp is at the start of the bin, even if the
