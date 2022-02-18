@@ -46,7 +46,7 @@ impl num_traits::ops::checked::CheckedNeg for Interval {
         if let (Some(months), Some(duration)) =
             (self.months.checked_neg(), self.duration.checked_neg())
         {
-            Some(Self { months, duration })
+            Self::new(months, 0, duration).ok()
         } else {
             None
         }
