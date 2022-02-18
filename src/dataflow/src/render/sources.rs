@@ -1005,6 +1005,7 @@ where
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
+// TODO(guswynn): figure out how to merge this duplicated logic with `flatten_results_prepend_keys`
 fn transform_keys_from_key_envelope<G>(
     upsert_envelope: &UpsertEnvelope,
     results: timely::dataflow::Stream<G, DecodeResult>,

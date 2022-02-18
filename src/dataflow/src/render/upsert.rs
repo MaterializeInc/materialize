@@ -410,7 +410,7 @@ where
                                                             ),
                                                         }
                                                     }
-                                                    _ => {
+                                                    UpsertStyle::Default(_) => {
                                                         let mut datums =
                                                             Vec::with_capacity(source_arity);
                                                         datums.extend(decoded_key.iter());
@@ -516,49 +516,141 @@ where
 
 /// `thin` uses information from the source description to find which indexes in the row
 /// are keys and skip them.
-fn thin(key_indices: &Vec<usize>, value: &Row, row_packer: &mut Row) -> Row {
-    let mut index = 0;
+fn thin(key_indices: &[usize], value: &Row, row_packer: &mut Row) -> Row {
     row_packer.clear();
-    for (i, d) in value.iter().enumerate() {
-        if key_indices.get(index) == Some(&i) {
-            index += 1;
-        } else {
-            row_packer.push(d)
-        }
+    let values = &mut value.iter();
+    let mut next_idx = 0;
+    for &key_idx in key_indices {
+        // First, push the datums that are before `key_idx`
+        row_packer.extend(values.take(key_idx - next_idx));
+        // Then, skip this key datum
+        values.next().unwrap();
+        next_idx = key_idx + 1;
     }
+    // Finally, push any columns after the last key index
+    row_packer.extend(values);
+
     row_packer.finish_and_reuse()
 }
 
-/// `thin` uses information from the source description to find which indexes in the row
+/// `rehydrate` uses information from the source description to find which indexes in the row
 /// are keys and add them back in in the right places.
-fn rehydrate(
-    key_indices: &Vec<usize>,
-    key: &Row,
-    thinned_value: &Row,
-    row_packer: &mut Row,
-) -> Row {
+fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row {
     row_packer.clear();
-
-    let mut index = 0;
-    let mut count = 0;
-
-    let mut ki = key.iter();
-    let mut vi = thinned_value.iter();
-    loop {
-        if key_indices.get(index).is_some() {
-            row_packer.push(ki.next().expect(
-                "DebeziumEnvelope(DebeziumMode::Upsert) \
-                    to ensure the key_indices matches the key length",
-            ));
-            count += 1;
-        } else if let Some(v) = vi.next() {
-            row_packer.push(v);
-        } else if count >= key_indices.len() {
-            break;
-        }
-
-        index += 1;
+    let values = &mut thinned_value.iter();
+    let mut next_idx = 0;
+    for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
+        // First, push the datums that are before `key_idx`
+        row_packer.extend(values.take(key_idx - next_idx));
+        // Then, push this key datum
+        row_packer.push(key_datum);
+        next_idx = key_idx + 1;
     }
+    // Finally, push any columns after the last key index
+    row_packer.extend(values);
 
     row_packer.finish_and_reuse()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rehydrate_thin_first() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![0];
+        let key = Row::pack([Datum::String("key")]);
+
+        let thinned = Row::pack([Datum::String("two")]);
+
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+
+        assert_eq!(
+            rehydrated,
+            Row::pack([Datum::String("key"), Datum::String("two"),])
+        );
+
+        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+    }
+
+    #[test]
+    fn test_rehydrate_thin_middle() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![2];
+        let key = Row::pack([Datum::String("key")]);
+
+        let thinned = Row::pack([
+            Datum::String("one"),
+            Datum::String("two"),
+            Datum::String("four"),
+        ]);
+
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+
+        assert_eq!(
+            rehydrated,
+            Row::pack([
+                Datum::String("one"),
+                Datum::String("two"),
+                Datum::String("key"),
+                Datum::String("four"),
+            ])
+        );
+
+        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+    }
+
+    #[test]
+    fn test_rehydrate_thin_multiple() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![2, 4];
+        let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
+
+        let thinned = Row::pack([
+            Datum::String("one"),
+            Datum::String("two"),
+            Datum::String("four"),
+            Datum::String("six"),
+        ]);
+
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+
+        assert_eq!(
+            rehydrated,
+            Row::pack([
+                Datum::String("one"),
+                Datum::String("two"),
+                Datum::String("key1"),
+                Datum::String("four"),
+                Datum::String("key2"),
+                Datum::String("six"),
+            ])
+        );
+
+        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+    }
+
+    #[test]
+    fn test_thin_end() {
+        let mut packer = Row::default();
+
+        let key_indices = vec![2];
+
+        assert_eq!(
+            thin(
+                &key_indices,
+                &Row::pack([
+                    Datum::String("one"),
+                    Datum::String("two"),
+                    Datum::String("key"),
+                ]),
+                &mut packer
+            ),
+            Row::pack([Datum::String("one"), Datum::String("two")]),
+        );
+    }
 }
