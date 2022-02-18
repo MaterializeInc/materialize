@@ -744,6 +744,21 @@ impl ParamList {
                         return None;
                     }
                 }
+                // As of today, with no UDFs, the only operators that accept records/row types as
+                // params are basic binary functions to other records: `=, <>, <, <=, >, >=`.
+                // This makes our lives a bit easier as we just need to ensure that both params
+                // are records. Later when executing the actual function, we will validate that
+                // they are truly comparable into each other
+                (ParamType::RecordAny, Some(t @ ScalarType::Record { .. }), None) => {
+                    constrained_type = Some(t.clone());
+                }
+                (
+                    ParamType::RecordAny,
+                    Some(ScalarType::Record { .. }),
+                    Some(t @ ScalarType::Record { .. }),
+                ) => {
+                    return Some(t.clone());
+                }
                 // These checks don't need to be more exhaustive (e.g. failing
                 // if arguments passed to `ListAny` are not `ScalarType::List`)
                 // because we've already done general type checking in
@@ -869,7 +884,7 @@ impl ParamType {
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t.clone(), to.clone()),
-            RecordAny => unreachable!("not yet supported for input"),
+            RecordAny => matches!(t, Record { .. }),
         }
     }
 
@@ -1473,7 +1488,10 @@ fn coerce_args_to_types(
                 _ => arg.type_as_any(ecx)?,
             },
 
-            ParamType::RecordAny => unreachable!("records not yet supported for input"),
+            ParamType::RecordAny => {
+                let constrained = get_constrained_ty();
+                do_convert(arg, &constrained)?
+            }
         };
         exprs.push(expr);
     }
@@ -3101,6 +3119,7 @@ lazy_static! {
                 params!(Char, Char) => BinaryFunc::Lt, 1058;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
+                params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
             },
             "<=" => Scalar {
                 params!(Numeric, Numeric) => BinaryFunc::Lte, 1755;
@@ -3122,6 +3141,7 @@ lazy_static! {
                 params!(Char, Char) => BinaryFunc::Lte, 1059;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
+                params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
             },
             ">" => Scalar {
                 params!(Numeric, Numeric) => BinaryFunc::Gt, 1756;
@@ -3143,6 +3163,7 @@ lazy_static! {
                 params!(Char, Char) => BinaryFunc::Gt, 1060;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
+                params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
             },
             ">=" => Scalar {
                 params!(Numeric, Numeric) => BinaryFunc::Gte, 1757;
@@ -3164,6 +3185,7 @@ lazy_static! {
                 params!(Char, Char) => BinaryFunc::Gte, 1061;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
+                params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
             },
             // Warning! If you are writing functions here that do not simply use
             // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
@@ -3189,6 +3211,7 @@ lazy_static! {
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
                 params!(ListAny, ListAny) => BinaryFunc::Eq => Bool, oid::FUNC_LIST_EQ_OID;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
+                params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
             },
             "<>" => Scalar {
                 params!(Numeric, Numeric) => BinaryFunc::NotEq, 1753;
@@ -3210,6 +3233,7 @@ lazy_static! {
                 params!(Char, Char) => BinaryFunc::NotEq, 1057;
                 params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
+                params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
             }
         }
     };
