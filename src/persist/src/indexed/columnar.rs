@@ -88,6 +88,13 @@ impl ColumnarRecords {
         self.len
     }
 
+    /// Read the record at `idx`, if there is one.
+    ///
+    /// Returns None if `idx >= self.len()`.
+    pub fn get<'a>(&'a self, idx: usize) -> Option<((&'a [u8], &'a [u8]), u64, i64)> {
+        self.borrow().get(idx)
+    }
+
     /// Borrow Self as a [ColumnarRecordsRef].
     fn borrow<'a>(&'a self) -> ColumnarRecordsRef<'a> {
         ColumnarRecordsRef {

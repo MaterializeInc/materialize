@@ -11,7 +11,6 @@
 //! updates.
 
 use std::collections::VecDeque;
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -19,6 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::Antichain;
 
 use crate::error::Error;
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::BlobTraceBatchPart;
 use crate::indexed::BlobUnsealedBatch;
 use crate::pfuture::PFuture;
@@ -80,43 +80,26 @@ impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
         iters.resize_with(num_iters.get(), || UnsealedSnapshotIter {
             ts_lower: self.ts_lower.clone(),
             ts_upper: self.ts_upper.clone(),
-            current_batch: Vec::new(),
-            batches: VecDeque::new(),
+            iter: BatchesIter::default(),
         });
         // TODO: This should probably distribute batches based on size, but for
         // now it's simpler to round-robin them.
         for (i, batch) in self.batches.into_iter().enumerate() {
             let iter_idx = i % num_iters;
-            iters[iter_idx].batches.push_back(batch);
+            iters[iter_idx].iter.batches.push_back(batch);
         }
         iters
     }
 }
 
 /// An [Iterator] representing one part of the data in a [UnsealedSnapshot].
-//
-// This intentionally stores the batches as a VecDeque so we can return the data
-// in roughly increasing timestamp order, but it's unclear if this is in any way
-// important.
+#[derive(Debug)]
 pub struct UnsealedSnapshotIter {
     /// A closed lower bound on the times of contained updates.
     ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     ts_upper: Antichain<u64>,
-
-    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
-    batches: VecDeque<PFuture<Arc<BlobUnsealedBatch>>>,
-}
-
-impl fmt::Debug for UnsealedSnapshotIter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UnsealedSnapshotIter")
-            .field("ts_lower", &self.ts_lower)
-            .field("ts_upper", &self.ts_upper)
-            .field("current_batch(len)", &self.current_batch.len())
-            .field("batches", &self.batches)
-            .finish()
-    }
+    iter: BatchesIter<BlobUnsealedBatch>,
 }
 
 impl Iterator for UnsealedSnapshotIter {
@@ -124,38 +107,16 @@ impl Iterator for UnsealedSnapshotIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if !self.current_batch.is_empty() {
-                let update = self.current_batch.pop().unwrap();
-                return Some(Ok(update));
-            } else {
-                // current_batch is empty, find a new one.
-                let b = match self.batches.pop_front() {
-                    None => return None,
-                    Some(b) => b,
-                };
-                match b.recv() {
-                    Ok(b) => {
-                        // Reverse the updates so we can pop them off the back
-                        // in roughly increasing time order. At the same time,
-                        // enforce our filter before we clone them. Note that we
-                        // don't reverse the updates within each ColumnarRecords,
-                        // because those are not guaranteed to be in any order.
-                        let ts_lower = self.ts_lower.borrow();
-                        let ts_upper = self.ts_upper.borrow();
-                        self.current_batch.extend(
-                            b.updates
-                                .iter()
-                                .rev()
-                                .flat_map(|u| u.iter())
-                                .filter(|(_, ts, _)| {
-                                    ts_lower.less_equal(&ts) && !ts_upper.less_equal(&ts)
-                                })
-                                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d)),
-                        );
-                        continue;
-                    }
-                    Err(err) => return Some(Err(err)),
-                }
+            let next = match self.iter.next() {
+                Some(x) => x,
+                None => return None,
+            };
+            let (kv, t, d) = match next {
+                Ok(x) => x,
+                Err(err) => return Some(Err(err)),
+            };
+            if self.ts_lower.less_equal(&t) && !self.ts_upper.less_equal(&t) {
+                return Some(Ok((kv, t, d)));
             }
         }
     }
@@ -180,73 +141,30 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 
     fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
         let mut iters = Vec::with_capacity(num_iters.get());
-        iters.resize_with(num_iters.get(), TraceSnapshotIter::default);
+        iters.resize_with(num_iters.get(), || TraceSnapshotIter {
+            iter: BatchesIter::default(),
+        });
         // TODO: This should probably distribute batches based on size, but for
         // now it's simpler to round-robin them.
         for (i, batch) in self.batches.into_iter().enumerate() {
             let iter_idx = i % num_iters;
-            iters[iter_idx].batches.push_back(batch);
+            iters[iter_idx].iter.batches.push_back(batch);
         }
         iters
     }
 }
 
 /// An [Iterator] representing one part of the data in a [TraceSnapshot].
-//
-// This intentionally stores the batches as a VecDeque so we can return the data
-// in roughly increasing timestamp order, but it's unclear if this is in any way
-// important.
+#[derive(Debug)]
 pub struct TraceSnapshotIter {
-    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
-    batches: VecDeque<PFuture<Arc<BlobTraceBatchPart>>>,
-}
-
-impl Default for TraceSnapshotIter {
-    fn default() -> Self {
-        TraceSnapshotIter {
-            current_batch: Vec::new(),
-            batches: VecDeque::new(),
-        }
-    }
-}
-
-impl fmt::Debug for TraceSnapshotIter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TraceSnapshotIter")
-            .field("current_batch(len)", &self.current_batch.len())
-            .field("batches", &self.batches)
-            .finish()
-    }
+    iter: BatchesIter<BlobTraceBatchPart>,
 }
 
 impl Iterator for TraceSnapshotIter {
     type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if !self.current_batch.is_empty() {
-                let update = self.current_batch.pop().unwrap();
-                return Some(Ok(update));
-            } else {
-                // current_batch is empty, find a new one.
-                let b = match self.batches.pop_front() {
-                    None => return None,
-                    Some(b) => b,
-                };
-                match b.recv() {
-                    Ok(b) => {
-                        self.current_batch
-                            .extend(b.updates.iter().flat_map(|u| u.iter()).map(
-                                |((key, val), time, diff)| {
-                                    ((key.to_vec(), val.to_vec()), time, diff)
-                                },
-                            ));
-                        continue;
-                    }
-                    Err(err) => return Some(Err(err)),
-                }
-            }
-        }
+        self.iter.next()
     }
 }
 
@@ -330,5 +248,93 @@ impl Iterator for ArrangementSnapshotIter {
                 (kv, ts, diff)
             })
         })
+    }
+}
+
+/// A type that [BatchesIter] can iterate over.
+trait BatchesIterBatch {
+    fn chunks(&self) -> &[ColumnarRecords];
+}
+
+impl BatchesIterBatch for BlobUnsealedBatch {
+    fn chunks(&self) -> &[ColumnarRecords] {
+        &self.updates
+    }
+}
+
+impl BatchesIterBatch for BlobTraceBatchPart {
+    fn chunks(&self) -> &[ColumnarRecords] {
+        &self.updates
+    }
+}
+
+/// An internal helper for iterating over the result of a set of Futures
+/// (representing fetches from storage), each of which resolves to something
+/// that has a slice of [ColumnarRecords].
+//
+// This intentionally stores the batches as a VecDeque so we can return the data
+// in roughly increasing timestamp order, but it's unclear if this is in any way
+// important.
+#[derive(Debug)]
+struct BatchesIter<B: BatchesIterBatch> {
+    record_idx: usize,
+    chunk_idx: usize,
+    current: Option<Arc<B>>,
+    batches: VecDeque<PFuture<Arc<B>>>,
+}
+
+impl<B: BatchesIterBatch> Default for BatchesIter<B> {
+    fn default() -> Self {
+        Self {
+            record_idx: Default::default(),
+            chunk_idx: Default::default(),
+            current: Default::default(),
+            batches: Default::default(),
+        }
+    }
+}
+
+impl<B: BatchesIterBatch> Iterator for BatchesIter<B> {
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let current = match self.current.as_ref() {
+                Some(x) => x,
+                None => {
+                    let new_current = match self.batches.pop_front() {
+                        Some(x) => x,
+                        None => return None,
+                    };
+                    let new_current = match new_current.recv() {
+                        Ok(x) => x,
+                        Err(err) => return Some(Err(err)),
+                    };
+                    self.current = Some(new_current);
+                    self.record_idx = 0;
+                    self.chunk_idx = 0;
+                    continue;
+                }
+            };
+            let chunk = match current.chunks().get(self.chunk_idx) {
+                Some(x) => x,
+                None => {
+                    self.current.take();
+                    continue;
+                }
+            };
+            let ((k, v), t, d) = match chunk.get(self.record_idx) {
+                Some(x) => {
+                    self.record_idx += 1;
+                    x
+                }
+                None => {
+                    self.record_idx = 0;
+                    self.chunk_idx += 1;
+                    continue;
+                }
+            };
+            return Some(Ok(((k.to_owned(), v.to_owned()), t, d)));
+        }
     }
 }
