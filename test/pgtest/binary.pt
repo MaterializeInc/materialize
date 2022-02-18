@@ -79,3 +79,19 @@ BindComplete
 DataRow {"fields":["[148, 182, 45, 255, 41, 108, 92, 1, 128, 0, 0, 0, 128, 0, 0, 0]"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[148, 182, 46, 0, 0, 0, 0, 1, 128, 0, 0, 1, 0, 0, 0, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
