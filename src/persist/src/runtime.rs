@@ -531,7 +531,7 @@ mod tests {
     use timely::progress::Antichain;
 
     use crate::client::{MultiWriteHandle, StreamWriteHandle};
-    use crate::indexed::SnapshotExt;
+    use crate::indexed::{SnapshotExt, StreamDesc};
     use crate::mem::{MemMultiRegistry, MemRegistry};
     use crate::operators::source::PersistedSource;
     use crate::operators::split_ok_err;
@@ -616,57 +616,43 @@ mod tests {
     }
 
     #[test]
-    fn seal_get_description_roundtrip() -> Result<(), Error> {
-        let id = "test";
-
+    fn get_description() -> Result<(), Error> {
+        let name = "test";
         let mut registry = MemRegistry::new();
         let persister = registry.runtime_no_reentrance()?;
-        let (write, _) = persister.create_or_load::<(), ()>(id);
 
-        // Initial seal frontier should be `0`.
-        let upper = persister.get_description(id)?.upper().clone();
-        assert_eq!(upper, Antichain::from_elem(0));
+        // Nonexistent stream
+        assert_eq!(
+            persister.get_description(name),
+            Err(Error::UnknownRegistration(name.to_owned()))
+        );
 
-        write.seal(42);
+        // Initial upper and since should be `0`.
+        let (write, _) = persister.create_or_load::<(), ()>(name);
+        let expected = StreamDesc {
+            name: name.to_owned(),
+            upper: Antichain::from_elem(0),
+            since: Antichain::from_elem(0),
+        };
+        assert_eq!(persister.get_description(name)?, expected);
 
-        let upper = persister.get_description(id)?.upper().clone();
-        assert_eq!(upper, Antichain::from_elem(42));
+        // Upper should advance after a seal.
+        let _ = write.seal(42).recv()?;
+        let expected = StreamDesc {
+            name: name.to_owned(),
+            upper: Antichain::from_elem(42),
+            since: Antichain::from_elem(0),
+        };
+        assert_eq!(persister.get_description(name)?, expected);
 
-        Ok(())
-    }
-
-    #[test]
-    fn allow_compaction_get_description_roundtrip() -> Result<(), Error> {
-        let id = "test";
-
-        let mut registry = MemRegistry::new();
-        let persister = registry.runtime_no_reentrance()?;
-        let (write, _) = persister.create_or_load::<(), ()>(id);
-
-        // Initial compaction/since frontier should be `0`.
-        let since = persister.get_description(id)?.since().clone();
-        assert_eq!(since, Antichain::from_elem(0));
-
-        write.seal(100).recv()?;
-        write.allow_compaction(Antichain::from_elem(42)).recv()?;
-
-        let since = persister.get_description(id)?.since().clone();
-        assert_eq!(since, Antichain::from_elem(42));
-
-        Ok(())
-    }
-
-    #[test]
-    fn get_description_lower() -> Result<(), Error> {
-        let id = "test";
-
-        let mut registry = MemRegistry::new();
-        let persister = registry.runtime_no_reentrance()?;
-        let (_write, _) = persister.create_or_load::<(), ()>(id);
-
-        // `lower` will always be `Antichain::from_elem(Timestamp::minimum())`.
-        let since = persister.get_description(id)?.lower().clone();
-        assert_eq!(since, Antichain::from_elem(0));
+        // Upper should advance after an allow_compaction.
+        let _ = write.allow_compaction(Antichain::from_elem(40)).recv()?;
+        let expected = StreamDesc {
+            name: name.to_owned(),
+            upper: Antichain::from_elem(42),
+            since: Antichain::from_elem(40),
+        };
+        assert_eq!(persister.get_description(name)?, expected);
 
         Ok(())
     }
@@ -762,12 +748,12 @@ mod tests {
         let _ = multi.seal_all(42).recv()?;
 
         assert_eq!(
-            client.get_description("1")?.upper(),
+            &client.get_description("1")?.upper,
             &Antichain::from_elem(42)
         );
 
         assert_eq!(
-            client.get_description("2")?.upper(),
+            &client.get_description("2")?.upper,
             &Antichain::from_elem(42)
         );
 
@@ -790,12 +776,12 @@ mod tests {
             .recv()?;
 
         assert_eq!(
-            client.get_description("1")?.since(),
+            &client.get_description("1")?.since,
             &Antichain::from_elem(42)
         );
 
         assert_eq!(
-            client.get_description("2")?.since(),
+            &client.get_description("2")?.since,
             &Antichain::from_elem(42)
         );
 

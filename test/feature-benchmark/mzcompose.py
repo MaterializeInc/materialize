@@ -116,6 +116,9 @@ def run_one_scenario(
 
     for mz_id, instance in enumerate(["this", "other"]):
         with c.override(mzs[instance]):
+            print(f"The version of the '{instance.upper()}' Mz instance is:")
+            c.run("materialized", "--version")
+
             c.start_and_wait_for_tcp(services=["materialized"])
             c.wait_for_materialized()
 
@@ -146,6 +149,8 @@ def run_one_scenario(
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
+
+    c.silent = True
 
     parser.add_argument(
         "--this-tag",

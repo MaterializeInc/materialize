@@ -16,7 +16,6 @@ use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use differential_dataflow::trace::Description;
 use mz_persist_types::Codec;
 use timely::progress::Antichain;
 use tracing::error;
@@ -26,7 +25,7 @@ use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Cmd, CmdRead, ListenEvent, Snapshot};
+use crate::indexed::{Cmd, CmdRead, ListenEvent, Snapshot, StreamDesc};
 use crate::pfuture::PFuture;
 use crate::runtime::{RuntimeCmd, RuntimeHandle, RuntimeId};
 use crate::storage::SeqNo;
@@ -109,18 +108,16 @@ impl RuntimeClient {
         (write, read)
     }
 
-    /// Returns a [Description] of the stream identified by `id_str`.
-    //
-    // TODO: We might want to think about returning only the compaction frontier
-    // (since) and seal timestamp (upper) here. Description seems more oriented
-    // towards describing batches, and in our case the lower is always
-    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
-    // create our own Description-like return type for this.
-    pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
+    /// Returns a [StreamDesc] of the stream identified by `name`.
+    pub fn get_description(&self, name: &str) -> Result<StreamDesc, Error> {
         let (tx, rx) = PFuture::new();
-        self.sender
-            .send_cmd_read(CmdRead::GetDescription(id_str.to_owned(), tx));
-        rx.recv()
+        self.sender.send_cmd_read(CmdRead::GetDescriptions(tx));
+        let descs = rx.recv()?;
+        let desc = descs
+            .into_values()
+            .find(|x| x.name == name)
+            .ok_or_else(|| Error::UnknownRegistration(name.to_owned()))?;
+        Ok(desc)
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -203,19 +200,16 @@ impl RuntimeReadClient {
         }
     }
 
-    /// Returns a [Description] of the stream identified by `id_str`.
-    //
-    // TODO: We might want to think about returning only the compaction frontier
-    // (since) and seal timestamp (upper) here. Description seems more oriented
-    // towards describing batches, and in our case the lower is always
-    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
-    // create our own Description-like return type for this.
-    pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
+    /// Returns a [StreamDesc] of the stream identified by `name`.
+    pub fn get_description(&self, name: &str) -> Result<StreamDesc, Error> {
         let (tx, rx) = PFuture::new();
-        self.sender
-            .send_cmd_read(CmdRead::GetDescription(id_str.to_owned(), tx));
-        let seal_frontier = rx.recv()?;
-        Ok(seal_frontier)
+        self.sender.send_cmd_read(CmdRead::GetDescriptions(tx));
+        let descs = rx.recv()?;
+        let desc = descs
+            .into_values()
+            .find(|x| x.name == name)
+            .ok_or_else(|| Error::UnknownRegistration(name.to_owned()))?;
+        Ok(desc)
     }
 
     /// Synchronously closes the runtime, causing all future commands to error.

@@ -108,14 +108,6 @@ steps:
     agents:
       queue: builder
 
-  - id: persistence
-    label: Persistence tests
-    depends_on: build-x86_64
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persistence
-
   - id: testdrive
     label: Testdrive %n
     depends_on: build-x86_64
@@ -128,6 +120,23 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-2]
+
+  - id: persistence
+    label: Persistence tests
+    depends_on: build-x86_64
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+
+  - id: persistence-failpoints
+    label: Persistence failpoints
+    depends_on: build-x86_64
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+          run: failpoints
 
   - id: cluster-smoke
     label: Cluster smoke test

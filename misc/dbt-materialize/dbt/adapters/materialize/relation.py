@@ -14,4 +14,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-version = "1.0.1.post3"
+from dataclasses import dataclass
+from typing import Optional
+
+from dbt.adapters.postgres import PostgresRelation
+from dbt.dataclass_schema import StrEnum
+
+
+class MaterializeRelationType(StrEnum):
+    # Built-in materialization types.
+    Table = "table"
+    View = "view"
+    CTE = "cte"
+    External = "external"
+
+    # Materialize-specific materialization types.
+    Source = "source"
+    MaterializedView = "materializedview"
+    Index = "index"
+    Sink = "sink"
+
+
+@dataclass(frozen=True, eq=False, repr=False)
+class MaterializeRelation(PostgresRelation):
+    type: Optional[MaterializeRelationType] = None

@@ -69,6 +69,18 @@ sequences:
   test_dbt_schema_test: schema_test
   test_dbt_ephemeral: ephemeral
   test_dbt_ephemeral_data_tests: data_test_ephemeral_models
+  test_dbt_custom_materializations:
+    project: custom_materializations
+    sequence:
+      - type: dbt
+        cmd: run
+      - type: relations_equal
+        relations: [test_materialized_view, test_source]
+      # TODO(benesch): figure out how to test that the sink emits the correct
+      # data. Ideally we'd just ingest the sink back into Materialize with a
+      # source and then use a `relations_equal` step, but that's hard to do
+      # presently because Avro OCF sinks do not have a stable output filename
+      # and Avro OCF sources do not support glob patterns.
   # dbt-materialize does not support incremental models or snapshots
   # test_dbt_incremental: incremental
   # test_dbt_snapshot_strategy_timestamp: snapshot_strategy_timestamp
@@ -88,3 +100,35 @@ projects:
         view_model: view
         table_model: view
         swappable: view
+  - name: custom_materializations
+    paths:
+        testdata/test_csv.csv: |
+            a,b
+            chicken,pig
+            cow,horse
+
+        models/test_materialized_view.sql: |
+            {{ config(materialized='materializedview') }}
+
+            SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+
+        models/test_source.sql: |
+            {{ config(materialized='source') }}
+
+            CREATE SOURCE {{ mz_generate_name('test_source') }}
+            -- TODO(benesch): is there a better way to get the CWD in a test?
+            FROM FILE '{{ flags.os.getcwd() }}/testdata/test_csv.csv'
+            FORMAT CSV WITH HEADER
+
+        models/test_index.sql: |
+            {{ config(materialized='index') }}
+
+            CREATE DEFAULT INDEX test_index
+            ON {{ ref('test_source') }}
+
+        models/test_sink.sql: |
+            {{ config(materialized='sink') }}
+
+            CREATE SINK {{ mz_generate_name('test_sink') }}
+            FROM {{ ref('test_source') }}
+            INTO AVRO OCF 'test_sink.ocf'

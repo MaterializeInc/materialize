@@ -60,6 +60,7 @@ impl PartialEq for Error {
         match (self, other) {
             (Error::String(s), Error::String(o)) => s == o,
             (Error::OutOfQuota(s), Error::OutOfQuota(o)) => s == o,
+            (Error::UnknownRegistration(s), Error::UnknownRegistration(o)) => s == o,
             (Error::RuntimeShutdown, Error::RuntimeShutdown) => true,
             _ => false,
         }

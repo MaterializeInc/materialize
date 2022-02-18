@@ -15,11 +15,13 @@
 # limitations under the License.
 
 from dbt.adapters.materialize import MaterializeConnectionManager
+from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 
 
 class MaterializeAdapter(PostgresAdapter):
     ConnectionManager = MaterializeConnectionManager
+    Relation = MaterializeRelation
 
     def _link_cached_relations(self, manifest):
         # NOTE(benesch): this *should* reimplement the parent class's method
