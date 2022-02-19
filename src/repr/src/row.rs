@@ -713,6 +713,24 @@ where
 // public api
 
 impl Row {
+    /// Allocate an empty `Row` with a pre-allocated capacity.
+    #[inline]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            data: SmallVec::with_capacity(cap),
+        }
+    }
+
+    /// Creates a new row from supplied bytes.
+    ///
+    /// # Safety
+    ///
+    /// This method relies on `data` being an appropriate row encoding, and can
+    /// result in unsafety if this is not the case.
+    pub unsafe fn from_bytes_unchecked(data: Vec<u8>) -> Self {
+        Row { data: data.into() }
+    }
+
     /// Take some `Datum`s and pack them into a `Row`.
     ///
     /// This method builds a `Row` by repeatedly increasing the backing
@@ -743,13 +761,18 @@ impl Row {
         Ok(row)
     }
 
-    /// Allocate an empty `Row` with a pre-allocated capacity.
-    #[inline]
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            data: SmallVec::with_capacity(cap),
-        }
+    /// Pack a slice of `Datum`s into a `Row`.
+    ///
+    /// This method has the advantage over `pack` that it can determine the required
+    /// allocation before packing the elements, ensuring only one allocation and no
+    /// redundant copies required.
+    pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
+        // Pre-allocate the needed number of bytes.
+        let mut row = Row::with_capacity(datums_size(slice.iter()));
+        row.extend(slice.iter());
+        row
     }
+
 
     /// Extend an existing `Row` with a `Datum`.
     #[inline]
@@ -792,33 +815,6 @@ impl Row {
     /// Appends the datums of an entire `Row`.
     pub fn extend_by_row(&mut self, row: &Row) {
         self.data.extend(row.data.iter().copied());
-    }
-
-    /// Clears the contents of the row without de-allocating its backing memory.
-    pub fn clear(&mut self) {
-        self.data.clear();
-    }
-
-    /// Creates a new row from supplied bytes.
-    ///
-    /// # Safety
-    ///
-    /// This method relies on `data` being an appropriate row encoding, and can
-    /// result in unsafety if this is not the case.
-    pub unsafe fn from_bytes_unchecked(data: Vec<u8>) -> Self {
-        Row { data: data.into() }
-    }
-
-    /// Pack a slice of `Datum`s into a `Row`.
-    ///
-    /// This method has the advantage over `pack` that it can determine the required
-    /// allocation before packing the elements, ensuring only one allocation and no
-    /// redundant copies required.
-    pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
-        // Pre-allocate the needed number of bytes.
-        let mut row = Row::with_capacity(datums_size(slice.iter()));
-        row.extend(slice.iter());
-        row
     }
 
     /// Pushes a [`DatumList`] that is built from a closure.
@@ -1014,15 +1010,9 @@ impl Row {
         })
     }
 
-    /// Returns a copy of this `Row`, clearing the data but not the allocation
-    /// in `self`.
-    ///
-    /// The intent is that `self`'s allocation can be used to pack additional
-    /// rows, to reduce the amount of interaction with the allocator.
-    pub fn finish_and_reuse(&mut self) -> Row {
-        let data = SmallVec::from_slice(&self.data[..]);
+    /// Clears the contents of the row without de-allocating its backing memory.
+    pub fn clear(&mut self) {
         self.data.clear();
-        Row { data }
     }
 
     /// Truncates the underlying storage to the specified byte position.
@@ -1042,14 +1032,23 @@ impl Row {
     }
 
     /// Truncates the row to contain at most the first `n` datums.
-    ///
-    /// # Panics
     pub fn truncate_datums(&mut self, n: usize) {
         let mut iter = self.iter();
         for _ in iter.by_ref().take(n) {}
         let offset = iter.offset;
         // SAFETY: iterator offsets always lie on a datum boundary.
         unsafe { self.truncate(offset) }
+    }
+
+    /// Returns a copy of this `Row`, clearing the data but not the allocation
+    /// in `self`.
+    ///
+    /// The intent is that `self`'s allocation can be used to pack additional
+    /// rows, to reduce the amount of interaction with the allocator.
+    pub fn finish_and_reuse(&mut self) -> Row {
+        let data = SmallVec::from_slice(&self.data[..]);
+        self.data.clear();
+        Row { data }
     }
 }
 
