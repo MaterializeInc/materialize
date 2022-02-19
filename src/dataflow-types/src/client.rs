@@ -366,15 +366,15 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 
 /// A client to a running dataflow server.
 #[async_trait(?Send)]
-pub trait Client {
+pub trait Client<T = mz_repr::Timestamp> {
     /// Sends a command to the dataflow server.
-    async fn send(&mut self, cmd: Command);
+    async fn send(&mut self, cmd: Command<T>);
 
     /// Receives the next response from the dataflow server.
     ///
     /// This method blocks until the next response is available, or, if the
     /// dataflow server has been shut down, returns `None`.
-    async fn recv(&mut self) -> Option<Response>;
+    async fn recv(&mut self) -> Option<Response<T>>;
 }
 
 #[async_trait(?Send)]

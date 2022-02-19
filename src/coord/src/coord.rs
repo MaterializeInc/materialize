@@ -549,6 +549,7 @@ impl Coordinator {
                         .source_description_for(entry.id())
                         .unwrap();
                     self.dataflow_client
+                        .storage()
                         .create_sources(vec![(
                             entry.id(),
                             (source_description, Antichain::from_elem(since_ts)),
@@ -584,6 +585,7 @@ impl Coordinator {
                         .source_description_for(entry.id())
                         .unwrap();
                     self.dataflow_client
+                        .storage()
                         .create_sources(vec![(
                             entry.id(),
                             (source_description, Antichain::from_elem(since_ts)),
@@ -847,6 +849,7 @@ impl Coordinator {
         }
 
         self.dataflow_client
+            .storage()
             .advance_all_table_timestamps(advance_to)
             .await;
     }
@@ -947,6 +950,7 @@ impl Coordinator {
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
                     self.dataflow_client
+                        .storage()
                         .update_durability_frontiers(durability_updates)
                         .await;
                 }
@@ -1589,7 +1593,9 @@ impl Coordinator {
             // See #10300 for context.
             self.persisted_table_allow_compaction(&index_since_updates);
             self.dataflow_client
-                .allow_index_compaction(DEFAULT_COMPUTE_INSTANCE_ID, index_since_updates)
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .allow_index_compaction(index_since_updates)
                 .await
                 .unwrap();
         }
@@ -1604,6 +1610,7 @@ impl Coordinator {
         if !source_since_updates.is_empty() {
             self.persisted_table_allow_compaction(&source_since_updates);
             self.dataflow_client
+                .storage()
                 .allow_source_compaction(source_since_updates)
                 .await;
         }
@@ -1725,7 +1732,9 @@ impl Coordinator {
 
             // Allow dataflow to cancel any pending peeks.
             self.dataflow_client
-                .cancel_peek(DEFAULT_COMPUTE_INSTANCE_ID, conn_id)
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .cancel_peek(conn_id)
                 .await;
         }
     }
@@ -2237,6 +2246,7 @@ impl Coordinator {
                     .source_description_for(table_id)
                     .unwrap();
                 self.dataflow_client
+                    .storage()
                     .create_sources(vec![(
                         table_id,
                         (source_description, Antichain::from_elem(since_ts)),
@@ -2342,6 +2352,7 @@ impl Coordinator {
                 }
 
                 self.dataflow_client
+                    .storage()
                     .create_sources(source_descriptions)
                     .await
                     .unwrap();
@@ -3011,7 +3022,10 @@ impl Coordinator {
                             );
                         } else {
                             for (id, updates) in volatile_updates {
-                                self.dataflow_client.table_insert(id, updates).await;
+                                self.dataflow_client
+                                    .storage()
+                                    .table_insert(id, updates)
+                                    .await;
                             }
                         }
                     }
@@ -4143,7 +4157,10 @@ impl Coordinator {
                     self.update_timestamper(id, false).await;
                     self.sources.remove(&id);
                 }
-                self.dataflow_client.drop_sources(sources_to_drop).await;
+                self.dataflow_client
+                    .storage()
+                    .drop_sources(sources_to_drop)
+                    .await;
             }
             if !tables_to_drop.is_empty() {
                 // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
@@ -4153,14 +4170,19 @@ impl Coordinator {
                     self.sources.remove(&id);
                     self.persister.remove_table(id);
                 }
-                self.dataflow_client.drop_sources(tables_to_drop).await;
+                self.dataflow_client
+                    .storage()
+                    .drop_sources(tables_to_drop)
+                    .await;
             }
             if !sinks_to_drop.is_empty() {
                 for id in sinks_to_drop.iter() {
                     self.sink_writes.remove(id);
                 }
                 self.dataflow_client
-                    .drop_sinks(DEFAULT_COMPUTE_INSTANCE_ID, sinks_to_drop)
+                    .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                    .unwrap()
+                    .drop_sinks(sinks_to_drop)
                     .await;
             }
             if !indexes_to_drop.is_empty() {
@@ -4230,7 +4252,10 @@ impl Coordinator {
                 let write_fut = persist.write_handle.write(&updates);
                 let _ = task::spawn(|| "builtin_table_updates_write_fut:{id}", write_fut);
             } else {
-                self.dataflow_client.table_insert(id, updates).await
+                self.dataflow_client
+                    .storage()
+                    .table_insert(id, updates)
+                    .await
             }
         }
     }
@@ -4247,7 +4272,9 @@ impl Coordinator {
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
             self.dataflow_client
-                .drop_sinks(DEFAULT_COMPUTE_INSTANCE_ID, dataflow_names)
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .drop_sinks(dataflow_names)
                 .await;
         }
     }
@@ -4261,7 +4288,9 @@ impl Coordinator {
         }
         if !trace_keys.is_empty() {
             self.dataflow_client
-                .drop_indexes(DEFAULT_COMPUTE_INSTANCE_ID, trace_keys)
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .drop_indexes(trace_keys)
                 .await
         }
     }
@@ -4378,7 +4407,9 @@ impl Coordinator {
             dataflow_plans.push(self.finalize_dataflow(dataflow));
         }
         self.dataflow_client
-            .create_dataflows(DEFAULT_COMPUTE_INSTANCE_ID, dataflow_plans)
+            .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+            .unwrap()
+            .create_dataflows(dataflow_plans)
             .await
             .unwrap();
     }
@@ -4478,12 +4509,14 @@ impl Coordinator {
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     self.dataflow_client
+                        .storage()
                         .add_source_timestamping(source_id, s.connector.clone(), bindings)
                         .await;
                 }
             }
         } else {
             self.dataflow_client
+                .storage()
                 .drop_source_timestamping(source_id)
                 .await;
         }
@@ -4688,13 +4721,11 @@ pub async fn serve(
                     .collect(),
                 log_logging: config.log_logging,
             });
-            handle
-                .block_on(
-                    coord
-                        .dataflow_client
-                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
-                )
-                .unwrap();
+            handle.block_on(
+                coord
+                    .dataflow_client
+                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
+            );
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
@@ -5082,7 +5113,9 @@ pub mod fast_path_peek {
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client
-                        .create_dataflows(DEFAULT_COMPUTE_INSTANCE_ID, vec![dataflow])
+                        .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                        .unwrap()
+                        .create_dataflows(vec![dataflow])
                         .await
                         .unwrap();
                     // Create an identity MFP operator.
@@ -5123,8 +5156,9 @@ pub mod fast_path_peek {
             self.pending_peeks.insert(conn_id, rows_tx);
             let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
             self.dataflow_client
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
                 .peek(
-                    DEFAULT_COMPUTE_INSTANCE_ID,
                     id,
                     key,
                     conn_id,
