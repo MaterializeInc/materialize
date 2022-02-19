@@ -283,11 +283,14 @@ fn evaluate(
 
     // We pack dummy values in locations that do not reference
     // specific columns.
-    row_packer.extend(position_or.iter().map(|x| match x {
-        Some(column) => datums[*column],
-        None => Datum::Dummy,
-    }));
-    Ok(Some(row_packer.finish_and_reuse()))
+    Ok(Some(
+        row_packer
+            .extend(position_or.iter().map(|x| match x {
+                Some(column) => datums[*column],
+                None => Datum::Dummy,
+            }))
+            .finish_and_reuse(),
+    ))
 }
 
 /// Internal core upsert logic.
