@@ -27,18 +27,18 @@ use crate::{
     Update,
 };
 use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
-use mz_repr::{Row, Timestamp};
+use mz_repr::Row;
 
 pub mod controller;
 pub use controller::Controller;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Command {
+pub enum Command<T = mz_repr::Timestamp> {
     /// A compute command.
-    Compute(ComputeCommand, ComputeInstanceId),
+    Compute(ComputeCommand<T>, ComputeInstanceId),
     /// A storage command.
-    Storage(StorageCommand),
+    Storage(StorageCommand<T>),
 }
 
 /// An abstraction allowing us to name difference compute instances.
@@ -53,7 +53,7 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
     derive(IntoEnumIterator),
     doc = "The kind of compute command that was received"
 )]
-pub enum ComputeCommand {
+pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     ///
     /// Optionally, request that the logging sources in the contained configuration are installed.
@@ -68,7 +68,7 @@ pub enum ComputeCommand {
     /// Subsequent commands may arbitrarily compact the arrangements;
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
-    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan>>),
+    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan, T>>),
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these namees.
@@ -96,7 +96,7 @@ pub enum ComputeCommand {
         /// Used in responses and cancelation requests.
         conn_id: u32,
         /// The logical timestamp at which the arrangement is queried.
-        timestamp: Timestamp,
+        timestamp: T,
         /// Actions to apply to the result set before returning them.
         finishing: RowSetFinishing,
         /// Linear operation to apply in-line on each result.
@@ -113,7 +113,7 @@ pub enum ComputeCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     // TODO: Could be called `AllowTraceCompaction` or `AllowArrangementCompaction`?
-    AllowIndexCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    AllowIndexCompaction(Vec<(GlobalId, Antichain<T>)>),
 }
 
 impl ComputeCommandKind {
@@ -142,16 +142,11 @@ impl ComputeCommandKind {
     derive(IntoEnumIterator),
     doc = "the kind of storage command that was received"
 )]
-pub enum StorageCommand {
+pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
     ///
     /// For each identifier, there is a source description and a valid `since` frontier.
-    CreateSources(
-        Vec<(
-            GlobalId,
-            (crate::types::sources::SourceDesc, Antichain<Timestamp>),
-        )>,
-    ),
+    CreateSources(Vec<(GlobalId, (crate::types::sources::SourceDesc, Antichain<T>))>),
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
 
@@ -160,14 +155,14 @@ pub enum StorageCommand {
         /// Identifier of the local input.
         id: GlobalId,
         /// A list of updates to be introduced to the input.
-        updates: Vec<Update>,
+        updates: Vec<Update<T>>,
     },
     /// Update durability information for sources.
     ///
     /// Each entry names a source and provides a frontier before which the source can
     /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
     /// all the same data)
-    DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<Timestamp>)>),
+    DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
     /// Add a new source to be aware of for timestamping.
     AddSourceTimestamping {
         /// The ID of the timestamped source
@@ -175,13 +170,13 @@ pub enum StorageCommand {
         /// The connector for the timestamped source.
         connector: SourceConnector,
         /// Previously stored timestamp bindings.
-        bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
+        bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
     },
     /// Enable compaction in sources.
     ///
     /// Each entry in the vector names a source and provides a frontier after which
     /// accumulations must be correct.
-    AllowSourceCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    AllowSourceCompaction(Vec<(GlobalId, Antichain<T>)>),
     /// Drop all timestamping info for a source
     DropSourceTimestamping {
         /// The ID id of the formerly timestamped source.
@@ -190,7 +185,7 @@ pub enum StorageCommand {
     /// Advance all local inputs to the given timestamp.
     AdvanceAllLocalInputs {
         /// The timestamp to advance to.
-        advance_to: Timestamp,
+        advance_to: T,
     },
 }
 
@@ -212,7 +207,7 @@ impl StorageCommandKind {
     }
 }
 
-impl Command {
+impl<T: timely::progress::Timestamp> Command<T> {
     /// Partitions the command into `parts` many disjoint pieces.
     ///
     /// This is used to subdivide commands that can be sharded across workers,
@@ -334,39 +329,39 @@ impl Command {
 
 /// Data about timestamp bindings that dataflow workers send to the coordinator
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TimestampBindingFeedback {
+pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
     /// Durability frontier changes
-    pub changes: Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+    pub changes: Vec<(GlobalId, ChangeBatch<T>)>,
     /// Timestamp bindings for all of those frontier changes
-    pub bindings: Vec<(GlobalId, PartitionId, Timestamp, MzOffset)>,
+    pub bindings: Vec<(GlobalId, PartitionId, T, MzOffset)>,
 }
 
 /// Responses that the worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Response {
+pub enum Response<T = mz_repr::Timestamp> {
     /// A compute response.
-    Compute(ComputeResponse, ComputeInstanceId),
+    Compute(ComputeResponse<T>, ComputeInstanceId),
     /// A storage response.
-    Storage(StorageResponse),
+    Storage(StorageResponse<T>),
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ComputeResponse {
+pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
+    FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
     /// The worker's response to a specified (by connection id) peek.
     PeekResponse(u32, PeekResponse),
     /// The worker's next response to a specified tail.
-    TailResponse(GlobalId, TailResponse),
+    TailResponse(GlobalId, TailResponse<T>),
 }
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum StorageResponse {
+pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// Timestamp bindings and prior and new frontiers for those bindings for all
     /// sources
-    TimestampBindings(TimestampBindingFeedback),
+    TimestampBindings(TimestampBindingFeedback<T>),
 }
 
 /// A client to a running dataflow server.
