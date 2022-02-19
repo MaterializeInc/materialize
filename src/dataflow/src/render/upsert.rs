@@ -178,11 +178,11 @@ where
 
                 // Fold metadata into the value if there is in fact a valid value.
                 let value = if let Some(Ok(value)) = decode_result.value {
-                    Some(Ok(row_packer
-                        .activate()
+                    let mut row_packer = row_packer.activate();
+                    row_packer
                         .extend(value.iter())
-                        .extend(decode_result.metadata.iter())
-                        .finish_and_reuse()))
+                        .extend(decode_result.metadata.iter());
+                    Some(Ok(row_packer.finish_and_reuse()))
                 } else {
                     decode_result.value
                 };
@@ -271,7 +271,7 @@ fn evaluate(
     datums: &[Datum],
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
-    row_packer: mz_repr::RowPackerRef<'_>,
+    mut row_packer: mz_repr::RowPackerRef<'_>,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
@@ -283,14 +283,11 @@ fn evaluate(
 
     // We pack dummy values in locations that do not reference
     // specific columns.
-    Ok(Some(
-        row_packer
-            .extend(position_or.iter().map(|x| match x {
-                Some(column) => datums[*column],
-                None => Datum::Dummy,
-            }))
-            .finish_and_reuse(),
-    ))
+    row_packer.extend(position_or.iter().map(|x| match x {
+        Some(column) => datums[*column],
+        None => Datum::Dummy,
+    }));
+    Ok(Some(row_packer.finish_and_reuse()))
 }
 
 /// Internal core upsert logic.
@@ -524,13 +521,14 @@ fn thin(key_indices: &[usize], value: &Row, mut row_packer: mz_repr::RowPackerRe
     let mut next_idx = 0;
     for &key_idx in key_indices {
         // First, push the datums that are before `key_idx`
-        row_packer = row_packer.extend(values.take(key_idx - next_idx));
+        row_packer.extend(values.take(key_idx - next_idx));
         // Then, skip this key datum
         values.next().unwrap();
         next_idx = key_idx + 1;
     }
     // Finally, push any columns after the last key index
-    row_packer.extend(values).finish_and_reuse()
+    row_packer.extend(values);
+    row_packer.finish_and_reuse()
 }
 
 /// `rehydrate` uses information from the source description to find which indexes in the row
@@ -545,13 +543,14 @@ fn rehydrate(
     let mut next_idx = 0;
     for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
         // First, push the datums that are before `key_idx`
-        row_packer = row_packer.extend(values.take(key_idx - next_idx));
+        row_packer.extend(values.take(key_idx - next_idx));
         // Then, push this key datum
-        row_packer = row_packer.push(key_datum);
+        row_packer.push(key_datum);
         next_idx = key_idx + 1;
     }
     // Finally, push any columns after the last key index
-    row_packer.extend(values).finish_and_reuse()
+    row_packer.extend(values);
+    row_packer.finish_and_reuse()
 }
 
 #[cfg(test)]

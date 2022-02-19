@@ -1398,7 +1398,7 @@ impl fmt::Debug for RowPackerRef<'_> {
 
 impl<'row> RowPackerRef<'row> {
     #[inline]
-    pub fn push<'a, D>(self, datum: D) -> Self
+    pub fn push<'a, D>(&mut self, datum: D) -> &mut Self
     where
         D: Borrow<Datum<'a>>,
     {
@@ -1408,7 +1408,7 @@ impl<'row> RowPackerRef<'row> {
 
     /// Extend an existing `Row` with additional `Datum`s.
     #[inline]
-    pub fn extend<'a, I, D>(self, iter: I) -> Self
+    pub fn extend<'a, I, D>(&mut self, iter: I) -> &mut Self
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
@@ -1417,7 +1417,7 @@ impl<'row> RowPackerRef<'row> {
         self
     }
 
-    pub fn finish_and_reuse(self) -> Row {
+    pub fn finish_and_reuse(&mut self) -> Row {
         self.inner.finish_and_reuse()
     }
 }
