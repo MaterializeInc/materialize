@@ -830,7 +830,7 @@ impl TimestampBindingUpdater {
         bindings_change.extend(inverted_current_bindings);
 
         // TODO: This seems wasteful. We could just add a get_bindings() which returns all bindings.
-        let lowest_frontier = Antichain::from_elem(u64::MIN);
+        let lowest_frontier = Antichain::from_elem(Timestamp::minimum());
         let new_bindings = timestamp_histories
             .get_bindings_in_range(
                 lowest_frontier.borrow(),

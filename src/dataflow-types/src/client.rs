@@ -500,7 +500,7 @@ pub mod partitioned {
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
     use timely::order::PartialOrder;
-    use timely::progress::{Antichain, ChangeBatch};
+    use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
     use tracing::debug;
 
     use crate::TailResponse;
@@ -813,7 +813,7 @@ pub mod partitioned {
                             change_batch: Default::default(),
                             buffer: Vec::new(),
                             parts: self.parts,
-                            reported_frontier: Antichain::from_elem(0),
+                            reported_frontier: Antichain::from_elem(Timestamp::minimum()),
                         })
                     });
 

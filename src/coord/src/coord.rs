@@ -102,7 +102,7 @@ use mz_repr::adt::interval::Interval;
 use rand::Rng;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
+use timely::progress::{Antichain, ChangeBatch, PathSummary, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -408,7 +408,7 @@ impl Coordinator {
             // If there are no writes at the open timestamp, we know we can read
             // at one unit of time less than the open time (which will always be
             // closed).
-            self.last_open_local_ts - 1
+            self.last_open_local_ts.saturating_sub(1)
         }
     }
 
@@ -448,7 +448,12 @@ impl Coordinator {
         // this feature enables us to drive the Coordinator's time when using a
         // test harness). Instead, we must manually increment
         // `last_open_local_ts` if `now` appears non-increasing.
-        self.last_open_local_ts = std::cmp::max(ts, self.last_open_local_ts + 1);
+        self.last_open_local_ts = std::cmp::max(
+            ts,
+            self.last_open_local_ts
+                .results_in(&1)
+                .expect("Timestamp no longer fits"),
+        );
 
         // Opening a new timestamp means that there cannot be new writes at the
         // open timestamp.
@@ -534,7 +539,7 @@ impl Coordinator {
                         .load_source_persist_desc(&source)
                         .map_err(CoordError::Persistence)?
                         .map(|p| p.since_ts)
-                        .unwrap_or(0);
+                        .unwrap_or_else(Timestamp::minimum);
 
                     let frontiers = self.new_source_frontiers(
                         entry.id(),
@@ -566,7 +571,7 @@ impl Coordinator {
                         .table_details
                         .get(&entry.id())
                         .map(|td| td.since_ts)
-                        .unwrap_or(0);
+                        .unwrap_or_else(Timestamp::minimum);
 
                     let frontiers = self.new_source_frontiers(
                         entry.id(),
@@ -602,7 +607,11 @@ impl Coordinator {
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        let frontiers = self.new_index_frontiers(entry.id(), Some(0), Some(1_000));
+                        let frontiers = self.new_index_frontiers(
+                            entry.id(),
+                            Some(Timestamp::minimum()),
+                            Some(1_000),
+                        );
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
                         let index_id = entry.id();
@@ -2228,7 +2237,7 @@ impl Coordinator {
                     .table_details
                     .get(&table_id)
                     .map(|td| td.since_ts)
-                    .unwrap_or(0);
+                    .unwrap_or_else(Timestamp::minimum);
 
                 // Announce the creation of the table source.
                 let source_description = self
@@ -2312,7 +2321,7 @@ impl Coordinator {
                             .load_source_persist_desc(&source)
                             .map_err(CoordError::Persistence)?
                             .map(|p| p.since_ts)
-                            .unwrap_or(0);
+                            .unwrap_or_else(Timestamp::minimum);
                         Ok::<_, CoordError>(since_ts)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -3442,7 +3451,7 @@ impl Coordinator {
                                     self.indexes
                                         .upper_of(id)
                                         .expect("id not found")
-                                        .less_equal(&0)
+                                        .less_equal(&Timestamp::minimum())
                                 })
                                 .collect::<Vec<_>>();
                             return Err(CoordError::IncompleteTimestamp(unstarted));
@@ -3451,7 +3460,7 @@ impl Coordinator {
                         // A complete trace can be read in its final form with this time.
                         //
                         // This should only happen for literals that have no sources
-                        Timestamp::max_value()
+                        u64::MAX
                     }
                 };
                 // If the candidate is not beyond the valid `since` frontier,
@@ -3536,12 +3545,12 @@ impl Coordinator {
                 // this sink to wait.
                 ts.saturating_sub(1)
             } else {
-                Timestamp::max_value()
+                u64::MAX
             }
         } else {
             // If the sink does need to create an index, use 0, which will cause the since
             // to be used below.
-            Timestamp::min_value()
+            Timestamp::minimum()
         };
 
         // Ensure that the timestamp is >= since. This is necessary because when a
@@ -4199,13 +4208,15 @@ impl Coordinator {
         let timestamp_base = self.get_local_write_ts();
         let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
         for tu in updates.into_iter() {
-            let timestamp = timestamp_base + tu.timestamp_offset;
-            for u in tu.updates {
-                updates_by_id.entry(u.id).or_default().push(Update {
-                    row: u.row,
-                    diff: u.diff,
-                    timestamp,
-                });
+            let timestamp: Option<Timestamp> = timestamp_base.results_in(&tu.timestamp_offset);
+            if let Some(timestamp) = timestamp {
+                for u in tu.updates {
+                    updates_by_id.entry(u.id).or_default().push(Update {
+                        row: u.row,
+                        diff: u.diff,
+                        timestamp,
+                    });
+                }
             }
         }
         for (id, updates) in updates_by_id {
@@ -4795,12 +4806,12 @@ pub fn index_sql(
 /// of milliseconds contained in that Duration
 fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
     let millis = d.as_millis();
-    if millis > Timestamp::max_value() as u128 {
-        Timestamp::max_value()
-    } else if millis < Timestamp::min_value() as u128 {
-        Timestamp::min_value()
+    if millis > u64::MAX as u128 {
+        u64::MAX
+    } else if millis < u64::MIN as u128 {
+        Timestamp::minimum()
     } else {
-        millis as Timestamp
+        millis as u64
     }
 }
 

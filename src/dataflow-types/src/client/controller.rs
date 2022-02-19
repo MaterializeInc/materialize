@@ -10,7 +10,7 @@
 //! A client that maintains summaries of the involved objects.
 use std::collections::BTreeMap;
 
-use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch};
+use timely::progress::{frontier::AntichainRef, Antichain, ChangeBatch, Timestamp as _};
 use tracing::error;
 
 use crate::client::SourceConnector;
@@ -100,7 +100,13 @@ impl<C: Client> Controller<C> {
                 self.compute_since_uppers
                     .get_mut(&instance)
                     .ok_or(ComputeError::InstanceMissing(instance))?
-                    .insert(id, (Antichain::from_elem(0), Antichain::from_elem(0)));
+                    .insert(
+                        id,
+                        (
+                            Antichain::from_elem(Timestamp::minimum()),
+                            Antichain::from_elem(Timestamp::minimum()),
+                        ),
+                    );
             }
         }
 
@@ -162,11 +168,17 @@ impl<C: Client> Controller<C> {
 
             for (sink_id, _) in dataflow.sink_exports.iter() {
                 // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
-                compute_since_uppers.insert(*sink_id, (as_of.clone(), Antichain::from_elem(0)));
+                compute_since_uppers.insert(
+                    *sink_id,
+                    (as_of.clone(), Antichain::from_elem(Timestamp::minimum())),
+                );
             }
             for (index_id, _, _) in dataflow.index_exports.iter() {
                 // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
-                compute_since_uppers.insert(*index_id, (as_of.clone(), Antichain::from_elem(0)));
+                compute_since_uppers.insert(
+                    *index_id,
+                    (as_of.clone(), Antichain::from_elem(Timestamp::minimum())),
+                );
             }
         }
 
@@ -308,8 +320,10 @@ impl<C: Client> Controller<C> {
             self.source_descriptions
                 .insert(*id, Some((description.clone(), since.clone())));
             // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
-            self.storage_since_uppers
-                .insert(*id, (since.clone(), Antichain::from_elem(0)));
+            self.storage_since_uppers.insert(
+                *id,
+                (since.clone(), Antichain::from_elem(Timestamp::minimum())),
+            );
         }
 
         self.client
@@ -477,8 +491,10 @@ impl SinceUpperMap {
         } else {
             // If we allow compaction before the item is created, pre-restrict the valid range.
             // We start tracking `upper` at 0; correct this should that change (e.g. to `as_of`).
-            self.since_uppers
-                .insert(id, (frontier.clone(), Antichain::from_elem(0)));
+            self.since_uppers.insert(
+                id,
+                (frontier.clone(), Antichain::from_elem(Timestamp::minimum())),
+            );
         }
     }
     fn update_upper_for(&mut self, id: GlobalId, changes: &ChangeBatch<Timestamp>) {

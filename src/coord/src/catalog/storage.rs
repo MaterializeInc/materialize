@@ -14,6 +14,7 @@ use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp as _;
 
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::{GlobalId, PartitionId};
@@ -460,7 +461,7 @@ impl Transaction<'_> {
 
         for (pid, bindings) in &bindings_by_pid {
             let mut latest_offset = 0;
-            let mut latest_ts = 0;
+            let mut latest_ts = Timestamp::minimum();
             for (_pid, ts, offset) in bindings {
                 if offset.offset < latest_offset {
                     return Err(format!(
@@ -608,7 +609,7 @@ impl Transaction<'_> {
         // on restart we don't emit timestamps that are beyond the previously
         // written consistency frontier. Otherwise, data with those timestamps
         // would get written again.
-        let latest_not_beyond_compaction: Option<Timestamp> = self
+        let latest_not_beyond_compaction: Option<u64> = self
             .inner
             .prepare_cached(
                 "SELECT max(timestamp) FROM timestamps WHERE sid = ? AND timestamp <= ?",
