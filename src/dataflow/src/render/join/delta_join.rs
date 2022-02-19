@@ -328,19 +328,20 @@ where
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut row_packer = Row::default();
+        let mut row_buf = Row::default();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
-            row_packer.clear();
-            row_packer.try_extend(
+            row_buf.packer().try_extend(
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
-            let row_key = row_packer.finish_and_reuse();
-            row_packer.extend(prev_thinning.iter().map(|&c| datums_local[c]));
-            let row_value = row_packer.finish_and_reuse();
+            let row_key = row_buf.clone();
+            row_buf
+                .packer()
+                .extend(prev_thinning.iter().map(|&c| datums_local[c]));
+            let row_value = row_buf.clone();
 
             Ok((row_key, row_value, time))
         }
@@ -406,7 +407,7 @@ where
     use differential_dataflow::AsCollection;
     use timely::dataflow::channels::pact::Pipeline;
 
-    let mut row_builder = Row::default();
+    let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
         trace
             .stream
@@ -434,7 +435,7 @@ where
                                                     .apply(
                                                         &mut datums_local,
                                                         &temp_storage,
-                                                        &mut row_builder,
+                                                        &mut row_buf,
                                                     )
                                                     .transpose()
                                                 {
@@ -452,9 +453,8 @@ where
                                                 }
                                             } else {
                                                 let row = {
-                                                    row_builder.clear();
-                                                    row_builder.extend(&*datums_local);
-                                                    row_builder.finish_and_reuse()
+                                                    row_buf.packer().extend(&*datums_local);
+                                                    row_buf.clone()
                                                 };
                                                 ok_session.give((row, time.clone(), diff.clone()));
                                             }

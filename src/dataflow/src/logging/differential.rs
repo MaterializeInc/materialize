@@ -183,14 +183,15 @@ pub fn construct<A: Allocate>(
                 );
                 let trace = collection
                     .map({
-                        let mut row_packer = Row::default();
+                        let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
                         move |row| {
                             let datums = datums.borrow_with(&row);
-                            row_packer.extend(key.iter().map(|k| datums[*k]));
-                            let row_key = row_packer.finish_and_reuse();
-                            row_packer.extend(value.iter().map(|c| datums[*c]));
-                            (row_key, row_packer.finish_and_reuse())
+                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                            let row_key = row_buf.clone();
+                            row_buf.packer().extend(value.iter().map(|c| datums[*c]));
+                            let row_val = row_buf.clone();
+                            (row_key, row_val)
                         }
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))

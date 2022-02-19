@@ -404,14 +404,15 @@ impl CatalogState {
                 .map(|oid| self.get_by_oid(oid).id().to_string())
                 .collect::<Vec<_>>();
             let mut row = Row::default();
-            row.push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: arg_ids.len(),
-                }],
-                arg_ids.iter().map(|id| Datum::String(&id)),
-            )
-            .unwrap();
+            row.packer()
+                .push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: arg_ids.len(),
+                    }],
+                    arg_ids.iter().map(|id| Datum::String(&id)),
+                )
+                .unwrap();
             let arg_ids = row.unpack_first();
 
             let variadic_id = func_impl_details

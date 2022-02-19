@@ -107,7 +107,9 @@ fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy
     .prop_map(|(dimensions, elements)| {
         let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
         let mut row = Row::default();
-        row.push_array(&dimensions, element_datums).unwrap();
+        row.packer()
+            .push_array(&dimensions, element_datums)
+            .unwrap();
         PropertizedArray(row, elements)
     })
     .boxed()
@@ -121,7 +123,7 @@ fn arb_list(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
         .prop_map(|elements| {
             let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
             let mut row = Row::default();
-            row.push_list(element_datums.iter());
+            row.packer().push_list(element_datums.iter());
             PropertizedList(row, elements)
         })
         .boxed()
@@ -140,7 +142,7 @@ fn arb_dict(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.into()))
                 .collect();
-            row.push_dict(entry_iter.into_iter());
+            row.packer().push_dict(entry_iter.into_iter());
             PropertizedDict(row, entries)
         })
         .boxed()
@@ -237,12 +239,8 @@ proptest! {
 
     #[test]
     fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
-        let mut row = Row::default();
         let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
-        for d in datums.iter() {
-            row.push(d.clone());
-        }
-        let row = row;
+        let row = Row::pack(&datums);
         let unpacked = row.unpack();
         assert_eq!(datums, unpacked);
     }

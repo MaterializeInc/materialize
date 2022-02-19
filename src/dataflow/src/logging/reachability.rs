@@ -110,7 +110,7 @@ pub fn construct<A: Allocate>(
                 }
             });
 
-            let mut row_packer = Row::default();
+            let mut row_buf = Row::default();
             updates
                 .as_collection()
                 .arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -120,22 +120,22 @@ pub fn construct<A: Allocate>(
                 .as_collection(move |(update_type, addr, source, port, worker, ts), _| {
                     let row_arena = RowArena::default();
                     let update_type = if *update_type { "source" } else { "target" };
-                    row_packer.push_list(
+                    row_buf.packer().push_list(
                         addr.iter()
                             .chain_one(&source)
                             .map(|id| Datum::Int64(*id as i64)),
                     );
                     let datums = &[
-                        row_arena.push_unary_row(row_packer.finish_and_reuse()),
+                        row_arena.push_unary_row(row_buf.clone()),
                         Datum::Int64(*port as i64),
                         Datum::Int64(*worker as i64),
                         Datum::String(&update_type),
                         Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
                     ];
-                    row_packer.extend(key.iter().map(|k| datums[*k]));
-                    let key_row = row_packer.finish_and_reuse();
-                    row_packer.extend(value.iter().map(|k| datums[*k]));
-                    let value_row = row_packer.finish_and_reuse();
+                    row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                    let key_row = row_buf.clone();
+                    row_buf.packer().extend(value.iter().map(|k| datums[*k]));
+                    let value_row = row_buf.clone();
                     (key_row, value_row)
                 })
         };

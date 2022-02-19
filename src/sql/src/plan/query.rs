@@ -814,7 +814,8 @@ pub fn plan_params<'a>(
     let scope = Scope::empty();
     let rel_type = RelationType::empty();
 
-    let mut datums = Row::with_capacity(desc.param_types.len());
+    let mut datums = Row::default();
+    let mut packer = datums.packer();
     let mut types = Vec::new();
     let temp_storage = &RowArena::new();
     for (mut param, ty) in params.into_iter().zip(&desc.param_types) {
@@ -841,7 +842,7 @@ pub fn plan_params<'a>(
         }
         let ex = ex.lower_uncorrelated()?;
         let evaled = ex.eval(&[], temp_storage)?;
-        datums.push(evaled);
+        packer.push(evaled);
         types.push(st);
     }
     Ok(Params { datums, types })

@@ -108,7 +108,7 @@ where
                         let iterator = group_key.iter().map(|i| datums[*i]);
                         let total_size = mz_repr::datums_size(iterator.clone());
                         let mut group_row = Row::with_capacity(total_size);
-                        group_row.extend(iterator);
+                        group_row.packer().extend(iterator);
                         group_row
                     };
                     ((group_row, row_hash), row)
@@ -263,7 +263,7 @@ where
                         let iterator = group_key.iter().map(|i| datums[*i]);
                         let total_size = mz_repr::datums_size(iterator.clone());
                         let mut group_key = Row::with_capacity(total_size);
-                        group_key.extend(iterator);
+                        group_key.packer().extend(iterator);
                         group_key
                     };
                     (group_key, row)

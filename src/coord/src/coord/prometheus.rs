@@ -46,7 +46,7 @@ fn convert_metrics_to_value_rows<
     timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
-    let mut row_packer = Row::default();
+    let mut row_buf = Row::default();
     let mut rows: Vec<Row> = vec![];
     let mut metadata: Vec<Row> = vec![];
 
@@ -63,6 +63,7 @@ fn convert_metrics_to_value_rows<
                 .into_iter()
                 .map(|pair| (pair.get_name(), Datum::from(pair.get_value())))
                 .collect();
+            let mut row_packer = row_buf.packer();
             row_packer.push(Datum::from(fam.get_name()));
             row_packer.push(Datum::from(timestamp));
             row_packer.push_dict(labels.iter().copied());
@@ -71,7 +72,7 @@ fn convert_metrics_to_value_rows<
                 MetricType::GAUGE => metric.get_gauge().get_value(),
                 _ => unreachable!("never hit for anything other than gauges & counters"),
             }));
-            rows.push(row_packer.finish_and_reuse());
+            rows.push(row_buf.clone());
         }
     }
     (rows, metadata)
@@ -84,7 +85,7 @@ fn convert_metrics_to_histogram_rows<
     timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
-    let mut row_packer = Row::default();
+    let mut row_buf = Row::default();
     let mut rows: Vec<Row> = vec![];
     let mut metadata: Vec<Row> = vec![];
 
@@ -99,12 +100,13 @@ fn convert_metrics_to_histogram_rows<
                     .map(|pair| (pair.get_name(), Datum::from(pair.get_value())))
                     .collect();
                 for bucket in metric.get_histogram().get_bucket() {
+                    let mut row_packer = row_buf.packer();
                     row_packer.push(Datum::from(name));
                     row_packer.push(Datum::from(timestamp));
                     row_packer.push_dict(labels.iter().copied());
                     row_packer.push(Datum::from(bucket.get_upper_bound()));
                     row_packer.push(Datum::from(bucket.get_cumulative_count() as i64));
-                    rows.push(row_packer.finish_and_reuse());
+                    rows.push(row_buf.clone());
                 }
             }
         }

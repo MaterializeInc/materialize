@@ -196,7 +196,7 @@ where
             mut val_plan,
         } = key_val_plan;
         let key_arity = key_plan.projection.len();
-        let mut row_packer = Row::default();
+        let mut row_buf = Row::default();
         let mut row_mfp = Row::default();
         let mut datums = DatumVec::new();
         let mut row_datums = DatumVec::new();
@@ -248,9 +248,8 @@ where
                     }
                     Ok(val) => val.expect("Row expected as no predicate was used"),
                 };
-                row_packer.clear();
-                row_packer.extend(val);
-                let row = row_packer.finish_and_reuse();
+                row_buf.packer().extend(val);
+                let row = row_buf.clone();
                 return Some((Ok((key, row)), time.clone(), diff.clone()));
             }
         });
@@ -298,7 +297,7 @@ where
     use differential_dataflow::collection::concatenate;
     concatenate(scope, to_concat)
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceCollation", {
-            let mut row_packer = Row::default();
+            let mut row_buf = Row::default();
             move |_key, input, output| {
                 // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
                 // aggregate values.
@@ -337,6 +336,7 @@ where
                 }
 
                 // Merge results into the order they were asked for.
+                let mut row_packer = row_buf.packer();
                 for typ in aggregate_types.iter() {
                     match typ {
                         ReductionType::Accumulable => {
@@ -350,7 +350,7 @@ where
                         }
                     }
                 }
-                output.push((row_packer.finish_and_reuse(), 1));
+                output.push((row_buf.clone(), 1));
             }
         })
 }
@@ -431,13 +431,14 @@ where
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
-            let mut row_packer = Row::default();
+            let mut row_buf = Row::default();
             move |_key, input, output| {
+                let mut row_packer = row_buf.packer();
                 for ((_, row), _) in input.iter() {
                     let datum = row.unpack_first();
                     row_packer.push(datum);
                 }
-                output.push((row_packer.finish_and_reuse(), 1));
+                output.push((row_buf.clone(), 1));
             }
         })
 }
@@ -461,11 +462,11 @@ where
     } = aggr.clone();
 
     // Extract the value we were asked to aggregate over.
-    let mut packer = Row::default();
+    let mut row_buf = Row::default();
     let mut partial = input.map(move |(key, row)| {
         let value = row.iter().nth(index).unwrap();
-        packer.push(value);
-        (key, packer.finish_and_reuse())
+        row_buf.packer().push(value);
+        (key, row_buf.clone())
     });
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
@@ -474,7 +475,7 @@ where
     }
 
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
-        let mut row_packer = Row::default();
+        let mut row_buf = Row::default();
         move |_key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
             // see them, we should report when we do. We may want to bake even more info
@@ -495,8 +496,8 @@ where
                 let iter = source.iter().flat_map(|(v, w)| {
                     std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
                 });
-                row_packer.push(func.eval(iter, &RowArena::new()));
-                target.push((row_packer.finish_and_reuse(), 1));
+                row_buf.packer().push(func.eval(iter, &RowArena::new()));
+                target.push((row_buf.clone(), 1));
             }
         }
     })
@@ -526,13 +527,13 @@ where
     G::Timestamp: Lattice,
 {
     // Gather the relevant values into a vec of rows ordered by aggregation_index
-    let mut packer = Row::default();
+    let mut row_buf = Row::default();
     let input = input.map(move |(key, row)| {
         let mut values = Vec::with_capacity(skips.len());
         let mut row_iter = row.iter();
         for skip in skips.iter() {
-            packer.push((&mut row_iter).nth(*skip).unwrap());
-            values.push(packer.finish_and_reuse());
+            row_buf.packer().push((&mut row_iter).nth(*skip).unwrap());
+            values.push(row_buf.clone());
         }
 
         (key, values)
@@ -550,7 +551,7 @@ where
     // Build a series of stages for the reduction
     // Arrange the final result into (key, Row)
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
-        let mut row_packer = Row::default();
+        let mut row_buf = Row::default();
         move |_key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
             // see them, we should report when we do. We may want to bake even more info
@@ -563,11 +564,12 @@ where
                     }
                 }
             } else {
+                let mut row_packer = row_buf.packer();
                 for (aggr_index, func) in aggr_funcs.iter().enumerate() {
                     let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
                     row_packer.push(func.eval(iter, &RowArena::new()));
                 }
-                target.push((row_packer.finish_and_reuse(), 1));
+                target.push((row_buf.clone(), 1));
             }
         }
     })
@@ -637,13 +639,13 @@ where
     G::Timestamp: Lattice,
 {
     // Gather the relevant values into a vec of rows ordered by aggregation_index
-    let mut packer = Row::default();
+    let mut row_buf = Row::default();
     let collection = collection.map(move |(key, row)| {
         let mut values = Vec::with_capacity(skips.len());
         let mut row_iter = row.iter();
         for skip in skips.iter() {
-            packer.push((&mut row_iter).nth(*skip).unwrap());
-            values.push(packer.finish_and_reuse());
+            row_buf.packer().push((&mut row_iter).nth(*skip).unwrap());
+            values.push(row_buf.clone());
         }
 
         (key, values)
@@ -674,8 +676,9 @@ where
     partial
         .arrange_by_self()
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
-            let mut row_packer = Row::default();
+            let mut row_buf = Row::default();
             move |_key, input, output| {
+                let mut row_packer = row_buf.packer();
                 let accum = &input[0].1;
                 for monoid in accum.iter() {
                     match monoid {
@@ -683,7 +686,7 @@ where
                         monoids::ReductionMonoid::Max(row) => row_packer.extend(row.iter()),
                     }
                 }
-                output.push((row_packer.finish_and_reuse(), 1));
+                output.push((row_buf.clone(), 1));
             }
         })
 }
@@ -1173,12 +1176,12 @@ where
 
     // Next, collect all aggregations that require distinctness.
     for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
-        let mut packer = Row::default();
+        let mut row_buf = Row::default();
         let collection = collection
             .map(move |(key, row)| {
                 let value = row.iter().nth(datum_index).unwrap();
-                packer.push(value);
-                (key, packer.finish_and_reuse())
+                row_buf.packer().push(value);
+                (key, row_buf.clone())
             })
             .distinct_core()
             .explode({
@@ -1198,9 +1201,10 @@ where
     collection
         .arrange_by_self()
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
-            let mut row_packer = Row::default();
+            let mut row_buf = Row::default();
             move |_key, input, output| {
                 let accum = &input[0].1;
+                let mut row_packer = row_buf.packer();
 
                 for (aggr, accum) in full_aggrs.iter().zip(accum) {
                     // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
@@ -1346,7 +1350,7 @@ where
 
                     row_packer.push(value);
                 }
-                output.push((row_packer.finish_and_reuse(), 1));
+                output.push((row_buf.clone(), 1));
             }
         })
 }

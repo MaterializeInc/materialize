@@ -47,7 +47,7 @@ impl PendingTail {
     ///
     /// Returns `true` if the sink should be removed.
     pub(crate) fn process_response(&mut self, response: TailResponse) -> bool {
-        let mut packer = Row::default();
+        let mut row_buf = Row::default();
         match response {
             TailResponse::Progress(upper) => {
                 if self.emit_progress && !upper.is_empty() {
@@ -56,15 +56,15 @@ impl PendingTail {
                         1,
                         "TAIL only supports single-dimensional timestamps"
                     );
+                    let mut packer = row_buf.packer();
                     packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
                     packer.push(Datum::True);
                     // Fill in the diff column and all table columns with NULL.
                     for _ in 0..(self.arity + 1) {
                         packer.push(Datum::Null);
                     }
-                    let row = packer.finish_and_reuse();
 
-                    let result = self.channel.send(vec![row]);
+                    let result = self.channel.send(vec![row_buf]);
                     if result.is_err() {
                         // TODO(benesch): we should actually drop the sink if the
                         // receiver has gone away. E.g. form a DROP SINK command?
@@ -81,6 +81,7 @@ impl PendingTail {
                 let rows = rows
                     .into_iter()
                     .map(|(time, row, diff)| {
+                        let mut packer = row_buf.packer();
                         packer.push(Datum::from(numeric::Numeric::from(time)));
                         if self.emit_progress {
                             // When sinking with PROGRESS, the output
@@ -95,7 +96,7 @@ impl PendingTail {
 
                         packer.extend_by_row(&row);
 
-                        packer.finish_and_reuse()
+                        row_buf.clone()
                     })
                     .collect();
                 // TODO(benesch): the lack of backpressure here can result in

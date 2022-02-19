@@ -2188,7 +2188,7 @@ impl RowSetFinishing {
 
         let mut ret = Vec::with_capacity(return_size);
         let mut remaining = limit;
-        let mut row_packer = Row::default();
+        let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
         for (row, count) in &rows[offset_nth_row..] {
             if remaining == 0 {
@@ -2198,8 +2198,10 @@ impl RowSetFinishing {
             for _ in 0..count {
                 let new_row = {
                     let datums = datum_vec.borrow_with(&row);
-                    row_packer.extend(self.project.iter().map(|i| &datums[*i]));
-                    row_packer.finish_and_reuse()
+                    row_buf
+                        .packer()
+                        .extend(self.project.iter().map(|i| &datums[*i]));
+                    row_buf.clone()
                 };
                 ret.push(new_row);
             }

@@ -17,7 +17,7 @@ use prost_reflect::{
 };
 
 use mz_ore::str::StrExt;
-use mz_repr::{ColumnName, ColumnType, Datum, Row, ScalarType};
+use mz_repr::{ColumnName, ColumnType, Datum, Row, RowPacker, ScalarType};
 
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug, PartialEq)]
@@ -67,7 +67,7 @@ impl DecodedDescriptors {
 #[derive(Debug)]
 pub struct Decoder {
     descriptors: DecodedDescriptors,
-    packer: Row,
+    row: Row,
     confluent_wire_format: bool,
 }
 
@@ -79,7 +79,7 @@ impl Decoder {
     ) -> Result<Self, anyhow::Error> {
         Ok(Decoder {
             descriptors,
-            packer: Default::default(),
+            row: Row::default(),
             confluent_wire_format,
         })
     }
@@ -107,8 +107,9 @@ impl Decoder {
             bytes = adjusted_bytes;
         }
         let message = DynamicMessage::decode(self.descriptors.message_descriptor.clone(), bytes)?;
-        pack_message(&mut self.packer, &message)?;
-        Ok(Some(self.packer.finish_and_reuse()))
+        let mut packer = self.row.packer();
+        pack_message(&mut packer, &message)?;
+        Ok(Some(self.row.clone()))
     }
 }
 
@@ -172,7 +173,7 @@ fn derive_inner_type(
     }
 }
 
-fn pack_message(packer: &mut Row, message: &DynamicMessage) -> Result<(), anyhow::Error> {
+fn pack_message(packer: &mut RowPacker, message: &DynamicMessage) -> Result<(), anyhow::Error> {
     for field_desc in message.descriptor().fields() {
         if !message.has_field(&field_desc) {
             if field_desc.cardinality() == Cardinality::Required {
@@ -193,7 +194,7 @@ fn pack_message(packer: &mut Row, message: &DynamicMessage) -> Result<(), anyhow
 }
 
 fn pack_value(
-    packer: &mut Row,
+    packer: &mut RowPacker,
     field_desc: &FieldDescriptor,
     value: &Value,
 ) -> Result<(), anyhow::Error> {

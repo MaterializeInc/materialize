@@ -250,15 +250,15 @@ impl FoldConstants {
             }
             MirRelationExpr::Project { input, outputs } => {
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
-                    let mut row_packer = Row::default();
+                    let mut row_buf = Row::default();
                     let new_rows = match rows {
                         Ok(rows) => Ok(rows
                             .iter()
                             .map(|(input_row, diff)| {
                                 // TODO: reduce allocations to zero.
                                 let datums = input_row.unpack();
-                                row_packer.extend(outputs.iter().map(|i| &datums[*i]));
-                                (row_packer.finish_and_reuse(), *diff)
+                                row_buf.packer().extend(outputs.iter().map(|i| &datums[*i]));
+                                (row_buf.clone(), *diff)
                             })
                             .collect()),
                         Err(e) => Err(e.clone()),
@@ -299,7 +299,7 @@ impl FoldConstants {
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
                     let mut old_rows = vec![(Row::pack::<_, Datum>(None), 1)];
-                    let mut row_packer = Row::default();
+                    let mut row_buf = Row::default();
                     for input in inputs.iter() {
                         if let MirRelationExpr::Constant { rows: Ok(rows), .. } = input {
                             if let Some(limit) = self.limit {
@@ -313,11 +313,10 @@ impl FoldConstants {
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
-                                    row_packer.extend(old_row.iter().chain(new_row.iter()));
-                                    next_rows.push((
-                                        row_packer.finish_and_reuse(),
-                                        old_count * *new_count,
-                                    ));
+                                    row_buf
+                                        .packer()
+                                        .extend(old_row.iter().chain(new_row.iter()));
+                                    next_rows.push((row_buf.clone(), old_count * *new_count));
                                 }
                             }
                             old_rows = next_rows;
@@ -428,7 +427,7 @@ impl FoldConstants {
         // `aggregates`.
         let mut groups = BTreeMap::new();
         let temp_storage2 = RowArena::new();
-        let mut row_packer = Row::default();
+        let mut row_buf = Row::default();
         for (row, diff) in rows {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
@@ -450,8 +449,10 @@ impl FoldConstants {
             let val = aggregates
                 .iter()
                 .map(|agg| {
-                    row_packer.extend(&[agg.expr.eval(&datums, &temp_storage)?]);
-                    Ok::<_, EvalError>(row_packer.finish_and_reuse())
+                    row_buf
+                        .packer()
+                        .extend(&[agg.expr.eval(&datums, &temp_storage)?]);
+                    Ok::<_, EvalError>(row_buf.clone())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let entry = groups.entry(key).or_insert_with(Vec::new);
@@ -468,11 +469,11 @@ impl FoldConstants {
         let new_rows = groups
             .into_iter()
             .map({
-                let mut row_packer = Row::default();
+                let mut row_buf = Row::default();
                 move |(key, vals)| {
                     let temp_storage = RowArena::new();
-                    row_packer.extend(key.into_iter().chain(aggregates.iter().enumerate().map(
-                        |(i, agg)| {
+                    row_buf.packer().extend(key.into_iter().chain(
+                        aggregates.iter().enumerate().map(|(i, agg)| {
                             if agg.distinct {
                                 agg.func.eval(
                                     vals.iter()
@@ -487,9 +488,9 @@ impl FoldConstants {
                                     &temp_storage,
                                 )
                             }
-                        },
-                    )));
-                    (row_packer.finish_and_reuse(), 1)
+                        }),
+                    ));
+                    (row_buf.clone(), 1)
                 }
             })
             .collect();
@@ -579,7 +580,7 @@ impl FoldConstants {
         // We cannot exceed `usize::MAX` in any array, so this is a fine upper bound.
         let limit = limit.unwrap_or(usize::MAX);
         let mut new_rows = Vec::new();
-        let mut row_packer = Row::default();
+        let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
         for (input_row, diff) in rows {
             let datums = datum_vec.borrow_with(&input_row);
@@ -590,8 +591,10 @@ impl FoldConstants {
                 .collect::<Result<Vec<_>, _>>()?;
             let mut output_rows = func.eval(&datums, &temp_storage)?.fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
-                row_packer.extend(input_row.clone().into_iter().chain(output_row.into_iter()));
-                new_rows.push((row_packer.finish_and_reuse(), diff2 * *diff))
+                row_buf
+                    .packer()
+                    .extend(input_row.clone().into_iter().chain(output_row.into_iter()));
+                new_rows.push((row_buf.clone(), diff2 * *diff))
             }
             // If we still have records to enumerate, but dropped out of the iteration,
             // it means we have exhausted `limit` and should stop.

@@ -172,13 +172,15 @@ where
             };
 
             // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
-            let rp = Rc::new(RefCell::new(Row::default()));
+            let row_buf = Rc::new(RefCell::new(Row::default()));
             let collection = combined.flat_map(move |(mut k, v)| {
                 let max_idx = v.len() - 1;
-                let rp = Rc::clone(&rp);
+                let row_buf = Rc::clone(&row_buf);
                 v.into_iter().enumerate().map(move |(idx, dp)| {
                     let k = if idx == max_idx { k.take() } else { k.clone() };
-                    (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))
+                    let mut row_buf = row_buf.borrow_mut();
+                    dbz_format(&mut row_buf.packer(), dp);
+                    (k, Some(row_buf.clone()))
                 })
             });
             collection

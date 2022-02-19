@@ -211,22 +211,22 @@ impl PostgresSourceReader {
             pin_mut!(reader);
             let mut mz_row = Row::default();
             while let Some(Ok(b)) = reader.next().await {
-                mz_row.push(relation_id);
+                let mut packer = mz_row.packer();
+                packer.push(relation_id);
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
                 let mut raw_values = parser.iter_raw(info.schema.len() as i32);
-                try_fatal!(mz_row.push_list_with(|rp| -> Result<(), anyhow::Error> {
+                try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
                     while let Some(raw_value) = raw_values.next() {
                         let value = std::str::from_utf8(raw_value?)?;
                         rp.push(Datum::String(value));
                     }
                     Ok(())
                 }));
-                let row = mz_row.finish_and_reuse();
-                try_recoverable!(snapshot_tx.insert(row.clone()).await);
-                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&row))).await);
+                try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
+                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
             }
 
             self.metrics.tables.inc();
@@ -266,10 +266,11 @@ impl PostgresSourceReader {
         T: IntoIterator<Item = &'a TupleData>,
     {
         let mut row = Row::default();
+        let mut packer = row.packer();
 
         let rel_id: Datum = (rel_id as i32).into();
-        row.push(rel_id);
-        row.push_list_with(move |packer| {
+        packer.push(rel_id);
+        packer.push_list_with(move |packer| {
             for val in tuple_data.into_iter() {
                 let datum = match val {
                     TupleData::Null => Datum::Null,

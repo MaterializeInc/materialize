@@ -198,29 +198,29 @@ impl Value {
                     Type::List(t) => &*t,
                     _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
                 };
-                let mut row = Row::default();
-                row.push_list(elems.into_iter().map(|elem| match elem {
-                    Some(elem) => elem.into_datum(buf, &elem_pg_type),
-                    None => Datum::Null,
-                }));
-                buf.push_unary_row(row)
+                buf.make_datum(|packer| {
+                    packer.push_list(elems.into_iter().map(|elem| match elem {
+                        Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                        None => Datum::Null,
+                    }));
+                })
             }
             Value::Map(map) => {
                 let elem_pg_type = match typ {
                     Type::Map { value_type } => &*value_type,
                     _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
                 };
-                let mut row = Row::default();
-                row.push_dict_with(|row| {
-                    for (k, v) in map {
-                        row.push(Datum::String(&k));
-                        row.push(match v {
-                            Some(elem) => elem.into_datum(buf, &elem_pg_type),
-                            None => Datum::Null,
-                        });
-                    }
-                });
-                buf.push_unary_row(row)
+                buf.make_datum(|packer| {
+                    packer.push_dict_with(|row| {
+                        for (k, v) in map {
+                            row.push(Datum::String(&k));
+                            row.push(match v {
+                                Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                                None => Datum::Null,
+                            });
+                        }
+                    });
+                })
             }
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we

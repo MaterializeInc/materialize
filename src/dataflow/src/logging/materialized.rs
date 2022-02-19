@@ -311,11 +311,11 @@ pub fn construct<A: Allocate>(
 
         let kafka_source_statistics_current = kafka_source_statistics.as_collection().map({
             move |(source_id, worker, stats)| {
-                let mut row = Row::pack_slice(&[
-                    Datum::String(&source_id.to_string()),
-                    Datum::Int64(worker as i64),
-                ]);
-                row.extend_by_row(&stats.into_row());
+                let mut row = Row::default();
+                let mut packer = row.packer();
+                packer.push(Datum::String(&source_id.to_string()));
+                packer.push(Datum::Int64(worker as i64));
+                packer.extend_by_row(&stats.into_row());
                 row
             }
         });
@@ -399,14 +399,15 @@ pub fn construct<A: Allocate>(
                 );
                 let trace = collection
                     .map({
-                        let mut row_packer = Row::default();
+                        let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
                         move |row| {
                             let datums = datums.borrow_with(&row);
-                            row_packer.extend(key.iter().map(|k| datums[*k]));
-                            let row_key = row_packer.finish_and_reuse();
-                            row_packer.extend(value.iter().map(|k| datums[*k]));
-                            (row_key, row_packer.finish_and_reuse())
+                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                            let row_key = row_buf.clone();
+                            row_buf.packer().extend(value.iter().map(|k| datums[*k]));
+                            let row_val = row_buf.clone();
+                            (row_key, row_val)
                         }
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))

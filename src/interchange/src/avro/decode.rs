@@ -26,7 +26,7 @@ use mz_avro::{
 use mz_ore::result::ResultExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Row, RowPacker};
 
 use crate::avro::ConfluentAvroResolver;
 
@@ -36,7 +36,7 @@ pub struct Decoder {
     csr_avro: ConfluentAvroResolver,
     debug_name: String,
     buf1: Vec<u8>,
-    packer: Row,
+    row_buf: Row,
 }
 
 #[cfg(test)]
@@ -87,7 +87,7 @@ impl Decoder {
             csr_avro,
             debug_name,
             buf1: vec![],
-            packer: Default::default(),
+            row_buf: Row::default(),
         })
     }
 
@@ -97,11 +97,11 @@ impl Decoder {
         // an earlier run. This can happen if the
         // `dsr.deserialize` call returns an error,
         // causing us to return early.
-        self.packer.clear();
+        let mut packer = self.row_buf.packer();
         let (bytes2, resolved_schema, csr_schema_id) = self.csr_avro.resolve(bytes).await?;
         *bytes = bytes2;
         let dec = AvroFlatDecoder {
-            packer: &mut self.packer,
+            packer: &mut packer,
             buf: &mut self.buf1,
             is_top: true,
         };
@@ -117,13 +117,12 @@ impl Decoder {
                 }
             )
         })?;
-        let result = self.packer.finish_and_reuse();
         trace!(
             "[customer-data] Decoded row {:?} in {}",
-            result,
+            self.row_buf,
             self.debug_name
         );
-        Ok(result)
+        Ok(self.row_buf.clone())
     }
 }
 
@@ -154,12 +153,12 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
     }
 }
 
-pub(super) struct OptionalRecordDecoder<'a> {
-    pub packer: &'a mut Row,
+pub(super) struct OptionalRecordDecoder<'a, 'row> {
+    pub packer: &'a mut RowPacker<'row>,
     pub buf: &'a mut Vec<u8>,
 }
 
-impl<'a> AvroDecode for OptionalRecordDecoder<'a> {
+impl<'a, 'row> AvroDecode for OptionalRecordDecoder<'a, 'row> {
     type Out = bool;
     fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
         self,
@@ -197,16 +196,16 @@ impl AvroDecode for RowDecoder {
         self,
         a: &mut A,
     ) -> Result<Self::Out, AvroError> {
-        let mut packer_borrow = self.state.0.borrow_mut();
+        let mut row_borrow = self.state.0.borrow_mut();
         let mut buf_borrow = self.state.1.borrow_mut();
+        let mut packer = row_borrow.packer();
         let inner = AvroFlatDecoder {
-            packer: &mut packer_borrow,
+            packer: &mut packer,
             buf: &mut buf_borrow,
             is_top: true,
         };
         inner.record(a)?;
-        let row = packer_borrow.finish_and_reuse();
-        Ok(RowWrapper(row))
+        Ok(RowWrapper(row_borrow.clone()))
     }
     define_unexpected! {
         union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
@@ -229,13 +228,13 @@ impl StatefulAvroDecodable for RowWrapper {
 }
 
 #[derive(Debug)]
-pub struct AvroFlatDecoder<'a> {
-    pub packer: &'a mut Row,
+pub struct AvroFlatDecoder<'a, 'row> {
+    pub packer: &'a mut RowPacker<'row>,
     pub buf: &'a mut Vec<u8>,
     pub is_top: bool,
 }
 
-impl<'a> AvroDecode for AvroFlatDecoder<'a> {
+impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
     type Out = ();
     #[inline]
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
@@ -243,7 +242,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         a: &mut A,
     ) -> Result<Self::Out, AvroError> {
         let mut str_buf = std::mem::take(self.buf);
-        let mut pack_record = |rp: &mut Row| -> Result<(), AvroError> {
+        let mut pack_record = |rp: &mut RowPacker| -> Result<(), AvroError> {
             let mut expected = 0;
             let mut stash = vec![];
             // The idea here is that if the deserializer gives us fields in the order we're expecting,
@@ -256,17 +255,15 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             // Maybe instead, we should decode to separate sub-Rows and then add an API
             // to Row that just copies in the bytes from another one.
             while let Some((_name, idx, f)) = a.next_field()? {
-                let dec = AvroFlatDecoder {
-                    packer: rp,
-                    buf: &mut str_buf,
-                    is_top: false,
-                };
                 if idx == expected {
                     expected += 1;
-                    f.decode_field(dec)?;
+                    f.decode_field(AvroFlatDecoder {
+                        packer: rp,
+                        buf: &mut str_buf,
+                        is_top: false,
+                    })?;
                 } else {
-                    let next = ValueDecoder;
-                    let val = f.decode_field(next)?;
+                    let val = f.decode_field(ValueDecoder)?;
                     stash.push((idx, val));
                 }
             }
@@ -439,7 +436,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     ) -> Result<Self::Out, AvroError> {
         match r {
             ValueOrReader::Value(val) => {
-                *self.packer = JsonbPacker::new(std::mem::take(self.packer))
+                JsonbPacker::new(self.packer)
                     .pack_serde_json(val.clone())
                     .map_err_to_string()
                     .map_err(DecodeError::Custom)?;
@@ -447,7 +444,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
-                *self.packer = JsonbPacker::new(std::mem::take(self.packer))
+                JsonbPacker::new(self.packer)
                     .pack_slice(&self.buf)
                     .map_err_to_string()
                     .map_err(DecodeError::Custom)?;

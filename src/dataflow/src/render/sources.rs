@@ -30,7 +30,7 @@ use mz_persist_types::Codec;
 use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
 use mz_dataflow_types::*;
 use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row, RowPacker, Timestamp};
 use timely::progress::Antichain;
 
 use crate::decode::decode_cdcv2;
@@ -993,7 +993,7 @@ where
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
                 if !res.metadata.is_empty() {
-                    val.extend(res.metadata.into_iter());
+                    RowPacker::for_existing_row(&mut val).extend(res.metadata.into_iter());
                 }
 
                 val
@@ -1024,16 +1024,15 @@ where
             style: UpsertStyle::Default(KeyEnvelope::Named(_)),
             ..
         } => {
-            let mut row_packer = mz_repr::Row::default();
+            let mut row_buf = mz_repr::Row::default();
             results.map(move |mut res| {
                 res.key = res.key.map(|k_result| {
                     k_result.map(|k| {
                         if k.iter().nth(1).is_none() {
                             k
                         } else {
-                            row_packer.clear();
-                            row_packer.push_list(k.iter());
-                            row_packer.finish_and_reuse()
+                            row_buf.packer().push_list(k.iter());
+                            row_buf.clone()
                         }
                     })
                 });
@@ -1064,7 +1063,7 @@ where
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value)| {
-                    key.extend_by_row(&value);
+                    RowPacker::for_existing_row(&mut key).extend_by_row(&value);
                     key
                 })
             }),
@@ -1076,12 +1075,13 @@ where
                         // Named semantics rename a key that is a single column, and encode a
                         // multi-column field as a struct with that name
                         let row = if key.iter().nth(1).is_none() {
-                            key.extend_by_row(&value);
+                            RowPacker::for_existing_row(&mut key).extend_by_row(&value);
                             key
                         } else {
                             let mut new_row = Row::default();
-                            new_row.push_list(key.iter());
-                            new_row.extend_by_row(&value);
+                            let mut packer = new_row.packer();
+                            packer.push_list(key.iter());
+                            packer.extend_by_row(&value);
                             new_row
                         };
                         row

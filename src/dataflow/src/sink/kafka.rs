@@ -56,7 +56,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_repr::{Datum, Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{Datum, Diff, RelationDesc, Row, RowPacker, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -99,7 +99,7 @@ where
                 .map(|((k, v), t, diff)| {
                     let v = v.map(|mut v| {
                         let t = t.to_string();
-                        v.push_list_with(|rp| {
+                        RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
                             rp.push(Datum::String(&t));
                         });
                         v

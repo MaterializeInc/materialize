@@ -478,14 +478,15 @@ pub fn construct<A: Allocate>(
                 );
                 let trace = collection
                     .map({
-                        let mut row_packer = Row::default();
+                        let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
                         move |row| {
                             let datums = datums.borrow_with(&row);
-                            row_packer.extend(key.iter().map(|k| datums[*k]));
-                            let row_key = row_packer.finish_and_reuse();
-                            row_packer.extend(value.iter().map(|k| datums[*k]));
-                            (row_key, row_packer.finish_and_reuse())
+                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                            let row_key = row_buf.clone();
+                            row_buf.packer().extend(value.iter().map(|k| datums[*k]));
+                            let row_val = row_buf.clone();
+                            (row_key, row_val)
                         }
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
@@ -511,9 +512,10 @@ fn create_address_row(id: i64, worker: i64, address: &[usize]) -> Row {
         datum_size(&id_datum) + datum_size(&worker_datum) + datum_list_size(&address_datums);
 
     let mut address_row = Row::with_capacity(row_capacity);
-    address_row.push(id_datum);
-    address_row.push(worker_datum);
-    address_row.push_list(address_datums);
+    let mut packer = address_row.packer();
+    packer.push(id_datum);
+    packer.push(worker_datum);
+    packer.push_list(address_datums);
 
     address_row
 }
