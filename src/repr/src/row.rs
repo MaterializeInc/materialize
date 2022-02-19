@@ -1359,6 +1359,69 @@ impl Default for RowArena {
     }
 }
 
+pub struct RowPacker {
+    inner: Row,
+}
+
+impl fmt::Debug for RowPacker {
+    /// Debug representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&self.inner, f)
+    }
+}
+
+impl RowPacker {
+    pub fn new() -> Self {
+        RowPacker {
+            inner: Row::default(),
+        }
+    }
+
+    pub fn activate(&mut self) -> RowPackerRef<'_> {
+        self.inner.clear();
+        RowPackerRef {
+            inner: &mut self.inner,
+        }
+    }
+}
+
+pub struct RowPackerRef<'row> {
+    inner: &'row mut Row,
+}
+
+impl fmt::Debug for RowPackerRef<'_> {
+    /// Debug representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&self.inner, f)
+    }
+}
+
+impl<'row> RowPackerRef<'row> {
+    #[inline]
+    pub fn push<'a, D>(self, datum: D) -> Self
+    where
+        D: Borrow<Datum<'a>>,
+    {
+        self.inner.push(datum);
+        self
+    }
+
+    /// Extend an existing `Row` with additional `Datum`s.
+    #[inline]
+    pub fn extend<'a, I, D>(self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.inner.extend(iter);
+        self
+    }
+
+    pub fn finish_and_reuse(self) -> Row {
+        self.inner.finish_and_reuse()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDateTime;

@@ -167,7 +167,7 @@ where
             //
             // This also means that we cannot push MFPs into the upsert operatot, as that would
             // mean persisting EvalErrors, which, also icky.
-            let mut row_packer = mz_repr::Row::default();
+            let mut row_packer = mz_repr::RowPacker::new();
             let stream = stream.flat_map(move |decode_result| {
                 if decode_result.key.is_none() {
                     // This is the same behaviour as regular upsert. It's not pretty, though.
@@ -178,17 +178,18 @@ where
 
                 // Fold metadata into the value if there is in fact a valid value.
                 let value = if let Some(Ok(value)) = decode_result.value {
-                    row_packer.clear();
-                    row_packer.extend(value.iter());
-                    row_packer.extend(decode_result.metadata.iter());
-                    Some(Ok(row_packer.finish_and_reuse()))
+                    Some(Ok(row_packer
+                        .activate()
+                        .extend(value.iter())
+                        .extend(decode_result.metadata.iter())
+                        .finish_and_reuse()))
                 } else {
                     decode_result.value
                 };
                 Some((decode_result.key.unwrap(), value, offset))
             });
 
-            let mut row_packer = mz_repr::Row::default();
+            let mut row_packer = mz_repr::RowPacker::new();
 
             let (upsert_output, upsert_persist_errs) =
                 stream.persistent_upsert(source_name, as_of_frontier, upsert_persist_config);
@@ -204,7 +205,7 @@ where
                                 let mut datums = Vec::with_capacity(source_arity);
                                 datums.extend(key.iter());
                                 datums.extend(value.iter());
-                                evaluate(&datums, &predicates, &position_or, &mut row_packer)
+                                evaluate(&datums, &predicates, &position_or, row_packer.activate())
                                     .map_err(DataflowError::from)
                             })
                             .transpose();
@@ -270,7 +271,7 @@ fn evaluate(
     datums: &[Datum],
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
-    row_packer: &mut mz_repr::Row,
+    row_packer: mz_repr::RowPackerRef<'_>,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
@@ -282,12 +283,14 @@ fn evaluate(
 
     // We pack dummy values in locations that do not reference
     // specific columns.
-    row_packer.clear();
-    row_packer.extend(position_or.iter().map(|x| match x {
-        Some(column) => datums[*column],
-        None => Datum::Dummy,
-    }));
-    Ok(Some(row_packer.finish_and_reuse()))
+    Ok(Some(
+        row_packer
+            .extend(position_or.iter().map(|x| match x {
+                Some(column) => datums[*column],
+                None => Datum::Dummy,
+            }))
+            .finish_and_reuse(),
+    ))
 }
 
 /// Internal core upsert logic.
@@ -318,7 +321,7 @@ where
             let mut current_values = HashMap::new();
 
             let mut vector = Vec::new();
-            let mut row_packer = mz_repr::Row::default();
+            let mut row_packer = mz_repr::RowPacker::new();
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
@@ -425,7 +428,7 @@ where
                                                         &datums,
                                                         &predicates,
                                                         &position_or,
-                                                        &mut row_packer,
+                                                        row_packer.activate(),
                                                     )
                                                     .map_err(DataflowError::from)
                                                 } else {
@@ -449,7 +452,7 @@ where
                                                 thin(
                                                     &upsert_envelope.key_indices,
                                                     &full_row,
-                                                    &mut row_packer,
+                                                    row_packer.activate(),
                                                 )
                                             })
                                             .map_err(|e| e.clone());
@@ -461,7 +464,7 @@ where
                                                         &upsert_envelope.key_indices,
                                                         &decoded_key,
                                                         &v,
-                                                        &mut row_packer,
+                                                        row_packer.activate(),
                                                     )
                                                 })
                                             })
@@ -472,7 +475,7 @@ where
                                                     &upsert_envelope.key_indices,
                                                     &decoded_key,
                                                     &v,
-                                                    &mut row_packer,
+                                                    row_packer.activate(),
                                                 )
                                             })
                                         })
@@ -516,40 +519,39 @@ where
 
 /// `thin` uses information from the source description to find which indexes in the row
 /// are keys and skip them.
-fn thin(key_indices: &[usize], value: &Row, row_packer: &mut Row) -> Row {
-    row_packer.clear();
+fn thin(key_indices: &[usize], value: &Row, mut row_packer: mz_repr::RowPackerRef<'_>) -> Row {
     let values = &mut value.iter();
     let mut next_idx = 0;
     for &key_idx in key_indices {
         // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(key_idx - next_idx));
+        row_packer = row_packer.extend(values.take(key_idx - next_idx));
         // Then, skip this key datum
         values.next().unwrap();
         next_idx = key_idx + 1;
     }
     // Finally, push any columns after the last key index
-    row_packer.extend(values);
-
-    row_packer.finish_and_reuse()
+    row_packer.extend(values).finish_and_reuse()
 }
 
 /// `rehydrate` uses information from the source description to find which indexes in the row
 /// are keys and add them back in in the right places.
-fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row {
-    row_packer.clear();
+fn rehydrate(
+    key_indices: &[usize],
+    key: &Row,
+    thinned_value: &Row,
+    mut row_packer: mz_repr::RowPackerRef<'_>,
+) -> Row {
     let values = &mut thinned_value.iter();
     let mut next_idx = 0;
     for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
         // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(key_idx - next_idx));
+        row_packer = row_packer.extend(values.take(key_idx - next_idx));
         // Then, push this key datum
-        row_packer.push(key_datum);
+        row_packer = row_packer.push(key_datum);
         next_idx = key_idx + 1;
     }
     // Finally, push any columns after the last key index
-    row_packer.extend(values);
-
-    row_packer.finish_and_reuse()
+    row_packer.extend(values).finish_and_reuse()
 }
 
 #[cfg(test)]
@@ -558,26 +560,26 @@ mod tests {
 
     #[test]
     fn test_rehydrate_thin_first() {
-        let mut packer = Row::default();
+        let mut packer = mz_repr::RowPacker::new();
 
         let key_indices = vec![0];
         let key = Row::pack([Datum::String("key")]);
 
         let thinned = Row::pack([Datum::String("two")]);
 
-        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, packer.activate());
 
         assert_eq!(
             rehydrated,
             Row::pack([Datum::String("key"), Datum::String("two"),])
         );
 
-        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+        assert_eq!(thin(&key_indices, &rehydrated, packer.activate()), thinned);
     }
 
     #[test]
     fn test_rehydrate_thin_middle() {
-        let mut packer = Row::default();
+        let mut packer = mz_repr::RowPacker::new();
 
         let key_indices = vec![2];
         let key = Row::pack([Datum::String("key")]);
@@ -588,7 +590,7 @@ mod tests {
             Datum::String("four"),
         ]);
 
-        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, packer.activate());
 
         assert_eq!(
             rehydrated,
@@ -600,12 +602,12 @@ mod tests {
             ])
         );
 
-        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+        assert_eq!(thin(&key_indices, &rehydrated, packer.activate()), thinned);
     }
 
     #[test]
     fn test_rehydrate_thin_multiple() {
-        let mut packer = Row::default();
+        let mut packer = mz_repr::RowPacker::new();
 
         let key_indices = vec![2, 4];
         let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
@@ -617,7 +619,7 @@ mod tests {
             Datum::String("six"),
         ]);
 
-        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+        let rehydrated = rehydrate(&key_indices, &key, &thinned, packer.activate());
 
         assert_eq!(
             rehydrated,
@@ -631,12 +633,12 @@ mod tests {
             ])
         );
 
-        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+        assert_eq!(thin(&key_indices, &rehydrated, packer.activate()), thinned);
     }
 
     #[test]
     fn test_thin_end() {
-        let mut packer = Row::default();
+        let mut packer = mz_repr::RowPacker::new();
 
         let key_indices = vec![2];
 
@@ -648,7 +650,7 @@ mod tests {
                     Datum::String("two"),
                     Datum::String("key"),
                 ]),
-                &mut packer
+                packer.activate()
             ),
             Row::pack([Datum::String("one"), Datum::String("two")]),
         );

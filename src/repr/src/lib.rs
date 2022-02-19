@@ -35,7 +35,8 @@ pub mod util;
 pub use datum_vec::{DatumVec, DatumVecBorrow};
 pub use relation::{ColumnName, ColumnType, NotNullViolation, RelationDesc, RelationType};
 pub use row::{
-    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena, RowRef,
+    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena,
+    RowPacker, RowPackerRef, RowRef,
 };
 pub use scalar::{AsColumnType, Datum, DatumType, ScalarBaseType, ScalarType};
 
