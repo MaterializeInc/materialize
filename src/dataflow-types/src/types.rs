@@ -48,23 +48,23 @@ impl PeekResponse {
 
 /// Various responses that can be communicated about the progress of a TAIL command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub enum TailResponse {
+pub enum TailResponse<T = mz_repr::Timestamp> {
     /// Progress information. Subsequent messages from this worker will only contain timestamps
     /// greater or equal to an element of this frontier.
     ///
     /// An empty antichain indicates the end.
-    Progress(Antichain<Timestamp>),
+    Progress(Antichain<T>),
     /// Rows that should be returned in order to the client.
-    Rows(Vec<(Timestamp, Row, Diff)>),
+    Rows(Vec<(T, Row, Diff)>),
     /// The TAIL dataflow was dropped before completing. Indicates the end.
     Dropped,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
-pub struct Update {
+pub struct Update<T = mz_repr::Timestamp> {
     pub row: Row,
-    pub timestamp: u64,
+    pub timestamp: T,
     pub diff: Diff,
 }
 
@@ -106,7 +106,7 @@ pub struct SourceInstanceKey {
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct DataflowDescription<View> {
+pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
     /// Indexes made available to the dataflow.
@@ -128,7 +128,7 @@ pub struct DataflowDescription<View> {
     /// If this is set, it should override the default setting determined by
     /// the upper bound of `since` frontiers contributing to the dataflow.
     /// It is an error for this to be set to a frontier not beyond that default.
-    pub as_of: Option<Antichain<Timestamp>>,
+    pub as_of: Option<Antichain<T>>,
     /// Human readable name
     pub debug_name: String,
 }
