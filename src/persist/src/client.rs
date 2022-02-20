@@ -220,7 +220,7 @@ impl RuntimeReadClient {
     }
 }
 
-/// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
+/// A handle that allows writes of ((Key, Value), Time, i64) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
 #[derive(Debug)]
 pub struct StreamWriteHandle<K, V> {
@@ -252,10 +252,10 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
         self.stream_id.clone()
     }
 
-    /// Asynchronously persists `(Key, Value, Time, Diff)` updates.
+    /// Asynchronously persists `(Key, Value, Time, i64)` updates.
     pub fn write<'a, I>(&self, updates: I) -> PFuture<SeqNo>
     where
-        I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
+        I: IntoIterator<Item = &'a ((K, V), u64, i64)>,
     {
         let (tx, rx) = PFuture::new();
 
@@ -352,7 +352,7 @@ impl<K: Codec, V: Codec> WriteReqBuilder<K, V> {
     }
 }
 
-impl<'a, K: Codec, V: Codec, T: Borrow<((K, V), u64, isize)>> FromIterator<T>
+impl<'a, K: Codec, V: Codec, T: Borrow<((K, V), u64, i64)>> FromIterator<T>
     for WriteReqBuilder<K, V>
 {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
@@ -671,7 +671,7 @@ impl AtomicWriteBuilder<'_> {
     where
         K: Codec,
         V: Codec,
-        T: Borrow<((K, V), u64, isize)>,
+        T: Borrow<((K, V), u64, i64)>,
         I: IntoIterator<Item = T>,
     {
         let stream_id = handle.stream_id()?;
@@ -749,7 +749,7 @@ pub struct DecodedSnapshotIter<K, V> {
 }
 
 impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
-    type Item = Result<((K, V), u64, isize), Error>;
+    type Item = Result<((K, V), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|x| {
@@ -794,7 +794,7 @@ impl StopRuntimeOnDrop {
     }
 }
 
-/// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
+/// A handle for a persisted stream of ((Key, Value), Time, i64) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
 #[derive(Debug)]
 pub struct StreamReadHandle<K, V> {

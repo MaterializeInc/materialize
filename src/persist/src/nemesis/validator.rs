@@ -28,9 +28,9 @@ use crate::storage::SeqNo;
 pub struct Validator {
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
-    writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, isize)>>,
+    writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, i64)>>,
     output_by_stream:
-        HashMap<String, Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, isize)>>>,
+        HashMap<String, Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, i64)>>>,
     available_snapshots: HashMap<SnapshotId, (String, Instant)>,
     errors: Vec<String>,
     uptime: Uptime,
@@ -297,7 +297,7 @@ impl Validator {
                     (kv, ts, diff)
                 })
                 .collect();
-            let mut expected: Vec<((String, ()), u64, isize)> = self
+            let mut expected: Vec<((String, ()), u64, i64)> = self
                 .writes_by_seqno
                 .range((req.stream.clone(), SeqNo(0))..(req.stream, SeqNo(u64::MAX)))
                 .flat_map(|(_, v)| v)
@@ -383,7 +383,7 @@ impl Validator {
                 self.check_success(meta, &res, require_succeed);
                 if let Ok(res) = res {
                     let mut actual = res.contents;
-                    let mut expected: Vec<((String, ()), u64, isize)> = self
+                    let mut expected: Vec<((String, ()), u64, i64)> = self
                         .writes_by_seqno
                         .range((stream.clone(), SeqNo(0))..=(stream, SeqNo(res.seqno)))
                         .flat_map(|(_, v)| v)
@@ -422,8 +422,8 @@ impl Validator {
 }
 
 fn updates_eq(
-    actual: &mut Vec<((String, ()), u64, isize)>,
-    expected: &mut Vec<((String, ()), u64, isize)>,
+    actual: &mut Vec<((String, ()), u64, i64)>,
+    expected: &mut Vec<((String, ()), u64, i64)>,
     since: Antichain<u64>,
 ) -> bool {
     // TODO: This is also used by the implementation. Write a slower but more

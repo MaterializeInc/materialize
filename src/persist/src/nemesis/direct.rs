@@ -133,7 +133,7 @@ struct Ingest {
 /// A handle to the "dataflowd" (output) side of a persisted collection.
 #[derive(Debug)]
 struct Dataflow {
-    output: Receiver<TimelyCaptureEvent<u64, (Result<(String, ()), String>, u64, isize)>>,
+    output: Receiver<TimelyCaptureEvent<u64, (Result<(String, ()), String>, u64, i64)>>,
     workers: TimelyWorkers,
     progress_tx: DataflowProgressHandle,
 }

@@ -25,7 +25,7 @@ use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, Response};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_expr::GlobalId;
-use mz_repr::Timestamp;
+use mz_repr::{Diff, Timestamp};
 
 use crate::activator::RcActivator;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -313,7 +313,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                                     .iter()
                                     .map(|u| {
                                         let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
-                                        (*u.0, *u.1, true, ts, *u.3 as isize)
+                                        (*u.0, *u.1, true, ts, *u.3)
                                     })
                                     .collect();
 
@@ -329,7 +329,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                                     .iter()
                                     .map(|u| {
                                         let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
-                                        (*u.0, *u.1, true, ts, *u.3 as isize)
+                                        (*u.0, *u.1, true, ts, *u.3)
                                     })
                                     .collect();
 
@@ -378,7 +378,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         let errs = self
             .timely_worker
             .dataflow_named("Dataflow: logging", |scope| {
-                Collection::<_, DataflowError, isize>::empty(scope)
+                Collection::<_, DataflowError, Diff>::empty(scope)
                     .arrange()
                     .trace
             });

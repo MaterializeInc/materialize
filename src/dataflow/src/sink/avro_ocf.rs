@@ -65,7 +65,7 @@ where
 }
 
 fn avro_ocf<G>(
-    collection: Collection<G, (Option<Row>, Option<Row>)>,
+    collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
     connector: AvroOcfSinkConnector,
     desc: RelationDesc,

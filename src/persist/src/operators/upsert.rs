@@ -68,10 +68,7 @@ pub trait PersistentUpsert<G, K: Codec, V: Codec, T> {
         name: &str,
         as_of_frontier: Antichain<u64>,
         persist_config: PersistentUpsertConfig<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    )
+    ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>)
     where
         G: Scope<Timestamp = u64>;
 }
@@ -116,10 +113,7 @@ where
         name: &str,
         as_of_frontier: Antichain<u64>,
         persist_config: PersistentUpsertConfig<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    )
+    ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>)
     where
         G: Scope<Timestamp = u64>,
     {
@@ -302,7 +296,7 @@ where
 /// Ingests differential updates, consolidates them, and emits a final `HashMap` that contains the
 /// consolidated upsert state.
 struct DifferentialStateIngester<K, V> {
-    differential_state: HashMap<(K, V), isize>,
+    differential_state: HashMap<(K, V), i64>,
 }
 
 impl<K, V> DifferentialStateIngester<K, V>
@@ -316,7 +310,7 @@ where
         }
     }
 
-    fn add_update(&mut self, update: ((K, V), u64, isize)) {
+    fn add_update(&mut self, update: ((K, V), u64, i64)) {
         let ((k, v), _ts, diff) = update;
 
         *self.differential_state.entry((k, v)).or_default() += diff;
@@ -329,7 +323,7 @@ where
 
         for ((key, value), diff) in self.differential_state.into_iter() {
             // our state must be internally consistent
-            assert!(diff == 1, "Diff for ({:?}, {:?}) is {}", key, value, diff);
+            assert!(diff == 1, "i64 for ({:?}, {:?}) is {}", key, value, diff);
             match state.insert(key.clone(), value) {
                 None => (), // it's all good
                 // we must be internally consistent: there can only be one value per key in the

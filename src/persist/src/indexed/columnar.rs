@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A columnar representation of ((Key, Val), Time, Diff) data suitable for in-memory
+//! A columnar representation of ((Key, Val), Time, i64) data suitable for in-memory
 //! reads and persistent storage.
 
 use std::iter::FromIterator;
@@ -15,7 +15,6 @@ use std::{cmp, fmt};
 
 use arrow2::buffer::{Buffer, MutableBuffer};
 use arrow2::types::Index;
-use mz_ore::cast::CastFrom;
 
 pub mod arrow;
 pub mod parquet;
@@ -39,11 +38,11 @@ pub const KEY_VAL_DATA_MAX_LEN: usize = i32::MAX as usize;
 
 const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 
-/// A set of ((Key, Val), Time, Diff) records stored in a columnar
+/// A set of ((Key, Val), Time, i64) records stored in a columnar
 /// representation.
 ///
 /// Note that the data are unsorted, and unconsolidated (so there may be
-/// multiple instances of the same ((Key, Val), Time), and some Diffs might be
+/// multiple instances of the same ((Key, Val), Time), and some i64s might be
 /// zero, or add up to zero).
 ///
 /// The i'th key's data is stored in
@@ -83,7 +82,7 @@ impl fmt::Debug for ColumnarRecords {
 }
 
 impl ColumnarRecords {
-    /// The number of (potentially duplicated) ((Key, Val), Time, Diff) records
+    /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
     /// stored in Self.
     pub fn len(&self) -> usize {
         self.len
@@ -109,12 +108,12 @@ impl ColumnarRecords {
 }
 
 // TODO: deduplicate this with the other FromIterator implementation.
-impl<'a, K, V> FromIterator<&'a ((K, V), u64, isize)> for ColumnarRecordsVec
+impl<'a, K, V> FromIterator<&'a ((K, V), u64, i64)> for ColumnarRecordsVec
 where
     K: AsRef<[u8]> + 'a,
     V: AsRef<[u8]> + 'a,
 {
-    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, isize)>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, i64)>>(iter: T) -> Self {
         let iter = iter.into_iter();
         let size_hint = iter.size_hint();
 
@@ -136,12 +135,12 @@ where
     }
 }
 
-impl<K, V> FromIterator<((K, V), u64, isize)> for ColumnarRecordsVec
+impl<K, V> FromIterator<((K, V), u64, i64)> for ColumnarRecordsVec
 where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    fn from_iter<T: IntoIterator<Item = ((K, V), u64, isize)>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = ((K, V), u64, i64)>>(iter: T) -> Self {
         let iter = iter.into_iter();
         let size_hint = iter.size_hint();
 
@@ -291,7 +290,7 @@ impl<'a> ColumnarRecordsRef<'a> {
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
-    fn get(&self, idx: usize) -> Option<((&'a [u8], &'a [u8]), u64, isize)> {
+    fn get(&self, idx: usize) -> Option<((&'a [u8], &'a [u8]), u64, i64)> {
         if idx >= self.len {
             return None;
         }
@@ -301,7 +300,7 @@ impl<'a> ColumnarRecordsRef<'a> {
         let key = &self.key_data[key_range];
         let val = &self.val_data[val_range];
         let ts = self.timestamps[idx];
-        let diff = isize::cast_from(self.diffs[idx]);
+        let diff = self.diffs[idx];
         Some(((key, val), ts, diff))
     }
 
@@ -322,7 +321,7 @@ pub struct ColumnarRecordsIter<'a> {
 }
 
 impl<'a> Iterator for ColumnarRecordsIter<'a> {
-    type Item = ((&'a [u8], &'a [u8]), u64, isize);
+    type Item = ((&'a [u8], &'a [u8]), u64, i64);
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.records.len, Some(self.records.len))
@@ -337,7 +336,7 @@ impl<'a> Iterator for ColumnarRecordsIter<'a> {
 
 impl<'a> ExactSizeIterator for ColumnarRecordsIter<'a> {}
 
-/// An abstraction to incrementally add ((Key, Value), Time, Diff) records
+/// An abstraction to incrementally add ((Key, Value), Time, i64) records
 /// in a columnar representation, and eventually get back a [ColumnarRecords].
 pub struct ColumnarRecordsBuilder {
     len: usize,
@@ -375,7 +374,7 @@ impl Default for ColumnarRecordsBuilder {
 }
 
 impl ColumnarRecordsBuilder {
-    /// The number of (potentially duplicated) ((Key, Val), Time, Diff) records
+    /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
     /// stored in Self.
     pub fn len(&self) -> usize {
         self.len
@@ -432,7 +431,7 @@ impl ColumnarRecordsBuilder {
     /// added if it exceeds the size limitations of ColumnarBatch. This method
     /// is atomic, if it fails, no partial data will have been added.
     #[must_use]
-    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, isize)) -> bool {
+    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, i64)) -> bool {
         let ((key, val), ts, diff) = record;
 
         // Check size invariants ahead of time so we stay atomic when we can't
@@ -450,7 +449,7 @@ impl ColumnarRecordsBuilder {
         self.val_offsets
             .push(i32::try_from(self.val_data.len()).expect("val_data is smaller than 2GB"));
         self.timestamps.push(ts);
-        self.diffs.push(i64::cast_from(diff));
+        self.diffs.push(diff);
         self.len += 1;
         debug_assert_eq!(self.borrow().validate(), Ok(()));
         true
@@ -515,7 +514,7 @@ impl ColumnarRecordsVecBuilder {
         }
     }
 
-    /// The number of (potentially duplicated) ((Key, Val), Time, Diff) records
+    /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
     /// stored in Self.
     pub fn len(&self) -> usize {
         self.current.len() + self.filled.iter().map(|x| x.len()).sum::<usize>()
@@ -544,7 +543,7 @@ impl ColumnarRecordsVecBuilder {
     }
 
     /// Add a record to Self.
-    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, isize)) {
+    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, i64)) {
         let ((key, val), ts, diff) = record;
         if !self.current.can_fit(key, val, self.key_val_data_max_len) {
             // We don't have room in this ColumnarRecords, finish it up and
@@ -572,6 +571,7 @@ impl ColumnarRecordsVecBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_ore::cast::CastFrom;
 
     /// Smoke test some edge cases around empty sets of records and empty keys/vals
     ///

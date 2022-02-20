@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! A persistent, compacting data structure containing indexed `(Key, Value,
-//! Time, Diff)` entries.
+//! Time, i64)` entries.
 
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
@@ -35,7 +35,7 @@ use crate::pfuture::PFuture;
 use crate::storage::{Blob, BlobRead, SeqNo};
 
 /// A persistent, compacting data structure containing indexed `(Key, Value,
-/// Time, Diff)` entries.
+/// Time, i64)` entries.
 ///
 ///
 /// The data is logically and physically separated into two "buckets":
@@ -724,7 +724,7 @@ pub struct UnsealedSnapshotIter {
     /// An open upper bound on the times of the contained updates.
     ts_upper: Antichain<u64>,
 
-    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
     batches: VecDeque<PFuture<Arc<BlobUnsealedBatch>>>,
 }
 
@@ -740,7 +740,7 @@ impl fmt::Debug for UnsealedSnapshotIter {
 }
 
 impl Iterator for UnsealedSnapshotIter {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -817,7 +817,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 // in roughly increasing timestamp order, but it's unclear if this is in any way
 // important.
 pub struct TraceSnapshotIter {
-    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
     batches: VecDeque<PFuture<Arc<BlobTraceBatch>>>,
 }
 
@@ -840,7 +840,7 @@ impl fmt::Debug for TraceSnapshotIter {
 }
 
 impl Iterator for TraceSnapshotIter {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -936,7 +936,7 @@ pub struct ArrangementSnapshotIter {
 }
 
 impl Iterator for ArrangementSnapshotIter {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, i64), Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|x| {
@@ -1000,7 +1000,7 @@ mod tests {
     }
 
     // Generate a list of ((k, v), t, 1) updates at all of the specified times.
-    fn unsealed_updates(update_times: Vec<u64>) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
+    fn unsealed_updates(update_times: Vec<u64>) -> Vec<((Vec<u8>, Vec<u8>), u64, i64)> {
         update_times
             .into_iter()
             .map(|t| (("k".into(), "v".into()), t, 1))
@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     // Generate a ColumnarRecords containing the provided updates
-    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> Vec<ColumnarRecords> {
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> Vec<ColumnarRecords> {
         updates.iter().collect::<ColumnarRecordsVec>().into_inner()
     }
 
@@ -1045,7 +1045,7 @@ mod tests {
         blob: &BlobCache<L>,
         lo: u64,
         hi: Option<u64>,
-    ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
+    ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, i64)>, Error> {
         let hi = hi.map_or_else(Antichain::new, Antichain::from_elem);
         let snapshot = arrangement
             .unsealed_snapshot(Antichain::from_elem(lo), hi)?

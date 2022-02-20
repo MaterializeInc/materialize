@@ -62,13 +62,10 @@ pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    );
+    ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>);
 }
 
-impl<G, K, V> Persist<G, K, V> for Stream<G, ((K, V), u64, isize)>
+impl<G, K, V> Persist<G, K, V> for Stream<G, ((K, V), u64, i64)>
 where
     G: Scope<Timestamp = u64>,
     K: TimelyData + Codec,
@@ -78,10 +75,7 @@ where
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    ) {
+    ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>) {
         let scope = self.scope();
         let operator_name = format!("persist({})", name);
         let mut persist_op = OperatorBuilder::new(operator_name.clone(), self.scope());
@@ -189,10 +183,10 @@ pub trait Seal<G: Scope<Timestamp = u64>, D: TimelyData> {
         name: &str,
         additional_frontiers: Vec<ProbeHandle<u64>>,
         write: MultiWriteHandle,
-    ) -> Stream<G, (D, u64, isize)>;
+    ) -> Stream<G, (D, u64, i64)>;
 }
 
-impl<G, D> Seal<G, D> for Stream<G, (D, u64, isize)>
+impl<G, D> Seal<G, D> for Stream<G, (D, u64, i64)>
 where
     G: Scope<Timestamp = u64>,
     D: TimelyData,
@@ -202,7 +196,7 @@ where
         name: &str,
         additional_frontiers: Vec<ProbeHandle<u64>>,
         write: MultiWriteHandle,
-    ) -> Stream<G, (D, u64, isize)> {
+    ) -> Stream<G, (D, u64, i64)> {
         let operator_name = format!("seal({})", name);
         let mut seal_op = OperatorBuilder::new(operator_name.clone(), self.scope());
 
@@ -400,16 +394,16 @@ pub trait AwaitFrontier<G: Scope<Timestamp = u64>, D> {
     /// the frontier to pass. The latter is an implementation detail of `delay()` that is not
     /// advertised in its documentation. We therefore have our own implementation that we control
     /// to be sure we don't break if `delay()` ever changes.
-    fn await_frontier(&self, name: &str) -> Stream<G, (D, u64, isize)>;
+    fn await_frontier(&self, name: &str) -> Stream<G, (D, u64, i64)>;
 }
 
-impl<G, D> AwaitFrontier<G, D> for Stream<G, (D, u64, isize)>
+impl<G, D> AwaitFrontier<G, D> for Stream<G, (D, u64, i64)>
 where
     G: Scope<Timestamp = u64>,
     D: TimelyData,
 {
     // Note: This is mostly a copy of the timely delay() operator without the delaying part.
-    fn await_frontier(&self, name: &str) -> Stream<G, (D, u64, isize)> {
+    fn await_frontier(&self, name: &str) -> Stream<G, (D, u64, i64)> {
         let operator_name = format!("await_frontier({})", name);
 
         // The values here are Vecs of Vecs. That's how the original timely code does it, to re-use
@@ -462,13 +456,10 @@ pub trait RetractUnsealed<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyDat
         name: &str,
         write: StreamWriteHandle<K, V>,
         upper_ts: u64,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    );
+    ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>);
 }
 
-impl<G, K, V> RetractUnsealed<G, K, V> for Stream<G, ((K, V), u64, isize)>
+impl<G, K, V> RetractUnsealed<G, K, V> for Stream<G, ((K, V), u64, i64)>
 where
     G: Scope<Timestamp = u64>,
     K: TimelyData + Codec + Debug,
@@ -479,10 +470,7 @@ where
         name: &str,
         write: StreamWriteHandle<K, V>,
         upper_ts: u64,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    ) {
+    ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>) {
         let (pass_through, to_retract) = self.branch(move |_, (_, t, _)| t >= &upper_ts);
 
         let (retract_oks, errs) = to_retract
@@ -820,7 +808,7 @@ mod tests {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
                 let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
                 let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
-                let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
+                let mut primary_input: Handle<u64, ((), u64, i64)> = Handle::new();
                 let mut condition_input = Handle::new();
                 let primary_stream = primary_input.to_stream(scope);
                 let condition_stream = condition_input.to_stream(scope);
@@ -951,7 +939,7 @@ mod tests {
         let guards = timely::execute(Config::process(3), move |worker| {
             let (mut input, seal_probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("primary");
-                let mut input: Handle<u64, ((), u64, isize)> = Handle::new();
+                let mut input: Handle<u64, ((), u64, i64)> = Handle::new();
                 let stream = input.to_stream(scope);
 
                 let multi_write = MultiWriteHandle::new(&write);

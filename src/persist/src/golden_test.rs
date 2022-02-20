@@ -261,7 +261,7 @@ struct PersistStreamState {
     name: String,
     seal: Antichain<u64>,
     since: Antichain<u64>,
-    snap: Vec<((String, ()), u64, isize)>,
+    snap: Vec<((String, ()), u64, i64)>,
 }
 
 const DATAZ: &'static str = include_str!("golden_test.json");

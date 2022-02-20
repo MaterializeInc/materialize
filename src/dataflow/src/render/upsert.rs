@@ -298,7 +298,7 @@ fn upsert_core<G>(
     as_of_frontier: Antichain<Timestamp>,
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
-) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
+) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {

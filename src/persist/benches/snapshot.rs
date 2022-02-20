@@ -84,7 +84,7 @@ fn bench_blob_get_one_iter<B: BlobRead>(blob: &B, key: &str) -> Result<Vec<u8>, 
 fn read_full_snapshot<K: Codec + Ord, V: Codec + Ord>(
     read: &StreamReadHandle<K, V>,
     expected_len: usize,
-) -> Vec<((K, V), u64, isize)> {
+) -> Vec<((K, V), u64, i64)> {
     let buf = read
         .snapshot()
         .expect("reading snapshot cannot fail")

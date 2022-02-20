@@ -47,7 +47,7 @@ const DEFAULT_BATCH_MAX_COUNT: usize = (8 * 1024 * 1024) / DEFAULT_RECORD_SIZE_B
 // round-ish number.
 const DEFAULT_RECORD_COUNT: usize = 819_200;
 
-const TS_DIFF_GOODPUT_SIZE: usize = size_of::<u64>() + size_of::<isize>();
+const TS_DIFF_GOODPUT_SIZE: usize = size_of::<u64>() + size_of::<i64>();
 
 fn read_env_usize(key: &str, default: usize) -> usize {
     match env::var(key) {
@@ -139,7 +139,7 @@ impl DataGenerator {
         Some(batch.finish())
     }
 
-    fn gen_record(&mut self, record_idx: usize) -> ((&[u8], &[u8]), u64, isize) {
+    fn gen_record(&mut self, record_idx: usize) -> ((&[u8], &[u8]), u64, i64) {
         assert!(record_idx < self.record_count);
         assert!(self.record_size_bytes > TS_DIFF_GOODPUT_SIZE);
 
@@ -171,7 +171,7 @@ impl DataGenerator {
     }
 
     /// Returns an [Iterator] of all records.
-    pub fn records(&self) -> impl Iterator<Item = ((Vec<u8>, Vec<u8>), u64, isize)> {
+    pub fn records(&self) -> impl Iterator<Item = ((Vec<u8>, Vec<u8>), u64, i64)> {
         let mut config = self.clone();
         (0..self.record_count).map(move |record_idx| {
             let ((k, v), t, d) = config.gen_record(record_idx);

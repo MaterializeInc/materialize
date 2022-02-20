@@ -68,7 +68,7 @@ pub(crate) fn import_table<G>(
     persisted_name: Option<String>,
 ) -> (
     LocalInput,
-    (Collection<G, Row>, Collection<G, DataflowError>),
+    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -144,7 +144,7 @@ pub(crate) fn import_source<G>(
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
 ) -> (
-    (Collection<G, Row>, Collection<G, DataflowError>),
+    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
     Rc<dyn std::any::Any>,
 )
 where
@@ -197,7 +197,7 @@ where
 
             // All sources should push their various error streams into this vector,
             // whose contents will be concatenated and inserted along the collection.
-            let mut error_collections = Vec::<Collection<_, _>>::new();
+            let mut error_collections = Vec::<Collection<_, _, Diff>>::new();
 
             let source_persist_config = match (persist, storage_state.persist.as_mut()) {
                 (Some(persist_desc), Some(persist)) => {
@@ -541,8 +541,8 @@ where
                                 // place and re-use. There seem to be enough instances of this
                                 // by now.
                                 fn split_ok_err(
-                                    x: (Result<Row, DecodeError>, u64, isize),
-                                ) -> Result<(Row, u64, isize), (DataflowError, u64, isize)>
+                                    x: (Result<Row, DecodeError>, u64, Diff),
+                                ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)>
                                 {
                                     match x {
                                         (Ok(row), ts, diff) => Ok((row, ts, diff)),

@@ -1349,9 +1349,9 @@ impl SourceReaderPersistence {
         mz_persist::error::Error,
     > {
         // Materialized version of bindings updates that are not beyond the common seal timestamp.
-        let mut valid_bindings: HashMap<_, isize> = HashMap::new();
+        let mut valid_bindings: HashMap<_, Diff> = HashMap::new();
 
-        let mut retractions: HashMap<_, isize> = HashMap::new();
+        let mut retractions: HashMap<_, Diff> = HashMap::new();
 
         let snapshot = self.config.read_handle.snapshot()?;
         let buf = snapshot.into_iter().collect::<Result<Vec<_>, _>>()?;
@@ -1503,8 +1503,8 @@ fn maybe_emit_timestamp_bindings(
     bindings_cap: &Capability<u64>,
     bindings_output: &mut OutputHandle<
         u64,
-        ((SourceTimestamp, AssignedTimestamp), u64, isize),
-        Tee<u64, ((SourceTimestamp, AssignedTimestamp), u64, isize)>,
+        ((SourceTimestamp, AssignedTimestamp), u64, Diff),
+        Tee<u64, ((SourceTimestamp, AssignedTimestamp), u64, Diff)>,
     >,
 ) {
     let timestamp_bindings_updater = match timestamp_bindings_updater.as_mut() {
@@ -1519,7 +1519,7 @@ fn maybe_emit_timestamp_bindings(
     // Emit required changes downstream.
     let to_emit = changes
         .into_iter()
-        .map(|(binding, diff)| (binding, bindings_cap.time().clone(), isize::cast_from(diff)));
+        .map(|(binding, diff)| (binding, bindings_cap.time().clone(), diff));
 
     // We're collecting into a Vec because we want to log and emit. This is a bit
     // wasteful but we don't expect large numbers of bindings.
