@@ -253,8 +253,14 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 /// State maintained about individual collections.
 pub struct CollectionState<T> {
     /// Accumulation of read capabilities for the collection.
+    ///
+    /// We maintain that `since.frontier()` is the expressed compaction frontier.
     pub(super) since: MutableAntichain<T>,
     /// Reported progress in the write capabilities.
+    ///
+    /// Importantly, this is not a write capability, but what we have heard about the
+    /// write capabilities of others. All future writes will have times greater that or
+    /// equal to `upper_frontier.frontier()`.
     pub(super) upper_frontier: MutableAntichain<T>,
     /// The implicit capability associated with source creation.
     // TODO(mcsherry): make these capabilities explicit.
