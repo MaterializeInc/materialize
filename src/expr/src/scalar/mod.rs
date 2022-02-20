@@ -643,8 +643,7 @@ impl MirScalarExpr {
                                     exprs: list_exprs,
                                 } = &mut exprs[0]
                                 {
-                                    if matches!(func, VariadicFunc::ListCreate { .. })
-                                        && list_exprs.len() > index_literal
+                                    if matches!(func, VariadicFunc::ListCreate { .. }) && index_literal < list_exprs.len()
                                     {
                                         *e = list_exprs.swap_remove(index_literal);
                                     }
@@ -1575,6 +1574,64 @@ mod tests {
                 },
                 output: err(EvalError::DivisionByZero),
             },
+            TestCase{
+                input: MirScalarExpr::CallVariadic{
+                    func: VariadicFunc::ListIndex,
+                    exprs: vec![
+                        MirScalarExpr::CallVariadic{
+                            func: VariadicFunc::ListCreate{elem_type: ScalarType::Int64},
+                            exprs: vec![col(0), col(1), col(2)]
+                        },
+                        lit(1)
+                    ]
+                },
+                output: col(0)
+            },
+            TestCase{
+                input: MirScalarExpr::CallVariadic{
+                    func: VariadicFunc::ListIndex,
+                    exprs: vec![
+                        MirScalarExpr::CallVariadic{
+                            func: VariadicFunc::ListCreate{elem_type: ScalarType::Int64},
+                            exprs: vec![col(0), col(1), col(2)]
+                        },
+                        lit(-1)
+                    ]
+                },
+                output: MirScalarExpr::CallVariadic{
+                    func: VariadicFunc::ListIndex,
+                    exprs: vec![
+                        MirScalarExpr::CallVariadic{
+                            func: VariadicFunc::ListCreate{elem_type: ScalarType::Int64},
+                            exprs: vec![col(0), col(1), col(2)]
+                        },
+                        lit(-1)
+                    ]
+                }
+            },
+            TestCase{
+                input: MirScalarExpr::CallVariadic{
+                    func: VariadicFunc::ListIndex,
+                    exprs: vec![
+                        MirScalarExpr::CallVariadic{
+                            func: VariadicFunc::ListCreate{elem_type: ScalarType::Int64},
+                            exprs: vec![col(0), col(1), col(2)]
+                        },
+                        lit(10)
+                    ]
+                },
+                output: MirScalarExpr::CallVariadic{
+                    func: VariadicFunc::ListIndex,
+                    exprs: vec![
+                        MirScalarExpr::CallVariadic{
+                            func: VariadicFunc::ListCreate{elem_type: ScalarType::Int64},
+                            exprs: vec![col(0), col(1), col(2)]
+                        },
+                        lit(10)
+                    ]
+                }
+            }
+
         ];
 
         for tc in test_cases {
