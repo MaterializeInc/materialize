@@ -632,6 +632,24 @@ impl MirScalarExpr {
                                     e.typ(&relation_type).scalar_type,
                                 ),
                             };
+                        } else if *func == VariadicFunc::ListIndex && exprs[1].is_literal_ok() {
+                            let literal = match exprs[1].as_literal().unwrap().unwrap() {
+                                Datum::Int64(data) => usize::try_from(data - 1).ok(),
+                                _ => None,
+                            };
+                            if let Some(index_literal) = literal {
+                                if let MirScalarExpr::CallVariadic {
+                                    func,
+                                    exprs: list_exprs,
+                                } = &mut exprs[0]
+                                {
+                                    if matches!(func, VariadicFunc::ListCreate { .. })
+                                        && list_exprs.len() > index_literal
+                                    {
+                                        *e = list_exprs.swap_remove(index_literal);
+                                    }
+                                }
+                            }
                         }
                     }
                     MirScalarExpr::If { cond, then, els } => {
