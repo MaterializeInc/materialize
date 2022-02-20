@@ -11,7 +11,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp};
 
 use super::SinceUpperMap;
-use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId};
+use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId, StorageCommand};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
 use mz_expr::GlobalId;
@@ -117,6 +117,20 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             }
         }
 
+        let sources = dataflows
+            .iter()
+            .map(|dataflow| {
+                (
+                    dataflow.debug_name.clone(),
+                    dataflow.as_of.clone(),
+                    dataflow.source_imports.clone(),
+                )
+            })
+            .collect();
+
+        self.client
+            .send(Command::Storage(StorageCommand::RenderSources(sources)))
+            .await;
         self.client
             .send(Command::Compute(
                 ComputeCommand::CreateDataflows(dataflows),

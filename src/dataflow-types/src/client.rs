@@ -17,14 +17,15 @@ use async_trait::async_trait;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use tracing::trace;
 
 use crate::logging::LoggingConfig;
 use crate::{
-    sources::MzOffset, sources::SourceConnector, DataflowDescription, PeekResponse, TailResponse,
-    Update,
+    sources::MzOffset, sources::SourceConnector, DataflowDescription, PeekResponse,
+    SourceInstanceDesc, TailResponse, Update,
 };
 use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
 use mz_repr::Row;
@@ -147,6 +148,17 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     ///
     /// For each identifier, there is a source description and a valid `since` frontier.
     CreateSources(Vec<(GlobalId, (crate::types::sources::SourceDesc, Antichain<T>))>),
+    /// Render the enumerated sources.
+    ///
+    /// Each source has a name for debugging purposes, an optional "as of" frontier and collection
+    /// of sources to import.
+    RenderSources(
+        Vec<(
+            String,
+            Option<Antichain<T>>,
+            BTreeMap<GlobalId, SourceInstanceDesc>,
+        )>,
+    ),
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
 
@@ -203,6 +215,7 @@ impl StorageCommandKind {
             StorageCommandKind::DropSources => "drop_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::Insert => "insert",
+            StorageCommandKind::RenderSources => "render_sources",
         }
     }
 }
