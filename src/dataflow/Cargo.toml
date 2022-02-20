@@ -49,7 +49,7 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", b
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prost = "0.9.0"
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
-rand = "0.8.4"
+rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
 regex = "1.5.4"
 scopeguard = "1.1.0"

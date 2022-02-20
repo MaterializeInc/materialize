@@ -18,7 +18,7 @@ futures-channel = "0.3.16"
 mz-aws-util = { path = "../../src/aws-util", features = ["kinesis"] }
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../test-util" }
-rand = "0.8.4"
+rand = "0.8.5"
 tokio = "1.16.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tracing = "0.1.30"

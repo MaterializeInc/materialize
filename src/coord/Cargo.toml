@@ -39,7 +39,7 @@ mz-transform = { path = "../transform" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 protobuf-native = "0.2.1"
-rand = "0.8.4"
+rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 rusqlite = { version = "0.26.1", features = ["bundled", "unlock_notify"] }

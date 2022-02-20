@@ -47,7 +47,7 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 prost = "0.9.0"
 prost-reflect = { version = "0.5.6", features = ["serde"] }
 protobuf-src = "1.0.4"
-rand = "0.8.4"
+rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 reqwest = { version = "0.11.9", features = ["native-tls-vendored"] }
