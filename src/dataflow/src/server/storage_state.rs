@@ -3,7 +3,7 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Weak;
 use std::time::{Duration, Instant};
 
@@ -18,10 +18,9 @@ use tracing::{debug, trace};
 use mz_dataflow_types::client::{
     Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
-use mz_dataflow_types::plan;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_dataflow_types::DataflowDescription;
+use mz_dataflow_types::SourceInstanceDesc;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
@@ -102,6 +101,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         .insert(id, description);
                 }
             }
+            StorageCommand::RenderSources(sources) => self.build_storage_dataflow(sources),
             StorageCommand::DropSources(names) => {
                 for name in names {
                     // Drop table-related state.
@@ -242,9 +242,16 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         }
     }
 
-    pub(crate) fn build_storage_dataflow(&mut self, dataflows: &[DataflowDescription<plan::Plan>]) {
-        for dataflow in dataflows.iter() {
-            for (source_id, instance) in dataflow.source_imports.iter() {
+    fn build_storage_dataflow(
+        &mut self,
+        dataflows: Vec<(
+            String,
+            Option<Antichain<Timestamp>>,
+            BTreeMap<GlobalId, SourceInstanceDesc>,
+        )>,
+    ) {
+        for (debug_name, as_of, source_imports) in dataflows {
+            for (source_id, instance) in source_imports.iter() {
                 assert_eq!(
                     self.storage_state.source_descriptions[source_id],
                     instance.description
@@ -253,7 +260,9 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
             crate::render::build_storage_dataflow(
                 self.timely_worker,
                 &mut self.storage_state,
-                &dataflow,
+                &debug_name,
+                as_of,
+                source_imports,
                 self.boundary,
             );
         }

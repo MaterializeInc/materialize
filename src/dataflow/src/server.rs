@@ -27,7 +27,7 @@ use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{Command, ComputeCommand, LocalClient, Response};
+use mz_dataflow_types::client::{Command, LocalClient, Response};
 use mz_dataflow_types::PeekResponse;
 use mz_expr::{GlobalId, RowSetFinishing};
 use mz_ore::metrics::MetricsRegistry;
@@ -272,12 +272,6 @@ where
     }
 
     fn handle_command(&mut self, cmd: Command) {
-        // If we construct a dataflow, we must prepare the source implementations separately.
-        if let Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) = &cmd {
-            self.activate_storage()
-                .build_storage_dataflow(&dataflows[..]);
-        }
-
         match cmd {
             Command::Compute(cmd, _instance) => self.activate_compute().handle_compute_command(cmd),
             Command::Storage(cmd) => self.activate_storage().handle_storage_command(cmd),
