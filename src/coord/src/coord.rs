@@ -1592,12 +1592,13 @@ impl Coordinator {
             //
             // See #10300 for context.
             self.persisted_table_allow_compaction(&index_since_updates);
+            // Error value is ignored because this call attempts to modify ids
+            // for indexes that have not been installed. See above, presumably.
             self.dataflow_client
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .allow_index_compaction(index_since_updates)
-                .await
-                .unwrap();
+                .await;
         }
 
         let source_since_updates: Vec<_> = self
@@ -1612,7 +1613,8 @@ impl Coordinator {
             self.dataflow_client
                 .storage()
                 .allow_source_compaction(source_since_updates)
-                .await;
+                .await
+                .unwrap();
         }
     }
 
@@ -4183,7 +4185,8 @@ impl Coordinator {
                     .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                     .unwrap()
                     .drop_sinks(sinks_to_drop)
-                    .await;
+                    .await
+                    .unwrap();
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
@@ -4275,7 +4278,8 @@ impl Coordinator {
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .drop_sinks(dataflow_names)
-                .await;
+                .await
+                .unwrap();
         }
     }
 
@@ -4292,6 +4296,7 @@ impl Coordinator {
                 .unwrap()
                 .drop_indexes(trace_keys)
                 .await
+                .unwrap();
         }
     }
 

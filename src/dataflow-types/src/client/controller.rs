@@ -18,8 +18,6 @@ use crate::client::{
 };
 use crate::logging::LoggingConfig;
 
-mod since_upper;
-pub use since_upper::SinceUpperMap;
 pub use storage::StorageController;
 pub use storage::StorageControllerState;
 mod storage;
@@ -94,9 +92,10 @@ impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
                             // TODO: determine if this is an error, or perhaps just a late
                             // response about a terminated instance.
                             .expect("Reference to absent instance")
-                            .compute
-                            .since_uppers
-                            .update_upper_for(*id, changes);
+                            .collection_mut(*id)
+                            .expect("Reference to absent collection")
+                            .upper_frontier
+                            .update_iter(changes.clone().drain());
                     }
                 }
                 _ => {}

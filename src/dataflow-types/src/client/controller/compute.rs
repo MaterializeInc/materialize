@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use differential_dataflow::lattice::Lattice;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 
-use super::SinceUpperMap;
 use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId, StorageCommand};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
@@ -21,7 +23,7 @@ use mz_repr::Row;
 /// Controller state maintained for each compute instance.
 pub(super) struct ComputeControllerState<T> {
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
-    pub(super) since_uppers: SinceUpperMap<T>,
+    pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
 }
 
 /// A controller for a compute instance.
@@ -49,23 +51,25 @@ pub enum ComputeError {
 
 impl<T: Timestamp + Lattice> ComputeControllerState<T> {
     pub(super) fn new(logging: &Option<LoggingConfig>) -> Self {
-        let mut since_uppers = SinceUpperMap::default();
+        let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
-                since_uppers.insert(
-                    id,
-                    (
-                        Antichain::from_elem(T::minimum()),
-                        Antichain::from_elem(T::minimum()),
-                    ),
-                );
+                collections.insert(id, CollectionState::new(Antichain::from_elem(T::minimum())));
             }
         }
-        Self { since_uppers }
+        Self { collections }
     }
 }
 
+// Public interface
 impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
+    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+        self.compute
+            .collections
+            .get(&id)
+            .ok_or(ComputeError::IdentifierMissing(id))
+    }
+
     pub async fn create_dataflows(
         &mut self,
         dataflows: Vec<DataflowDescription<crate::plan::Plan, T>>,
@@ -80,12 +84,16 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
             // Validate sources have `since.less_equal(as_of)`.
             for (source_id, _) in dataflow.source_imports.iter() {
-                let (since, _upper) = self
+                let since = &self
                     .storage
-                    .since_uppers
+                    .collections
                     .get(source_id)
-                    .ok_or(ComputeError::IdentifierMissing(*source_id))?;
-                if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
+                    .ok_or(ComputeError::IdentifierMissing(*source_id))?
+                    .since;
+                if !(<_ as timely::order::PartialOrder>::less_equal(
+                    &since.frontier(),
+                    &as_of.borrow(),
+                )) {
                     Err(ComputeError::DataflowSinceViolation(*source_id))?;
                 }
             }
@@ -93,27 +101,21 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
             for (index_id, _) in dataflow.index_imports.iter() {
-                let (since, _upper) = self
-                    .compute
-                    .since_uppers
-                    .get(index_id)
-                    .ok_or(ComputeError::IdentifierMissing(*index_id))?;
+                let since = self.collection(*index_id)?.since.frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*index_id))?;
                 }
             }
 
             for (sink_id, _) in dataflow.sink_exports.iter() {
-                self.compute.since_uppers.insert(
-                    *sink_id,
-                    (as_of.clone(), Antichain::from_elem(Timestamp::minimum())),
-                );
+                self.compute
+                    .collections
+                    .insert(*sink_id, CollectionState::new(as_of.clone()));
             }
             for (index_id, _, _) in dataflow.index_exports.iter() {
-                self.compute.since_uppers.insert(
-                    *index_id,
-                    (as_of.clone(), Antichain::from_elem(Timestamp::minimum())),
-                );
+                self.compute
+                    .collections
+                    .insert(*index_id, CollectionState::new(as_of.clone()));
             }
         }
 
@@ -140,21 +142,52 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         Ok(())
     }
-    pub async fn drop_sinks(&mut self, sink_identifiers: Vec<GlobalId>) {
+    pub async fn drop_sinks(
+        &mut self,
+        sink_identifiers: Vec<GlobalId>,
+    ) -> Result<(), ComputeError> {
+        // Validate that the ids exist.
+        self.validate_ids(sink_identifiers.iter().cloned())?;
+
+        for id in sink_identifiers.iter() {
+            // Apply the updates but ignore the results for now.
+            // TODO(mcsherry): observe the results and allow compaction.
+            let _ = self
+                .collection_mut(*id)?
+                .capability_downgrade(Antichain::new());
+        }
         self.client
             .send(Command::Compute(
                 ComputeCommand::DropSinks(sink_identifiers),
                 self.instance,
             ))
             .await;
+
+        Ok(())
     }
-    pub async fn drop_indexes(&mut self, index_identifiers: Vec<GlobalId>) {
+    pub async fn drop_indexes(
+        &mut self,
+        index_identifiers: Vec<GlobalId>,
+    ) -> Result<(), ComputeError> {
+        // Validate that the ids exist.
+        self.validate_ids(index_identifiers.iter().cloned())?;
+
+        for id in index_identifiers.iter() {
+            // Apply the updates but ignore the results for now.
+            // TODO(mcsherry): observe the results and allow compaction.
+            let _ = self
+                .collection_mut(*id)?
+                .capability_downgrade(Antichain::new());
+        }
+
         self.client
             .send(Command::Compute(
                 ComputeCommand::DropIndexes(index_identifiers),
                 self.instance,
             ))
             .await;
+
+        Ok(())
     }
     pub async fn peek(
         &mut self,
@@ -165,11 +198,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
     ) -> Result<(), ComputeError> {
-        let (since, _upper) = self
-            .compute
-            .since_uppers
-            .get(&id)
-            .ok_or(ComputeError::IdentifierMissing(id))?;
+        let since = self.collection(id)?.since.frontier();
 
         if !since.less_equal(&timestamp) {
             Err(ComputeError::PeekSinceViolation(id))?;
@@ -199,13 +228,23 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             ))
             .await;
     }
-    pub async fn allow_index_compaction(
-        &mut self,
-        frontiers: Vec<(GlobalId, Antichain<T>)>,
-    ) -> Result<(), ComputeError> {
-        for (id, frontier) in frontiers.iter() {
-            self.compute.since_uppers.advance_since_for(*id, frontier);
-        }
+
+    pub async fn allow_index_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<T>)>) {
+        // The coordinator currently sends compaction commands for identifiers that do not exist.
+        // Until that changes, we need to be oblivious to errors, or risk not compacting anything.
+
+        // // Validate that the ids exist.
+        // self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+        //
+        // // Downgrade the implicit capability for each referenced id.
+        // for (id, frontier) in frontiers.iter() {
+        //     // Apply the updates but ignore the results for now.
+        //     // TODO(mcsherry): observe the results and allow compaction.
+        //     let _ = self
+        //         .collection_mut(*id)?
+        //         .capability_downgrade(frontier.clone());
+        // }
+        // // TODO(mcsherry): Delay compation subject to read capability constraints.
 
         self.client
             .send(Command::Compute(
@@ -213,7 +252,57 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                 self.instance,
             ))
             .await;
+    }
+}
 
+// Internal interface
+impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
+    pub fn collection_mut(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<&mut CollectionState<T>, ComputeError> {
+        self.compute
+            .collections
+            .get_mut(&id)
+            .ok_or(ComputeError::IdentifierMissing(id))
+    }
+    pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
+        for id in ids {
+            self.collection(id)?;
+        }
         Ok(())
+    }
+}
+
+/// State maintained about individual collections.
+pub struct CollectionState<T> {
+    /// Accumulation of read capabilities for the collection.
+    pub(super) since: MutableAntichain<T>,
+    /// Reported progress in the write capabilities.
+    pub(super) upper_frontier: MutableAntichain<T>,
+    /// The implicit capability associated with source creation.
+    // TODO(mcsherry): make these capabilities explicit.
+    pub(super) capability: Antichain<T>,
+}
+
+impl<T: Timestamp> CollectionState<T> {
+    pub fn new(since: Antichain<T>) -> Self {
+        Self {
+            since: since.borrow().into(),
+            upper_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            capability: since,
+        }
+    }
+
+    pub fn capability_downgrade(
+        &mut self,
+        mut frontier: Antichain<T>,
+    ) -> impl Iterator<Item = (T, i64)> + '_ {
+        std::mem::swap(&mut self.capability, &mut frontier);
+        let changes = frontier
+            .into_iter()
+            .map(|time| (time, -1))
+            .chain(self.capability.iter().map(|time| (time.clone(), 1)));
+        self.since.update_iter(changes)
     }
 }
