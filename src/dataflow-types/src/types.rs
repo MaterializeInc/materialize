@@ -105,7 +105,7 @@ pub struct SourceInstanceKey {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
@@ -131,11 +131,13 @@ pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     pub as_of: Option<Antichain<T>>,
     /// Human readable name
     pub debug_name: String,
+    /// Unique ID of the dataflow
+    pub id: GlobalId,
 }
 
 impl DataflowDescription<OptimizedMirRelationExpr> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, id: GlobalId) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),
@@ -145,6 +147,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
             dependent_objects: Default::default(),
             as_of: Default::default(),
             debug_name: name,
+            id,
         }
     }
 

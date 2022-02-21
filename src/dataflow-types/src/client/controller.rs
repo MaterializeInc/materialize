@@ -18,11 +18,12 @@ use crate::client::{
 };
 use crate::logging::LoggingConfig;
 
+pub use compute::ComputeController;
 pub use storage::StorageController;
 pub use storage::StorageControllerState;
-mod storage;
-pub use compute::ComputeController;
+
 mod compute;
+mod storage;
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<C, T = mz_repr::Timestamp> {

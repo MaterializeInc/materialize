@@ -193,7 +193,7 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<DataflowDesc, CoordError> {
         let on_entry = self.catalog.get_by_id(&index_description.on_id);
         let on_type = on_entry.desc().unwrap().typ().clone();
-        let mut dataflow = DataflowDesc::new(name);
+        let mut dataflow = DataflowDesc::new(name, id);
         self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
         dataflow.export_index(id, index_description, on_type);
 
@@ -214,7 +214,7 @@ impl<'a> DataflowBuilder<'a> {
         id: GlobalId,
         sink_description: SinkDesc,
     ) -> Result<DataflowDesc, CoordError> {
-        let mut dataflow = DataflowDesc::new(name);
+        let mut dataflow = DataflowDesc::new(name, id);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
         Ok(dataflow)
     }

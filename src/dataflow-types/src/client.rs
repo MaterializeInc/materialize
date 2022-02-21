@@ -154,9 +154,10 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// of sources to import.
     RenderSources(
         Vec<(
-            String,
-            Option<Antichain<T>>,
-            BTreeMap<GlobalId, SourceInstanceDesc>,
+            /* debug_name */ String,
+            /* dataflow_id */ GlobalId,
+            /* as_of */ Option<Antichain<T>>,
+            /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc>,
         )>,
     ),
     /// Drop the sources bound to these names.
@@ -264,6 +265,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                                 dependent_objects: dataflow.dependent_objects.clone(),
                                 as_of: dataflow.as_of.clone(),
                                 debug_name: dataflow.debug_name.clone(),
+                                id: dataflow.id,
                             });
                         }
                     }

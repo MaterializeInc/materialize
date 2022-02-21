@@ -12,6 +12,7 @@ use timely::dataflow::Scope;
 
 use mz_dataflow_types::DataflowError;
 use mz_dataflow_types::SourceInstanceKey;
+use mz_expr::GlobalId;
 use mz_repr::{Diff, Row};
 
 /// A type that can capture a specific source.
@@ -24,6 +25,7 @@ pub trait StorageCapture {
         err: Collection<G, DataflowError, Diff>,
         token: Rc<dyn Any>,
         name: &str,
+        dataflow_id: GlobalId,
     );
 }
 
@@ -39,6 +41,7 @@ pub trait ComputeReplay {
         id: SourceInstanceKey,
         scope: &mut G,
         name: &str,
+        dataflow_id: GlobalId,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
@@ -47,6 +50,7 @@ pub trait ComputeReplay {
 }
 
 pub use event_link::EventLinkBoundary;
+
 /// A simple boundary that uses activated event linked lists.
 mod event_link {
 
@@ -62,6 +66,7 @@ mod event_link {
 
     use mz_dataflow_types::DataflowError;
     use mz_dataflow_types::SourceInstanceKey;
+    use mz_expr::GlobalId;
     use mz_repr::{Diff, Row};
 
     use crate::activator::RcActivator;
@@ -93,6 +98,7 @@ mod event_link {
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
             name: &str,
+            _dataflow_id: GlobalId,
         ) {
             let boundary = SourceBoundary::new(name, token);
 
@@ -119,6 +125,7 @@ mod event_link {
             id: SourceInstanceKey,
             scope: &mut G,
             name: &str,
+            _dataflow_id: GlobalId,
         ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,

@@ -246,11 +246,12 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         &mut self,
         dataflows: Vec<(
             String,
+            GlobalId,
             Option<Antichain<Timestamp>>,
             BTreeMap<GlobalId, SourceInstanceDesc>,
         )>,
     ) {
-        for (debug_name, as_of, source_imports) in dataflows {
+        for (debug_name, dataflow_id, as_of, source_imports) in dataflows {
             for (source_id, instance) in source_imports.iter() {
                 assert_eq!(
                     self.storage_state.source_descriptions[source_id],
@@ -263,6 +264,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 &debug_name,
                 as_of,
                 source_imports,
+                dataflow_id,
                 self.boundary,
             );
         }

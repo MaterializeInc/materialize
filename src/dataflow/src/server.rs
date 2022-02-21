@@ -119,7 +119,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let aws_external_id = config.aws_external_id.clone();
     let addr = "127.0.0.1:45678".parse::<std::net::SocketAddr>().unwrap();
     let (source_server_handle, _thread) = TcpEventLinkServer::serve(addr.clone());
-    let (compute_client_handle, _thread) = TcpEventLinkClient::connect(addr.clone());
+    let (compute_client_handle, _thread) =
+        TcpEventLinkClient::connect(addr.clone(), config.workers);
     let boundary = TcpBoundary::new(source_server_handle, compute_client_handle);
     let boundaries = (0..config.workers)
         .into_iter()
@@ -127,22 +128,24 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
         .collect::<Vec<_>>();
     let boundaries = Arc::new(Mutex::new(boundaries));
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
-        let _tokio_guard = tokio_executor.enter();
-        let (response_tx, command_rx) = channels.lock().unwrap()
-            [timely_worker.index() % config.workers]
+        let timely_worker_index = timely_worker.index();
+        let timely_worker_peers = timely_worker.peers();
+        let boundary = boundaries.lock().unwrap()[timely_worker_index % config.workers]
             .take()
             .unwrap();
-        let worker_idx = timely_worker.index();
+        let _tokio_guard = tokio_executor.enter();
+        let (response_tx, command_rx) = channels.lock().unwrap()
+            [timely_worker_index % config.workers]
+            .take()
+            .unwrap();
         let metrics = metrics.clone();
         let trace_metrics = trace_metrics.clone();
         let source_metrics = source_metrics.clone();
         let sink_metrics = sink_metrics.clone();
-        let timely_worker_index = timely_worker.index();
-        let timely_worker_peers = timely_worker.peers();
         Worker {
             timely_worker,
             compute_state: ComputeState {
-                traces: TraceManager::new(trace_metrics, worker_idx),
+                traces: TraceManager::new(trace_metrics, timely_worker_index),
                 dataflow_tokens: HashMap::new(),
                 tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 sink_write_frontiers: HashMap::new(),
@@ -168,10 +171,10 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 timely_worker_peers,
             },
             // boundary: boundary::EventLinkBoundary::new(),
-            boundary: boundaries.lock().unwrap()[worker_idx].take().unwrap(),
+            boundary,
             command_rx,
             response_tx,
-            command_metrics: server_metrics.for_worker_id(worker_idx),
+            command_metrics: server_metrics.for_worker_id(timely_worker_index),
         }
         .run()
     })
