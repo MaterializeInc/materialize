@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.52"
 aws-sdk-s3 = { version = "0.6.0", default-features = false }
 bytefmt = "0.1.7"
-clap = { version = "3.0.14", features = ["derive"] }
+clap = { version = "3.1.0", features = ["derive"] }
 futures = "0.3.21"
 indicatif = "0.16.2"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
