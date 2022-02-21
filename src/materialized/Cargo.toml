@@ -118,7 +118,7 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", br
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 predicates = "2.1.1"
-rand = "0.8.4"
+rand = "0.8.5"
 reqwest = { version = "0.11.9", features = ["blocking"] }
 serde_json = "1.0.79"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
