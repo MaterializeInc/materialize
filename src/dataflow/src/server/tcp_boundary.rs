@@ -159,38 +159,15 @@ pub mod server {
         socket: TcpStream,
     ) -> std::io::Result<()> {
         let mut connection = framed_server(socket);
-        println!("server: waiting for register");
-        let mut client_rx = match connection.next().await {
-            Some(Ok(Command::Register)) => {
-                println!("server: client register");
-                let (tx, rx) = unbounded_channel();
-                state.lock().await.channels.insert(client_id, tx);
-                rx
-            }
-            Some(cmd) => {
-                eprintln!("Unexpected command: {cmd:?}");
-                return Ok(());
-            }
-            None => {
-                eprintln!("server: client disconnected");
-                return Ok(());
-            }
-        };
-        println!("server: client register done, entering loop");
+
+        let (client_tx, mut client_rx) = unbounded_channel();
+        state.lock().await.channels.insert(client_id, client_tx);
 
         let mut active_keys = HashSet::new();
 
         loop {
             select! {
                 cmd = connection.next() => match cmd {
-                    Some(Ok(Command::Register)) => {
-                        // Register isn't a valid command in this context, it was handled earlier
-                        let mut state = state.lock().await;
-                        for key in active_keys {
-                            state.association.remove(&key);
-                        }
-                        return Ok(());
-                    }
                     Some(Ok(Command::Subscribe(key))) => {
                         println!("{key:?} server: client subscribe");
                         let new = active_keys.insert(key);
@@ -440,8 +417,6 @@ pub mod client {
         println!("client: connected to server");
         let mut client = framed_client(stream);
 
-        client.send(Command::Register).await?;
-
         let mut channels: HashMap<
             SourceId,
             (
@@ -652,7 +627,6 @@ pub mod client {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
-    Register,
     Subscribe(SourceId),
     Unsubscribe(SourceId),
 }
