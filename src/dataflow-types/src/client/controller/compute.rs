@@ -20,6 +20,8 @@ use mz_expr::GlobalId;
 use mz_expr::RowSetFinishing;
 use mz_repr::Row;
 
+use super::Capabilities;
+
 /// Controller state maintained for each compute instance.
 pub(super) struct ComputeControllerState<T> {
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
@@ -54,7 +56,14 @@ impl<T: Timestamp + Lattice> ComputeControllerState<T> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
-                collections.insert(id, CollectionState::new(Antichain::from_elem(T::minimum())));
+                collections.insert(
+                    id,
+                    CollectionState::new(
+                        Antichain::from_elem(T::minimum()),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                );
             }
         }
         Self { collections }
@@ -82,6 +91,10 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                 .as_ref()
                 .ok_or(ComputeError::DataflowMalformed)?;
 
+            // Record all transitive dependencies of the outputs.
+            let mut storage_dependencies = Vec::new();
+            let mut compute_dependencies = Vec::new();
+
             // Validate sources have `since.less_equal(as_of)`.
             for (source_id, _) in dataflow.source_imports.iter() {
                 let since = &self
@@ -89,33 +102,53 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                     .collections
                     .get(source_id)
                     .ok_or(ComputeError::IdentifierMissing(*source_id))?
-                    .since;
-                if !(<_ as timely::order::PartialOrder>::less_equal(
-                    &since.frontier(),
-                    &as_of.borrow(),
-                )) {
+                    .read_capabilities
+                    .frontier();
+                if !(<_ as timely::order::PartialOrder>::less_equal(since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*source_id))?;
                 }
+
+                storage_dependencies.push(*source_id);
             }
 
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
             for (index_id, _) in dataflow.index_imports.iter() {
-                let since = self.collection(*index_id)?.since.frontier();
+                let collection = self.collection(*index_id)?;
+                let since = collection.read_capabilities.frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*index_id))?;
+                } else {
+                    storage_dependencies.extend(collection.storage_dependencies.iter().cloned());
+                    compute_dependencies.extend(collection.compute_dependencies.iter().cloned());
+                    compute_dependencies.push(*index_id);
                 }
             }
 
+            storage_dependencies.sort();
+            storage_dependencies.dedup();
+            compute_dependencies.sort();
+            compute_dependencies.dedup();
+
             for (sink_id, _) in dataflow.sink_exports.iter() {
-                self.compute
-                    .collections
-                    .insert(*sink_id, CollectionState::new(as_of.clone()));
+                self.compute.collections.insert(
+                    *sink_id,
+                    CollectionState::new(
+                        as_of.clone(),
+                        storage_dependencies.clone(),
+                        compute_dependencies.clone(),
+                    ),
+                );
             }
             for (index_id, _, _) in dataflow.index_exports.iter() {
-                self.compute
-                    .collections
-                    .insert(*index_id, CollectionState::new(as_of.clone()));
+                self.compute.collections.insert(
+                    *index_id,
+                    CollectionState::new(
+                        as_of.clone(),
+                        storage_dependencies.clone(),
+                        compute_dependencies.clone(),
+                    ),
+                );
             }
         }
 
@@ -174,7 +207,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
     ) -> Result<(), ComputeError> {
-        let since = self.collection(id)?.since.frontier();
+        let since = self.collection(id)?.read_capabilities.frontier();
 
         if !since.less_equal(&timestamp) {
             Err(ComputeError::PeekSinceViolation(id))?;
@@ -255,36 +288,44 @@ pub struct CollectionState<T> {
     /// Accumulation of read capabilities for the collection.
     ///
     /// We maintain that `since.frontier()` is the expressed compaction frontier.
-    pub(super) since: MutableAntichain<T>,
+    pub(super) read_capabilities: Capabilities<T>,
+    /// The implicit capability associated with compute collection creation.
+    pub(super) implied_capability: usize,
+
+    /// Storage identifiers on which this collection depends.
+    pub(super) storage_dependencies: Vec<GlobalId>,
+    /// Compute identifiers on which this collection depends.
+    pub(super) compute_dependencies: Vec<GlobalId>,
+
     /// Reported progress in the write capabilities.
     ///
     /// Importantly, this is not a write capability, but what we have heard about the
     /// write capabilities of others. All future writes will have times greater that or
     /// equal to `upper_frontier.frontier()`.
-    pub(super) upper_frontier: MutableAntichain<T>,
-    /// The implicit capability associated with source creation.
-    // TODO(mcsherry): make these capabilities explicit.
-    pub(super) capability: Antichain<T>,
+    pub(super) write_frontier: MutableAntichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
-    pub fn new(since: Antichain<T>) -> Self {
+    pub fn new(
+        since: Antichain<T>,
+        storage_dependencies: Vec<GlobalId>,
+        compute_dependencies: Vec<GlobalId>,
+    ) -> Self {
+        let (read_capabilities, implied_capability) = Capabilities::new(since);
         Self {
-            since: since.borrow().into(),
-            upper_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
-            capability: since,
+            read_capabilities,
+            implied_capability,
+            storage_dependencies,
+            compute_dependencies,
+            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
         }
     }
 
     pub fn capability_downgrade(
         &mut self,
-        mut frontier: Antichain<T>,
-    ) -> impl Iterator<Item = (T, i64)> + '_ {
-        std::mem::swap(&mut self.capability, &mut frontier);
-        let changes = frontier
-            .into_iter()
-            .map(|time| (time, -1))
-            .chain(self.capability.iter().map(|time| (time.clone(), 1)));
-        self.since.update_iter(changes)
+        frontier: Antichain<T>,
+    ) -> Option<impl Iterator<Item = (T, i64)> + '_> {
+        self.read_capabilities
+            .downgrade(&self.implied_capability, frontier)
     }
 }

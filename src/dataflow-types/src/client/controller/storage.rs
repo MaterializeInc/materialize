@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::client::SourceConnector;
@@ -19,6 +18,8 @@ use crate::sources::SourceDesc;
 use crate::Update;
 use mz_expr::GlobalId;
 use mz_expr::PartitionId;
+
+use super::Capabilities;
 
 /// Controller state maintained for each storage instance.
 pub struct StorageControllerState<T> {
@@ -191,31 +192,28 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
 pub struct CollectionState<T> {
     /// Description with which the source was created, and its initial `since`.
     pub(super) description: (crate::sources::SourceDesc, Antichain<T>),
+
     /// Accumulation of read capabilities for the collection.
-    pub(super) since: MutableAntichain<T>,
-    /// The implicit capability associated with source creation.
-    // TODO(mcsherry): make these capabilities explicit.
-    pub(super) capability: Antichain<T>,
+    pub(super) read_capabilities: Capabilities<T>,
+    /// The implicit capability associated with storage collection creation.
+    pub(super) implied_capability: usize,
 }
 
 impl<T: Timestamp> CollectionState<T> {
     pub fn new(description: SourceDesc, since: Antichain<T>) -> Self {
+        let (read_capabilities, implied_capability) = Capabilities::new(since.clone());
         Self {
-            description: (description, since.clone()),
-            since: since.borrow().into(),
-            capability: since,
+            description: (description, since),
+            read_capabilities,
+            implied_capability,
         }
     }
 
     pub fn capability_downgrade(
         &mut self,
-        mut frontier: Antichain<T>,
-    ) -> impl Iterator<Item = (T, i64)> + '_ {
-        std::mem::swap(&mut self.capability, &mut frontier);
-        let changes = frontier
-            .into_iter()
-            .map(|time| (time, -1))
-            .chain(self.capability.iter().map(|time| (time.clone(), 1)));
-        self.since.update_iter(changes)
+        frontier: Antichain<T>,
+    ) -> Option<impl Iterator<Item = (T, i64)> + '_> {
+        self.read_capabilities
+            .downgrade(&self.implied_capability, frontier)
     }
 }

@@ -18,6 +18,8 @@ use crate::client::{
 };
 use crate::logging::LoggingConfig;
 
+pub use capability::Capabilities;
+mod capability;
 pub use storage::StorageController;
 pub use storage::StorageControllerState;
 mod storage;
@@ -94,7 +96,7 @@ impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
                             .expect("Reference to absent instance")
                             .collection_mut(*id)
                             .expect("Reference to absent collection")
-                            .upper_frontier
+                            .write_frontier
                             .update_iter(changes.clone().drain());
                     }
                 }
