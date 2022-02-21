@@ -55,16 +55,6 @@ pub mod server {
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tokio::sync::{oneshot, Mutex};
 
-    #[derive(Debug)]
-    pub struct TcpEventLinkServer {
-        state: Arc<Mutex<Shared>>,
-        announce_rx: UnboundedReceiver<(
-            SourceId,
-            oneshot::Sender<UnboundedSender<Response>>,
-            Arc<()>,
-        )>,
-    }
-
     type ClientId = u64;
 
     #[derive(Debug, Default)]
@@ -75,187 +65,180 @@ pub mod server {
         tokens: HashMap<SourceId, Vec<Arc<()>>>,
     }
 
-    #[derive(Debug)]
-    struct ConnectionState {
-        rx: UnboundedReceiver<Response>,
+    pub fn serve(addr: SocketAddr) -> (TcpEventLinkHandle, JoinHandle<()>) {
+        let (announce_tx, announce_rx) = unbounded_channel();
+
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .build()
+                .unwrap();
+            let shared = Default::default();
+            let state = Arc::new(Mutex::new(shared));
+
+            runtime.block_on(accept(&addr, state, announce_rx)).unwrap();
+        });
+
+        (
+            TcpEventLinkHandle {
+                announce: announce_tx,
+            },
+            thread,
+        )
     }
 
-    impl TcpEventLinkServer {
-        pub fn serve(addr: SocketAddr) -> (TcpEventLinkHandle, JoinHandle<()>) {
-            let (announce_tx, announce_rx) = unbounded_channel();
+    async fn accept(
+        addr: &SocketAddr,
+        state: Arc<Mutex<Shared>>,
+        mut announce_rx: UnboundedReceiver<(
+            SourceId,
+            oneshot::Sender<UnboundedSender<Response>>,
+            Arc<()>,
+        )>,
+    ) -> std::io::Result<()> {
+        let listener = TcpListener::bind(addr).await?;
+        println!("server listening {listener:?}");
 
-            let thread = std::thread::spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_io()
-                    .build()
-                    .unwrap();
-                let shared = Default::default();
-                let server = Self {
-                    announce_rx,
-                    state: Arc::new(Mutex::new(shared)),
-                };
+        let (tx, mut rx) = unbounded_channel();
 
-                runtime.block_on(server.accept(&addr)).unwrap();
-            });
-
-            (
-                TcpEventLinkHandle {
-                    announce: announce_tx,
+        loop {
+            select! {
+                _ = async {
+                    let mut client_id = 0;
+                    loop {
+                        client_id += 1;
+                        let (socket, _) = listener.accept().await?;
+                        println!("server: client connected {socket:?}");
+                        let state = Arc::clone(&state);
+                        tokio::spawn(async move {
+                            println!("server: spawned");
+                            handle_compute(client_id, state, socket).await
+                        });
+                    }
+                    Ok::<_, std::io::Error>(())
+                } => {}
+                announce = announce_rx.recv() => match announce {
+                    Some((source_id, channel, token)) => {
+                        println!("server: announce {source_id:?}");
+                        state.lock().await.tokens.entry(source_id).or_default().push(token);
+                        channel.send(tx.clone()).unwrap();
+                    }
+                    None => {
+                        eprintln!("announce closed");
+                        todo!();
+                    }
                 },
-                thread,
-            )
-        }
-
-        async fn accept(self, addr: &SocketAddr) -> std::io::Result<()> {
-            let listener = TcpListener::bind(addr).await?;
-            println!("server listening {listener:?}");
-            // let mut conn_state: BTreeMap<SourceId, ConnectionState> = BTreeMap::new();
-            // let mut ok_stash : HashMap<_, Vec<_>> = HashMap::new();
-            // let mut err_stash: HashMap<_, Vec<_>> = HashMap::new();
-            let state = self.state;
-            let mut announce_rx = self.announce_rx;
-
-            let (tx, mut rx) = unbounded_channel();
-
-            loop {
-                select! {
-                    _ = async {
-                        let mut client_id = 0;
-                        loop {
-                            client_id += 1;
-                            let (socket, _) = listener.accept().await?;
-                            println!("server: client connected {socket:?}");
-                            let state = Arc::clone(&state);
-                            tokio::spawn(async move {
-                                println!("server: spawned");
-                                Self::handle_compute(client_id, state, socket).await
-                            });
+                response = rx.recv() => match response {
+                    Some(response) => {
+                        // println!("server: rx response");
+                        let mut state = state.lock().await;
+                        let source_id = match &response {
+                            Response::Err(source_id, _, _) | Response::Data(source_id, _, _) => source_id
+                        };
+                        // println!("server: rx response {source_id:?}");
+                        if let Some(client_id) = state.association.get(source_id).copied() {
+                            // println!("server: sending to client");
+                            state.channels.get_mut(&client_id).unwrap().send(response).unwrap();
+                        } else {
+                            println!("server: stashing");
+                            state.stash.entry(*source_id).or_default().push(response);
                         }
-                        Ok::<_, std::io::Error>(())
-                    } => {}
-                    announce = announce_rx.recv() => match announce {
-                        Some((source_id, channel, token)) => {
-                            println!("server: announce {source_id:?}");
-                            state.lock().await.tokens.entry(source_id).or_default().push(token);
-                            channel.send(tx.clone()).unwrap();
-                        }
-                        None => {
-                            eprintln!("announce closed");
-                            todo!();
-                        }
-                    },
-                    response = rx.recv() => match response {
-                        Some(response) => {
-                            // println!("server: rx response");
-                            let mut state = state.lock().await;
-                            let source_id = match &response {
-                                Response::Err(source_id, _, _) | Response::Data(source_id, _, _) => source_id
-                            };
-                            // println!("server: rx response {source_id:?}");
-                            if let Some(client_id) = state.association.get(source_id).copied() {
-                                // println!("server: sending to client");
-                                state.channels.get_mut(&client_id).unwrap().send(response).unwrap();
-                            } else {
-                                println!("server: stashing");
-                                state.stash.entry(*source_id).or_default().push(response);
-                            }
-                        }
-                        None => {
-                            println!("server: rx none");
-                            todo!();
-                        }
+                    }
+                    None => {
+                        println!("server: rx none");
+                        todo!();
                     }
                 }
             }
         }
+    }
 
-        async fn handle_compute(
-            client_id: ClientId,
-            state: Arc<Mutex<Shared>>,
-            socket: TcpStream,
-        ) -> std::io::Result<()> {
-            let mut connection = framed_server(socket);
-            println!("server: waiting for register");
-            let mut client = match connection.next().await {
-                Some(Ok(Command::Register)) => {
-                    println!("server: client register");
-                    let (tx, rx) = unbounded_channel();
-                    state.lock().await.channels.insert(client_id, tx);
-                    ConnectionState { rx }
-                }
-                Some(cmd) => {
-                    eprintln!("Unexpected command: {cmd:?}");
-                    return Ok(());
-                }
-                None => {
-                    eprintln!("server: client disconnected");
-                    return Ok(());
-                }
-            };
-            println!("server: client register done, entering loop");
+    async fn handle_compute(
+        client_id: ClientId,
+        state: Arc<Mutex<Shared>>,
+        socket: TcpStream,
+    ) -> std::io::Result<()> {
+        let mut connection = framed_server(socket);
+        println!("server: waiting for register");
+        let mut client_rx = match connection.next().await {
+            Some(Ok(Command::Register)) => {
+                println!("server: client register");
+                let (tx, rx) = unbounded_channel();
+                state.lock().await.channels.insert(client_id, tx);
+                rx
+            }
+            Some(cmd) => {
+                eprintln!("Unexpected command: {cmd:?}");
+                return Ok(());
+            }
+            None => {
+                eprintln!("server: client disconnected");
+                return Ok(());
+            }
+        };
+        println!("server: client register done, entering loop");
 
-            let mut active_keys = HashSet::new();
+        let mut active_keys = HashSet::new();
 
-            loop {
-                select! {
-                    cmd = connection.next() => match cmd {
-                        Some(Ok(Command::Register)) => {
-                            // Register isn't a valid command in this context, it was handled earlier
-                            let mut state = state.lock().await;
-                            for key in active_keys {
-                                state.association.remove(&key);
-                            }
-                            return Ok(());
-                        }
-                        Some(Ok(Command::Subscribe(key))) => {
-                            println!("{key:?} server: client subscribe");
-                            let new = active_keys.insert(key);
-                            assert!(new, "Duplicate key: {key:?}");
-                            let stashed = {
-                                let mut state = state.lock().await;
-                                state.association.insert(key, client_id);
-                                state.stash.remove(&key).unwrap_or_default()
-                            };
-                            for stashed in stashed {
-                                connection.send(stashed).await?;
-                            }
-                        }
-                        Some(Ok(Command::Unsubscribe(key))) => {
-                            println!("{key:?} server: client unsubscribe");
-                            let mut state = state.lock().await;
+        loop {
+            select! {
+                cmd = connection.next() => match cmd {
+                    Some(Ok(Command::Register)) => {
+                        // Register isn't a valid command in this context, it was handled earlier
+                        let mut state = state.lock().await;
+                        for key in active_keys {
                             state.association.remove(&key);
-                            let removed = active_keys.remove(&key);
-                            state.tokens.remove(&key);
-                            assert!(removed, "Unknown key: {key:?}");
                         }
-                        Some(Err(e)) => {
-                            eprintln!("Connection receiver error: {e:?}");
+                        return Ok(());
+                    }
+                    Some(Ok(Command::Subscribe(key))) => {
+                        println!("{key:?} server: client subscribe");
+                        let new = active_keys.insert(key);
+                        assert!(new, "Duplicate key: {key:?}");
+                        let stashed = {
                             let mut state = state.lock().await;
-                            for key in active_keys {
-                                state.association.remove(&key);
-                            }
-                            return Err(e);
+                            state.association.insert(key, client_id);
+                            state.stash.remove(&key).unwrap_or_default()
+                        };
+                        for stashed in stashed {
+                            connection.send(stashed).await?;
                         }
-                        None => {
-                            eprintln!("connection closed");
-                            let mut state = state.lock().await;
-                            for key in active_keys {
-                                state.association.remove(&key);
-                            }
-                            return Ok(());
+                    }
+                    Some(Ok(Command::Unsubscribe(key))) => {
+                        println!("{key:?} server: client unsubscribe");
+                        let mut state = state.lock().await;
+                        state.association.remove(&key);
+                        let removed = active_keys.remove(&key);
+                        state.tokens.remove(&key);
+                        assert!(removed, "Unknown key: {key:?}");
+                    }
+                    Some(Err(e)) => {
+                        eprintln!("Connection receiver error: {e:?}");
+                        let mut state = state.lock().await;
+                        for key in active_keys {
+                            state.association.remove(&key);
                         }
+                        return Err(e);
+                    }
+                    None => {
+                        eprintln!("connection closed");
+                        let mut state = state.lock().await;
+                        for key in active_keys {
+                            state.association.remove(&key);
+                        }
+                        return Ok(());
+                    }
+                },
+                response = client_rx.recv() => match response {
+                    Some(response) => {
+                        // println!("server: sending to client");
+                        connection.send(response).await?
                     },
-                    response = client.rx.recv() => match response {
-                        Some(response) => {
-                            // println!("server: sending to client");
-                            connection.send(response).await?
-                        },
-                        None => {
-                            eprintln!("channel closed");
-                            todo!();
-                            // TODO: clean up
-                            return Ok(());
-                        }
+                    None => {
+                        eprintln!("channel closed");
+                        todo!();
+                        // TODO: clean up
+                        return Ok(());
                     }
                 }
             }
@@ -384,7 +367,7 @@ impl ComputeReplay for TcpBoundary {
 }
 
 pub mod client {
-    use crate::activator::ArcActivator;
+    use crate::activator::{ActivatorTrait, ArcActivator};
     use crate::replay::MzReplay;
     use crate::server::boundary::ComputeReplay;
     use crate::server::tcp_boundary::{framed_client, Command, Response, SourceId};
@@ -409,145 +392,147 @@ pub mod client {
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tokio::sync::oneshot;
 
-    pub struct TcpEventLinkClient {}
     #[derive(Debug, Clone)]
     pub struct TcpEventLinkClientHandle {
         announce_tx: UnboundedSender<Announce>,
     }
 
-    impl TcpEventLinkClient {
-        pub fn connect(
-            addr: SocketAddr,
-            workers: usize,
-        ) -> (TcpEventLinkClientHandle, JoinHandle<()>) {
-            let (announce_tx, announce_rx) = unbounded_channel();
-            let thread = std::thread::spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_io()
-                    .enable_time()
-                    .build()
-                    .unwrap();
+    struct WorkerState<T, D, A: ActivatorTrait> {
+        sender: UnboundedSender<EventCore<T, D>>,
+        activator: Option<A>,
+    }
 
-                runtime
-                    .block_on(Self::connect_inner(&addr, announce_rx, workers))
-                    .unwrap();
-            });
+    pub fn connect(addr: SocketAddr, workers: usize) -> (TcpEventLinkClientHandle, JoinHandle<()>) {
+        let (announce_tx, announce_rx) = unbounded_channel();
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .unwrap();
 
-            (TcpEventLinkClientHandle { announce_tx }, thread)
-        }
-        async fn connect_inner(
-            addr: &SocketAddr,
-            mut announce_rx: UnboundedReceiver<Announce>,
-            workers: usize,
-        ) -> std::io::Result<()> {
-            let stream = {
-                let mut retries = 10;
-                loop {
-                    match TcpStream::connect(addr).await {
-                        Ok(stream) => break stream,
-                        Err(_) if retries > 0 => {
-                            retries -= 1;
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-            };
-            println!("client: connected to server");
-            let mut client = framed_client(stream);
+            runtime
+                .block_on(connect_inner(&addr, announce_rx, workers))
+                .unwrap();
+        });
 
-            client.send(Command::Register).await?;
+        (TcpEventLinkClientHandle { announce_tx }, thread)
+    }
 
-            let mut channels: HashMap<
-                SourceId,
-                (
-                    HashMap<WorkerIdentifier, (UnboundedSender<_>, Option<ArcActivator>)>,
-                    HashMap<WorkerIdentifier, (UnboundedSender<_>, Option<ArcActivator>)>,
-                ),
-            > = Default::default();
-
+    async fn connect_inner(
+        addr: &SocketAddr,
+        mut announce_rx: UnboundedReceiver<Announce>,
+        workers: usize,
+    ) -> std::io::Result<()> {
+        let stream = {
+            let mut retries = 10;
             loop {
-                select! {
-                    response = client.next() => match response {
-                        Some(Ok(Response::Data(source_id, partition, event))) => {
-                            // println!("client: data response {source_id:?}");
-                            let channel_queue = &mut channels.get_mut(&source_id).unwrap().0;
-                            let worker = partition % workers;
-                            let channel = channel_queue.get_mut(&worker).unwrap();
-                            channel.0.send(event).unwrap();
-                            if let Some(activator) = &mut channel.1 {
-                                activator.activate();
-                            }
-                        }
-                        Some(Ok(Response::Err(source_id, partition, event))) => {
-                            // println!("client: err response {source_id:?}");
-                            let channel_queue = &mut channels.get_mut(&source_id).unwrap().1;
-                            let worker = partition % workers;
-                            let channel = channel_queue.get_mut(&worker).unwrap();
-                            channel.0.send(event).unwrap();
-                            if let Some(activator) = &mut channel.1 {
-                                activator.activate();
-                            }
-                        }
-                        Some(Err(e)) => {
-                            println!("client: err {e:?}");
-                            todo!();
-                        }
-                        None => {
-                            println!("client: remote disconnected");
-                            todo!();
-                            break;
-                        }
+                match TcpStream::connect(addr).await {
+                    Ok(stream) => break stream,
+                    Err(_) if retries > 0 => {
+                        retries -= 1;
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        };
+        println!("client: connected to server");
+        let mut client = framed_client(stream);
 
-                    },
-                    announce = announce_rx.recv() => match announce {
-                        Some(Announce::Register(source_id, worker, sender )) => {
-                            println!("{source_id:?} client: announce register worker {worker}");
-                            let (ok_tx, ok_rx) = unbounded_channel();
-                            let (err_tx, err_rx) = unbounded_channel();
-                            sender.send((ok_rx, err_rx)).unwrap();
-                            let mut first = false;
-                            let state = channels.entry(source_id).or_insert_with(|| {
-                                first = true;
-                                Default::default()
-                            });
-                            state.0.insert(worker, (ok_tx, None));
-                            state.1.insert(worker, (err_tx, None));
+        client.send(Command::Register).await?;
 
-                        }
-                        Some(Announce::Activate(source_id, worker, ok_activator, err_activator)) => {
-                            println!("{source_id:?} client: announce activate worker {worker}");
-                            let state = channels.get_mut(&source_id).unwrap();
-                            state.0.get_mut(&worker).unwrap().1 = Some(ok_activator);
-                            state.1.get_mut(&worker).unwrap().1 = Some(err_activator);
+        let mut channels: HashMap<
+            SourceId,
+            (
+                HashMap<WorkerIdentifier, WorkerState<_, _, ArcActivator>>,
+                HashMap<WorkerIdentifier, WorkerState<_, _, ArcActivator>>,
+            ),
+        > = Default::default();
 
-                            let active_workers = state.0.values().into_iter().flat_map(|(_, activator)| activator).count();
-                            if active_workers == workers {
-                                client.send(Command::Subscribe(source_id)).await?;
-                            }
+        loop {
+            select! {
+                response = client.next() => match response {
+                    Some(Ok(Response::Data(source_id, partition, event))) => {
+                        // println!("client: data response {source_id:?}");
+                        let channel_queue = &mut channels.get_mut(&source_id).unwrap().0;
+                        let worker = partition % workers;
+                        let channel = channel_queue.get_mut(&worker).unwrap();
+                        channel.sender.send(event).unwrap();
+                        if let Some(activator) = &mut channel.activator {
+                            activator.activate();
                         }
-                        Some(Announce::Drop(source_id)) => {
-                            println!("{source_id:?} client: announce drop");
-                            if let Some(_state) = channels.remove(&source_id) {
-                                client.send(Command::Unsubscribe(source_id)).await.unwrap();
-                            }
+                    }
+                    Some(Ok(Response::Err(source_id, partition, event))) => {
+                        // println!("client: err response {source_id:?}");
+                        let channel_queue = &mut channels.get_mut(&source_id).unwrap().1;
+                        let worker = partition % workers;
+                        let channel = channel_queue.get_mut(&worker).unwrap();
+                        channel.sender.send(event).unwrap();
+                        if let Some(activator) = &mut channel.activator {
+                            activator.activate();
                         }
-                        None => {
-                            println!("client: announce none");
-                            todo!();
+                    }
+                    Some(Err(e)) => {
+                        println!("client: err {e:?}");
+                        todo!();
+                    }
+                    None => {
+                        println!("client: remote disconnected");
+                        todo!();
+                        break;
+                    }
+
+                },
+                announce = announce_rx.recv() => match announce {
+                    Some(Announce::Register(source_id, worker, sender )) => {
+                        println!("{source_id:?} client: announce register worker {worker}");
+                        let (ok_tx, ok_rx) = unbounded_channel();
+                        let (err_tx, err_rx) = unbounded_channel();
+                        sender.send((ok_rx, err_rx)).unwrap();
+
+                        let state = channels.entry(source_id).or_default();
+                        state.0.insert(worker, WorkerState { sender: ok_tx, activator: None});
+                        state.1.insert(worker, WorkerState { sender: err_tx, activator: None});
+
+                    }
+                    Some(Announce::Activate(source_id, worker, ok_activator, err_activator)) => {
+                        println!("{source_id:?} client: announce activate worker {worker}");
+                        let state = channels.get_mut(&source_id).unwrap();
+                        state.0.get_mut(&worker).unwrap().activator = Some(ok_activator);
+                        state.1.get_mut(&worker).unwrap().activator = Some(err_activator);
+
+                        // TODO: We only want to send a `Subscribe` message once all local workers
+                        // announced their presence. Otherwise, we'd need to stash data locally.
+                        // The following statement counts the number of activated workers.
+                        let active_workers = state.0.values().into_iter().flat_map(|state| &state.activator).count();
+                        if active_workers == workers {
+                            client.send(Command::Subscribe(source_id)).await?;
                         }
+                    }
+                    Some(Announce::Drop(source_id)) => {
+                        println!("{source_id:?} client: announce drop");
+                        if let Some(_state) = channels.remove(&source_id) {
+                            client.send(Command::Unsubscribe(source_id)).await.unwrap();
+                        }
+                    }
+                    None => {
+                        println!("client: announce none");
+                        todo!();
                     }
                 }
             }
-
-            println!("client: done");
-
-            Ok(())
         }
+
+        println!("client: done");
+
+        Ok(())
     }
 
     #[derive(Debug)]
     enum Announce {
+        Activate(SourceId, WorkerIdentifier, ArcActivator, ArcActivator),
+        Drop(SourceId),
         Register(
             SourceId,
             WorkerIdentifier,
@@ -556,8 +541,6 @@ pub mod client {
                 UnboundedReceiver<EventCore<Timestamp, Vec<(DataflowError, Timestamp, Diff)>>>,
             )>,
         ),
-        Activate(SourceId, WorkerIdentifier, ArcActivator, ArcActivator),
-        Drop(SourceId),
     }
 
     impl ComputeReplay for TcpEventLinkClientHandle {
@@ -592,7 +575,7 @@ pub mod client {
                 .mz_replay(
                     scope,
                     &format!("{name}-ok"),
-                    Duration::from_millis(1000),
+                    Duration::from_millis(100),
                     ok_activator.clone(),
                 )
                 .as_collection();
@@ -601,7 +584,7 @@ pub mod client {
                 .mz_replay(
                     scope,
                     &format!("{name}-err"),
-                    Duration::from_millis(1000),
+                    Duration::from_millis(100),
                     err_activator.clone(),
                 )
                 .as_collection();
@@ -623,6 +606,7 @@ pub mod client {
         announce_tx: UnboundedSender<Announce>,
         message: Option<Announce>,
     }
+
     impl Drop for DropReplay {
         fn drop(&mut self) {
             if let Some(message) = self.message.take() {
@@ -656,7 +640,7 @@ pub mod client {
                     self.element = Some(element);
                     self.element.as_ref()
                 }
-                Err(e @ TryRecvError::Empty) | Err(e @ TryRecvError::Disconnected) => {
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => {
                     // println!("puller: next -> {e:?}");
                     self.element.take();
                     None
