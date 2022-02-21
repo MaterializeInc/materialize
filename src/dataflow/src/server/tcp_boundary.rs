@@ -4,12 +4,6 @@
 // included in the LICENSE file.
 
 //! This module provides a TCP-based boundary.
-//!
-//! # Architecture
-//!
-//! STORAGE hosts a [TcpEveltLinkServer], which has its own runtime. Sources connect to it using
-//! handles, which provide means to register a source.
-//!
 
 use std::any::Any;
 use std::rc::Rc;
@@ -19,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::capture::EventCore;
 use timely::dataflow::Scope;
 use timely::logging::WorkerIdentifier;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_serde::formats::Bincode;
 use tokio_util::codec::LengthDelimitedCodec;
 
@@ -35,7 +28,9 @@ pub type SourceId = (GlobalId, GlobalId);
 
 pub mod server {
     use crate::server::boundary::StorageCapture;
-    use crate::server::tcp_boundary::{framed_server, Command, Response, SourceId};
+    use crate::server::tcp_boundary::{
+        length_delimited_codec, Command, Framed, Response, SourceId,
+    };
     use differential_dataflow::Collection;
     use futures::{SinkExt, StreamExt};
     use mz_dataflow_types::{DataflowError, SourceInstanceKey};
@@ -50,13 +45,31 @@ pub mod server {
     use timely::dataflow::operators::capture::{EventCore, EventPusherCore};
     use timely::dataflow::operators::Capture;
     use timely::dataflow::Scope;
+    use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::select;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tokio::sync::{oneshot, Mutex};
+    use tokio_serde::formats::Bincode;
 
+    /// A framed connection from the server's perspective.
+    type FramedServer<C> = Framed<C, Command, Response>;
+
+    /// Constructs a framed connection for the server.
+    fn framed_server<C>(conn: C) -> FramedServer<C>
+    where
+        C: AsyncRead + AsyncWrite,
+    {
+        tokio_serde::Framed::new(
+            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
+            Bincode::default(),
+        )
+    }
+
+    /// Unique client identifier, only used internally
     type ClientId = u64;
 
+    /// Shared state between main server loop and client-specific task.
     #[derive(Debug, Default)]
     struct Shared {
         stash: HashMap<SourceId, Vec<Response>>,
@@ -65,6 +78,9 @@ pub mod server {
         tokens: HashMap<SourceId, Vec<Arc<()>>>,
     }
 
+    /// Start the boundary server on the specified address.
+    ///
+    /// Returns a handle implementing [StorageCapture] and a join handle to await termination.
     pub fn serve(addr: SocketAddr) -> (TcpEventLinkHandle, JoinHandle<()>) {
         let (announce_tx, announce_rx) = unbounded_channel();
 
@@ -87,6 +103,7 @@ pub mod server {
         )
     }
 
+    /// Accept connections on the socket.
     async fn accept(
         addr: &SocketAddr,
         state: Arc<Mutex<Shared>>,
@@ -97,7 +114,7 @@ pub mod server {
         )>,
     ) -> std::io::Result<()> {
         let listener = TcpListener::bind(addr).await?;
-        println!("server listening {listener:?}");
+        tracing::debug!("server listening {listener:?}");
 
         let (tx, mut rx) = unbounded_channel();
 
@@ -107,69 +124,78 @@ pub mod server {
                     let mut client_id = 0;
                     loop {
                         client_id += 1;
-                        let (socket, _) = listener.accept().await?;
-                        println!("server: client connected {socket:?}");
-                        let state = Arc::clone(&state);
-                        tokio::spawn(async move {
-                            println!("server: spawned");
-                            handle_compute(client_id, state, socket).await
-                        });
+                        match listener.accept().await {
+                            Ok((socket, _)) => {
+                                let state = Arc::clone(&state);
+                                tokio::spawn(async move {
+                                    handle_compute(client_id, Arc::clone(&state), socket).await
+                                });
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to accept connection: {e}");
+                            }
+                        }
                     }
-                    Ok::<_, std::io::Error>(())
                 } => {}
                 announce = announce_rx.recv() => match announce {
                     Some((source_id, channel, token)) => {
-                        println!("server: announce {source_id:?}");
                         state.lock().await.tokens.entry(source_id).or_default().push(token);
                         channel.send(tx.clone()).unwrap();
                     }
-                    None => {
-                        eprintln!("announce closed");
-                        todo!();
-                    }
+                    None => return Ok(()),
                 },
-                response = rx.recv() => match response {
-                    Some(response) => {
-                        // println!("server: rx response");
-                        let mut state = state.lock().await;
-                        let source_id = match &response {
-                            Response::Err(source_id, _, _) | Response::Data(source_id, _, _) => source_id
-                        };
-                        // println!("server: rx response {source_id:?}");
-                        if let Some(client_id) = state.association.get(source_id).copied() {
-                            // println!("server: sending to client");
-                            state.channels.get_mut(&client_id).unwrap().send(response).unwrap();
-                        } else {
-                            println!("server: stashing");
-                            state.stash.entry(*source_id).or_default().push(response);
-                        }
-                    }
-                    None => {
-                        println!("server: rx none");
-                        todo!();
+                response = rx.recv() => {
+                    let response = response.expect("Channel closed prematurely");
+                    let mut state = state.lock().await;
+                    let source_id = match &response {
+                        Response::Err(source_id, _, _) | Response::Data(source_id, _, _) => source_id
+                    };
+                    if let Some(client_id) = state.association.get(source_id).copied() {
+                        state.channels.get_mut(&client_id).unwrap().send(response).unwrap();
+                    } else {
+                        state.stash.entry(*source_id).or_default().push(response);
                     }
                 }
             }
         }
     }
 
+    /// Handle the server side of a compute client connection.
+    ///
+    /// This function calls into the inner part and upon client termination cleans up state.
     async fn handle_compute(
         client_id: ClientId,
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
+    ) -> std::io::Result<()> {
+        let mut active_keys = HashSet::new();
+
+        let result =
+            handle_compute_inner(client_id, Arc::clone(&state), socket, &mut active_keys).await;
+        let mut state = state.lock().await;
+        for key in active_keys {
+            state.association.remove(&key);
+        }
+        state.channels.remove(&client_id);
+        result
+    }
+
+    /// Inner portion to handle a compute client.
+    async fn handle_compute_inner(
+        client_id: ClientId,
+        state: Arc<Mutex<Shared>>,
+        socket: TcpStream,
+        active_keys: &mut HashSet<SourceId>,
     ) -> std::io::Result<()> {
         let mut connection = framed_server(socket);
 
         let (client_tx, mut client_rx) = unbounded_channel();
         state.lock().await.channels.insert(client_id, client_tx);
 
-        let mut active_keys = HashSet::new();
-
         loop {
             select! {
                 cmd = connection.next() => match cmd {
                     Some(Ok(Command::Subscribe(key))) => {
-                        println!("{key:?} server: client subscribe");
                         let new = active_keys.insert(key);
                         assert!(new, "Duplicate key: {key:?}");
                         let stashed = {
@@ -182,46 +208,25 @@ pub mod server {
                         }
                     }
                     Some(Ok(Command::Unsubscribe(key))) => {
-                        println!("{key:?} server: client unsubscribe");
                         let mut state = state.lock().await;
+                        state.tokens.remove(&key);
                         state.association.remove(&key);
                         let removed = active_keys.remove(&key);
-                        state.tokens.remove(&key);
                         assert!(removed, "Unknown key: {key:?}");
                     }
                     Some(Err(e)) => {
-                        eprintln!("Connection receiver error: {e:?}");
-                        let mut state = state.lock().await;
-                        for key in active_keys {
-                            state.association.remove(&key);
-                        }
                         return Err(e);
                     }
                     None => {
-                        eprintln!("connection closed");
-                        let mut state = state.lock().await;
-                        for key in active_keys {
-                            state.association.remove(&key);
-                        }
                         return Ok(());
                     }
                 },
-                response = client_rx.recv() => match response {
-                    Some(response) => {
-                        // println!("server: sending to client");
-                        connection.send(response).await?
-                    },
-                    None => {
-                        eprintln!("channel closed");
-                        todo!();
-                        // TODO: clean up
-                        return Ok(());
-                    }
-                }
+                response = client_rx.recv() => connection.send(response.expect("Channel closed before dropping source")).await?,
             }
         }
     }
 
+    /// A handle to the boundary service. Implements [StorageCapture] to capture sources.
     #[derive(Clone, Debug)]
     pub struct TcpEventLinkHandle {
         announce: UnboundedSender<(
@@ -238,19 +243,18 @@ pub mod server {
             ok: Collection<G, Row, Diff>,
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
-            name: &str,
+            _name: &str,
             dataflow_id: GlobalId,
         ) {
             let key = (dataflow_id, id.identifier);
-            println!("{key:?} capture {name}: about to announce");
             let client_token = Arc::new(());
+
             let (tx, rx) = oneshot::channel();
             self.announce
                 .send((key, tx, Arc::clone(&client_token)))
                 .unwrap();
-            println!("{key:?} capture {name}: announce sent");
+
             let sender = rx.blocking_recv().unwrap();
-            println!("{key:?} capture {name}: announce got sender");
 
             let partition = ok.inner.scope().index().try_into().unwrap();
 
@@ -278,14 +282,11 @@ pub mod server {
 
     impl<T, D, F: Fn(EventCore<T, D>) -> Response> EventPusherCore<T, D> for UnboundedEventPusher<F> {
         fn push(&mut self, event: EventCore<T, D>) {
-            // println!("pusher: push");
             if self.client_token.upgrade().is_none() && self.token.is_some() {
-                println!("pusher: client_token dropped");
                 self.token.take();
             }
             match self.sender.send((self.convert)(event)) {
                 Err(_) => {
-                    println!("pusher: push -> err");
                     self.token.take();
                 }
                 _ => {}
@@ -294,6 +295,8 @@ pub mod server {
     }
 }
 
+/// A struct providing both halfs of the tcp boundary. This only serves as a slot-in replacement
+/// for the event link boundary but should disappear soon.
 #[derive(Debug, Clone)]
 pub struct TcpBoundary {
     storage_handle: TcpEventLinkHandle,
@@ -347,7 +350,9 @@ pub mod client {
     use crate::activator::{ActivatorTrait, ArcActivator};
     use crate::replay::MzReplay;
     use crate::server::boundary::ComputeReplay;
-    use crate::server::tcp_boundary::{framed_client, Command, Response, SourceId};
+    use crate::server::tcp_boundary::{
+        length_delimited_codec, Command, Framed, Response, SourceId,
+    };
     use differential_dataflow::{AsCollection, Collection};
     use futures::{SinkExt, StreamExt};
     use mz_dataflow_types::{DataflowError, SourceInstanceKey};
@@ -363,22 +368,41 @@ pub mod client {
     use timely::dataflow::operators::capture::EventCore;
     use timely::dataflow::Scope;
     use timely::logging::WorkerIdentifier;
+    use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
     use tokio::select;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tokio::sync::oneshot;
+    use tokio_serde::formats::Bincode;
 
+    /// A framed connection from the client's perspective.
+    type FramedClient<C> = Framed<C, Response, Command>;
+
+    /// Constructs a framed connection for the client.
+    fn framed_client<C>(conn: C) -> FramedClient<C>
+    where
+        C: AsyncRead + AsyncWrite,
+    {
+        tokio_serde::Framed::new(
+            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
+            Bincode::default(),
+        )
+    }
+    /// A handle to the storage client. Implements [ComputeReplay].
     #[derive(Debug, Clone)]
     pub struct TcpEventLinkClientHandle {
         announce_tx: UnboundedSender<Announce>,
     }
 
+    /// State per worker and source.
     struct WorkerState<T, D, A: ActivatorTrait> {
         sender: UnboundedSender<EventCore<T, D>>,
         activator: Option<A>,
     }
 
+    /// Connect to a storage boundary server. Returns a handle to replay sources and a join handle
+    /// to await termination.
     pub fn connect(addr: SocketAddr, workers: usize) -> (TcpEventLinkClientHandle, JoinHandle<()>) {
         let (announce_tx, announce_rx) = unbounded_channel();
         let thread = std::thread::spawn(move || {
@@ -389,19 +413,20 @@ pub mod client {
                 .unwrap();
 
             runtime
-                .block_on(connect_inner(&addr, announce_rx, workers))
+                .block_on(run_client(&addr, announce_rx, workers))
                 .unwrap();
         });
 
         (TcpEventLinkClientHandle { announce_tx }, thread)
     }
 
-    async fn connect_inner(
+    async fn run_client(
         addr: &SocketAddr,
         mut announce_rx: UnboundedReceiver<Announce>,
         workers: usize,
     ) -> std::io::Result<()> {
         let stream = {
+            // TODO(mh@): Hack to retry connecting to the storage server.
             let mut retries = 10;
             loop {
                 match TcpStream::connect(addr).await {
@@ -414,9 +439,10 @@ pub mod client {
                 }
             }
         };
-        println!("client: connected to server");
+        tracing::debug!("client: connected to server");
         let mut client = framed_client(stream);
 
+        // State per source_id: (ok state, err state)
         let mut channels: HashMap<
             SourceId,
             (
@@ -429,7 +455,6 @@ pub mod client {
             select! {
                 response = client.next() => match response {
                     Some(Ok(Response::Data(source_id, partition, event))) => {
-                        // println!("client: data response {source_id:?}");
                         let channel_queue = &mut channels.get_mut(&source_id).unwrap().0;
                         let worker = partition % workers;
                         let channel = channel_queue.get_mut(&worker).unwrap();
@@ -439,7 +464,6 @@ pub mod client {
                         }
                     }
                     Some(Ok(Response::Err(source_id, partition, event))) => {
-                        // println!("client: err response {source_id:?}");
                         let channel_queue = &mut channels.get_mut(&source_id).unwrap().1;
                         let worker = partition % workers;
                         let channel = channel_queue.get_mut(&worker).unwrap();
@@ -448,20 +472,11 @@ pub mod client {
                             activator.activate();
                         }
                     }
-                    Some(Err(e)) => {
-                        println!("client: err {e:?}");
-                        todo!();
-                    }
-                    None => {
-                        println!("client: remote disconnected");
-                        todo!();
-                        break;
-                    }
-
+                    Some(Err(e)) => return Err(e),
+                    None => break,
                 },
                 announce = announce_rx.recv() => match announce {
                     Some(Announce::Register(source_id, worker, sender )) => {
-                        println!("{source_id:?} client: announce register worker {worker}");
                         let (ok_tx, ok_rx) = unbounded_channel();
                         let (err_tx, err_rx) = unbounded_channel();
                         sender.send((ok_rx, err_rx)).unwrap();
@@ -472,7 +487,6 @@ pub mod client {
 
                     }
                     Some(Announce::Activate(source_id, worker, ok_activator, err_activator)) => {
-                        println!("{source_id:?} client: announce activate worker {worker}");
                         let state = channels.get_mut(&source_id).unwrap();
                         state.0.get_mut(&worker).unwrap().activator = Some(ok_activator);
                         state.1.get_mut(&worker).unwrap().activator = Some(err_activator);
@@ -486,20 +500,14 @@ pub mod client {
                         }
                     }
                     Some(Announce::Drop(source_id)) => {
-                        println!("{source_id:?} client: announce drop");
                         if let Some(_state) = channels.remove(&source_id) {
                             client.send(Command::Unsubscribe(source_id)).await.unwrap();
                         }
                     }
-                    None => {
-                        println!("client: announce none");
-                        todo!();
-                    }
+                    None => break,
                 }
             }
         }
-
-        println!("client: done");
 
         Ok(())
     }
@@ -532,13 +540,10 @@ pub mod client {
         ) {
             let key = (dataflow_id, id.identifier);
             let (tx, rx) = oneshot::channel();
-            println!("{key:?} replay: about to register");
             self.announce_tx
                 .send(Announce::Register(key, scope.index(), tx))
                 .unwrap();
-            println!("{key:?} replay: register sent, waiting for channels");
             let (ok_rx, err_rx) = rx.blocking_recv().unwrap();
-            println!("{key:?} replay: got channels");
 
             let token = Rc::new(DropReplay {
                 announce_tx: self.announce_tx.clone(),
@@ -550,16 +555,16 @@ pub mod client {
                 .mz_replay(
                     scope,
                     &format!("{name}-ok"),
-                    Duration::from_millis(100),
+                    Duration::MAX,
                     ok_activator.clone(),
                 )
                 .as_collection();
-            let err_activator = ArcActivator::new(format!("{name}-ok-activator"), 1);
+            let err_activator = ArcActivator::new(format!("{name}-err-activator"), 1);
             let err = Some(UnboundedEventPuller::new(err_rx))
                 .mz_replay(
                     scope,
                     &format!("{name}-err"),
-                    Duration::from_millis(100),
+                    Duration::MAX,
                     err_activator.clone(),
                 )
                 .as_collection();
@@ -585,8 +590,7 @@ pub mod client {
     impl Drop for DropReplay {
         fn drop(&mut self) {
             if let Some(message) = self.message.take() {
-                println!("DropReplay: Sending {message:?}");
-                // If the channel is closed, another thread
+                // Igore errors on send as it indicates the client is no longer running
                 let _ = self.announce_tx.send(message);
             }
         }
@@ -608,15 +612,12 @@ pub mod client {
 
     impl<T, D> EventIteratorCore<T, D> for UnboundedEventPuller<T, D> {
         fn next(&mut self) -> Option<&EventCore<T, D>> {
-            // println!("puller: next");
             match self.receiver.try_recv() {
                 Ok(element) => {
-                    // println!("puller: next -> OK");
                     self.element = Some(element);
                     self.element.as_ref()
                 }
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => {
-                    // println!("puller: next -> {e:?}");
                     self.element.take();
                     None
                 }
@@ -626,13 +627,13 @@ pub mod client {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Command {
+enum Command {
     Subscribe(SourceId),
     Unsubscribe(SourceId),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Response {
+enum Response {
     Data(
         SourceId,
         WorkerIdentifier,
@@ -649,12 +650,6 @@ pub enum Response {
 pub type Framed<C, T, U> =
     tokio_serde::Framed<tokio_util::codec::Framed<C, LengthDelimitedCodec>, T, U, Bincode<T, U>>;
 
-/// A framed connection from the server's perspective.
-pub type FramedServer<C> = Framed<C, Command, Response>;
-
-/// A framed connection from the client's perspective.
-pub type FramedClient<C> = Framed<C, Response, Command>;
-
 fn length_delimited_codec() -> LengthDelimitedCodec {
     // NOTE(benesch): using an unlimited maximum frame length is problematic
     // because Tokio never shrinks its buffer. Sending or receiving one large
@@ -664,26 +659,4 @@ fn length_delimited_codec() -> LengthDelimitedCodec {
     let mut codec = LengthDelimitedCodec::new();
     codec.set_max_frame_length(usize::MAX);
     codec
-}
-
-/// Constructs a framed connection for the server.
-pub fn framed_server<C>(conn: C) -> FramedServer<C>
-where
-    C: AsyncRead + AsyncWrite,
-{
-    tokio_serde::Framed::new(
-        tokio_util::codec::Framed::new(conn, length_delimited_codec()),
-        Bincode::default(),
-    )
-}
-
-/// Constructs a framed connection for the client.
-pub fn framed_client<C>(conn: C) -> FramedClient<C>
-where
-    C: AsyncRead + AsyncWrite,
-{
-    tokio_serde::Framed::new(
-        tokio_util::codec::Framed::new(conn, length_delimited_codec()),
-        Bincode::default(),
-    )
 }

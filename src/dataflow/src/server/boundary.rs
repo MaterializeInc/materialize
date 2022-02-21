@@ -82,6 +82,7 @@ mod event_link {
     }
 
     impl EventLinkBoundary {
+        #[allow(dead_code)]
         pub fn new() -> Self {
             Self {
                 send: BTreeMap::new(),
