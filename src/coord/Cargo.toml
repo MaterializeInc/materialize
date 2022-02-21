@@ -51,7 +51,7 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.16.1", features = ["rt"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-stream = "0.1.8"
-tracing = "0.1.30"
+tracing = "0.1.31"
 uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["v4"] }
