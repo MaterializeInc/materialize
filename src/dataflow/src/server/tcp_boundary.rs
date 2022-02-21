@@ -127,7 +127,7 @@ pub mod server {
                         match listener.accept().await {
                             Ok((socket, _)) => {
                                 let state = Arc::clone(&state);
-                                tokio::spawn(async move {
+                                mz_ore::task::spawn(|| "client loop", async move {
                                     handle_compute(client_id, Arc::clone(&state), socket).await
                                 });
                             }
@@ -256,7 +256,7 @@ pub mod server {
 
             let sender = rx.blocking_recv().unwrap();
 
-            let partition = ok.inner.scope().index().try_into().unwrap();
+            let partition = ok.inner.scope().index();
 
             ok.inner.capture_into(UnboundedEventPusher {
                 sender: sender.clone(),

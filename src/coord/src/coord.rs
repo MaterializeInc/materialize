@@ -5221,7 +5221,7 @@ impl Coordinator {
         // prevent us from incorrectly teaching those functions how to return errors
         // (which has happened twice and is the motivation for this test).
 
-        let df = DataflowDesc::new("".into());
+        let df = DataflowDesc::new("".into(), GlobalId::Explain);
         let _: () = self.ship_dataflow(df.clone()).await;
         let _: () = self.ship_dataflows(vec![df.clone()]).await;
         let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);
