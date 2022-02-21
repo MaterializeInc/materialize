@@ -11,7 +11,7 @@ Materialize's primary function is to provide the contents of time-varying collec
 # Time-varying collections
 
 Materialize represents TVCs as a set of "updates" of the form `(data, time, diff)`.
-The difference `diff` represents the change in the multiplicity of `data` as we go from `time-1` to `time`.
+The difference `diff` represents the change in the multiplicity of `data` as we go from `time-1` to `time` (for times that form a sequence; for partially ordered times consult the Differential Dataflow source material for more details).
 To go from a sequence of collections to this representation one subtracts the old from new frequencies for each `data`.
 To go from this representation to a sequence of collections, one updates the multiplicities of each `data` by `diff` for each `time`.
 
@@ -21,24 +21,23 @@ To represent what Materialize knows with certainty, Materialize maintains two "f
 A frontier is a lower bound on times, and is used to describe the set of times greater or equal to the lower bound.
 The two frontiers Materialize maintains for each TVC are:
 
-*   The `since` frontier, which communicates that for times `time` greater or equal to `since`, the accumulated collection at `time` is precise.
-
-    Informally, updates at times not greater than the `since` frontier may have been consolidated with other updates.
-    They are not discarded, but their times may have been advanced to the `since` frontier to allow cancelation and consolidation of updates to occur.
-    This is analogous to "version vacuuming" in multiversioned databases.
-    As the system operates, the `since` frontier may advance to allow compaction of data.
-    This happens subject to constraints, and only when correctness permits.
-
-    We think of `since` as the "read frontier": times greater or equal to it may still be correctly read from the TVC.
-
 *   The `upper` frontier, which communicates that for times `time` not greater or equal to `upper`, the updates at `time` are complete.
 
     The upper frontier provides the information about how a TVC may continue to evolve.
     All future updates will necessarily have their `time` greater or equal to the `upper` frontier.
-    As the system operates, we expect the `upper` frontiers to advance indicating that the contents of the collection are known for more times.
-    This happens only when we become certain that updates for a time are complete.
+    As the system operates, the `upper` frontiers advance when the contents of the collection are known with certainty for more times.
 
     We think of `upper` as the "write frontier": times greater or equal to it may still be written to the TVC.
+
+*   The `since` frontier, which communicates that for times `time` greater or equal to `since`, the accumulated collection at `time` will be correct.
+
+    Informally, updates at times not greater than the `since` frontier may have been consolidated with updates at other times.
+    The updates are not discarded, but their times may have been advanced to allow cancelation and consolidation of updates to occur.
+    This is analogous to "version vacuuming" in multiversioned databases.
+    As the system operates, the `since` frontier may advance to allow compaction of updates.
+    This happens subject to constraints, and only when correctness permits.
+
+    We think of `since` as the "read frontier": times greater or equal to it may yet be correctly read from the TVC.
 
 These two frontiers mean that for any `time` greater or equal to `since`, but not greater or equal to `upper`, we can exactly reconstruct the collection at `time`.
 If `time` is not greater or equal to `since`, we may have permanently lost historical distinctions that allow us to know the contents at `time`.
@@ -57,13 +56,13 @@ The life cycle of each `GlobalId` follows several steps:
 
 0. The `GlobalId` is initially not yet bound.
 
-    In this state, the `GlobalId` cannot be used, as we do not yet know what its initial `since` will be.
+    In this state, the `GlobalId` cannot be used in queries, as we do not yet know what its initial `since` will be.
 
 1. The `GlobalId` is bound to some definition, with an initially equal `since` and `upper`.
 
-    This means that the collection is initially not useful, as it cannot be queried at any time greater or equal to `since` but not greater or equal to `upper`.
+    The partial TVC can now be used in queries, those reading from `since` onward, though results may not be immediately available.
+    The collection is initially not useful, as it will not be able to immediately respond about any time greater or equal to `since` but not greater or equal to `upper`.
     However, the initial value of `since` indicates that one should expect the data to eventually become available for each time greater or equal to `since`.
-    The partial TVC can now be used in queries, though results may not be immediately available.
 
 2. Repeatedly, either of the these two steps occur:
 
@@ -71,13 +70,15 @@ The life cycle of each `GlobalId` follows several steps:
 
     b. The `since` frontier advances, concealing some of the past of the pTVC.
 
-3. Eventually, the `since` frontier advances to the empty collection, rendering the TVC complete and closed.
+3. Eventually, the `upper` frontier advances to the empty set of times, rendering the TVC unwriteable.
+
+3. Eventually, the `since` frontier advances to the empty set of times, rendering the TVC unreadable.
 
 The `GlobalId` is never reused.
 
 # Storage and Compute
 
-Materialize produces and maintains time-varying collections in two distinct ways:
+Materialize produces and maintains bindings of `GlobalId`s to time-varying collections in two distinct ways:
 
 *   The **Storage** layer records explicit TVCs in response to direct instruction (e.g. user DML), integrations with external sources of data, and feedback from Materialize itself.
     The representation in the Storage layer is as explicit update triples and maintained `since` and `upper` frontiers.
@@ -87,7 +88,7 @@ Materialize produces and maintains time-varying collections in two distinct ways
     The output TVC varies *exactly* with the input TVCs:
     For each `time`, the output collection at `time` equals the view applied to the input collections at `time`.
 
-The Storage and Compute layers both track `since` and `upper` frontiers for the collections they manage.
+The Storage and Compute layers both manage the `since` and `upper` frontiers for the `GlobalId`s they manage.
 For both layers, the `since` frontier is controlled by their users and it does not advance unless it is allowed.
 The `upper` frontier in Storage is advanced when it has sealed a frontier and made the data up to that point durable.
 The `upper` frontier in Compute is advanced when its inputs have advanced and its computation has pushed updates fully through the view definitions.
@@ -95,6 +96,7 @@ The `upper` frontier in Compute is advanced when its inputs have advanced and it
 ## Capabilities
 
 The `since` and `upper` frontiers are allowed to advance through the use of "capabilities".
+Each capability names a `GlobalId` and a frontier.
 
 * `ReadCapability(id, frontier)` prevents the `since` frontier associated with `id` from advancing beyond `frontier`.
 * `WriteCapability(id, frontier)` prevents the `upper` frontier associated with `id` from advancing beyond `frontier`.
@@ -135,8 +137,9 @@ It likely has a more verbose diagnostic API that describes its state, which shou
 
     This command returns the contents of `id` as of `frontier` once they are known, and updates thereafter once they are known.
     The snapshot and stream contain in-line statements of the subscription's `upper` frontier: those times for which updates may still arrive.
+    The subscription will produce exactly correct results: the snapshot is the TVCs contents at `frontier`, and all subsequent updates occur at exactly their indicated time.
     This call may block, or not be promptly responded to, if `frontier` is greater or equal to the current `upper` of `id`.
-    The subscription can be canceled by either endpoint, and the recipient should only downgrade their read capability when they are certain they have all data for an interval.
+    The subscription can be canceled by either endpoint, and the recipient should only downgrade their read capability when they are certain they have all data through the frontier they would downgrade to.
 
     A subscription can be constructed with additional arguments that change how the data is returned to the user.
     For example, the user may ask to not receive the initial snapshot, rather that receive and then discard it.
@@ -146,13 +149,14 @@ It likely has a more verbose diagnostic API that describes its state, which shou
 
     All times in `updates` must be greater or equal to `frontier` and not greater or equal to `new_frontier`.
 
+    It is probably an error to call this with `new_frontier` equal to `frontier`, as it would mean `updates` must be empty.
     This is the analog of the `INSERT` statement, though `updates` are signed and general enough to support `DELETE` and `UPDATE` at the same time.
 
 *   `AcquireCapabilities(id) -> (ReadCapability, WriteCapability)`: provides capabilities for `id` at its current `since` and `upper` frontiers.
 
     This method is a best-effort attempt to regain control of the frontiers of a collection.
     Its most common uses are to recover capabilities that have expired (leases) or to attempt to read a TVC that one did not create (or otherwise receive capabilities for).
-    If the frontiers have been fully released by all other parties, this call may result in empty frontiers (useless).
+    If the frontiers have been fully released by all other parties, this call may result in capabilities with empty frontiers (which are useless).
 
 The Storage layer provides its output through `SubscribeAt` and `AcquireCapabilities`, which reveal the contents and frontiers of the TVC.
 All commands are durable upon the return of the invocation.
@@ -174,3 +178,19 @@ The layer also intercepts commands for identifiers it introduces.
 
 The outputs of a dataflow may or may not make their way to durable TVCs in the Storage layer.
 All commands are durable upon return of the invocation.
+
+### Constraints
+
+A view introduces *constraints* on the capabilities and frontiers of its input and output identifiers.
+
+*   The view holds a write capability for each output that does not advance beyond the input write capabilities.
+
+    This prevents the output from announcing it is complete through times for which the input may still change.
+    The output write capabilities are advanced through timely dataflow, which tracks outstanding work and can confirm completeness.
+
+*   The view holds a read capability for each input that does not advance beyond the output read capabilities.
+
+    This prevents the compaction of inputs updates into a state that prevents recovery of the outputs.
+    Outputs may need to be recovered in the case of failure, but also in other less dramatic query migration scenarios.
+
+These constraints are effected using the capability abstractions.
