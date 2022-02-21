@@ -28,7 +28,7 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.54"
 askama = { version = "0.11.0", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.52"
 atty = "0.2.14"
@@ -52,7 +52,7 @@ include_dir = "0.7.2"
 itertools = "0.10.3"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
-libc = "0.2.117"
+libc = "0.2.119"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
 mz-dataflow = { path = "../dataflow" }
@@ -118,13 +118,13 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", br
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 predicates = "2.1.1"
-rand = "0.8.4"
+rand = "0.8.5"
 reqwest = { version = "0.11.9", features = ["blocking"] }
 serde_json = "1.0.79"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.54"
 askama_shared = { version = "0.12.0", features = ["json"] }
 cc = "1.0.72"
 flate2 = "1.0.22"
