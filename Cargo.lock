@@ -3884,6 +3884,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "env_logger",
  "flate2",
  "futures",
  "globset",
