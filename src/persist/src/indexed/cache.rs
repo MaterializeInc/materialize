@@ -276,10 +276,17 @@ impl<B: BlobRead> BlobCache<B> {
     }
 
     fn check_meta_build_version(&self, meta: &ProtoMeta) -> Result<(), Error> {
-        let meta_version = meta
-            .version
-            .parse::<Version>()
-            .map_err(|err| err.to_string())?;
+        // TODO: After ENCODING_VERSION is bumped to 8 or higher, this can be
+        // removed.
+        let meta_version = if meta.version.is_empty() {
+            // Any build that includes this check comes after a ProtoMeta that
+            // was written with no version set.
+            Version::new(0, 0, 0)
+        } else {
+            meta.version
+                .parse::<Version>()
+                .map_err(|err| err.to_string())?
+        };
         // Allow data written by any previous version of persist (backward
         // compatible for all time) but disallow data written by a future
         // version of persist (aka we're currently *not* forward compatible).
