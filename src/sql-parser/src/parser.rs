@@ -758,15 +758,17 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_composite_type_definition(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
+    fn parse_composite_type_definition(&mut self) -> Result<Vec<ColumnDef<Raw>>, ParserError> {
         let mut fields = vec![];
         self.expect_token(&Token::LParen)?;
         loop {
             if let Some(column_name) = self.consume_identifier() {
                 let data_type = self.parse_data_type()?;
-                fields.push(SqlOption::DataType {
+                fields.push(ColumnDef {
                     name: column_name,
                     data_type,
+                    collation: None,
+                    options: vec![],
                 });
             } else {
                 return self.expected(self.peek_pos(), "field name and type", self.peek_token());
@@ -2386,31 +2388,26 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
 
-        let as_type = match self.expect_one_of_keywords(&[LIST, MAP]) {
-            Ok(LIST) => CreateTypeAs::List,
-            Ok(MAP) => CreateTypeAs::Map,
-            _ => CreateTypeAs::Record,
-        };
-
-        match as_type {
-            CreateTypeAs::List | CreateTypeAs::Map => {
+        match self.expect_one_of_keywords(&[LIST, MAP]) {
+            Ok(as_type) => {
                 self.expect_token(&Token::LParen)?;
                 let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
                 self.expect_token(&Token::RParen)?;
 
-                Ok(Statement::CreateType(CreateTypeStatement {
-                    name,
-                    as_type,
-                    with_options,
-                }))
+                let as_type = match as_type {
+                    LIST => CreateTypeAs::List { with_options },
+                    MAP => CreateTypeAs::Map { with_options },
+                    _ => unreachable!(),
+                };
+
+                Ok(Statement::CreateType(CreateTypeStatement { name, as_type }))
             }
-            CreateTypeAs::Record => {
-                let result = self.parse_composite_type_definition()?;
+            _ => {
+                let column_defs = self.parse_composite_type_definition()?;
 
                 Ok(Statement::CreateType(CreateTypeStatement {
                     name,
-                    as_type: CreateTypeAs::Record,
-                    with_options: result,
+                    as_type: CreateTypeAs::Record { column_defs },
                 }))
             }
         }
