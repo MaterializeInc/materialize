@@ -47,7 +47,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 parquet2 = { version = "0.8.1", default-features = false }
 prost = "0.9.0"
-semver = "1.0.5"
+semver = "1.0.6"
 serde = { version = "1.0.136", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.16.1", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
