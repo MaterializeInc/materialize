@@ -1,0 +1,137 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Return NULL for NULL input
+query T
+SELECT chr(NULL)
+----
+NULL
+
+query error null character not permitted
+SELECT chr(0)
+
+# Match behavior of Postgres 14
+query error requested character too large for encoding: -1
+SELECT chr(-1)
+
+# i32.MIN
+query error requested character too large for encoding: -2147483648
+SELECT chr(-2147483648)
+
+# Test non-printable characters
+query T
+SELECT chr(1) = E'\u0001'
+----
+true
+
+query T
+SELECT chr(2) = E'\u0002'
+----
+true
+
+query T
+SELECT chr(10) = E'\u000a'
+----
+true
+
+query T
+SELECT chr(126)
+----
+~
+
+query T
+SELECT chr(127) = E'\u007f'
+----
+true
+
+# Check if non-ASCII characters work
+query T
+SELECT chr(128) = E'\u0080'
+----
+true
+
+# Test random basic multilingual plane (BMP) character
+query T
+SELECT chr(9233)
+----
+␑
+
+# Last code point before the surrogates
+query T
+SELECT chr(55295)
+----
+퟿
+
+# Surrogate characters should not be encoded in UTF-8
+# 55296 = U+D800
+query error requested character not valid for encoding: 55296
+SELECT chr(55296)
+
+# Last surrogate character
+# 57343 = U+DFFF
+query error requested character not valid for encoding: 57343
+SELECT chr(57343)
+
+query T
+SELECT chr(57344)
+----
+
+
+# Test full and half width characters
+query T
+SELECT chr(65318)
+----
+Ｆ
+
+query T
+SELECT chr(65383)
+----
+ｧ
+
+# Test supplementary multilingual plane (SMP / Plane 1) characters
+query T
+SELECT chr(66312)
+----
+𐌈
+
+query T
+SELECT chr(92330)
+----
+𖢪
+
+query T
+SELECT chr(128579)
+----
+🙃
+
+# Test composing regional indicator symbols
+query T
+SELECT chr(127463) || chr(127479);
+----
+🇧🇷
+
+# Test supplementary ideographic plane (SIP / Plane 2) characters
+query T
+SELECT chr(194564)
+----
+你
+
+# Test last valid Unicode code point
+query T
+SELECT chr(1114111) = E'\U0010FFFF'
+----
+true
+
+# First invalid code point
+query error requested character too large for encoding: 1114112
+SELECT chr(1114112)
+
+# i32.MAX
+query error requested character too large for encoding: 2147483647
+SELECT chr(2147483647)

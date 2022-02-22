@@ -3354,6 +3354,7 @@ pub enum UnaryFunc {
     ByteLengthBytes,
     ByteLengthString,
     CharLength,
+    Chr(Chr),
     IsLikeMatch(like_pattern::Matcher),
     IsRegexpMatch(Regex),
     RegexpMatch(Regex),
@@ -3572,7 +3573,8 @@ derive_unary!(
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastBytesToString,
-    CastVarCharToString
+    CastVarCharToString,
+    Chr
 );
 
 impl UnaryFunc {
@@ -3742,7 +3744,8 @@ impl UnaryFunc {
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
-            | CastVarCharToString(_) => unreachable!(),
+            | CastVarCharToString(_)
+            | Chr(_) => unreachable!(),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
@@ -3968,7 +3971,8 @@ impl UnaryFunc {
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
-            | CastVarCharToString(_) => unreachable!(),
+            | CastVarCharToString(_)
+            | Chr(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
@@ -4221,7 +4225,8 @@ impl UnaryFunc {
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
-            | CastVarCharToString(_) => unreachable!(),
+            | CastVarCharToString(_)
+            | Chr(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
             | CastJsonbToFloat32 | CastJsonbToFloat64 | CastJsonbToBool => true,
@@ -4494,7 +4499,8 @@ impl UnaryFunc {
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
-            | CastVarCharToString(_) => unreachable!(),
+            | CastVarCharToString(_)
+            | Chr(_) => unreachable!(),
             CastStringToJsonb => f.write_str("strtojsonb"),
             CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
             CastJsonbToString => f.write_str("jsonbtostr"),

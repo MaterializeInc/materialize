@@ -1743,6 +1743,9 @@ lazy_static! {
                     Ok(HirScalarExpr::literal(datum, ScalarType::String))
                 }), 746;
             },
+            "chr" => Scalar {
+                params!(Int32) => UnaryFunc::Chr(func::Chr), 1621;
+            },
             "date_bin" => Scalar {
                 params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
                     ecx.require_experimental_mode("binary date_bin")?;

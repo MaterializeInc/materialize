@@ -142,6 +142,9 @@ changes that have not yet been documented.
 
 - Change inclusive ranges of column indices in `EXPLAIN PLAN` to use `..=` instead of `..`.
 
+- Add [`chr`](/sql/functions#string-func) function to convert a Unicode codepoint
+  into a string.
+
 {{< comment >}}
 Only add new release notes above this line.
 

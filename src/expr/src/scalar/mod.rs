@@ -1207,6 +1207,8 @@ pub enum DomainLimit {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum EvalError {
+    CharacterNotValidForEncoding(i32),
+    CharacterTooLargeForEncoding(i32),
     DateBinOutOfRange(String),
     DivisionByZero,
     Unsupported {
@@ -1249,6 +1251,7 @@ pub enum EvalError {
     InvalidRegexFlag(char),
     InvalidParameterValue(String),
     NegSqrt,
+    NullCharacterNotPermitted,
     UnknownUnits(String),
     UnsupportedUnits(String, String),
     UnterminatedLikeEscapeSequence,
@@ -1277,6 +1280,12 @@ pub enum EvalError {
 impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            EvalError::CharacterNotValidForEncoding(v) => {
+                write!(f, "requested character not valid for encoding: {v}")
+            }
+            EvalError::CharacterTooLargeForEncoding(v) => {
+                write!(f, "requested character too large for encoding: {v}")
+            }
             EvalError::DateBinOutOfRange(message) => f.write_str(message),
             EvalError::DivisionByZero => f.write_str("division by zero"),
             EvalError::Unsupported { feature, issue_no } => {
@@ -1331,6 +1340,7 @@ impl fmt::Display for EvalError {
                 byte_sequence, encoding_name
             ),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
+            EvalError::NullCharacterNotPermitted => f.write_str("null character not permitted"),
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
             EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
             EvalError::InvalidParameterValue(s) => f.write_str(s),
