@@ -120,6 +120,7 @@ pub struct CatalogState {
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
+    clusters: HashMap<String, Cluster>,
 }
 
 impl CatalogState {
@@ -440,6 +441,14 @@ pub struct Schema {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct Role {
+    pub name: String,
+    pub id: i64,
+    #[serde(skip)]
+    pub oid: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct Cluster {
     pub name: String,
     pub id: i64,
     #[serde(skip)]
@@ -821,6 +830,7 @@ impl Catalog {
                     now: config.now.clone(),
                     disable_user_indexes: config.disable_user_indexes,
                 },
+                clusters: HashMap::new(),
             },
             oid_counter: FIRST_USER_OID,
             transient_revision: 0,
@@ -877,6 +887,19 @@ impl Catalog {
             catalog.state.roles.insert(
                 name.clone(),
                 Role {
+                    name: name.clone(),
+                    id,
+                    oid,
+                },
+            );
+        }
+
+        let clusters = catalog.storage().load_clusters()?;
+        for (id, name) in clusters.into_iter() {
+            let oid = catalog.allocate_oid()?;
+            catalog.state.clusters.insert(
+                name.clone(),
+                Cluster {
                     name: name.clone(),
                     id,
                     oid,
