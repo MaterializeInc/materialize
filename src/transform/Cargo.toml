@@ -15,7 +15,7 @@ mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 
 [dev-dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.54"
 datadriven = "0.6.0"
 mz-expr_test_util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }

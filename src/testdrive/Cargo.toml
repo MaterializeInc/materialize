@@ -7,7 +7,7 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.53"
+anyhow = "1.0.54"
 async-compression = { version = "0.3.12", features = ["tokio", "gzip"] }
 async-trait = "0.1.52"
 atty = "0.2.0"
