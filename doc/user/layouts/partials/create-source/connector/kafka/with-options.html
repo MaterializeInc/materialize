@@ -60,5 +60,5 @@ Field | Value | Description
 `ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication. <em>New in v0.17.0.</em>
 `ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication. <em>New in v0.17.0.</em>
 `ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. <em>New in v0.17.0.</em>
-`username` | `text` | The username used to connect to the schema registry, using basic auth. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
-`password` | `text` | The password used to connect to the schema registry, using basic auth. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
+`username` | `text` | The username used to connect to the schema registry, using basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
+`password` | `text` | The password used to connect to the schema registry, using basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
