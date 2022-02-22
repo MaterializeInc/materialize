@@ -367,13 +367,7 @@ where
 
     let dist: fn(&SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>) -> _ = match envelope {
         SourceEnvelope::Debezium(_) => |x| x.partition.hashed(),
-        _ => |x| {
-            if let Some(position) = x.position {
-                position.hashed()
-            } else {
-                x.value.hashed()
-            }
-        },
+        _ => |x| x.position.hashed(),
     };
     let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
         move |input, output| {
@@ -410,7 +404,7 @@ where
                         metadata: to_metadata_row(
                             &metadata_items,
                             partition.clone(),
-                            *position,
+                            Some(*position),
                             *upstream_time_millis,
                         ),
                     });
@@ -516,7 +510,7 @@ where
                                     session.give(DecodeResult {
                                         key: None,
                                         value: Some(value),
-                                        position,
+                                        position: position.unwrap(),
                                         upstream_time_millis: *upstream_time_millis,
                                         partition: partition.clone(),
                                         metadata,
@@ -536,84 +530,70 @@ where
                         &value_buf
                     };
 
-                    if value.is_empty() {
+                    // At this point, `value` is non-empty, as it came from a
+                    // `MessagePayload::Data`
+
+                    let value_bytes_remaining = &mut value.as_slice();
+                    // The intent is that the below loop runs as long as there are more bytes to decode.
+                    //
+                    // We'd like to be able to write `while !value_cursor.empty()`
+                    // here, but that runs into borrow checker issues, so we use `loop`
+                    // and break manually.
+                    loop {
+                        let old_value_cursor = *value_bytes_remaining;
+                        let value = match value_decoder.next(value_bytes_remaining) {
+                            Err(e) => Err(e),
+                            Ok(None) => {
+                                let leftover = value_bytes_remaining.to_vec();
+                                value_buf = leftover;
+                                break;
+                            }
+                            Ok(Some(value)) => Ok(value),
+                        };
+
+                        // If the decoders decoded a message, they need to have made progress consuming the bytes.
+                        // Otherwise, we risk going into an infinite loop.
+                        assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
+
+                        let is_err = value.is_err();
+                        if is_err {
+                            n_errors += 1;
+                        } else if matches!(&value, Ok(_)) {
+                            n_successes += 1;
+                        }
+                        let position = n_seen.next();
                         let metadata = to_metadata_row(
                             &metadata_items,
                             partition.clone(),
-                            None,
+                            position,
                             *upstream_time_millis,
                         );
-                        session.give(DecodeResult {
-                            key: None,
-                            value: None,
-                            position: None,
-                            upstream_time_millis: *upstream_time_millis,
-                            partition: partition.clone(),
-                            metadata,
-                        });
-                    } else {
-                        let value_bytes_remaining = &mut value.as_slice();
-                        // The intent is that the below loop runs as long as there are more bytes to decode.
-                        //
-                        // We'd like to be able to write `while !value_cursor.empty()`
-                        // here, but that runs into borrow checker issues, so we use `loop`
-                        // and break manually.
-                        loop {
-                            let old_value_cursor = *value_bytes_remaining;
-                            let value = match value_decoder.next(value_bytes_remaining) {
-                                Err(e) => Err(e),
-                                Ok(None) => {
-                                    let leftover = value_bytes_remaining.to_vec();
-                                    value_buf = leftover;
-                                    break;
-                                }
-                                Ok(Some(value)) => Ok(value),
-                            };
 
-                            // If the decoders decoded a message, they need to have made progress consuming the bytes.
-                            // Otherwise, we risk going into an infinite loop.
-                            assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
-
-                            let is_err = value.is_err();
-                            if is_err {
-                                n_errors += 1;
-                            } else if matches!(&value, Ok(_)) {
-                                n_successes += 1;
-                            }
-                            let position = n_seen.next();
-                            let metadata = to_metadata_row(
-                                &metadata_items,
-                                partition.clone(),
-                                position,
-                                *upstream_time_millis,
-                            );
-
-                            if value_bytes_remaining.is_empty() {
-                                session.give(DecodeResult {
-                                    key: None,
-                                    value: Some(value),
-                                    position,
-                                    upstream_time_millis: *upstream_time_millis,
-                                    partition: partition.clone(),
-                                    metadata,
-                                });
-                                value_buf = vec![];
-                                break;
-                            } else {
-                                session.give(DecodeResult {
-                                    key: None,
-                                    value: Some(value),
-                                    position,
-                                    upstream_time_millis: *upstream_time_millis,
-                                    partition: partition.clone(),
-                                    metadata,
-                                });
-                            }
-                            if is_err {
-                                // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
-                                // makes no sense to keep going.
-                                break;
-                            }
+                        if value_bytes_remaining.is_empty() {
+                            session.give(DecodeResult {
+                                key: None,
+                                value: Some(value),
+                                position: position.unwrap(),
+                                upstream_time_millis: *upstream_time_millis,
+                                partition: partition.clone(),
+                                metadata,
+                            });
+                            value_buf = vec![];
+                            break;
+                        } else {
+                            session.give(DecodeResult {
+                                key: None,
+                                value: Some(value),
+                                position: position.unwrap(),
+                                upstream_time_millis: *upstream_time_millis,
+                                partition: partition.clone(),
+                                metadata,
+                            });
+                        }
+                        if is_err {
+                            // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
+                            // makes no sense to keep going.
+                            break;
                         }
                     }
                 }

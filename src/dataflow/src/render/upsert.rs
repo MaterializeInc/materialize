@@ -344,8 +344,7 @@ where
                             .entry(time)
                             .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
                             .1
-                            .entry(key)
-                            .or_insert_with(Default::default);
+                            .entry(key);
 
                         let new_entry = UpsertSourceData {
                             raw_data: SourceData {
@@ -358,18 +357,17 @@ where
                             metadata,
                         };
 
-                        if let Some(offset) = entry.raw_data.position {
-                            // If the time is equal, toss out the row with the
-                            // lower offset
-                            if offset < new_position.expect("Kafka must always have an offset") {
-                                *entry = new_entry;
+                        match entry {
+                            std::collections::hash_map::Entry::Occupied(mut e) => {
+                                // If the time is equal, toss out the row with the
+                                // lower offset
+                                if e.get().raw_data.position < new_position {
+                                    e.insert(new_entry);
+                                }
                             }
-                        } else {
-                            // If there was not a previous entry, we'll have
-                            // inserted a blank default value, and the
-                            // offset would be none.
-                            // Just insert new entry into the hashmap.
-                            *entry = new_entry;
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(new_entry);
+                            }
                         }
                     }
                 });

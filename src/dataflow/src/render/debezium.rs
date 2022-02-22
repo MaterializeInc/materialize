@@ -76,7 +76,7 @@ where
                                     let res = s.should_use_record(
                                         key,
                                         &value,
-                                        result.position,
+                                        Some(result.position),
                                         result.upstream_time_millis,
                                         &debug_name,
                                     );
