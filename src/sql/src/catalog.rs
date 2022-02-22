@@ -106,6 +106,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// functions within the catalog.
     fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
+    /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
+    /// compute instances within the catalog.
+    fn resolve_compute_instance(&self, item_name: &PartialName) -> Result<String, CatalogError>;
+
     /// Gets an item by its ID.
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
 
@@ -374,6 +378,8 @@ pub enum CatalogError {
     UnknownFunction(String),
     /// Unknown source.
     UnknownSource(String),
+    /// Unknown compute instance.
+    UnknownComputeInstance(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -392,6 +398,8 @@ impl fmt::Display for CatalogError {
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            // n.b. compute instances are referred to as clusters to users
+            Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
             Self::InvalidDependency { name, typ } => write!(
                 f,
                 "catalog item '{}' is {} {} and so cannot be depended upon",
@@ -467,6 +475,10 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+        unimplemented!();
+    }
+
+    fn resolve_compute_instance(&self, _: &PartialName) -> Result<String, CatalogError> {
         unimplemented!();
     }
 

@@ -249,6 +249,7 @@ impl<'a> DataflowBuilder<'a> {
         id: GlobalId,
         sink_description: SinkDesc,
     ) -> Result<DataflowDesc, CoordError> {
+        // TODO: get instance ID from sink description
         let mut dataflow = DataflowDesc::new(name, id, 0);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
         Ok(dataflow)

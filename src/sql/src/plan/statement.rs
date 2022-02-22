@@ -383,6 +383,14 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
+    pub fn resolve_compute_instance(
+        &self,
+        name: UnresolvedObjectName,
+    ) -> Result<String, PlanError> {
+        let name = normalize::unresolved_object_name(name)?;
+        Ok(self.catalog.resolve_compute_instance(&name)?)
+    }
+
     pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
         self.catalog.get_item_by_id(id)
     }

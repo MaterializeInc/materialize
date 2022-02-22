@@ -407,6 +407,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
+    pub in_instance: String,
 }
 
 #[derive(Clone, Debug)]

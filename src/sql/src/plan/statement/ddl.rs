@@ -2077,6 +2077,14 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
             depends_on,
+            // TODO(CLUSTER): take this argument in from the AST.
+            in_instance: scx
+                .catalog
+                .resolve_compute_instance(&crate::names::PartialName {
+                    database: None,
+                    schema: None,
+                    item: "default".to_string(),
+                })?,
         },
         options,
         if_not_exists,

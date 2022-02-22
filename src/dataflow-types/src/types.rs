@@ -181,6 +181,10 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
         typ: RelationType,
         requesting_view: GlobalId,
     ) {
+        assert_eq!(
+            self.compute_instance_id, description.compute_instance_id,
+            "can currently only import indexes on the same instance"
+        );
         self.index_imports.insert(id, (description, typ));
         self.record_depends_on(requesting_view, id);
     }
@@ -217,6 +221,11 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
     pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: RelationType) {
+        assert_eq!(
+            self.compute_instance_id, description.compute_instance_id,
+            "can only export indexes from the same instance"
+        );
+
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_view(

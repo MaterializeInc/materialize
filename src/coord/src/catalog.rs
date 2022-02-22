@@ -34,6 +34,7 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::{
+    client::DEFAULT_COMPUTE_INSTANCE_ID,
     sinks::{SinkConnector, SinkConnectorBuilder},
     sources::{AwsExternalId, SourceConnector, Timeline},
 };
@@ -1009,7 +1010,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![log.id],
                             enabled: catalog.index_enabled_by_default(&log.index_id),
-                            compute_instance_id: 0,
+                            compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -1063,7 +1064,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![table.id],
                             enabled: catalog.index_enabled_by_default(&table.index_id),
-                            compute_instance_id: 0,
+                            compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -1454,6 +1455,18 @@ impl Catalog {
 
     pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
         self.state.get_by_oid(oid)
+    }
+
+    pub fn get_compute_instance_by_name(
+        &self,
+        name: &str,
+    ) -> Result<&ComputeInstance, SqlCatalogError> {
+        let id = self
+            .state
+            .compute_instance_names
+            .get(name)
+            .ok_or(SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
+        Ok(&self.state.compute_instances_by_id[id])
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
@@ -2306,7 +2319,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
-                compute_instance_id: 0,
+                compute_instance_id: self.get_compute_instance_by_name(&index.in_instance)?.id,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2791,6 +2804,18 @@ impl SessionCatalog for ConnCatalog<'_> {
         Ok(self
             .catalog
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
+    }
+
+    fn resolve_compute_instance(&self, name: &PartialName) -> Result<String, SqlCatalogError> {
+        if name.database.is_some() || name.schema.is_some() {
+            Err(SqlCatalogError::UnknownComputeInstance(name.to_string()))
+        } else {
+            Ok(self
+                .catalog
+                .get_compute_instance_by_name(&name.item)?
+                .name
+                .clone())
+        }
     }
 
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
