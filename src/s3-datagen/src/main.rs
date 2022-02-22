@@ -12,7 +12,7 @@ use std::iter;
 
 use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
 use aws_sdk_s3::model::{BucketLocationConstraint, CreateBucketConfiguration};
-use aws_sdk_s3::SdkError;
+use aws_sdk_s3::types::SdkError;
 use clap::Parser;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use tracing::event;

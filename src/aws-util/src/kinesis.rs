@@ -11,7 +11,8 @@
 
 use aws_sdk_kinesis::error::{GetShardIteratorError, ListShardsError};
 use aws_sdk_kinesis::model::{Shard, ShardIteratorType};
-use aws_sdk_kinesis::{Client, SdkError};
+use aws_sdk_kinesis::types::SdkError;
+use aws_sdk_kinesis::Client;
 
 use crate::config::AwsConfig;
 use crate::util;

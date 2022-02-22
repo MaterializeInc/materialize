@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.55"
-aws-sdk-s3 = { version = "0.6.0", default-features = false }
+aws-sdk-s3 = { version = "0.7.0", default-features = false }
 bytefmt = "0.1.7"
 clap = { version = "3.0.14", features = ["derive"] }
 futures = "0.3.21"
