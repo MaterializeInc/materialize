@@ -139,7 +139,7 @@ const MIGRATIONS: &[&str] = &[
         id   integer PRIMARY KEY,
         name text NOT NULL UNIQUE
     );
-    INSERT INTO clusters VALUES (1, 'default');",
+    INSERT INTO clusters VALUES (0, 'default');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:

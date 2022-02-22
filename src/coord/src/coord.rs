@@ -108,7 +108,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
+use mz_dataflow_types::client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID};
 use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
 use mz_dataflow_types::client::{Response as DataflowResponse, StorageResponse};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
@@ -617,7 +617,7 @@ impl Coordinator {
                                 index_id,
                                 description,
                             )?;
-                            self.ship_dataflow(df).await;
+                            self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
                         }
                     }
                 }
@@ -1839,7 +1839,7 @@ impl Coordinator {
             let sink_writes = SinkWrites::new(tokens);
             self.sink_writes.insert(id, sink_writes);
         }
-        Ok(self.ship_dataflow(df).await)
+        Ok(self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await)
     }
 
     async fn sequence_plan(
@@ -2268,7 +2268,7 @@ impl Coordinator {
                     // like they are, e.g. they are rendered as a SourceConnector::Local.
                     self.sources.insert(table_id, frontiers);
 
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -2359,7 +2359,7 @@ impl Coordinator {
                     .create_sources(source_descriptions)
                     .await
                     .unwrap();
-                self.ship_dataflows(dfs).await;
+                self.ship_dataflows(0, dfs).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2647,7 +2647,7 @@ impl Coordinator {
         {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2692,7 +2692,7 @@ impl Coordinator {
             .await
         {
             Ok(dfs) => {
-                self.ship_dataflows(dfs).await;
+                self.ship_dataflows(0, dfs).await;
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -2740,7 +2740,7 @@ impl Coordinator {
         {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
                     self.set_index_options(id, options).expect("index enabled");
                 }
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -3344,7 +3344,8 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
             .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
-        self.ship_dataflow(dataflow).await;
+        self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, dataflow)
+            .await;
 
         let resp = ExecuteResponse::Tailing { rx };
         match copy_to {
@@ -4121,7 +4122,7 @@ impl Coordinator {
                     Ok(df)
                 })
                 .await?;
-            self.ship_dataflow(df).await;
+            self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
@@ -4382,18 +4383,22 @@ impl Coordinator {
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
-        self.ship_dataflows(vec![dataflow]).await
+    async fn ship_dataflow(&mut self, in_instance: ComputeInstanceId, dataflow: DataflowDesc) {
+        self.ship_dataflows(in_instance, vec![dataflow]).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+    async fn ship_dataflows(
+        &mut self,
+        in_instance: ComputeInstanceId,
+        dataflows: Vec<DataflowDesc>,
+    ) {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow));
         }
         self.dataflow_client
-            .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+            .compute(in_instance)
             .unwrap()
             .create_dataflows(dataflow_plans)
             .await
@@ -5186,8 +5191,12 @@ impl Coordinator {
         // (which has happened twice and is the motivation for this test).
 
         let df = DataflowDesc::new("".into(), GlobalId::Explain);
-        let _: () = self.ship_dataflow(df.clone()).await;
-        let _: () = self.ship_dataflows(vec![df.clone()]).await;
+        let _: () = self
+            .ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df.clone())
+            .await;
+        let _: () = self
+            .ship_dataflows(DEFAULT_COMPUTE_INSTANCE_ID, vec![df.clone()])
+            .await;
         let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);
     }
 }
