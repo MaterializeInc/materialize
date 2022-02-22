@@ -118,7 +118,7 @@ changes that have not yet been documented.
   Intervals d days > h hours for all d,h {{% gh 10708 %}}.
 
 - **Breaking change.** Print all negative [`interval`](/sql/types/interval)
-  units as plural. So `-1 days` will be  printed instead of `1 day`. This
+  units as plural. So `-1 days` will be  printed instead of `-1 day`. This
   matches the behavior of PostgreSQL.
 
 - **Breaking change.** Round microsecond field of
