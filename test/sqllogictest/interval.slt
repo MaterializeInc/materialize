@@ -943,3 +943,19 @@ query T
 SELECT INTERVAL '7 months'::time;
 ----
 00:00:00
+
+# Sub microseconds get rounded to microseconds
+query T
+SELECT INTERVAL '01:00:01.00000009';
+----
+01:00:01
+
+query T
+SELECT INTERVAL '01:00:01.0000009';
+----
+01:00:01.000001
+
+query T
+SELECT INTERVAL '01:00:01.0000004';
+----
+01:00:01

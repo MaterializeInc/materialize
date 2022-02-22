@@ -508,7 +508,9 @@ impl ParsedDateTime {
                 // months += y_f * month_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
                 *months = y_f
                     .checked_mul(d.month_multiplier())
-                    .and_then(|y_f_m| y_f_m.checked_div(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION))
+                    .and_then(|y_f_m| {
+                        y_f_m.checked_div(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
+                    })
                     .and_then(|y_f_m| i32::try_from(y_f_m).ok())
                     .and_then(|y_f_m| months.checked_add(y_f_m))
                     .ok_or_else(|| {
@@ -629,7 +631,10 @@ impl ParsedDateTime {
                 *micros = t_f
                     .checked_mul(d.micros_multiplier())
                     .and_then(|t_f_ns| {
-                        div_and_round(t_f_ns.into(), DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
+                        div_and_round(
+                            t_f_ns.into(),
+                            DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION,
+                        )
                     })
                     .and_then(|t_f_ns| micros.checked_add(t_f_ns))
                     .ok_or_else(|| {
