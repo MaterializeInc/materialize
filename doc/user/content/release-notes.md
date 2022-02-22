@@ -145,6 +145,9 @@ changes that have not yet been documented.
 - Add [`chr`](/sql/functions#string-func) function to convert a Unicode codepoint
   into a string.
 
+- Capture and persist source table schemas during creation of materialized postgres source for use detecting DDL changes.
+  When DDL changes are detected for tables which were present at source creation the source will error with a message indicating which table was altered, a more detailed error log will also be generated which includes the schema before and after the change.
+
 {{< comment >}}
 Only add new release notes above this line.
 
