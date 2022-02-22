@@ -198,7 +198,7 @@ simple queries to just hit an existing index instead of installing a temporary
 dataflow.
 
 ```
-Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..#3)
+Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..=#3)
 ```
 
 #### Operators in decorrelated and optimized plans

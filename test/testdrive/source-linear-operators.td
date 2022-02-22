@@ -42,7 +42,7 @@ $ set-regex match=u\d+ replacement=UID
 ? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 3)
-| Project (#0..#3)
+| Project (#0..=#3)
 
 Query:
 %0 =
@@ -222,7 +222,7 @@ Query:
 ? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#0 = 1)
-| Project (#0..#2)
+| Project (#0..=#2)
 
 Query:
 %0 = Let l0 =

@@ -450,7 +450,7 @@ impl<'a> fmt::Display for Indices<'a> {
                 while slice.get(last) == Some(&(lead + last)) {
                     last += 1;
                 }
-                write!(f, "#{}..#{}", lead, lead + last - 1)?;
+                write!(f, "#{}..=#{}", lead, lead + last - 1)?;
                 slice = &slice[last..];
             } else {
                 write!(f, "#{}", slice[0])?;

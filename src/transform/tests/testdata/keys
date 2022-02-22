@@ -38,7 +38,7 @@ opt format=types
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -70,7 +70,7 @@ Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtract
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -87,7 +87,7 @@ Applied RelationCSE:
 | Get %0 (l0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -102,7 +102,7 @@ Applied InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: 
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -114,7 +114,7 @@ Final:
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -144,7 +144,7 @@ opt format=types
 | | implementation = Differential %1 %0.(#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ()
-| Project (#0..#4, #2)
+| Project (#0..=#4, #2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ()
 ----

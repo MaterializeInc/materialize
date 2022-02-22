@@ -107,6 +107,24 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- **Breaking change.** Return an empty list for slice operations that retrieve
+  no elements (e.g. the beginning of the slice's range exceeds the length of the
+  list); previously Materialize returned NULL.
+
+- **Breaking change.** Decrease minimum [`interval`](/sql/types/interval) value
+  from '-2147483647 months -2147483647 days -2147483647 hours -59 minutes
+  -59.999999 seconds' to '-2147483648 months -2147483648 days -2147483648 hours
+  -59 minutes -59.999999 seconds' to match PostgreSQL's behavior {{% gh 10598 %}}.
+
+- Fix a bug where too many columns were returned when both `*` and a
+  table function appeared in the `SELECT` list {{% gh 10363 %}}.
+
+- Improve the clarity of any Avro schema resolution errors found when
+  creating materialized sources and views. {{% gh 8415 %}}
+
+- Allow setting `standard_conforming_strings` to its default value of `on`.
+  Setting it to `off` is still not supported.
+
 - Support sequences of subscript operations on [`array`] values when
   indexing/accessing individual elements (as opposed to taking slices/ranges of
   values) {{% gh 9815 %}}.
@@ -121,6 +139,8 @@ changes that have not yet been documented.
 - `INCLUDE KEY AS` ([see this for more details](/sql/create-source/avro-kafka#avro-format-details)
   now works when using [`ENVELOPE UPSERT`](/sql/create-source/avro-kafka#upsert-envelope-details)
   {{% gh 10730 %}}.
+
+- Change inclusive ranges of column indices in `EXPLAIN PLAN` to use `..=` instead of `..`.
 
 {{< comment >}}
 Only add new release notes above this line.

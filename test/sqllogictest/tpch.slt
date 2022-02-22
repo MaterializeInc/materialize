@@ -161,7 +161,7 @@ ORDER BY
 %0 =
 | Get materialize.public.lineitem (u21)
 | Filter (#10 <= 1998-12-01)
-| Project (#4..#9)
+| Project (#4..=#9)
 | Reduce group=(#4, #5)
 | | agg sum(#0)
 | | agg sum(#1)
@@ -170,9 +170,9 @@ ORDER BY
 | | agg count(true)
 | | agg sum(#2)
 | Map i64tof64(if (#6 = 0) then {null} else {#6}), (numerictof64(#2) / #8), (numerictof64(#3) / #8), (numerictof64(#7) / #8)
-| Project (#0..#5, #9..#11, #6)
+| Project (#0..=#5, #9..=#11, #6)
 
-Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0..#9)
+Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0..=#9)
 
 EOF
 
@@ -243,7 +243,7 @@ ORDER BY
 | |   delta %2 %3.(#0) %0.(#3) %1.(#1) %4.(#0)
 | |   delta %3 %2.(#2) %0.(#3) %1.(#1) %4.(#0)
 | Filter (#5 = 15), (#26 = "EUROPE"), "%BRASS" ~~(varchartostr(#4))
-| Project (#0, #2, #10, #11, #13..#15, #19, #22)
+| Project (#0, #2, #10, #11, #13..=#15, #19, #22)
 
 %6 =
 | Get %5 (l4)
@@ -270,7 +270,7 @@ ORDER BY
 | | implementation = Differential %5 %7.(#0, #1)
 | Project (#5, #2, #8, #0, #1, #3, #4, #6)
 
-Finish order_by=(#0 desc, #2 asc, #1 asc, #3 asc) limit=none offset=0 project=(#0..#7)
+Finish order_by=(#0 desc, #2 asc, #1 asc, #3 asc) limit=none offset=0 project=(#0..=#7)
 
 EOF
 
@@ -324,7 +324,7 @@ ORDER BY
 | | agg sum((#3 * (1 - #4)))
 | Project (#0, #3, #1, #2)
 
-Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..#3)
+Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..=#3)
 
 EOF
 
@@ -557,7 +557,7 @@ ORDER BY
 | Reduce group=(#3, #4, extract_year_d(#2))
 | | agg sum((#0 * (1 - #1)))
 
-Finish order_by=(#0 asc, #1 asc, #2 asc) limit=none offset=0 project=(#0..#3)
+Finish order_by=(#0 asc, #1 asc, #2 asc) limit=none offset=0 project=(#0..=#3)
 
 EOF
 
@@ -727,11 +727,11 @@ ORDER BY
 | |   delta %4 %2.(#0) %3.(#0, #1) %0.(#0) %1.(#0) %5.(#0)
 | |   delta %5 %1.(#3) %2.(#2) %3.(#0, #1) %0.(#0) %4.(#0)
 | Filter "%green%" ~~(varchartostr(#1))
-| Project (#20..#22, #35, #41, #47)
+| Project (#20..=#22, #35, #41, #47)
 | Reduce group=(#5, extract_year_d(#4))
 | | agg sum(((#1 * (1 - #2)) - (#3 * #0)))
 
-Finish order_by=(#0 asc, #1 desc) limit=none offset=0 project=(#0..#2)
+Finish order_by=(#0 asc, #1 desc) limit=none offset=0 project=(#0..=#2)
 
 EOF
 
@@ -795,12 +795,12 @@ ORDER BY
 | |   delta %2 %1.(#0) %0.(#0) %3.(#0)
 | |   delta %3 %0.(#3) %1.(#1) %2.(#0)
 | Filter (#25 = "R"), (#12 < 1994-01-01), (#12 >= 1993-10-01), (datetots(#12) < 1994-01-01 00:00:00)
-| Project (#0..#2, #4, #5, #7, #22, #23, #34)
+| Project (#0..=#2, #4, #5, #7, #22, #23, #34)
 | Reduce group=(#0, #1, #4, #3, #8, #2, #5)
 | | agg sum((#6 * (1 - #7)))
 | Project (#0, #1, #7, #2, #4, #5, #3, #6)
 
-Finish order_by=(#2 desc) limit=none offset=0 project=(#0..#7)
+Finish order_by=(#2 desc) limit=none offset=0 project=(#0..=#7)
 
 EOF
 
@@ -929,7 +929,7 @@ ORDER BY
 | | agg sum(if ((#0 = "2-HIGH") || (#0 = "1-URGENT")) then {1} else {0})
 | | agg sum(if ((#0 != "2-HIGH") && (#0 != "1-URGENT")) then {1} else {0})
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
+Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#2)
 
 EOF
 
@@ -971,7 +971,7 @@ ORDER BY
 | |   delta %0 %1.(#1)
 | |   delta %1 %0.(#0)
 | Filter !("%special%requests%" ~~(varchartostr(#16)))
-| Project (#0..#8)
+| Project (#0..=#8)
 
 %3 =
 | Get %2 (l0)
@@ -979,7 +979,7 @@ ORDER BY
 
 %4 =
 | Get %2 (l0)
-| Project (#0..#7)
+| Project (#0..=#7)
 | Distinct group=(#0, #1, #2, #3, #4, #5, #6, #7)
 | Project (#0)
 | Negate
@@ -1120,9 +1120,9 @@ ORDER BY
 %4 =
 | Join %1 %2 %3 (= #0 #7) (= #8 #9)
 | | implementation = Differential %1.(#0) %2.(#0) %3.(#0)
-| Project (#0..#2, #4, #8)
+| Project (#0..=#2, #4, #8)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#4)
+Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#4)
 
 EOF
 
@@ -1177,7 +1177,7 @@ ORDER BY
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
 | Filter (#8 != "Brand#45"), !("MEDIUM POLISHED%" ~~(varchartostr(#9))), ((((((((#10 = 14) || (#10 = 49)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9))
-| Project (#1, #8..#10)
+| Project (#1, #8..=#10)
 
 %3 = Let l1 =
 | Get %2 (l0)
@@ -1211,11 +1211,11 @@ ORDER BY
 %9 =
 | Join %4 %8 (= #0 #4)
 | | implementation = Differential %8 %4.(#0)
-| Project (#0..#3)
+| Project (#0..=#3)
 | Reduce group=(#1, #2, #3)
 | | agg count(distinct #0)
 
-Finish order_by=(#3 desc, #0 asc, #1 asc, #2 asc) limit=none offset=0 project=(#0..#3)
+Finish order_by=(#3 desc, #0 asc, #1 asc, #2 asc) limit=none offset=0 project=(#0..=#3)
 
 EOF
 
@@ -1376,11 +1376,11 @@ ORDER BY
 | Join %3 %5 (= #2 #6)
 | | implementation = Differential %3 %5.(#0)
 | Filter (#7 > 300)
-| Project (#0..#5)
+| Project (#0..=#5)
 | Reduce group=(#1, #0, #2, #4, #3)
 | | agg sum(#5)
 
-Finish order_by=(#4 desc, #3 asc) limit=none offset=0 project=(#0..#5)
+Finish order_by=(#4 desc, #3 asc) limit=none offset=0 project=(#0..=#5)
 
 EOF
 
@@ -1513,7 +1513,7 @@ ORDER BY
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#3)
 | Filter (#8 = "CANADA")
-| Project (#0..#2)
+| Project (#0..=#2)
 
 %3 =
 | Get %2 (l0)
@@ -1532,7 +1532,7 @@ ORDER BY
 | Join %3 %4 %5 (= #1 #6)
 | | implementation = Differential %4.(#0) %5.(#0) %3.()
 | Filter "forest%" ~~(varchartostr(#7))
-| Project (#0..#3)
+| Project (#0..=#3)
 
 %7 =
 | Get %6 (l1)
@@ -1666,7 +1666,7 @@ ORDER BY
 %8 = Let l2 =
 | Join %4 %7 (= #0 #4) (= #2 #3)
 | | implementation = Differential %4 %7.(#0, #1)
-| Project (#0..#2)
+| Project (#0..=#2)
 
 %9 = Let l3 =
 | Get %8 (l2)
@@ -1771,7 +1771,7 @@ ORDER BY
 | Join %0 %1
 | | implementation = Differential %0 %1.()
 | Filter (numerictof64(#2) > (numerictof64(#3) / i64tof64(if (#4 = 0) then {null} else {#4})))
-| Project (#0..#2)
+| Project (#0..=#2)
 
 %3 = Let l1 =
 | Get %2 (l0)
@@ -1804,7 +1804,7 @@ ORDER BY
 | | agg count(true)
 | | agg sum(#1)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
+Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#2)
 
 EOF
 

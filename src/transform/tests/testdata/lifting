@@ -80,7 +80,7 @@ build apply=LiteralLifting
 | Map #0, 1
 | Project (#0, #1, #3, #2)
 | Map #2, 2, 3
-| Project (#0..#3, #5, #6, #4)
+| Project (#0..=#3, #5, #6, #4)
 | Project (#3, #6)
 
 
@@ -93,7 +93,7 @@ build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
 | Get x (u0)
 | Map #0
 | Map 1, 1
-| Project (#0..#2, #4, #3)
+| Project (#0..=#2, #4, #3)
 | Project (#2, #4)
 
 opt
