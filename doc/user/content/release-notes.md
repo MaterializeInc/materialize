@@ -145,6 +145,8 @@ changes that have not yet been documented.
 - Add [`chr`](/sql/functions#string-func) function to convert a Unicode codepoint
   into a string.
 
+- Add support for Postgres's [named composite types](https://www.postgresql.org/docs/14/rowtypes.html) via `CREATE TYPE <name> AS (columns)`.
+
 {{< comment >}}
 Only add new release notes above this line.
 
