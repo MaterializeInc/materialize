@@ -48,8 +48,11 @@ pub enum Type {
     Int4,
     /// An 8-byte signed integer.
     Int8,
-    /// A time interval.
-    Interval,
+    /// A time interval 
+    Interval {
+        /// Optional precision
+        precision: Option<IntervalPrecision>,
+    },
     /// A textual JSON blob.
     Json,
     /// A binary JSON blob.
@@ -102,6 +105,30 @@ pub enum Type {
     RegClass,
 }
 
+/// A precision associatd with [`Type::Interval`]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct IntervalPrecision(i32);
+
+impl IntervalPrecision {
+    fn from_typmod(typmod: i32) -> Option<IntervalPrecision> {
+        // https://github.com/postgres/postgres/blob/52377bb81/src/backend/utils/adt/varchar.c#L139
+        if typmod >= VARHDRSZ {
+            Some(IntervalPrecision(typmod - VARHDRSZ))
+        } else {
+            None
+        }
+    }
+
+    fn into_typmod(self) -> i32 {
+        // https://github.com/postgres/postgres/blob/52377bb81/src/backend/utils/adt/varchar.c#L60-L65
+        self.0 + VARHDRSZ
+    }
+
+    /// Consumes the newtype wrapper, returning the contents as an `i32`.
+    pub fn into_i32(self) -> i32 {
+        self.0
+    }
+}
 /// A length associated with [`Type::Char`] and [`Type::VarChar`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct CharLength(i32);
@@ -237,7 +264,9 @@ impl Type {
             postgres_types::Type::INT2 => Type::Int2,
             postgres_types::Type::INT4 => Type::Int4,
             postgres_types::Type::INT8 => Type::Int8,
-            postgres_types::Type::INTERVAL => Type::Interval,
+            postgres_types::Type::INTERVAL => Type::Interval {
+                precision: IntervalPrecision::from_typmod(typmod),
+            },
             postgres_types::Type::JSON => Type::Json,
             postgres_types::Type::JSONB => Type::Jsonb,
             postgres_types::Type::NUMERIC => Type::Numeric {
@@ -270,7 +299,9 @@ impl Type {
             postgres_types::Type::INT2_ARRAY => Type::Array(Box::new(Type::Int2)),
             postgres_types::Type::INT4_ARRAY => Type::Array(Box::new(Type::Int4)),
             postgres_types::Type::INT8_ARRAY => Type::Array(Box::new(Type::Int8)),
-            postgres_types::Type::INTERVAL_ARRAY => Type::Array(Box::new(Type::Interval)),
+            postgres_types::Type::INTERVAL_ARRAY => Type::Array(Box::new(Type::Interval {
+                precision: IntervalPrecision::from_typmod(typmod),
+            })),
             postgres_types::Type::JSON_ARRAY => Type::Array(Box::new(Type::Json)),
             postgres_types::Type::JSONB_ARRAY => Type::Array(Box::new(Type::Jsonb)),
             postgres_types::Type::NUMERIC_ARRAY => Type::Array(Box::new(Type::Numeric {
@@ -305,7 +336,7 @@ impl Type {
                 Type::Int2 => &postgres_types::Type::INT2_ARRAY,
                 Type::Int4 => &postgres_types::Type::INT4_ARRAY,
                 Type::Int8 => &postgres_types::Type::INT8_ARRAY,
-                Type::Interval => &postgres_types::Type::INTERVAL_ARRAY,
+                Type::Interval { .. } => &postgres_types::Type::INTERVAL_ARRAY,
                 Type::Json => &postgres_types::Type::JSON_ARRAY,
                 Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
                 Type::List(_) => unreachable!(),
@@ -333,7 +364,7 @@ impl Type {
             Type::Int2 => &postgres_types::Type::INT2,
             Type::Int4 => &postgres_types::Type::INT4,
             Type::Int8 => &postgres_types::Type::INT8,
-            Type::Interval => &postgres_types::Type::INTERVAL,
+            Type::Interval { .. } => &postgres_types::Type::INTERVAL,
             Type::Json => &postgres_types::Type::JSON,
             Type::Jsonb => &postgres_types::Type::JSONB,
             Type::List(_) => &LIST,
@@ -416,7 +447,7 @@ impl Type {
             Type::Int2 => 2,
             Type::Int4 => 4,
             Type::Int8 => 8,
-            Type::Interval => 16,
+            Type::Interval { .. } => 16,
             Type::Json => -1,
             Type::Jsonb => -1,
             Type::List(_) => -1,
@@ -457,6 +488,9 @@ impl Type {
             Type::VarChar {
                 max_length: Some(max_length),
             } => max_length.into_typmod(),
+            Type::Interval {
+                precision: Some(precision)
+            } => precision.into_typmod(),
             Type::Array(_)
             | Type::Bool
             | Type::Bytea
@@ -467,7 +501,7 @@ impl Type {
             | Type::Int2
             | Type::Int4
             | Type::Int8
-            | Type::Interval
+            | Type::Interval { precision: None }
             | Type::Json
             | Type::Jsonb
             | Type::List(_)
@@ -521,7 +555,8 @@ impl TryFrom<&Type> for ScalarType {
             Type::Int2 => ScalarType::Int16,
             Type::Int4 => ScalarType::Int32,
             Type::Int8 => ScalarType::Int64,
-            Type::Interval => ScalarType::Interval,
+            // ScalarType::Interval hardcodes a precision of 6 for now
+            Type::Interval { .. } => ScalarType::Interval,
             Type::Json => bail!("type json not supported"),
             Type::Jsonb => ScalarType::Jsonb,
             Type::List(t) => ScalarType::List {
@@ -598,7 +633,8 @@ impl From<&ScalarType> for Type {
             ScalarType::Int16 => Type::Int2,
             ScalarType::Int32 => Type::Int4,
             ScalarType::Int64 => Type::Int8,
-            ScalarType::Interval => Type::Interval,
+            // ScalarType::Interval hardcodes a precision of 6 for now
+            ScalarType::Interval => Type::Interval { precision: Some(IntervalPrecision(6)) },
             ScalarType::Jsonb => Type::Jsonb,
             ScalarType::List { element_type, .. } => {
                 Type::List(Box::new(From::from(&**element_type)))

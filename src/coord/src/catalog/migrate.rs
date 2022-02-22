@@ -92,6 +92,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         ast_use_pg_catalog_0_7_1(stmt)?;
         ast_insert_default_confluent_wire_format_0_7_1(stmt)?;
         ast_remove_csr_confluent_wire_format_0_19_0(stmt)?;
+        ast_rewrite_pgcdc_with_details_0_21_0(stmt)?;
         if catalog_version < *VER_0_9_1 {
             ast_rewrite_pg_catalog_char_to_text_0_9_1(stmt)?;
         }
@@ -103,7 +104,6 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_20_0 {
             ast_rewrite_ccsr_with_options_to_compiled_0_20_0(stmt)?;
-            ast_rewrite_pgcdc_with_details_0_21_0(stmt)?;
         }
         Ok(())
     })?;

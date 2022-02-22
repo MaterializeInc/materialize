@@ -404,7 +404,7 @@ impl Value {
                 Value::Int4(strconv::parse_int32(raw)?)
             }
             Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
-            Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
+            Type::Interval { .. } => Value::Interval(Interval(strconv::parse_interval(raw)?)),
             Type::Json => return Err("input of json types is not implemented".into()),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
             Type::List(elem_type) => Value::List(strconv::parse_list(
@@ -448,7 +448,7 @@ impl Value {
                 i32::from_sql(ty.inner(), raw).map(Value::Int4)
             }
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
-            Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
+            Type::Interval { .. } => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
             Type::Json => return Err("input of json types is not implemented".into()),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),

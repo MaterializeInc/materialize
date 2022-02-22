@@ -121,12 +121,33 @@ pub fn plan_show_create_source(
 ) -> Result<Plan, anyhow::Error> {
     let source = scx.resolve_item(source_name)?;
     if let CatalogItemType::Source = source.item_type() {
-        Ok(Plan::SendRows(SendRowsPlan {
-            rows: vec![Row::pack_slice(&[
+        let mut rows: Vec<Row> = vec![];
+        match source.source_connector() {
+            Ok(conn) => match conn {
+                mz_dataflow_types::sources::SourceConnector::External { connector, .. } => {
+                    match connector {
+                        mz_dataflow_types::sources::ExternalSourceConnector::Postgres(src) => {
+                            eprintln!("{:?}", src.details);
+                        }
+                        _ => rows.push(Row::pack_slice(&[
+                            Datum::String(&source.name().to_string()),
+                            Datum::String(source.create_sql()),
+                        ])),
+                    }
+                }
+                mz_dataflow_types::sources::SourceConnector::Local { .. } => {
+                    rows.push(Row::pack_slice(&[
+                        Datum::String(&source.name().to_string()),
+                        Datum::String(source.create_sql()),
+                    ]))
+                }
+            },
+            Err(_) => rows.push(Row::pack_slice(&[
                 Datum::String(&source.name().to_string()),
                 Datum::String(source.create_sql()),
-            ])],
-        }))
+            ])),
+        }
+        Ok(Plan::SendRows(SendRowsPlan { rows: rows }))
     } else {
         bail!("{} is not a source", source.name());
     }
