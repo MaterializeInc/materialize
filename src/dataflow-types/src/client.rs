@@ -203,7 +203,7 @@ impl StorageCommandKind {
             StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
             StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
-            StorageCommandKind::AllowCompaction => "allows_storage_compaction",
+            StorageCommandKind::AllowCompaction => "allow_storage_compaction",
             StorageCommandKind::CreateSources => "create_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::Insert => "insert",

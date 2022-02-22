@@ -7,10 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! A controller than provides an interface to the storage layer.
+//!
+//! The storage controller curates the creation of sources, the progress of readers through these sources,
+//! and the eventual dropping an reclamation of these sources.
+//!
+//! The storage controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
+//! use an identifier before it has been "created" with `create_source()`. Once created, the controller holds
+//! a read capability for each source, which is manipulated with `allow_compaction()`. Eventually, the source
+//! is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
+
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
 
 use crate::client::SourceConnector;
 use crate::client::{Client, Command, StorageCommand};
@@ -18,8 +29,6 @@ use crate::sources::SourceDesc;
 use crate::Update;
 use mz_expr::GlobalId;
 use mz_expr::PartitionId;
-
-use super::Capabilities;
 
 /// Controller state maintained for each storage instance.
 pub struct StorageControllerState<T> {
@@ -61,7 +70,12 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
-
+    /// Create sources from descriptions and initial `since` read validity frontiers.
+    ///
+    /// This command installs collection state for the indicated identifiers, and the are
+    /// now valid to use in queries at times beyond the initial `since` frontiers. Each
+    /// collection also acquires a read capability at this frontier, which will need to
+    /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
     pub async fn create_sources(
         &mut self,
         mut bindings: Vec<(GlobalId, (crate::sources::SourceDesc, Antichain<T>))>,
@@ -96,6 +110,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
 
         Ok(())
     }
+    /// Drops the read capability for the sources and allows their resources to be reclaimed.
     pub async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_ids(identifiers.iter().cloned())?;
         let compaction_commands = identifiers
@@ -130,6 +145,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             }))
             .await
     }
+    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
+    ///
+    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
     pub async fn allow_compaction(
         &mut self,
         frontiers: Vec<(GlobalId, Antichain<T>)>,
@@ -137,19 +155,21 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         // Validate that the ids exist.
         self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
 
-        // Downgrade the implicit capability for each referenced id.
-        for (id, frontier) in frontiers.iter() {
-            // Apply the updates but ignore the results for now.
-            // TODO(mcsherry): observe the results and allow compaction.
-            let _ = self
-                .collection_mut(*id)?
-                .capability_downgrade(frontier.clone());
+        let mut updates = BTreeMap::new();
+        for (id, mut frontier) in frontiers.into_iter() {
+            let collection = self.collection_mut(id).unwrap();
+            // Add new frontier, swap, subtract old frontier.
+            let mut update = ChangeBatch::new();
+            update.extend(frontier.iter().map(|time| (time.clone(), 1)));
+            std::mem::swap(&mut collection.implied_capability, &mut frontier);
+            update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+            // Record updates if something of substance changed.
+            if !update.is_empty() {
+                updates.insert(id, update);
+            }
         }
-        // TODO(mcsherry): Delay compation subject to read capability constraints.
-        self.client
-            .send(Command::Storage(StorageCommand::AllowCompaction(frontiers)))
-            .await;
 
+        self.update_read_capabilities(&mut updates).await;
         Ok(())
     }
     pub async fn drop_source_timestamping(&mut self, id: GlobalId) {
@@ -170,7 +190,8 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
 
 // Internal interface
 impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
-    pub fn collection_mut(
+    /// Acquire a mutable reference to the collection state, should it exist.
+    pub(super) fn collection_mut(
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<T>, StorageError> {
@@ -179,12 +200,54 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
-
+    /// Validate that a collection exists for all identifiers, and error if any do not.
     pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), StorageError> {
         for id in ids {
             self.collection(id)?;
         }
         Ok(())
+    }
+
+    /// Applies `updates` and sends any appropriate compaction command.
+    pub(super) async fn update_read_capabilities(
+        &mut self,
+        updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
+    ) {
+        // Location to record consequences that we need to act on.
+        let mut storage_net = Vec::default();
+        // Repeatedly extract the maximum id, and updates for it.
+        while let Some(key) = updates.keys().rev().next().cloned() {
+            let mut update = updates.remove(&key).unwrap();
+            if let Ok(collection) = self.collection_mut(key) {
+                let changes = collection.read_capabilities.update_iter(update.drain());
+                update.extend(changes);
+                storage_net.push((key, update));
+            } else {
+                // This is confusing and we should probably error.
+                panic!("Unknown collection identifier {}", key);
+            }
+        }
+
+        // Translate our net compute actions into `AllowCompaction` commands.
+        let mut compaction_commands = Vec::new();
+        for (id, change) in storage_net.iter_mut() {
+            if !change.is_empty() {
+                let frontier = self
+                    .collection(*id)
+                    .unwrap()
+                    .read_capabilities
+                    .frontier()
+                    .to_owned();
+                compaction_commands.push((*id, frontier));
+            }
+        }
+        if !compaction_commands.is_empty() {
+            self.client
+                .send(Command::Storage(StorageCommand::AllowCompaction(
+                    compaction_commands,
+                )))
+                .await;
+        }
     }
 }
 
@@ -194,26 +257,22 @@ pub struct CollectionState<T> {
     pub(super) description: (crate::sources::SourceDesc, Antichain<T>),
 
     /// Accumulation of read capabilities for the collection.
-    pub(super) read_capabilities: Capabilities<T>,
-    /// The implicit capability associated with storage collection creation.
-    pub(super) implied_capability: usize,
+    ///
+    /// This accumulation will always contain `self.implied_capability`, but may also contain
+    /// capabilities held by others who have read dependencies on this collection.
+    pub(super) read_capabilities: MutableAntichain<T>,
+    /// The implicit capability associated with collection creation.
+    pub(super) implied_capability: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
     pub fn new(description: SourceDesc, since: Antichain<T>) -> Self {
-        let (read_capabilities, implied_capability) = Capabilities::new(since.clone());
+        let mut read_capabilities = MutableAntichain::new();
+        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {
-            description: (description, since),
+            description: (description, since.clone()),
             read_capabilities,
-            implied_capability,
+            implied_capability: since,
         }
-    }
-
-    pub fn capability_downgrade(
-        &mut self,
-        frontier: Antichain<T>,
-    ) -> Option<impl Iterator<Item = (T, i64)> + '_> {
-        self.read_capabilities
-            .downgrade(&self.implied_capability, frontier)
     }
 }

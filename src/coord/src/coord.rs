@@ -1598,7 +1598,7 @@ impl Coordinator {
             self.dataflow_client
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
-                .allow_index_compaction(index_since_updates)
+                .allow_compaction(index_since_updates)
                 .await;
         }
 
