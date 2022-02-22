@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use aws_sdk_kinesis::model::{PutRecordsRequestEntry, StreamStatus};
-use aws_sdk_kinesis::{Blob, SdkError};
+use aws_sdk_kinesis::types::{Blob, SdkError};
 use tracing::info;
 
 use mz_ore::retry::Retry;
