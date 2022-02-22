@@ -404,7 +404,7 @@ where
                         metadata: to_metadata_row(
                             &metadata_items,
                             partition.clone(),
-                            Some(*position),
+                            *position,
                             *upstream_time_millis,
                         ),
                     });
@@ -499,7 +499,8 @@ where
                                     } else if matches!(&value, Ok(_)) {
                                         n_successes += 1;
                                     }
-                                    let position = n_seen.next();
+                                    // `RangeFrom` `Iterator`'s never end
+                                    let position = n_seen.next().unwrap();
                                     let metadata = to_metadata_row(
                                         &metadata_items,
                                         partition.clone(),
@@ -510,7 +511,7 @@ where
                                     session.give(DecodeResult {
                                         key: None,
                                         value: Some(value),
-                                        position: position.unwrap(),
+                                        position,
                                         upstream_time_millis: *upstream_time_millis,
                                         partition: partition.clone(),
                                         metadata,
@@ -561,7 +562,8 @@ where
                         } else if matches!(&value, Ok(_)) {
                             n_successes += 1;
                         }
-                        let position = n_seen.next();
+                        // `RangeFrom` `Iterator`'s never end
+                        let position = n_seen.next().unwrap();
                         let metadata = to_metadata_row(
                             &metadata_items,
                             partition.clone(),
@@ -573,7 +575,7 @@ where
                             session.give(DecodeResult {
                                 key: None,
                                 value: Some(value),
-                                position: position.unwrap(),
+                                position,
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
@@ -584,7 +586,7 @@ where
                             session.give(DecodeResult {
                                 key: None,
                                 value: Some(value),
-                                position: position.unwrap(),
+                                position,
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
@@ -613,7 +615,7 @@ where
 fn to_metadata_row(
     metadata_items: &[IncludedColumnSource],
     partition: PartitionId,
-    position: Option<i64>,
+    position: i64,
     upstream_time_millis: Option<i64>,
 ) -> Row {
     let mut row = Row::default();
@@ -622,10 +624,9 @@ fn to_metadata_row(
             for item in metadata_items.iter() {
                 match item {
                     IncludedColumnSource::Partition => row.push(Datum::from(partition)),
-                    IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => row
-                        .push(Datum::from(
-                            position.expect("kafka sources always have position"),
-                        )),
+                    IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => {
+                        row.push(Datum::from(position))
+                    }
                     IncludedColumnSource::Timestamp => {
                         let ts =
                             upstream_time_millis.expect("kafka sources always have upstream_time");
@@ -646,9 +647,7 @@ fn to_metadata_row(
         PartitionId::None => {
             for item in metadata_items.iter() {
                 match item {
-                    IncludedColumnSource::DefaultPosition => row.push(Datum::from(
-                        position.expect("kafka sources always have position"),
-                    )),
+                    IncludedColumnSource::DefaultPosition => row.push(Datum::from(position)),
                     _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
                 }
             }
