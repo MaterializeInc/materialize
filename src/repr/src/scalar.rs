@@ -1466,7 +1466,11 @@ impl<'a> ScalarType {
                 value_type: Box::new(value_type.default_embedded_value()),
                 custom_oid: None,
             },
-            Record { fields, .. } => {
+            Record {
+                fields,
+                custom_oid,
+                custom_name,
+            } => {
                 let default_embedded_field_values = fields
                     .iter()
                     .map(|(column_name, column_type)| {
@@ -1481,8 +1485,8 @@ impl<'a> ScalarType {
                     .collect_vec();
                 Record {
                     fields: default_embedded_field_values,
-                    custom_name: None,
-                    custom_oid: None,
+                    custom_name: custom_name.clone(),
+                    custom_oid: custom_oid.clone(),
                 }
             }
             Array(a) => Array(Box::new(a.default_embedded_value())),

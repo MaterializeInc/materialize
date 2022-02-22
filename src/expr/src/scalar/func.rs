@@ -4091,7 +4091,7 @@ impl UnaryFunc {
             CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
 
             CastRecord1ToRecord2 { return_ty, .. } => {
-                return_ty.default_embedded_value().nullable(false)
+                return_ty.default_embedded_value().nullable(nullable)
             }
 
             CastList1ToList2 { return_ty, .. } => {
