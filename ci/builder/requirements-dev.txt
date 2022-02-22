@@ -6,8 +6,8 @@
 # variety of platforms, including M1 Macs.
 
 black==22.1.0
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.20.49
-boto3==1.20.54
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.21.3
+boto3==1.21.3
 docker==5.0.3
 ec2instanceconnectcli==1.0.2
 flake8==4.0.1
@@ -28,7 +28,7 @@ types-prettytable==2.1.2
 types-psutil==5.8.20
 types-PyMYSQL==1.0.13
 types-PyYAML==6.0.4
-types-requests==2.27.9
+types-requests==2.27.10
 types-setuptools==57.4.9
 types-toml==0.10.4
 types-pkg-resources==0.1.3

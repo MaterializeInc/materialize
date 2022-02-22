@@ -108,6 +108,7 @@ use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::*;
@@ -140,11 +141,13 @@ mod upsert;
 pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
-    dataflow: &DataflowDescription<mz_dataflow_types::plan::Plan>,
+    debug_name: &str,
+    as_of: Option<Antichain<mz_repr::Timestamp>>,
+    source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
     boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
-    let name = format!("Dataflow: {}", &dataflow.debug_name);
+    let name = format!("Source dataflow: {debug_name}");
     let materialized_logging = timely_worker.log_register().get("materialized");
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
@@ -153,12 +156,12 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let as_of = dataflow.as_of.clone().unwrap();
+            let as_of = as_of.clone().unwrap();
             let dataflow_id = scope.addr().into_element();
-            let debug_name = format!("{}-sources", dataflow.debug_name);
+            let debug_name = format!("{debug_name}-sources");
 
             // Import declared sources into the rendering context.
-            for (src_id, source) in &dataflow.source_imports {
+            for (src_id, source) in &source_imports {
                 let ((ok, err), token) = crate::render::sources::import_source(
                     &debug_name,
                     dataflow_id,

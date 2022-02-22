@@ -177,8 +177,8 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<Collection<G, DataflowError>>,
-    ) -> Collection<G, Row> {
+        errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    ) -> Collection<G, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let mut row_packer = Row::default();
@@ -253,7 +253,7 @@ where
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
         closure: JoinClosure,
-    ) -> (Collection<G, Row>, Collection<G, DataflowError>)
+    ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
     where
         J: JoinCore<G, Row, Row, mz_repr::Diff>,
         Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = mz_repr::Diff>

@@ -7,11 +7,11 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-libc = "0.2.117"
+libc = "0.2.119"
 mz-ore = { path = "../ore", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.2.0"
 
 [build-dependencies]
-cc = "1.0.72"
+cc = "1.0.73"

@@ -9,7 +9,7 @@
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use aws_sdk_kinesis::{Blob, SdkError};
+use aws_sdk_kinesis::types::{Blob, SdkError};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 

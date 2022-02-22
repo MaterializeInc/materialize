@@ -66,7 +66,7 @@ solutions:
   * Compact the source upstream of Materialize.
 
     If you are using the [upsert envelope with a Kafka
-    source](/sql/create-source/avro-kafka/#upsert-envelope-details), consider
+    source](/sql/create-source/kafka/#handling-upserts), consider
     setting compaction policy on the Kafka topic to have Kafka perform the
     compaction.
 

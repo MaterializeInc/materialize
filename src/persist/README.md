@@ -94,7 +94,7 @@ correspondence to part of the following dataflow:
 
     timely::execute(Config::thread(), |worker| {
         worker.dataflow(|scope| {
-            let (input, stream) = scope.new_input::<((String, String), u64, isize)>();
+            let (input, stream) = scope.new_input::<((String, String), u64, i64)>();
             let arranged = stream.as_collection().arrange_by_key();
         });
     });
@@ -174,9 +174,9 @@ downgrade on the operator output.
 # Codec
 
 Persist allows for arbitrary key and value types in persisted collections
-(timestamp and diff are hardcoded to `u64` and `isize`, but this can change
-if/when necessary). Internally, it translates these to `&[u8]` via a user
-supplied implementation of the [Codec] trait.
+(timestamp and diff are hardcoded to `u64` and `isize`, but this can
+change if/when necessary). Internally, it translates these to `&[u8]` via a
+user supplied implementation of the [Codec] trait.
 
 [Codec]: mz_persist_types::Codec
 

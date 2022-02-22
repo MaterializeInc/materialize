@@ -20,7 +20,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_ore::cast::CastFrom;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, NumericMaxScale};
@@ -1127,7 +1126,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
 }
 
 pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
-    let n = Diff::cast_from(a.unwrap_int64());
+    let n = a.unwrap_int64();
     if n != 0 {
         Some((Row::default(), n))
     } else {

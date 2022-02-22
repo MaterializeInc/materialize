@@ -43,7 +43,7 @@ pub use scalar::{AsColumnType, Datum, DatumType, ScalarBaseType, ScalarType};
 /// System-wide timestamp type.
 pub type Timestamp = u64;
 /// System-wide record count difference type.
-pub type Diff = isize;
+pub type Diff = i64;
 
 use serde::{Deserialize, Serialize};
 // This probably logically belongs in `dataflow`, but source caching looks at it,

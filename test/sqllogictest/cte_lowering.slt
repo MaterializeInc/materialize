@@ -702,7 +702,7 @@ FROM x,
 %30 =
 | Get %29 (l11)
 | Map #0
-| Project (#0..#2)
+| Project (#0..=#2)
 | Project (#0, #2)
 
 %31 =

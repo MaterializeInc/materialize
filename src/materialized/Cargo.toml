@@ -28,17 +28,17 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.52"
-askama = { version = "0.11.0", default-features = false, features = ["config", "serde-json"] }
+anyhow = "1.0.55"
+askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.52"
 atty = "0.2.14"
 backtrace = "0.3.64"
 base64 = "0.13.0"
 cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.0.14", features = ["wrap_help", "env", "derive"] }
+clap = { version = "3.1.1", features = ["wrap_help", "env", "derive"] }
 compile-time-run = "0.2.12"
-console-subscriber = { version = "0.1.2", optional = true }
+console-subscriber = { version = "0.1.3", optional = true }
 crossbeam-channel = "0.5.2"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
@@ -52,7 +52,7 @@ include_dir = "0.7.2"
 itertools = "0.10.3"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
-libc = "0.2.117"
+libc = "0.2.119"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
 mz-dataflow = { path = "../dataflow" }
@@ -87,8 +87,8 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.16.1", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
-tracing = "0.1.30"
-tracing-subscriber = "0.3.7"
+tracing = "0.1.31"
+tracing-subscriber = "0.3.9"
 url = "2.2.2"
 uuid = "0.8.2"
 
@@ -118,15 +118,15 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", br
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 predicates = "2.1.1"
-rand = "0.8.4"
+rand = "0.8.5"
 reqwest = { version = "0.11.9", features = ["blocking"] }
 serde_json = "1.0.79"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.52"
-askama_shared = { version = "0.12.0", features = ["json"] }
-cc = "1.0.72"
+anyhow = "1.0.55"
+askama_shared = { version = "0.12.1", features = ["json"] }
+cc = "1.0.73"
 flate2 = "1.0.22"
 hex = "0.4.3"
 hex-literal = "0.3.4"

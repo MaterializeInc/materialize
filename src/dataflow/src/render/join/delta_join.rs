@@ -308,15 +308,15 @@ use differential_dataflow::Collection;
 /// the time of the update. This is crucial for correctness, as the total order on times of updates is used
 /// to ensure that any two updates are matched at most once.
 fn build_halfjoin<G, Tr, CF>(
-    updates: Collection<G, (Row, G::Timestamp)>,
+    updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
 ) -> (
-    Collection<G, (Row, G::Timestamp)>,
-    Collection<G, DataflowError>,
+    Collection<G, (Row, G::Timestamp), Diff>,
+    Collection<G, DataflowError, Diff>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -395,7 +395,7 @@ fn build_update_stream<G, Tr>(
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
-) -> (Collection<G, Row>, Collection<G, DataflowError>)
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,

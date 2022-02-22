@@ -80,7 +80,7 @@ EXPLAIN  SELECT *  FROM table_f1 , ( table_f4_f5_f6 AS a2 LEFT JOIN table_f5_f6 
 %3 = Let l1 =
 | Join %1 %2 (= #0 #3)
 | | implementation = Differential %2 %1.(#0)
-| Project (#0..#2)
+| Project (#0..=#2)
 
 %4 =
 | Get materialize.public.table_f1 (u1)
@@ -106,7 +106,7 @@ EXPLAIN  SELECT *  FROM table_f1 , ( table_f4_f5_f6 AS a2 LEFT JOIN table_f5_f6 
 %9 =
 | Join %7 %8 (= #0 #3)
 | | implementation = Differential %8 %7.(#0)
-| Project (#0..#2)
+| Project (#0..=#2)
 
 %10 =
 | Union %3 %9

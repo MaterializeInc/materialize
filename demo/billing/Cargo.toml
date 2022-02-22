@@ -7,10 +7,10 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.55"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.0.14", features = ["derive"] }
+clap = { version = "3.1.1", features = ["derive"] }
 csv = "1.1.6"
 env_logger = "0.9.0"
 futures = "0.3.21"
@@ -21,11 +21,11 @@ mz-test-util = { path = "../../test/test-util" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prost = "0.9.0"
 prost-types = "0.9.0"
-rand = "0.8.4"
+rand = "0.8.5"
 rand_distr = "0.4.3"
 tokio = "1.16.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tracing = "0.1.30"
+tracing = "0.1.31"
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]

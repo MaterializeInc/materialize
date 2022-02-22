@@ -31,7 +31,7 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyDat
         &mut self,
         read: StreamReadHandle<K, V>,
         as_of_frontier: &Antichain<u64>,
-    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
+    ) -> Stream<G, (Result<(K, V), String>, u64, i64)> {
         self.persisted_source_yield(read, as_of_frontier, DEFAULT_OUTPUTS_PER_YIELD)
     }
 
@@ -46,7 +46,7 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyDat
         read: StreamReadHandle<K, V>,
         as_of_frontier: &Antichain<u64>,
         outputs_per_yield: usize,
-    ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
+    ) -> Stream<G, (Result<(K, V), String>, u64, i64)>;
 }
 
 impl<G, K, V> PersistedSource<G, K, V> for G
@@ -60,7 +60,7 @@ where
         read: StreamReadHandle<K, V>,
         as_of_frontier: &Antichain<u64>,
         outputs_per_yield: usize,
-    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
+    ) -> Stream<G, (Result<(K, V), String>, u64, i64)> {
         let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
         let snapshot = read.listen(listen_tx);
 
@@ -90,7 +90,7 @@ fn listen_source<G, K, V>(
     initial_frontier: Option<Antichain<u64>>,
     listen_rx: crossbeam_channel::Receiver<ListenEvent>,
     _outputs_per_yield: usize,
-) -> Stream<G, (Result<(K, V), String>, u64, isize)>
+) -> Stream<G, (Result<(K, V), String>, u64, i64)>
 where
     G: Scope<Timestamp = u64>,
     K: TimelyData + Codec + Send,

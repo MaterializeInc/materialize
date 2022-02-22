@@ -68,7 +68,7 @@ pub(crate) fn import_table<G>(
     persisted_name: Option<String>,
 ) -> (
     LocalInput,
-    (Collection<G, Row>, Collection<G, DataflowError>),
+    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -144,7 +144,7 @@ pub(crate) fn import_source<G>(
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
 ) -> (
-    (Collection<G, Row>, Collection<G, DataflowError>),
+    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
     Rc<dyn std::any::Any>,
 )
 where
@@ -183,6 +183,7 @@ where
             connector,
             encoding,
             envelope,
+            metadata_columns,
             ts_frequency,
             timeline: _,
         } => {
@@ -196,7 +197,7 @@ where
 
             // All sources should push their various error streams into this vector,
             // whose contents will be concatenated and inserted along the collection.
-            let mut error_collections = Vec::<Collection<_, _>>::new();
+            let mut error_collections = Vec::<Collection<_, _, Diff>>::new();
 
             let source_persist_config = match (persist, storage_state.persist.as_mut()) {
                 (Some(persist_desc), Some(persist)) => {
@@ -339,19 +340,10 @@ where
                 );
 
                 let (stream, errors) = {
-                    let (key_desc, _) = encoding.desc().expect("planning has verified this");
                     let (key_encoding, value_encoding) = match encoding {
                         SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
                         SourceDataEncoding::Single(value) => (None, value),
                     };
-
-                    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
-                    // syntax is implemented
-                    //
-                    // Default metadata is mostly configured in planning, but we need it here for upsert
-                    let default_metadata = provide_default_metadata(&envelope, &value_encoding);
-
-                    let metadata_columns = connector.metadata_column_types(default_metadata);
 
                     // CDCv2 can't quite be slotted in to the below code, since it determines
                     // its own diffs/timestamps as part of decoding.
@@ -410,34 +402,52 @@ where
                                     dbz_envelope,
                                     &results,
                                     dataflow_debug_name.clone(),
-                                    storage_state.metrics.clone(),
-                                    src_id,
-                                    dataflow_id,
-                                )
-                                .inner
-                                .ok_err(|(res, time, diff)| match res {
-                                    Ok(v) => Ok((v, time, diff)),
-                                    Err(e) => Err((e, time, diff)),
-                                });
+                                );
                                 (stream.as_collection(), Some(errors.as_collection()))
                             }
-                            SourceEnvelope::Upsert(_key_envelope) => {
+                            SourceEnvelope::Upsert(upsert_envelope) => {
                                 // TODO: use the key envelope to figure out when to add keys.
                                 // The opeator currently does it unconditionally
-                                let upsert_operator_name = format!("{}-upsert", source_name);
+                                let upsert_operator_name = format!(
+                                    "{}-{}upsert",
+                                    source_name,
+                                    if let UpsertEnvelope {
+                                        style: UpsertStyle::Debezium { .. },
+                                        ..
+                                    } = upsert_envelope
+                                    {
+                                        "debezium-"
+                                    } else {
+                                        ""
+                                    }
+                                );
 
-                                let key_arity = key_desc.expect("SourceEnvelope::Upsert to require SourceDataEncoding::KeyValue").arity();
+                                let transformed_results =
+                                    transform_keys_from_key_envelope(upsert_envelope, results);
+
+                                let as_of_frontier = as_of_frontier.clone();
+
+                                let source_arity = src.desc.typ().arity();
 
                                 let (upsert_ok, upsert_err) = super::upsert::upsert(
                                     &upsert_operator_name,
-                                    &results,
-                                    as_of_frontier.clone(),
+                                    &transformed_results,
+                                    as_of_frontier,
                                     &mut linear_operators,
-                                    key_arity,
-                                    src.desc.typ().arity(),
-                                    source_persist_config
-                                        .as_ref()
-                                        .map(|config| config.upsert_config().clone()),
+                                    source_arity,
+                                    match upsert_envelope.style {
+                                        UpsertStyle::Default(_) => source_persist_config
+                                            .as_ref()
+                                            .map(|config| config.upsert_config().clone()),
+                                        UpsertStyle::Debezium { .. } => {
+                                            // TODO(guswynn): make debezium upsert work with
+                                            // persistence. See
+                                            // https://github.com/MaterializeInc/materialize/issues/10699z
+                                            // for more info.
+                                            None
+                                        }
+                                    },
+                                    upsert_envelope.clone(),
                                 );
 
                                 // When persistence is enabled we need to seal up both the
@@ -531,8 +541,8 @@ where
                                 // place and re-use. There seem to be enough instances of this
                                 // by now.
                                 fn split_ok_err(
-                                    x: (Result<Row, DecodeError>, u64, isize),
-                                ) -> Result<(Row, u64, isize), (DataflowError, u64, isize)>
+                                    x: (Result<Row, DecodeError>, u64, Diff),
+                                ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)>
                                 {
                                     match x {
                                         (Ok(row), ts, diff) => Ok((row, ts, diff)),
@@ -992,6 +1002,52 @@ where
 
         KV { val, key: res.key }
     })
+}
+
+/// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
+// TODO(guswynn): figure out how to merge this duplicated logic with `flatten_results_prepend_keys`
+fn transform_keys_from_key_envelope<G>(
+    upsert_envelope: &UpsertEnvelope,
+    results: timely::dataflow::Stream<G, DecodeResult>,
+) -> timely::dataflow::Stream<G, DecodeResult>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    match upsert_envelope {
+        UpsertEnvelope {
+            style:
+                UpsertStyle::Default(KeyEnvelope::LegacyUpsert | KeyEnvelope::Flattened)
+                | UpsertStyle::Debezium { .. },
+            ..
+        } => results,
+        UpsertEnvelope {
+            style: UpsertStyle::Default(KeyEnvelope::Named(_)),
+            ..
+        } => {
+            let mut row_packer = mz_repr::Row::default();
+            results.map(move |mut res| {
+                res.key = res.key.map(|k_result| {
+                    k_result.map(|k| {
+                        if k.iter().nth(1).is_none() {
+                            k
+                        } else {
+                            row_packer.clear();
+                            row_packer.push_list(k.iter());
+                            row_packer.finish_and_reuse()
+                        }
+                    })
+                });
+
+                res
+            })
+        }
+        UpsertEnvelope {
+            style: UpsertStyle::Default(KeyEnvelope::None),
+            ..
+        } => {
+            unreachable!("SourceEnvelope::Upsert should never have KeyEnvelope::None")
+        }
+    }
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]

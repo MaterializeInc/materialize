@@ -164,6 +164,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let args: Args = mz_ore::cli::parse_args();
 
     let (aws_config, aws_account) = match args.aws_region {

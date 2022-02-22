@@ -36,10 +36,9 @@ use mz_dataflow_types::plan::reduce::{
 
 use dec::OrderedDecimal;
 use mz_expr::{AggregateExpr, AggregateFunc};
-use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
-use mz_repr::{Datum, DatumList, Row, RowArena};
+use mz_repr::{Datum, DatumList, Diff, Row, RowArena};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
@@ -56,8 +55,8 @@ use crate::arrangement::manager::RowSpine;
 /// this arrangement can also be re-used.
 fn render_reduce_plan<G, T>(
     plan: ReducePlan,
-    collection: Collection<G, (Row, Row)>,
-    err_input: Collection<G, DataflowError>,
+    collection: Collection<G, (Row, Row), Diff>,
+    err_input: Collection<G, DataflowError, Diff>,
     key_arity: usize,
 ) -> CollectionBundle<G, Row, T>
 where
@@ -66,14 +65,14 @@ where
     T: Timestamp + Lattice,
 {
     // Convenience wrapper to render the right kind of hierarchical plan.
-    let build_hierarchical =
-        |collection: Collection<G, (Row, Row)>, expr: HierarchicalPlan| match expr {
-            HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr),
-            HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr),
-        };
+    let build_hierarchical = |collection: Collection<G, (Row, Row), Diff>,
+                              expr: HierarchicalPlan| match expr {
+        HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr),
+        HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr),
+    };
 
     // Convenience wrapper to render the right kind of basic plan.
-    let build_basic = |collection: Collection<G, (Row, Row)>, expr: BasicPlan| match expr {
+    let build_basic = |collection: Collection<G, (Row, Row), Diff>, expr: BasicPlan| match expr {
         BasicPlan::Single(index, aggr) => build_basic_aggregate(collection, index, &aggr),
         BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs),
     };
@@ -123,7 +122,7 @@ where
     /// Wrap an arrangement
     Arrangement(Arrangement<G, Row>),
     /// Wrap a collection
-    Collection(Collection<G, Row>),
+    Collection(Collection<G, Row, Diff>),
 }
 
 impl<G> ArrangementOrCollection<G>
@@ -139,7 +138,7 @@ where
     fn into_bundle<T>(
         self,
         key_arity: usize,
-        err_input: Collection<G, DataflowError>,
+        err_input: Collection<G, DataflowError, Diff>,
     ) -> CollectionBundle<G, Row, T>
     where
         G::Timestamp: Lattice + Refines<T>,
@@ -167,12 +166,12 @@ where
     }
 }
 
-impl<G> From<Collection<G, Row>> for ArrangementOrCollection<G>
+impl<G> From<Collection<G, Row, Diff>> for ArrangementOrCollection<G>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    fn from(collection: Collection<G, Row>) -> Self {
+    fn from(collection: Collection<G, Row, Diff>) -> Self {
         ArrangementOrCollection::Collection(collection)
     }
 }
@@ -357,7 +356,7 @@ where
 }
 
 /// Build the dataflow to compute the set of distinct keys.
-fn build_distinct<G>(collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+fn build_distinct<G>(collection: Collection<G, (Row, Row), Diff>) -> Arrangement<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -375,7 +374,9 @@ where
 /// Build the dataflow to compute the set of distinct keys.
 ///
 /// This implementation maintains the rows that don't appear in the output.
-fn build_distinct_retractions<G, T>(collection: Collection<G, (Row, Row)>) -> Collection<G, Row>
+fn build_distinct_retractions<G, T>(
+    collection: Collection<G, (Row, Row), Diff>,
+) -> Collection<G, Row, Diff>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -409,7 +410,7 @@ where
 /// results together into a final arrangement that presents all the results
 /// in the order specified by `aggrs`.
 fn build_basic_aggregates<G>(
-    input: Collection<G, (Row, Row)>,
+    input: Collection<G, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
 ) -> Arrangement<G, Row>
 where
@@ -445,7 +446,7 @@ where
 ///
 /// This method also applies distinctness if required.
 fn build_basic_aggregate<G>(
-    input: Collection<G, (Row, Row)>,
+    input: Collection<G, (Row, Row), Diff>,
     index: usize,
     aggr: &AggregateExpr,
 ) -> Arrangement<G, Row>
@@ -469,7 +470,7 @@ where
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
-        partial = partial.distinct();
+        partial = partial.distinct_core();
     }
 
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
@@ -513,7 +514,7 @@ where
 /// currently only perform min / max hierarchically and the reduction tree
 /// efficiently suppresses non-distinct updates.
 fn build_bucketed<G>(
-    input: Collection<G, (Row, Row)>,
+    input: Collection<G, (Row, Row), Diff>,
     BucketedPlan {
         aggr_funcs,
         skips,
@@ -581,10 +582,10 @@ where
 /// output collection maintains the `((key, bucket), (passing value)` for this
 /// stage.
 fn build_bucketed_stage<G>(
-    input: Collection<G, ((Row, u64), Vec<Row>)>,
+    input: Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
     buckets: u64,
-) -> Collection<G, ((Row, u64), Vec<Row>)>
+) -> Collection<G, ((Row, u64), Vec<Row>), Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -628,7 +629,7 @@ where
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
 fn build_monotonic<G>(
-    collection: Collection<G, (Row, Row)>,
+    collection: Collection<G, (Row, Row), Diff>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
 ) -> Arrangement<G, Row>
 where
@@ -693,16 +694,16 @@ enum AccumInner {
     /// Accumulates boolean values.
     Bool {
         /// The number of `true` values observed.
-        trues: isize,
+        trues: Diff,
         /// The number of `false` values observed.
-        falses: isize,
+        falses: Diff,
     },
     /// Accumulates simple numeric values.
     SimpleNumber {
         /// The accumulation of all non-NULL values observed.
         accum: i128,
         /// The number of non-NULL values observed.
-        non_nulls: isize,
+        non_nulls: Diff,
     },
     /// Accumulates float values.
     Float {
@@ -710,26 +711,26 @@ enum AccumInner {
         /// preserve associativity and commutativity
         accum: i128,
         /// Counts +inf
-        pos_infs: isize,
+        pos_infs: Diff,
         /// Counts -inf
-        neg_infs: isize,
+        neg_infs: Diff,
         /// Counts NaNs
-        nans: isize,
+        nans: Diff,
         /// Counts non-NULL values
-        non_nulls: isize,
+        non_nulls: Diff,
     },
     /// Accumulates arbitrary precision decimals.
     Numeric {
         /// Accumulates non-special values
         accum: OrderedDecimal<NumericAgg>,
         /// Counts +inf
-        pos_infs: isize,
+        pos_infs: Diff,
         /// Counts -inf
-        neg_infs: isize,
+        neg_infs: Diff,
         /// Counts NaNs
-        nans: isize,
+        nans: Diff,
         /// Counts non-NULL values
-        non_nulls: isize,
+        non_nulls: Diff,
     },
 }
 
@@ -867,10 +868,10 @@ impl Semigroup for AccumInner {
     }
 }
 
-impl Multiply<isize> for AccumInner {
+impl Multiply<Diff> for AccumInner {
     type Output = AccumInner;
 
-    fn multiply(self, factor: &isize) -> AccumInner {
+    fn multiply(self, factor: &Diff) -> AccumInner {
         let factor = *factor;
         match self {
             AccumInner::Bool { trues, falses } => AccumInner::Bool {
@@ -878,7 +879,7 @@ impl Multiply<isize> for AccumInner {
                 falses: falses * factor,
             },
             AccumInner::SimpleNumber { accum, non_nulls } => AccumInner::SimpleNumber {
-                accum: accum * i128::cast_from(factor),
+                accum: accum * i128::from(factor),
                 non_nulls: non_nulls * factor,
             },
             AccumInner::Float {
@@ -888,7 +889,7 @@ impl Multiply<isize> for AccumInner {
                 nans,
                 non_nulls,
             } => AccumInner::Float {
-                accum: accum * i128::cast_from(factor),
+                accum: accum * i128::from(factor),
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
@@ -938,7 +939,7 @@ impl Multiply<isize> for AccumInner {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct Accum {
     inner: AccumInner,
-    total: isize,
+    total: Diff,
 }
 
 impl Semigroup for Accum {
@@ -952,10 +953,10 @@ impl Semigroup for Accum {
     }
 }
 
-impl Multiply<isize> for Accum {
+impl Multiply<Diff> for Accum {
     type Output = Accum;
 
-    fn multiply(self, factor: &isize) -> Accum {
+    fn multiply(self, factor: &Diff) -> Accum {
         Accum {
             inner: self.inner.multiply(factor),
             total: self.total * *factor,
@@ -970,7 +971,7 @@ impl Multiply<isize> for Accum {
 /// values to data, at which point a final map applies operator-specific logic to
 /// yield the final aggregate.
 fn build_accumulable<G>(
-    collection: Collection<G, (Row, Row)>,
+    collection: Collection<G, (Row, Row), Diff>,
     AccumulablePlan {
         full_aggrs,
         simple_aggrs,
@@ -1062,10 +1063,10 @@ where
                     x => panic!("Invalid argument to AggregateFunc::{:?}: {:?}", aggr, x),
                 };
 
-                let nans = n.is_nan() as isize;
-                let pos_infs = (n == f64::INFINITY) as isize;
-                let neg_infs = (n == f64::NEG_INFINITY) as isize;
-                let non_nulls = (datum != Datum::Null) as isize;
+                let nans = n.is_nan() as Diff;
+                let pos_infs = (n == f64::INFINITY) as Diff;
+                let neg_infs = (n == f64::NEG_INFINITY) as Diff;
+                let non_nulls = (datum != Datum::Null) as Diff;
 
                 // Map the floating point value onto a fixed presicion domain
                 // All special values should map to zero, since they are tracked separately
@@ -1179,7 +1180,7 @@ where
                 packer.push(value);
                 (key, packer.finish_and_reuse())
             })
-            .distinct()
+            .distinct_core()
             .explode({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
@@ -1225,7 +1226,7 @@ where
                     } else {
                         match (&aggr.func, &accum.inner) {
                             (AggregateFunc::Count, AccumInner::SimpleNumber { non_nulls, .. }) => {
-                                Datum::Int64(i64::cast_from(*non_nulls))
+                                Datum::Int64(*non_nulls)
                             }
                             (AggregateFunc::All, AccumInner::Bool { falses, trues }) => {
                                 // If any false, else if all true, else must be no false and some nulls.

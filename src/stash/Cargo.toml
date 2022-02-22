@@ -14,5 +14,5 @@ rusqlite = { version = "0.26.3", features = ["bundled"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
 [dev-dependencies]
-anyhow = "1.0.53"
+anyhow = "1.0.55"
 tempfile = "3.3.0"

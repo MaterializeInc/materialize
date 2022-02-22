@@ -107,6 +107,10 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- **Breaking change.** Return an empty list for slice operations that retrieve
+  no elements (e.g. the beginning of the slice's range exceeds the length of the
+  list); previously Materialize returned NULL.
+  
 - **Breaking change.** Store days separately in [`interval`](/sql/types/interval).
   Unlike the previous version, Hours are never converted to days. This
   means that an Interval of 24 hours will not be equal to an Interval
@@ -123,6 +127,20 @@ changes that have not yet been documented.
   rounded to `00:00:01.23457` not `00:00:01.23456`. This matches the
   behavior of PostgreSQL.
 
+- **Breaking change.** Decrease minimum [`interval`](/sql/types/interval) value
+  from '-2147483647 months -2147483647 days -2147483647 hours -59 minutes
+  -59.999999 seconds' to '-2147483648 months -2147483648 days -2147483648 hours
+  -59 minutes -59.999999 seconds' to match PostgreSQL's behavior {{% gh 10598 %}}.
+
+- Fix a bug where too many columns were returned when both `*` and a
+  table function appeared in the `SELECT` list {{% gh 10363 %}}.
+
+- Improve the clarity of any Avro schema resolution errors found when
+  creating materialized sources and views. {{% gh 8415 %}}
+
+- Allow setting `standard_conforming_strings` to its default value of `on`.
+  Setting it to `off` is still not supported.
+
 - Support sequences of subscript operations on [`array`] values when
   indexing/accessing individual elements (as opposed to taking slices/ranges of
   values) {{% gh 9815 %}}.
@@ -133,6 +151,12 @@ changes that have not yet been documented.
 - Add support for `ESCAPE` clauses in `LIKE` and `ILIKE` expressions.
 
 - Add support for `ARRAY(<subquery>)` constructor {{% gh 10700 %}}.
+
+- `INCLUDE KEY AS` ([see this for more details](/sql/create-source/avro-kafka#avro-format-details)
+  now works when using [`ENVELOPE UPSERT`](/sql/create-source/avro-kafka#upsert-envelope-details)
+  {{% gh 10730 %}}.
+
+- Change inclusive ranges of column indices in `EXPLAIN PLAN` to use `..=` instead of `..`.
 
 {{< comment >}}
 Only add new release notes above this line.
@@ -171,7 +195,7 @@ boundary don't silently merge their release notes into the wrong place.
 
   SSL parameters for the Confluent Schema Registry must now always be provided
   explicitly, even when they are identical to the SSL parameters for the Kafka
-  broker. See the [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)
+  broker. See the [Confluent Schema Registry options](/sql/create-source/kafka/#confluent-schema-registry-ssl-with-options)
   for details.
 
   Existing source definitions have been automatically migrated to account for
@@ -239,7 +263,7 @@ boundary don't silently merge their release notes into the wrong place.
 {{% version-header v0.19.0 %}}
 
 - **Breaking change.** Reject unknown `WITH` options in the [`CONFLUENT SCHEMA
-  REGISTRY` clause](/sql/create-source/avro-kafka#confluent-schema-registry-options)
+  REGISTRY` clause](/sql/create-source/kafka#confluent-schema-registry-ssl-with-options)
   when creating a Kafka source or sink {{% gh 10129 %}}.
 
   Previously, unknown options were silently ignored. The new behavior matches
@@ -343,7 +367,7 @@ boundary don't silently merge their release notes into the wrong place.
 
 - In Kafka sources and sinks, support independent SSL configurations for the Confluent
   Schema Registry and the Kafka broker. See the new
-  [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)
+  [Confluent Schema Registry options](/sql/create-source/kafka#confluent-schema-registry-ssl-with-options)
   for details.
 
 - Fix a bug where using a `ROWS FROM` clause with an alias in a view would cause
@@ -394,7 +418,7 @@ boundary don't silently merge their release notes into the wrong place.
   Materialize.
 
 - Permit passing the `fetch_message_max_bytes` librdkafka option to
-  [Kafka sources](/sql/create-source/avro-kafka#with-options).
+  [Kafka sources](/sql/create-source/kafka#with-options).
 
 {{% version-header v0.14.0 %}}
 
@@ -405,7 +429,7 @@ boundary don't silently merge their release notes into the wrong place.
   name:
 
   ```sql
-  CREATE VIEW view AS SELECT 1, 2
+  CREATE VIEW view AS SELECT 1, 2;
   ```
 
   To make this view compatible with v0.14.0, adjust it view to have at most one
@@ -609,7 +633,7 @@ Improve PostgreSQL compatibility:
 - **Breaking change.** Disallow `SELECT DISTINCT` when applied to a 0-column
   relation, like a table with no columns {{% gh 9122 %}}.
 
-- Allow creating [Avro-formatted sources](/sql/create-source/avro-kafka/#avro-format-details)
+- Allow creating [Avro-formatted sources](/sql/create-source/kafka/#supported-formats)
   from Avro schemas whose top-level type is not a record.
 
 - Support invoking a single [table function](/sql/functions/#table-func) in a
@@ -905,11 +929,11 @@ a problem with PostgreSQL JDBC 42.3.0.
   [CDC](/connect/materialize-cdc) and Debezium consistency topic sources
   by default.
 
-- Add the [`isolation_level`](/sql/create-source/avro-kafka/#with-options)
+- Add the [`isolation_level`](/sql/create-source/kafka#with-options)
   `WITH` option to Kafka sources to allow changing read behavior of
   transactionally written messages.
 
-- Add the [`kafka_time_offset`](/sql/create-source/avro-kafka/#with-options)
+- Add the [`kafka_time_offset`](/sql/create-source/kafka#with-options)
   `WITH` option for Kafka sources, which allows to set `start_offset` based on
   Kafka timestamps.
 
@@ -929,7 +953,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Add the [`current_role`](/sql/functions/#system-information-func) system
   information function.
 
-- Support manually declaring a [`(non-enforced) primary key`](/sql/create-source/avro-kafka/#key-constraint-details)
+- Support manually declaring a [`(non-enforced) primary key`](/sql/create-source/kafka/#defining-primary-keys)
   on sources.
 
 - S3 sources retry failed requests to list buckets and download objects.
@@ -1021,7 +1045,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   reference {{% gh 6021 %}}.
 
 - Support Kafka log compaction on Debezium topics via the [`DEBEZIUM
-  UPSERT`](/sql/create-source/avro-kafka/#debezium-envelope-details) source envelope.
+  UPSERT`](/sql/create-source/kafka/#using-debezium) source envelope.
 
 {{% version-header v0.7.1 %}}
 
@@ -1532,7 +1556,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 {{% version-header v0.4.2 %}}
 
 - Remove the `max_timestamp_batch_size` [`WITH`
-  option](/sql/create-source/avro-kafka/#with-options) from sources. Materialize
+  option](/sql/create-source/kafka#with-options) from sources. Materialize
   now automatically selects the optimal batch size. **Backwards-incompatible
   change.**
 
@@ -1552,7 +1576,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
   - Consume only a constant amount of memory when computing a
     [`min` or `max` aggregation](/sql/functions/#aggregate-func)
-    on an [append-only source](/sql/create-source/avro-kafka/#append-only-envelope)
+    on an append-only source
     {{% gh 3994 %}}.
 
 - Always permit memory profiling via the `/prof` web UI, even if the
@@ -1594,7 +1618,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
   - Handle Snappy-encoded [Avro OCF files](/sql/create-source/avro-file/).
 
-  - In [Avro sources that use the Debezium envelope](/sql/create-source/avro-kafka/#debezium-envelope-details),
+  - In [Avro sources that use the Debezium envelope](/sql/create-source/kafka/#using-debezium),
     automatically filter out duplicate records generated by Debezium's
     PostgreSQL connector.
 
@@ -1655,7 +1679,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   features that require experimental mode will be marked as such in their
   documentation.
 
-- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-authentication).
+- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/kafka/#sasl).
   Notably, this allows Materialize to connect to Kafka clusters hosted by
   Confluent Cloud.
 
@@ -1751,7 +1775,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   created if you had used [`CREATE MATERIALIZED VIEW`].
 
 - Permit control over the timestamp selection logic on a per-Kafka-source basis
-  via three new [`WITH` options](https://materialize.com/docs/sql/create-source/avro-kafka/#with-options):
+  via three new [`WITH` options](https://materialize.com/docs/sql/create-source/kafka#with-options):
     - `timestamp_frequency_ms`
     - `max_timestamp_batch_size`
     - `topic_metadata_refresh_interval_ms`
@@ -1815,14 +1839,14 @@ a problem with PostgreSQL JDBC 42.3.0.
   across the partitions.
 
 - Infer primary keys based on the key schema for [Kafka Avro sources that use
-  the Debezium envelope](/sql/create-source/avro-kafka/#debezium-envelope-details)
+  the Debezium envelope](/sql/create-source/kafka/#using-debezium)
   to facilitate query optimization. This corrects a regression
   in v0.2.2.
 
-  The new [`ignore_source_keys` option](/sql/create-source/avro-kafka/#with-options)
+  The new [`ignore_source_keys` option](/sql/create-source/kafka#with-options)
   can be set to `true` to explicitly disable this behavior.
 
-- In [Avro sources that use the Debezium envelope](/sql/create-source/avro-kafka/#debezium-envelope-details),
+- In [Avro sources that use the Debezium envelope](/sql/create-source/kafka/#using-debezium),
   automatically filter out duplicate records generated by Debezium's MySQL
   connector.
 
@@ -1858,12 +1882,12 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 - Introduce an "upsert" envelope for sources that follow the Kafka key–value
   convention for representing inserts, upserts, and deletes. See the [Upsert
-  envelope](/sql/create-source/avro-kafka/#upsert-envelope-details) section of
+  envelope](/sql/create-source/kafka/#handling-upserts) section of
   the `CREATE SOURCE` docs for details.
 
 - Enable connections to Kafka brokers using either
-  [SSL authentication](/sql/create-source/avro-kafka/#ssl-encrypted-kafka-details)
-  or [Kerberos authentication](/sql/create-source/avro-kafka/#kerberized-kafka-details).
+  [SSL authentication](/sql/create-source/kafka/#ssl)
+  or [Kerberos authentication](/sql/create-source/kafka/#saslgssapi-kerberos).
   This includes support for SSL authentication with Confluent Schema Registries.
 
 - Introduce the [`AS OF`](/sql/tail/#as-of) and
@@ -1877,7 +1901,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   partitions evenly, rather than processing partitions sequentially, one after
   the next. {{% gh 2936 %}}
 
-- Add two [`WITH` options](/sql/create-source/avro-kafka/#with-options)
+- Add two [`WITH` options](/sql/create-source/kafka#with-options)
   to Kafka sources:
   - The `group_id_prefix` option affords some control over the consumer group
     ID Materialize uses when consuming from Kafka.

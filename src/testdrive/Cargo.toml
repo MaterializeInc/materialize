@@ -7,24 +7,25 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.53"
+anyhow = "1.0.55"
 async-compression = { version = "0.3.12", features = ["tokio", "gzip"] }
 async-trait = "0.1.52"
 atty = "0.2.0"
-aws-config = { version = "0.6.0", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.6.0", default-features = false }
-aws-sdk-s3 = { version = "0.6.0", default-features = false }
-aws-sdk-sqs = { version = "0.6.0", default-features = false }
-aws-smithy-http = "0.36.0"
-aws-types = { version = "0.6.0", features = ["hardcoded-credentials"] }
+aws-config = { version = "0.7.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.7.0", default-features = false }
+aws-sdk-s3 = { version = "0.7.0", default-features = false }
+aws-sdk-sqs = { version = "0.7.0", default-features = false }
+aws-smithy-http = "0.37.0"
+aws-types = { version = "0.7.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.0.14", features = ["derive"] }
+clap = { version = "3.1.1", features = ["derive"] }
 flate2 = "1.0.22"
 futures = "0.3.21"
 globset = "0.4.8"
 http = "0.2.6"
+env_logger = "0.9.0"
 itertools = "0.10.3"
 junit-report = "0.7.0"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
@@ -45,9 +46,9 @@ mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 prost = "0.9.0"
-prost-reflect = { version = "0.5.6", features = ["serde"] }
+prost-reflect = { version = "0.6.0", features = ["serde"] }
 protobuf-src = "1.0.4"
-rand = "0.8.4"
+rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 reqwest = { version = "0.11.9", features = ["native-tls-vendored"] }

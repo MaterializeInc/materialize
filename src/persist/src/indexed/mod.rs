@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! A persistent, compacting, indexed data structure of `(Key, Value, Time,
-//! Diff)` updates.
+//! i64)` updates.
 
 // NB: These really don't need to be public, but the public doc lint is nice.
 pub mod arrangement;
@@ -114,7 +114,7 @@ pub enum Cmd {
     /// the stream was destroyed from this call, and false if it was already
     /// destroyed.
     Destroy(String, PFutureHandle<bool>),
-    /// Asynchronously persists (Key, Value, Time, Diff) updates for the stream
+    /// Asynchronously persists (Key, Value, Time, i64) updates for the stream
     /// with the given id.
     Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
     /// Sealing a time advances the "sealed" frontier for an id, which restricts
@@ -283,7 +283,7 @@ impl Pending {
 }
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
-/// Diff)` updates.
+/// i64)` updates.
 ///
 /// Indexed contains a set of named persistent [Arrangement]s.
 ///
@@ -1405,19 +1405,19 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ListenEvent {
     /// Records in the data stream.
-    Records(Vec<((Vec<u8>, Vec<u8>), u64, isize)>),
+    Records(Vec<((Vec<u8>, Vec<u8>), u64, i64)>),
     /// Progress of the data stream.
     Sealed(u64),
 }
 
-/// An isolated, consistent read of previously written (Key, Value, Time, Diff)
+/// An isolated, consistent read of previously written (Key, Value, Time, i64)
 /// updates.
 //
 // TODO: This <K, V> allows Snapshot to be generic over both IndexedSnapshot
 // (and friends) and DecodedSnapshot, but does that get us anything?
 pub trait Snapshot<K, V>: Sized {
     /// The kind of iterator we are turning this into.
-    type Iter: Iterator<Item = Result<((K, V), u64, isize), Error>>;
+    type Iter: Iterator<Item = Result<((K, V), u64, i64), Error>>;
 
     /// Returns a set of `num_iters` [Iterator]s that each output roughly
     /// `1/num_iters` of the data represented by this snapshot.
@@ -1436,7 +1436,7 @@ pub trait Snapshot<K, V>: Sized {
 #[cfg(test)]
 pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
     /// A full read of the data in the snapshot.
-    fn read_to_end(self) -> Result<Vec<((K, V), u64, isize)>, Error> {
+    fn read_to_end(self) -> Result<Vec<((K, V), u64, i64)>, Error> {
         let iter = self.into_iter();
         let mut buf = iter.collect::<Result<Vec<_>, Error>>()?;
         buf.sort();
@@ -1485,7 +1485,7 @@ mod tests {
 
     fn write_req_payload(
         id: Id,
-        updates: &[((Vec<u8>, Vec<u8>), u64, isize)],
+        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
     ) -> Vec<(Id, ColumnarRecords)> {
         updates
             .iter()
@@ -1527,7 +1527,7 @@ mod tests {
 
     #[test]
     fn single_stream() -> Result<(), Error> {
-        let updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)> = vec![
+        let updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)> = vec![
             (("1".into(), "".into()), 1, 1),
             (("2".into(), "".into()), 2, 1),
         ];
@@ -1644,7 +1644,7 @@ mod tests {
     > {
         let (mut i, maintainer) = indexed_and_maintainer(unreliable)?;
 
-        let updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)> = vec![
+        let updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)> = vec![
             (("1".into(), "".into()), 1, 1),
             (("2".into(), "".into()), 2, 1),
             (("3".into(), "".into()), 3, 1),
@@ -2090,7 +2090,7 @@ mod tests {
         // Normal case: registration uses same key and value codec.
         let _ = block_on(|res| i.register("stream", "key", "val", res))?;
 
-        // Different key codec
+        // i64erent key codec
         assert_eq!(
             block_on(|res| i.register("stream", "nope", "val", res)),
             Err(Error::from(
@@ -2098,7 +2098,7 @@ mod tests {
             ))
         );
 
-        // Different val codec
+        // i64erent val codec
         assert_eq!(
             block_on(|res| i.register("stream", "key", "nope", res)),
             Err(Error::from(

@@ -7,10 +7,10 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.55"
 itertools = "0.10.3"
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["task"] }
 tokio = "1.16.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tracing = "0.1.30"
+tracing = "0.1.31"

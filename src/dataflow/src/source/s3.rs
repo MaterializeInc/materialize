@@ -35,7 +35,8 @@ use std::ops::AddAssign;
 
 use async_compression::tokio::bufread::GzipDecoder;
 use aws_sdk_s3::error::{GetObjectError, ListObjectsV2Error};
-use aws_sdk_s3::{Client as S3Client, SdkError};
+use aws_sdk_s3::types::SdkError;
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::model::{ChangeMessageVisibilityBatchRequestEntry, Message as SqsMessage};
 use aws_sdk_sqs::Client as SqsClient;
 use futures::{FutureExt, StreamExt, TryStreamExt};

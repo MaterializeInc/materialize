@@ -59,7 +59,7 @@ pub struct LogEntry {
     //
     // We could require that each Id is included at most once, but at the
     // moment, there's no particular reason we'd need to.
-    pub updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+    pub updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, i64)>)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -675,7 +675,7 @@ impl fmt::Debug for PrettyBytes<'_> {
     }
 }
 
-struct PrettyRecord<'a>(((&'a [u8], &'a [u8]), u64, isize));
+struct PrettyRecord<'a>(((&'a [u8], &'a [u8]), u64, i64));
 
 impl fmt::Debug for PrettyRecord<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -931,11 +931,11 @@ mod tests {
 
     use super::*;
 
-    fn update_with_ts(ts: u64) -> ((Vec<u8>, Vec<u8>), u64, isize) {
+    fn update_with_ts(ts: u64) -> ((Vec<u8>, Vec<u8>), u64, i64) {
         (("".into(), "".into()), ts, 1)
     }
 
-    fn update_with_key(ts: u64, key: &'static str) -> ((Vec<u8>, Vec<u8>), u64, isize) {
+    fn update_with_key(ts: u64, key: &'static str) -> ((Vec<u8>, Vec<u8>), u64, i64) {
         ((key.into(), "".into()), ts, 1)
     }
 
@@ -986,7 +986,7 @@ mod tests {
         }
     }
 
-    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> Vec<ColumnarRecords> {
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> Vec<ColumnarRecords> {
         updates.iter().collect::<ColumnarRecordsVec>().into_inner()
     }
 

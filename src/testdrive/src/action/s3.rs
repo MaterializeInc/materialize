@@ -18,7 +18,7 @@ use aws_sdk_s3::model::{
     BucketLocationConstraint, CreateBucketConfiguration, Delete, NotificationConfiguration,
     ObjectIdentifier, QueueConfiguration,
 };
-use aws_sdk_s3::{ByteStream, SdkError};
+use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_sqs::model::{DeleteMessageBatchRequestEntry, QueueAttributeName};
 use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;

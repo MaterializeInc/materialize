@@ -61,15 +61,11 @@ create_source_avro_file ::=
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'AVRO OCF' path with_options?
   ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
-create_source_avro_kafka ::=
+create_source_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
-  'AVRO USING' (
-    'CONFLUENT SCHEMA REGISTRY' url with_options? |
-    'SCHEMA' 'FILE' schema_file_path
-  )
+  ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
   ('INCLUDE'
     ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
@@ -88,17 +84,6 @@ create_source_json ::=
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' 'BYTES'
   ('ENVELOPE NONE')?
-create_source_csv_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
-  ('CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? | format_spec)
-  ('INCLUDE'
-    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
-    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
-  )?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_csv_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -112,34 +97,12 @@ create_source_json_kinesis ::=
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' 'BYTES'
   ('ENVELOPE NONE')?
-create_source_json_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' ) ( 'TEXT' | 'BYTES' | format_spec)
-  ('INCLUDE'
-    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
-    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
-  )?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
   'CONNECTION' connection_info
   'PUBLICATION' publication_name
   ('WITH timestamp_frequency_ms =' int)?
-create_source_protobuf_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' )
-   ('PROTOBUF MESSAGE' message_name
-    'USING SCHEMA' 'FILE' schema_file_path)
-  ('INCLUDE'
-    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
-    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
-  )?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_protobuf_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -217,16 +180,6 @@ create_source_text ::=
     'BYTES'
   )
 ('ENVELOPE NONE')?
-create_source_text_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT') ('BYTES' | 'TEXT' | format_spec)
-  ('INCLUDE'
-    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
-    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
-  )?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_text_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -298,10 +251,10 @@ fetch ::=
 format_spec ::=
   'AVRO USING' (
         'CONFLUENT SCHEMA REGISTRY' url with_options? |
-        'SCHEMA' 'FILE' schema_file_path
+        'SCHEMA FILE' path
         ) |
   'PROTOBUF' (
-        'MESSAGE' message_name 'USING' 'SCHEMA' 'FILE' schema_file_path? |
+        'MESSAGE' message_name 'USING SCHEMA FILE' path |
         'USING CONFLUENT SCHEMA REGISTRY' url with_options
         ) |
   'REGEX' regex |

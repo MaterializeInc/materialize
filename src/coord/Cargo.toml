@@ -7,7 +7,7 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.52"
+anyhow = "1.0.55"
 backtrace = "0.3.64"
 bincode = { version = "1.3.3", optional = true }
 byteorder = "1.4.3"
@@ -39,7 +39,7 @@ mz-transform = { path = "../transform" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 protobuf-native = "0.2.1"
-rand = "0.8.4"
+rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 rusqlite = { version = "0.26.1", features = ["bundled", "unlock_notify"] }
@@ -51,7 +51,7 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.16.1", features = ["rt"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-stream = "0.1.8"
-tracing = "0.1.30"
+tracing = "0.1.31"
 uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["v4"] }

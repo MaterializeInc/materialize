@@ -27,7 +27,7 @@ use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
 use mz_dataflow_types::logging::LoggingConfig;
-use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Row, Timestamp};
+use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
 
 /// Constructs the logging dataflow for timely logs.
 ///
@@ -82,9 +82,9 @@ pub fn construct<A: Allocate>(
             let mut channels_data = HashMap::new();
             let mut parks_data = HashMap::new();
             let mut schedules_stash = HashMap::new();
-            let mut messages_sent_data: HashMap<_, Vec<isize>> = HashMap::new();
-            let mut messages_received_data: HashMap<_, Vec<isize>> = HashMap::new();
-            let mut schedules_data: HashMap<_, Vec<(isize, isize)>> = HashMap::new();
+            let mut messages_sent_data: HashMap<_, Vec<Diff>> = HashMap::new();
+            let mut messages_received_data: HashMap<_, Vec<Diff>> = HashMap::new();
+            let mut schedules_data: HashMap<_, Vec<(isize, Diff)>> = HashMap::new();
             move |_frontiers| {
                 let operates = operates_out.activate();
                 let channels = channels_out.activate();
@@ -172,7 +172,11 @@ pub fn construct<A: Allocate>(
                                             );
                                             schedules_histogram_session.give(
                                                 &cap,
-                                                ((event.id, worker, 1 << index), time_ms, -pow),
+                                                (
+                                                    (event.id, worker, 1 << index),
+                                                    time_ms,
+                                                    Diff::try_from(-pow).unwrap(),
+                                                ),
                                             );
                                         }
                                     }
@@ -265,20 +269,24 @@ pub fn construct<A: Allocate>(
                                     messages_sent_data
                                         .entry((event.channel, event.source))
                                         .or_insert_with(|| vec![0; peers])[event.target] +=
-                                        event.length as isize;
+                                        Diff::try_from(event.length).unwrap();
                                     let d = ((event.channel, event.source), event.target);
-                                    messages_sent_session
-                                        .give(&cap, (d, time_ms, event.length as isize));
+                                    messages_sent_session.give(
+                                        &cap,
+                                        (d, time_ms, Diff::try_from(event.length).unwrap()),
+                                    );
                                 } else {
                                     // Record messages received per channel and target
                                     // We can receive data from at most `peers` targets.
                                     messages_received_data
                                         .entry((event.channel, event.target))
                                         .or_insert_with(|| vec![0; peers])[event.source] +=
-                                        event.length as isize;
+                                        Diff::try_from(event.length).unwrap();
                                     let d = ((event.channel, event.target), event.source);
-                                    messages_received_session
-                                        .give(&cap, (d, time_ms, event.length as isize));
+                                    messages_received_session.give(
+                                        &cap,
+                                        (d, time_ms, Diff::try_from(event.length).unwrap()),
+                                    );
                                 }
                             }
                             TimelyEvent::Schedule(event) => {
@@ -306,11 +314,15 @@ pub fn construct<A: Allocate>(
                                             [elapsed_ns.next_power_of_two().trailing_zeros()
                                                 as usize];
                                         schedule_entry.0 += 1;
-                                        schedule_entry.1 += elapsed_ns as isize;
+                                        schedule_entry.1 += Diff::try_from(elapsed_ns).unwrap();
 
                                         schedules_duration_session.give(
                                             &cap,
-                                            ((key.1, worker), time_ms, elapsed_ns as isize),
+                                            (
+                                                (key.1, worker),
+                                                time_ms,
+                                                Diff::try_from(elapsed_ns).unwrap(),
+                                            ),
                                         );
                                         let d = (key.1, worker, elapsed_ns.next_power_of_two());
                                         schedules_histogram_session.give(&cap, (d, time_ms, 1));

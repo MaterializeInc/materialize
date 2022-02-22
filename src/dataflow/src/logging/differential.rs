@@ -28,7 +28,7 @@ use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
-use mz_repr::{Datum, DatumVec, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -86,34 +86,52 @@ pub fn construct<A: Allocate>(
                         match datum {
                             DifferentialEvent::Batch(event) => {
                                 arrangement_batches_session
-                                    .give(&cap, ((event.operator, worker), time_ms, 1));
+                                    .give(&cap, ((event.operator, worker), time_ms, Diff::from(1)));
                                 arrangement_records_session.give(
                                     &cap,
-                                    ((event.operator, worker), time_ms, event.length as isize),
+                                    (
+                                        (event.operator, worker),
+                                        time_ms,
+                                        Diff::try_from(event.length).unwrap(),
+                                    ),
                                 );
                             }
                             DifferentialEvent::Merge(event) => {
                                 if let Some(done) = event.complete {
-                                    arrangement_batches_session
-                                        .give(&cap, ((event.operator, worker), time_ms, -1));
-                                    let diff = (done as isize)
-                                        - ((event.length1 + event.length2) as isize);
+                                    arrangement_batches_session.give(
+                                        &cap,
+                                        ((event.operator, worker), time_ms, Diff::from(-1)),
+                                    );
+                                    let diff = Diff::try_from(done).unwrap()
+                                        - Diff::try_from(event.length1 + event.length2).unwrap();
                                     arrangement_records_session
                                         .give(&cap, ((event.operator, worker), time_ms, diff));
                                 }
                             }
                             DifferentialEvent::Drop(event) => {
-                                arrangement_batches_session
-                                    .give(&cap, ((event.operator, worker), time_ms, -1));
+                                arrangement_batches_session.give(
+                                    &cap,
+                                    ((event.operator, worker), time_ms, Diff::from(-1)),
+                                );
                                 arrangement_records_session.give(
                                     &cap,
-                                    ((event.operator, worker), time_ms, -(event.length as isize)),
+                                    (
+                                        (event.operator, worker),
+                                        time_ms,
+                                        -Diff::try_from(event.length).unwrap(),
+                                    ),
                                 );
                             }
                             DifferentialEvent::MergeShortfall(_) => {}
                             DifferentialEvent::TraceShare(event) => {
-                                sharing_session
-                                    .give(&cap, ((event.operator, worker), time_ms, event.diff));
+                                sharing_session.give(
+                                    &cap,
+                                    (
+                                        (event.operator, worker),
+                                        time_ms,
+                                        Diff::try_from(event.diff).unwrap(),
+                                    ),
+                                );
                             }
                         }
                     }

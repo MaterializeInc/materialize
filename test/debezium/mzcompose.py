@@ -15,6 +15,7 @@ from materialize.mzcompose.services import (
     Debezium,
     Kafka,
     Materialized,
+    MySql,
     Postgres,
     SchemaRegistry,
     SqlServer,
@@ -24,7 +25,7 @@ from materialize.mzcompose.services import (
 
 prerequisites = ["zookeeper", "kafka", "schema-registry", "debezium", "materialized"]
 
-sa_password = "AAbb!@" + "".join(
+password = "AAbb!@" + "".join(
     random.choices(string.ascii_uppercase + string.digits, k=10)
 )
 
@@ -35,7 +36,8 @@ SERVICES = [
     Debezium(),
     Materialized(),
     Postgres(),
-    SqlServer(sa_password=sa_password),
+    SqlServer(sa_password=password),
+    MySql(mysql_root_password=password),
     Testdrive(no_reset=True, default_timeout="300s"),
 ]
 
@@ -47,12 +49,19 @@ def workflow_postgres(c: Composition) -> None:
     c.wait_for_postgres(service="postgres")
     c.wait_for_materialized("materialized")
 
-    c.run("testdrive-svc", "debezium-postgres.td.initialize")
-    c.run("testdrive-svc", "*.td")
+    c.run("testdrive-svc", "postgres/debezium-postgres.td.initialize")
+    c.run("testdrive-svc", "postgres/*.td")
 
 
 def workflow_sql_server(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["sql-server"])
 
-    c.run("testdrive-svc", f"--var=sa-password={sa_password}", "sql-server/*.td")
+    c.run("testdrive-svc", f"--var=sa-password={password}", "sql-server/*.td")
+
+
+def workflow_mysql(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=prerequisites)
+    c.start_and_wait_for_tcp(services=["mysql"])
+
+    c.run("testdrive-svc", f"--var=mysql-root-password={password}", "mysql/*.td")

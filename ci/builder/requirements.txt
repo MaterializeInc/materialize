@@ -4,12 +4,12 @@
 # Strictly no packages that require compiling native code. Do not add to this
 # list without consulting with @benesch!
 
-click==8.0.3
+click==8.0.4
 colored==1.4.3
 humanize==4.0.0
 junit-xml==1.9
 pg8000==1.24.0
-prettytable==3.1.0
+prettytable==3.1.1
 PyMySQL==1.0.2
 pyyaml==6.0
 requests==2.27.1
