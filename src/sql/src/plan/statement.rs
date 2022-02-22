@@ -376,6 +376,11 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
+    pub fn resolve_cluster(&self, name: UnresolvedObjectName) -> Result<usize, PlanError> {
+        let name = normalize::unresolved_object_name(name)?;
+        Ok(self.catalog.resolve_cluster(&name)?)
+    }
+
     pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
         self.catalog.get_item_by_id(id)
     }

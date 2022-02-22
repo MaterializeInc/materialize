@@ -184,6 +184,7 @@ pub struct CreateIndexPlan {
     pub index: Index,
     pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
+    pub in_cluster: usize,
 }
 
 #[derive(Debug)]

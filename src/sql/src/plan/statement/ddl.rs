@@ -1994,6 +1994,11 @@ pub fn plan_create_index(
     } = &mut stmt;
     let on = scx.resolve_item(on_name.clone())?;
 
+    // TODO: Get cluster name from statement.
+    let in_cluster = scx
+        .resolve_cluster(UnresolvedObjectName::unqualified("default"))
+        .expect("default cluster exists");
+
     if CatalogItemType::View != on.item_type()
         && CatalogItemType::Source != on.item_type()
         && CatalogItemType::Table != on.item_type()
@@ -2080,6 +2085,7 @@ pub fn plan_create_index(
         },
         options,
         if_not_exists,
+        in_cluster,
     }))
 }
 

@@ -1402,6 +1402,10 @@ impl Catalog {
         self.state.get_by_oid(oid)
     }
 
+    pub fn get_cluster_by_name(&self, name: &str) -> Option<&Cluster> {
+        self.state.clusters.get(name)
+    }
+
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
@@ -2725,6 +2729,16 @@ impl SessionCatalog for ConnCatalog<'_> {
         Ok(self
             .catalog
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
+    }
+
+    fn resolve_cluster(&self, name: &PartialName) -> Result<usize, SqlCatalogError> {
+        match (
+            name.database.is_some() || name.schema.is_some(),
+            self.catalog.get_cluster_by_name(&name.item),
+        ) {
+            (true, _) | (_, None) => Err(SqlCatalogError::UnknownCluster(name.to_string())),
+            (false, Some(cluster)) => Ok(cluster.id.try_into().expect("id is valid usize")),
+        }
     }
 
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {

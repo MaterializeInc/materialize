@@ -2709,6 +2709,7 @@ impl Coordinator {
             index,
             options,
             if_not_exists,
+            in_cluster,
         } = plan;
 
         let id = self.catalog.allocate_id()?;
@@ -2740,7 +2741,7 @@ impl Coordinator {
         {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
+                    self.ship_dataflow(in_cluster, df).await;
                     self.set_index_options(id, options).expect("index enabled");
                 }
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
