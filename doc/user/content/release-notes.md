@@ -110,7 +110,7 @@ changes that have not yet been documented.
 - **Breaking change.** Return an empty list for slice operations that retrieve
   no elements (e.g. the beginning of the slice's range exceeds the length of the
   list); previously Materialize returned NULL.
-  
+
 - **Breaking change.** Store days separately in [`interval`](/sql/types/interval).
   Unlike the previous version, Hours are never converted to days. This
   means that an Interval of 24 hours will not be equal to an Interval
