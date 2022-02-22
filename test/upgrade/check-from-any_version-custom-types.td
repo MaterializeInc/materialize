@@ -54,3 +54,27 @@
 "{a=>{\"a a\"=>1}}"
 
 > DROP VIEW int4_map_map_view_after;
+
+# Named composite type
+
+> SELECT * FROM composite_type_view;
+(1,abc,2)
+
+> CREATE MATERIALIZED VIEW composite_type_view_after AS SELECT (1, 'abc', 2.0)::composite as composite_type;
+
+> SELECT composite_type FROM composite_type_view_after;
+(1,abc,2)
+
+> DROP VIEW composite_type_view_after;
+
+# Nested named composite types
+
+> SELECT * FROM nested_composite_type_view;
+(3,"(1,abc,2)")
+
+> CREATE MATERIALIZED VIEW nested_composite_type_view_after AS SELECT (3, (1, 'abc', 2.0))::nested_composite_type as nested_composite_type;
+
+> SELECT nested_composite_type FROM nested_composite_type_view_after;
+(3,"(1,abc,2)")
+
+> DROP VIEW nested_composite_type_view_after;
