@@ -7,7 +7,7 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.54"
+anyhow = "1.0.55"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.0.14", features = ["derive"] }
 fallible-iterator = "0.2.0"
