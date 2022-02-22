@@ -19,6 +19,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::{
     sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
     sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
@@ -118,6 +119,12 @@ pub struct CatalogState {
     enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
+
+    // We pass around `ComputeInstanceId`, but not the name, though still need
+    // a means by which to correlate names to an ID, necessitating this
+    // two-level lookup.
+    compute_instances_by_id: HashMap<ComputeInstanceId, ComputeInstance>,
+    compute_instance_names: HashMap<String, ComputeInstanceId>,
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
 }
@@ -442,6 +449,12 @@ pub struct Role {
     pub id: i64,
     #[serde(skip)]
     pub oid: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeInstance {
+    pub name: String,
+    pub id: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
@@ -819,6 +832,8 @@ impl Catalog {
                     now: config.now.clone(),
                     disable_user_indexes: config.disable_user_indexes,
                 },
+                compute_instances_by_id: HashMap::new(),
+                compute_instance_names: HashMap::new(),
             },
             oid_counter: FIRST_USER_OID,
             transient_revision: 0,
@@ -880,6 +895,31 @@ impl Catalog {
                     oid,
                 },
             );
+        }
+
+        let compute_instances = catalog.storage().load_compute_instances()?;
+        assert_eq!(
+            compute_instances.len(),
+            1,
+            "dataflows only shipped to 1 instance currently"
+        );
+        for (id, name) in compute_instances.into_iter() {
+            let oid = catalog.allocate_oid()?;
+
+            let id = id.try_into().expect("no negative compute_instance IDs");
+
+            catalog.state.compute_instances_by_id.insert(
+                id,
+                ComputeInstance {
+                    name: name.clone(),
+                    id,
+                },
+            );
+
+            catalog
+                .state
+                .compute_instance_names
+                .insert(name.clone(), id);
         }
 
         for builtin in BUILTINS.values() {
