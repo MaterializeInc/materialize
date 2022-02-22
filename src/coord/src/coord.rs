@@ -3731,7 +3731,7 @@ impl Coordinator {
         }
 
         let affected_rows = {
-            let mut affected_rows = 0isize;
+            let mut affected_rows = Diff::from(0);
             let mut all_positive_diffs = true;
             // If all diffs are positive, the number of affected rows is just the
             // sum of all unconsolidated diffs.

@@ -109,8 +109,8 @@ where
 // TODO: Maybe we should finally move this to some central place and re-use. There seem to be
 // enough instances of this by now.
 fn split_ok_err<K, V>(
-    x: (Result<(K, V), String>, u64, isize),
-) -> Result<((K, V), u64, isize), (String, u64, isize)> {
+    x: (Result<(K, V), String>, u64, Diff),
+) -> Result<((K, V), u64, Diff), (String, u64, Diff)> {
     match x {
         (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
         (Err(err), ts, diff) => Err((err, ts, diff)),

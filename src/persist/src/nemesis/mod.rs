@@ -156,7 +156,7 @@ pub enum Res {
 #[derive(Clone, Debug)]
 pub struct WriteReqSingle {
     stream: String,
-    update: ((String, ()), u64, isize),
+    update: ((String, ()), u64, i64),
 }
 
 #[derive(Clone, Debug)]
@@ -185,7 +185,7 @@ pub enum ReadOutputEvent<D> {
 
 #[derive(Clone, Debug)]
 pub struct ReadOutputRes {
-    contents: Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, isize)>>,
+    contents: Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, i64)>>,
 }
 
 #[derive(Clone, Debug)]
@@ -215,7 +215,7 @@ pub struct ReadSnapshotReq {
 pub struct ReadSnapshotRes {
     seqno: u64,
     since: Antichain<u64>,
-    contents: Vec<((String, ()), u64, isize)>,
+    contents: Vec<((String, ()), u64, i64)>,
 }
 
 #[derive(Debug)]

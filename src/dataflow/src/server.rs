@@ -424,7 +424,7 @@ impl PendingPeek {
                     // the DD representation uses a binary count and may not exhaust our
                     // memory in situtations where this copying might.
                     if let Some(limit) = max_results {
-                        let limit = std::convert::TryInto::<isize>::try_into(limit);
+                        let limit = std::convert::TryInto::<Diff>::try_into(limit);
                         if let Ok(limit) = limit {
                             copies = std::cmp::min(copies, limit);
                         }

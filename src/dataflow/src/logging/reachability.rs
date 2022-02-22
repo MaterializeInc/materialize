@@ -26,7 +26,7 @@ use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_ore::iter::IteratorExt;
-use mz_repr::{Datum, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 /// Constructs the logging dataflow for reachability logs.
 ///
@@ -49,7 +49,7 @@ pub fn construct<A: Allocate>(
                 WorkerIdentifier,
                 (
                     Vec<usize>,
-                    Vec<(usize, usize, bool, Option<Timestamp>, isize)>,
+                    Vec<(usize, usize, bool, Option<Timestamp>, Diff)>,
                 ),
             ),
         >,

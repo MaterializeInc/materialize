@@ -28,7 +28,7 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
         &self,
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
         as_of_frontier: &Antichain<u64>,
-    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
+    ) -> Stream<G, (Result<(K, V), String>, u64, i64)> {
         self.replay_yield(snapshot, as_of_frontier, DEFAULT_OUTPUTS_PER_YIELD)
     }
 
@@ -41,7 +41,7 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
         as_of_frontier: &Antichain<u64>,
         outputs_per_yield: usize,
-    ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
+    ) -> Stream<G, (Result<(K, V), String>, u64, i64)>;
 }
 
 impl<G, K, V> Replay<G, K, V> for G
@@ -55,7 +55,7 @@ where
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
         as_of_frontier: &Antichain<u64>,
         outputs_per_yield: usize,
-    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
+    ) -> Stream<G, (Result<(K, V), String>, u64, i64)> {
         // TODO: This currently works by only emitting the persisted
         // data on worker 0 because that was the simplest thing to do
         // initially. Instead, we should shard up the responsibility
@@ -64,7 +64,7 @@ where
 
         let as_of_frontier = as_of_frontier.clone();
 
-        let result_stream: Stream<G, Result<((K, V), u64, isize), Error>> = operator::source(
+        let result_stream: Stream<G, Result<((K, V), u64, i64), Error>> = operator::source(
             self,
             "Replay",
             move |cap, info| {

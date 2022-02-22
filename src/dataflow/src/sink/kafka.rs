@@ -943,7 +943,7 @@ struct EncodedRow {
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
 fn kafka<G>(
-    collection: Collection<G, (Option<Row>, Option<Row>)>,
+    collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
     connector: KafkaSinkConnector,
     key_desc: Option<RelationDesc>,

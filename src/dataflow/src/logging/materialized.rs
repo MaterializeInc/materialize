@@ -29,7 +29,7 @@ use crate::arrangement::KeysValsHandle;
 use crate::replay::MzReplay;
 use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr, SourceInstanceId};
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Datum, DatumVec, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -216,7 +216,7 @@ pub fn construct<A: Allocate>(
                                         Datum::Int64(logical as i64),
                                     ]),
                                     time_ms,
-                                    delta as isize,
+                                    delta,
                                 ));
                             }
                             MaterializedEvent::KafkaSourceStatistics {
@@ -258,7 +258,7 @@ pub fn construct<A: Allocate>(
                                         peek_duration_session.give((
                                             (key.0, elapsed_ns.next_power_of_two()),
                                             time_ms,
-                                            1isize,
+                                            Diff::from(1),
                                         ));
                                     } else {
                                         error!(
@@ -331,7 +331,7 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        let source_info_current = source_info.as_collection().count().map({
+        let source_info_current = source_info.as_collection().count_core().map({
             move |((name, id, pid), (offset, timestamp))| {
                 Row::pack_slice(&[
                     Datum::String(&name),
@@ -345,7 +345,7 @@ pub fn construct<A: Allocate>(
         });
 
         // Duration statistics derive from the non-rounded event times.
-        let peek_duration = peek_duration.as_collection().count_total().map({
+        let peek_duration = peek_duration.as_collection().count_total_core().map({
             move |((worker, pow), count)| {
                 Row::pack_slice(&[
                     Datum::Int64(worker as i64),

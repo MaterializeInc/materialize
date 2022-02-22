@@ -542,8 +542,8 @@ impl FoldConstants {
         let mut cursor = 0;
         while cursor < rows.len() {
             // first, reset the remaining limit and offset for the current group
-            let mut offset_rem: isize = offset.clone().try_into().unwrap();
-            let mut limit_rem: Option<isize> = limit.clone().map(|x| x.try_into().unwrap());
+            let mut offset_rem: Diff = offset.clone().try_into().unwrap();
+            let mut limit_rem: Option<Diff> = limit.clone().map(|x| x.try_into().unwrap());
 
             let mut finger = cursor;
             while finger < rows.len() && same_group_key(&rows[cursor], &rows[finger]) {

@@ -10,7 +10,6 @@
 //! Implementations around supporting the TAIL protocol with the dataflow layer
 
 use mz_dataflow_types::TailResponse;
-use mz_ore::cast::CastFrom;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
 use tokio::sync::mpsc;
@@ -92,7 +91,7 @@ impl PendingTail {
                             packer.push(Datum::False);
                         }
 
-                        packer.push(Datum::Int64(i64::cast_from(diff)));
+                        packer.push(Datum::Int64(diff));
 
                         packer.extend_by_row(&row);
 

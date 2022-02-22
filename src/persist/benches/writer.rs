@@ -164,7 +164,7 @@ fn block_on<T, F: FnOnce(PFutureHandle<T>)>(f: F) -> Result<T, Error> {
 fn bench_write<L: Log, B: Blob>(
     index: &mut Indexed<L, B>,
     id: Id,
-    updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
     b: &mut Bencher,
 ) {
     b.iter_custom(|iters| {

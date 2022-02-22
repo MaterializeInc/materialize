@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Timely and Differential Dataflow operators for persisting and replaying
+//! Timely and i64erential Dataflow operators for persisting and replaying
 //! data.
 
 pub mod replay;
@@ -20,11 +20,9 @@ pub mod upsert;
 // https://docs.rs/differential-dataflow/0.12.0/src/differential_dataflow/operators/join.rs.html#487-488
 const DEFAULT_OUTPUTS_PER_YIELD: usize = 1_000_000;
 
-pub(crate) fn split_ok_err<K, V>(
-    x: (Result<(K, V), String>, u64, isize),
-) -> Result<((K, V), u64, isize), (String, u64, isize)> {
+pub(crate) fn split_ok_err<O, E, T, R>(x: (Result<O, E>, T, R)) -> Result<(O, T, R), (E, T, R)> {
     match x {
-        (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
+        (Ok(ok), ts, diff) => Ok((ok, ts, diff)),
         (Err(err), ts, diff) => Err((err, ts, diff)),
     }
 }

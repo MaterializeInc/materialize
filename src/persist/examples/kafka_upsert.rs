@@ -101,8 +101,8 @@ fn construct_persistent_upsert_source<G, S>(
     name_base: &str,
 ) -> Result<
     (
-        Stream<G, ((S::K, S::V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
+        Stream<G, ((S::K, S::V), u64, i64)>,
+        Stream<G, (String, u64, i64)>,
     ),
     Box<dyn Error>,
 >
@@ -196,8 +196,8 @@ fn read_source<G, S>(
     bindings_read: StreamReadHandle<S::SourceTimestamp, AssignedTimestamp>,
 ) -> Result<
     (
-        Stream<G, ((S::K, S::V), S::SourceTimestamp, u64, isize)>,
-        Stream<G, ((S::SourceTimestamp, AssignedTimestamp), u64, isize)>,
+        Stream<G, ((S::K, S::V), S::SourceTimestamp, u64, i64)>,
+        Stream<G, ((S::SourceTimestamp, AssignedTimestamp), u64, i64)>,
     ),
     Box<dyn Error>,
 >
