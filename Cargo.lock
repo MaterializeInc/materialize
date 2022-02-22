@@ -848,9 +848,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.0.14"
+version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b63edc3f163b3c71ec8aa23f9bd6070f77edbf3d1d198b164afa90ff00e4ec62"
+checksum = "6d76c22c9b9b215eeb8d016ad3a90417bd13cb24cf8142756e6472445876cab7"
 dependencies = [
  "atty",
  "bitflags",
@@ -866,9 +866,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "3.0.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1b9752c030a14235a0bd5ef3ad60a1dcac8468c30921327fc8af36b20c790b9"
+checksum = "5fd1122e63869df2cb309f449da1ad54a7c6dfeb7c7e6ccd8e0825d9eb93bb72"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -2059,12 +2059,9 @@ dependencies = [
 
 [[package]]
 name = "heck"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20564e78d53d2bb135c343b3f47714a56af2061f1c928fdb541dc7b9fdd94205"
-dependencies = [
- "unicode-segmentation",
-]
+checksum = "2540771e65fc8cb83cd6e8a237f70c319bd5c29f78ed1084ba5d50eeac86f7f9"
 
 [[package]]
 name = "hermit-abi"
@@ -4735,7 +4732,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
+source = "git+https://github.com/MaterializeInc/prost.git#d26efab661091ef2dc07fedd57d55f2aa334a915"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -4744,7 +4741,7 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.9.1"
-source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
+source = "git+https://github.com/MaterializeInc/prost.git#d26efab661091ef2dc07fedd57d55f2aa334a915"
 dependencies = [
  "bytes",
  "heck",
@@ -4764,7 +4761,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
+source = "git+https://github.com/MaterializeInc/prost.git#d26efab661091ef2dc07fedd57d55f2aa334a915"
 dependencies = [
  "anyhow",
  "itertools",
@@ -4790,7 +4787,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
+source = "git+https://github.com/MaterializeInc/prost.git#d26efab661091ef2dc07fedd57d55f2aa334a915"
 dependencies = [
  "bytes",
  "prost",
@@ -6186,12 +6183,6 @@ checksum = "5479532badd04e128284890390c1e876ef7a993d0570b3597ae43dfa1d59afa4"
 dependencies = [
  "smallvec",
 ]
-
-[[package]]
-name = "unicode-segmentation"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e83e153d1053cbb5a118eeff7fd5be06ed99153f00dbcd8ae310c5fb2b22edc0"
 
 [[package]]
 name = "unicode-width"
