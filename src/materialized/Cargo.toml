@@ -99,7 +99,7 @@ uuid = "0.8.2"
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
 mz-prof = { path = "../prof", features = ["jemalloc"] }
-tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
+tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
 assert_cmd = "2.0.4"
