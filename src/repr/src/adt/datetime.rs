@@ -205,7 +205,7 @@ impl DateTimeField {
     ///
     /// # Panics
     ///
-    /// Panics if called on a non-duration field.
+    /// Panics if called on a non-time/day field.
     pub fn micros_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
@@ -215,7 +215,7 @@ impl DateTimeField {
             Second => 1_000_000,
             Milliseconds => 1_000,
             Microseconds => 1,
-            _other => unreachable!("Do not call with a non-duration field"),
+            _other => unreachable!("Do not call with a non-time/day field"),
         }
     }
 
@@ -322,7 +322,9 @@ impl DateTimeFieldValue {
         DateTimeFieldValue { unit, fraction }
     }
 
-    const FRACTION_MULTIPLIER: i64 = 1_000_000_000;
+    /// How much padding is added to the fractional portion to achieve a given precision.
+    /// e.g. with the current precision `.5` is represented as `500_000_000`.
+    const FRACTIONAL_DIGIT_PRECISION: i64 = 1_000_000_000;
 }
 
 /// Parsed timezone.
@@ -506,7 +508,7 @@ impl ParsedDateTime {
                 // months += y_f * month_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
                 *months = y_f
                     .checked_mul(d.month_multiplier())
-                    .and_then(|y_f_m| y_f_m.checked_div(DateTimeFieldValue::FRACTION_MULTIPLIER))
+                    .and_then(|y_f_m| y_f_m.checked_div(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION))
                     .and_then(|y_f_m| i32::try_from(y_f_m).ok())
                     .and_then(|y_f_m| months.checked_add(y_f_m))
                     .ok_or_else(|| {
@@ -541,7 +543,7 @@ impl ParsedDateTime {
                     .ok_or_else(|| "Intermediate overflow in MONTH fraction".to_owned())?;
                 // days += m_f * 30 / DateTimeFieldValue::FRACTION_MULTIPLIER
                 *days = m_f_days
-                    .checked_div(DateTimeFieldValue::FRACTION_MULTIPLIER)
+                    .checked_div(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
                     .and_then(|m_f_days| i32::try_from(m_f_days).ok())
                     .and_then(|m_f_days| days.checked_add(m_f_days))
                     .ok_or_else(|| {
@@ -554,10 +556,10 @@ impl ParsedDateTime {
 
                 // micros += m_f * 30 % DateTimeFieldValue::FRACTION_MULTIPLIER * micros_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
                 *micros = i128::from(m_f_days)
-                    .checked_rem(DateTimeFieldValue::FRACTION_MULTIPLIER.into())
+                    .checked_rem(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION.into())
                     .and_then(|m_f_us| m_f_us.checked_mul(Day.micros_multiplier().into()))
                     .and_then(|m_f_us| {
-                        div_and_round(m_f_us, DateTimeFieldValue::FRACTION_MULTIPLIER)
+                        div_and_round(m_f_us, DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
                     })
                     .and_then(|m_f_us| micros.checked_add(m_f_us))
                     .ok_or_else(|| {
@@ -592,7 +594,7 @@ impl ParsedDateTime {
                 *micros = i128::from(t_f)
                     .checked_mul(d.micros_multiplier().into())
                     .and_then(|t_f_us| {
-                        div_and_round(t_f_us, DateTimeFieldValue::FRACTION_MULTIPLIER)
+                        div_and_round(t_f_us, DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
                     })
                     .and_then(|t_f_us| micros.checked_add(t_f_us))
                     .ok_or_else(|| {
@@ -627,7 +629,7 @@ impl ParsedDateTime {
                 *micros = t_f
                     .checked_mul(d.micros_multiplier())
                     .and_then(|t_f_ns| {
-                        div_and_round(t_f_ns.into(), DateTimeFieldValue::FRACTION_MULTIPLIER)
+                        div_and_round(t_f_ns.into(), DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
                     })
                     .and_then(|t_f_ns| micros.checked_add(t_f_ns))
                     .ok_or_else(|| {

@@ -340,13 +340,13 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 // client (https://issues.apache.org/jira/browse/AVRO-2123),
                 // so no one is likely to be using it, so we're just using
                 // our own very convenient format.
-                ScalarType::Interval => Value::Fixed(28, {
+                ScalarType::Interval => Value::Fixed(16, {
                     let iv = datum.unwrap_interval();
-                    let mut buf = Vec::with_capacity(32);
+                    let mut buf = Vec::with_capacity(20);
                     buf.extend(&iv.months.to_le_bytes());
                     buf.extend(&iv.days.to_le_bytes());
                     buf.extend(&iv.micros.to_le_bytes());
-                    debug_assert_eq!(buf.len(), 28);
+                    debug_assert_eq!(buf.len(), 16);
                     buf
                 }),
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
