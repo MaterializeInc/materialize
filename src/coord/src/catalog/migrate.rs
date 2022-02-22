@@ -32,7 +32,6 @@ use mz_sql::ast::{
 };
 use mz_sql::names::resolve_names_stmt;
 use mz_sql_parser::ast::CreateTypeAs;
-use mz_sql_parser::ast::ObjectType::Type;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};

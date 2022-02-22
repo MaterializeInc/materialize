@@ -4312,17 +4312,19 @@ fn scalar_type_from_catalog(
                     custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
                 }),
                 CatalogType::Record { fields } => {
-                    let mut scalars = vec![];
-                    for (column, id) in fields {
-                        let scalar = scalar_type_from_catalog(scx, *id, &[])?;
-                        scalars.push((
-                            column.clone(),
-                            ColumnType {
-                                scalar_type: scalar,
-                                nullable: true,
-                            },
-                        ));
-                    }
+                    let scalars: Vec<(ColumnName, ColumnType)> = fields
+                        .iter()
+                        .map(|(column, id)| {
+                            let scalar_type = scalar_type_from_catalog(scx, *id, &[])?;
+                            Ok((
+                                column.clone(),
+                                ColumnType {
+                                    scalar_type,
+                                    nullable: true,
+                                },
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, PlanError>>()?;
                     let catalog_item = scx.catalog.get_item_by_id(&id);
                     Ok(ScalarType::Record {
                         fields: scalars,
