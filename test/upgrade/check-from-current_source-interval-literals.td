@@ -7,24 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-> SELECT * FROM postgres_interval1;
-"1 year 2 months 3 days 14:42:07.8"
-
-> SELECT * FROM postgres_interval2;
-"1 year 2 months 3 days 14:42:07.8"
-
-> SELECT * FROM interval_second;
-00:02:03
-
-> SELECT * FROM interval_minute;
-02:03:00
-
-> SELECT * FROM interval_day;
-"123 days"
-
-> SELECT * FROM interval_month;
-"10 years 3 months"
-
-> SELECT * FROM interval_year;
-"123 years"
+# This version broke backwards compatibility by separating the day
+# and microsecond fields in Intervals. The upgrade testing
+# infrastructure doesn't support testing a feature UNTIL some
+# version. If we add support for that we can test the old behavior,
+# which would return 5 days 03:00:00
+> SELECT * FROM interval_hour;
+"123:00:00"
