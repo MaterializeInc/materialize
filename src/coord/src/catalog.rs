@@ -120,6 +120,12 @@ pub struct CatalogState {
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
+
+    // Compute instances live in an adjacent, totally ambient namespace per
+    // coordinator, so they cannot easily be shoehorned into `CatalogEntry` but
+    // still want a multi-level lookup.
+    compute_instances_by_id: HashMap<usize, ComputeInstance>,
+    compute_instance_names: HashMap<String, usize>,
 }
 
 impl CatalogState {
@@ -442,6 +448,15 @@ pub struct Role {
     pub id: i64,
     #[serde(skip)]
     pub oid: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeInstance {
+    pub name: String,
+    pub id: usize,
+    #[serde(skip)]
+    pub oid: u32,
+    pub current_indexes: HashSet<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -819,6 +834,8 @@ impl Catalog {
                     now: config.now.clone(),
                     disable_user_indexes: config.disable_user_indexes,
                 },
+                compute_instances_by_id: HashMap::new(),
+                compute_instance_names: HashMap::new(),
             },
             oid_counter: FIRST_USER_OID,
             transient_revision: 0,
@@ -880,6 +897,33 @@ impl Catalog {
                     oid,
                 },
             );
+        }
+
+        let compute_instances = catalog.storage().load_compute_instances()?;
+        assert_eq!(
+            compute_instances.len(),
+            1,
+            "dataflows only shipped to 1 instance currently"
+        );
+        for (id, name) in compute_instances.into_iter() {
+            let oid = catalog.allocate_oid()?;
+
+            let id = id.try_into().expect("no negative compute_instance IDs");
+
+            catalog.state.compute_instances_by_id.insert(
+                id,
+                ComputeInstance {
+                    name: name.clone(),
+                    id,
+                    oid,
+                    current_indexes: HashSet::new(),
+                },
+            );
+
+            catalog
+                .state
+                .compute_instance_names
+                .insert(name.clone(), id);
         }
 
         for builtin in BUILTINS.values() {
