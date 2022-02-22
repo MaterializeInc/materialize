@@ -260,6 +260,12 @@
   - signature: 'char_length(s: str) -> int'
     description: Number of code points in `s`
 
+  - signature: 'chr(i: int) -> str'
+    description: >-
+      Character with the given Unicode codepoint.
+      Only supports codepoints that can be encoded in UTF-8.
+      The NULL (0) character is not allowed.
+
   - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
     description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
 

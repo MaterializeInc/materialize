@@ -148,3 +148,21 @@ sqlfunc!(
         RegType(a)
     }
 );
+
+sqlfunc!(
+    fn chr(a: i32) -> Result<String, EvalError> {
+        // This error matches the behavior of Postgres 13/14 (and potentially earlier versions)
+        // Postgres 15 will have a different error message for negative values
+        let codepoint = u32::try_from(a).map_err(|_| EvalError::CharacterTooLargeForEncoding(a))?;
+        if codepoint == 0 {
+            Err(EvalError::NullCharacterNotPermitted)
+        } else if 0xd800 <= codepoint && codepoint < 0xe000 {
+            // Postgres returns a different error message for inputs in this range
+            Err(EvalError::CharacterNotValidForEncoding(a))
+        } else {
+            char::from_u32(codepoint)
+                .map(|u| u.to_string())
+                .ok_or(EvalError::CharacterTooLargeForEncoding(a))
+        }
+    }
+);
