@@ -295,6 +295,16 @@ steps:
           composition: debezium
           run: sql-server
 
+  - id: debezium-mysql
+    label: Debezium MySQL tests
+    depends_on: build-x86_64
+    inputs: [test/debezium]
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: debezium
+          run: mysql
+
   - id: pg-cdc
     label: Postgres CDC tests
     depends_on: build-x86_64
