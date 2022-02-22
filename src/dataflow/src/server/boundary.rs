@@ -81,6 +81,39 @@ pub trait ComputeReplay {
     );
 }
 
+/// A boundary implementation that panics on use.
+pub struct DummyBoundary;
+
+impl ComputeReplay for DummyBoundary {
+    fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        _id: SourceInstanceKey,
+        _scope: &mut G,
+        _name: &str,
+        _dataflow_id: GlobalId,
+    ) -> (
+        Collection<G, Row, Diff>,
+        Collection<G, DataflowError, Diff>,
+        Rc<dyn Any>,
+    ) {
+        panic!("DummyBoundary cannot replay")
+    }
+}
+
+impl StorageCapture for DummyBoundary {
+    fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        _id: SourceInstanceKey,
+        _ok: Collection<G, Row, Diff>,
+        _err: Collection<G, DataflowError, Diff>,
+        _token: Rc<dyn Any>,
+        _name: &str,
+        _dataflow_id: GlobalId,
+    ) {
+        panic!("DummyBoundary cannot capture")
+    }
+}
+
 pub use event_link::EventLinkBoundary;
 
 /// A simple boundary that uses activated event linked lists.

@@ -22,6 +22,9 @@ use uuid::Uuid;
 use materialized::http;
 use materialized::mux::Mux;
 use materialized::server_metrics::Metrics;
+use mz_coord::LoggingConfig;
+use mz_dataflow_types::client::Client;
+use mz_dataflowd::SplitClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
@@ -40,6 +43,9 @@ struct Args {
     /// The address of the dataflowd servers to connect to.
     #[clap()]
     dataflowd_addr: Vec<String>,
+    /// The address of the storage dataflowd servers to connect to.
+    #[clap(long)]
+    storaged_addr: Vec<String>,
     /// Number of dataflow worker threads. This must match the number of
     /// workers that the targeted dataflowd was started with.
     #[clap(
@@ -80,12 +86,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
         .init();
 
-    info!(
-        "connecting to dataflowd server at {:?}...",
-        args.dataflowd_addr
-    );
-
-    let dataflow_client = mz_dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+    let dataflow_client: Box<dyn Client + Send + 'static> = if args.storaged_addr.is_empty() {
+        info!(
+            "connecting to dataflowd server at {:?}...",
+            args.dataflowd_addr
+        );
+        Box::new(mz_dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?)
+    } else {
+        info!(
+            "connecting to dataflowd server at {:?} and storaged server at {:?}...",
+            args.dataflowd_addr, args.storaged_addr
+        );
+        let compute_client = mz_dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+        let storage_client = mz_dataflowd::RemoteClient::connect(&args.storaged_addr).await?;
+        Box::new(SplitClient::new(storage_client, compute_client))
+    };
 
     let experimental_mode = false;
     let mut metrics_registry = MetricsRegistry::new();
@@ -104,9 +119,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             &metrics_registry,
         )
         .await?;
+    // TODO: expose as a parameter
+    let granularity = Duration::from_secs(1);
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
-        dataflow_client: Box::new(dataflow_client),
-        logging: None,
+        dataflow_client,
+        logging: Some(LoggingConfig {
+            log_logging: false,
+            granularity,
+            retain_readings_for: granularity,
+            metrics_scraping_interval: Some(granularity),
+        }),
         storage: coord_storage,
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: Some(Duration::from_millis(1)),
