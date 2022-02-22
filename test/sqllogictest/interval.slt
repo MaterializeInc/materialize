@@ -549,11 +549,25 @@ SELECT INTERVAL '1.23456789' SECOND(2);
 ----
 00:00:01.23
 
-# Postgres rounds micros to 6 digits before applying given precision
+# Postgres rounds micros to 6 digits every time a value is added before applying given precision
 query T
 SELECT INTERVAL '1.2345649' SECOND(5);
 ----
 00:00:01.23457
+
+# 0.00000001 min is     0.0000006 seconds
+# 0.0006 millisecond is 0.0000006 seconds
+# 3.5 microseconds is   0.0000035 seconds
+# They each separately get rounded to 6 digits and added together
+query T
+SELECT INTERVAL '0.00000001 min 0.0006 millisecond 3.5 microsecond';
+----
+00:00:00.000006
+
+query T
+SELECT INTERVAL '0.00000001 min 0.0006 millisecond 3.5 microsecond' SECOND(5);
+----
+00:00:00.00001
 
 query T
 SELECT INTERVAL '-1.555555555 years 2.555555555 months -3.555555555 days 4.555555555 hours -5.555555555 minutes 6.555555555 seconds';
@@ -959,3 +973,39 @@ query T
 SELECT INTERVAL '01:00:01.0000004';
 ----
 01:00:01
+
+query T
+SELECT INTERVAL '1.4 microseconds';
+----
+00:00:00.000001
+
+query T
+SELECT INTERVAL '1.5 microseconds';
+----
+00:00:00.000002
+
+query T
+SELECT INTERVAL '1.4 microseconds';
+----
+00:00:00.000001
+
+query T
+SELECT INTERVAL '1.5 microseconds';
+----
+00:00:00.000002
+
+query T
+SELECT INTERVAL '0.4 microseconds';
+----
+00:00:00
+
+# Postgres actually returns 00:00:00 here, which is most likely a bug/rounding error on their part
+query T
+SELECT INTERVAL '0.5 microseconds';
+----
+00:00:00.000001
+
+query T
+SELECT INTERVAL '0.6 microseconds';
+----
+00:00:00.000001
