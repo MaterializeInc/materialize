@@ -18,7 +18,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use itertools::Itertools;
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
@@ -770,10 +769,7 @@ pub struct CreateTypeStatement<T: AstInfo> {
     /// Name of the created type.
     pub name: UnresolvedObjectName,
     /// The new type's "base type".
-    pub as_type: CreateTypeAs,
-    /// Provides the name and type for the key
-    /// and value.
-    pub with_options: Vec<SqlOption<T>>,
+    pub as_type: CreateTypeAs<T>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
@@ -781,34 +777,17 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
         f.write_str("CREATE TYPE ");
         f.write_node(&self.name);
         f.write_str(" AS ");
-        match self.as_type {
-            CreateTypeAs::List | CreateTypeAs::Map => {
+        match &self.as_type {
+            CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
                 f.write_str(&self.as_type);
                 f.write_str("( ");
-                if !self.with_options.is_empty() {
-                    f.write_node(&display::comma_separated(&self.with_options));
+                if !with_options.is_empty() {
+                    f.write_node(&display::comma_separated(&with_options));
                 }
                 f.write_str(" )");
             }
-            CreateTypeAs::Record => {
+            CreateTypeAs::Record { column_defs } => {
                 f.write_str("( ");
-
-                // TODO(phemberger): hmm do we create a separate field to store ColumnDefs directly?
-                let column_defs = &self
-                    .with_options
-                    .iter()
-                    .map(|option| match option {
-                        SqlOption::DataType { name, data_type } => Some(ColumnDef::<T> {
-                            name: name.clone(),
-                            data_type: data_type.clone(),
-                            collation: None,
-                            options: vec![],
-                        }),
-                        _ => None,
-                    })
-                    .flatten()
-                    .collect_vec();
-
                 if !column_defs.is_empty() {
                     f.write_node(&display::comma_separated(&column_defs));
                 }
@@ -820,23 +799,23 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
 impl_display_t!(CreateTypeStatement);
 
 /// `CREATE TYPE .. AS <TYPE>`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CreateTypeAs {
-    List,
-    Map,
-    Record,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateTypeAs<T: AstInfo> {
+    List { with_options: Vec<SqlOption<T>> },
+    Map { with_options: Vec<SqlOption<T>> },
+    Record { column_defs: Vec<ColumnDef<T>> },
 }
 
-impl AstDisplay for CreateTypeAs {
+impl<T: AstInfo> AstDisplay for CreateTypeAs<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateTypeAs::List => f.write_str("LIST "),
-            CreateTypeAs::Map => f.write_str("MAP "),
-            CreateTypeAs::Record => f.write_str("RECORD "),
+            CreateTypeAs::List { .. } => f.write_str("LIST "),
+            CreateTypeAs::Map { .. } => f.write_str("MAP "),
+            CreateTypeAs::Record { .. } => f.write_str("RECORD "),
         }
     }
 }
-impl_display!(CreateTypeAs);
+impl_display_t!(CreateTypeAs);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

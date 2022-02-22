@@ -2095,15 +2095,11 @@ pub fn plan_create_type(
     stmt: CreateTypeStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
-    let CreateTypeStatement {
-        name,
-        as_type,
-        with_options,
-    } = stmt;
+    let CreateTypeStatement { name, as_type, .. } = stmt;
     fn ensure_valid_data_type(
         scx: &StatementContext,
         data_type: ResolvedDataType,
-        as_type: CreateTypeAs,
+        as_type: &CreateTypeAs<Raw>,
         key: &str,
     ) -> Result<(), anyhow::Error> {
         let item = match data_type {
@@ -2143,7 +2139,7 @@ pub fn plan_create_type(
             Some(CatalogTypeDetails {
                 typ: CatalogType::Char,
                 ..
-            }) if as_type == CreateTypeAs::List => {
+            }) if matches!(as_type, CreateTypeAs::List { .. }) => {
                 bail_unsupported!("char list")
             }
             _ => {}
@@ -2154,12 +2150,12 @@ pub fn plan_create_type(
 
     let mut ids = vec![];
     let mut record_field_names = vec![];
-    match as_type {
-        CreateTypeAs::List | CreateTypeAs::Map => {
+    match &as_type {
+        CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
             let mut with_options = normalize::option_objects(&with_options);
             let option_keys = match as_type {
-                CreateTypeAs::List => vec!["element_type"],
-                CreateTypeAs::Map => vec!["key_type", "value_type"],
+                CreateTypeAs::List { .. } => vec!["element_type"],
+                CreateTypeAs::Map { .. } => vec!["key_type", "value_type"],
                 _ => vec![],
             };
 
@@ -2168,7 +2164,7 @@ pub fn plan_create_type(
                     Some(SqlOption::DataType { data_type, .. }) => {
                         let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
                         ids.extend(dt_ids);
-                        ensure_valid_data_type(scx, data_type, as_type, key)?;
+                        ensure_valid_data_type(scx, data_type, &as_type, key)?;
                     }
                     Some(_) => bail!("{} must be a data type", key),
                     None => bail!("{} parameter required", key),
@@ -2177,18 +2173,14 @@ pub fn plan_create_type(
 
             normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
         }
-        CreateTypeAs::Record => {
-            for sql_option in with_options {
-                let (key, field_type) = (ident(sql_option.name().clone()), sql_option.clone());
-                match field_type {
-                    SqlOption::DataType { data_type, .. } => {
-                        let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
-                        ids.extend(dt_ids);
-                        record_field_names.push(ColumnName::from(key.clone()));
-                        ensure_valid_data_type(scx, data_type, as_type, &key)?;
-                    }
-                    _ => bail!("{} must be a data type", key),
-                };
+        CreateTypeAs::Record { ref column_defs } => {
+            for column_def in column_defs {
+                let key = ident(column_def.name.clone());
+                let (data_type, dt_ids) =
+                    resolve_names_data_type(scx, column_def.data_type.clone())?;
+                ids.extend(dt_ids);
+                record_field_names.push(ColumnName::from(key.clone()));
+                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
             }
         }
     };
@@ -2199,10 +2191,10 @@ pub fn plan_create_type(
     }
 
     let inner = match as_type {
-        CreateTypeAs::List => CatalogType::List {
+        CreateTypeAs::List { .. } => CatalogType::List {
             element_id: *ids.get(0).expect("custom type to have element id"),
         },
-        CreateTypeAs::Map => {
+        CreateTypeAs::Map { .. } => {
             let key_id = *ids.get(0).expect("key");
             let entry = scx.catalog.get_item_by_id(&key_id);
             match entry.type_details() {
@@ -2219,7 +2211,7 @@ pub fn plan_create_type(
                 value_id: *ids.get(1).expect("value"),
             }
         }
-        CreateTypeAs::Record => CatalogType::Record {
+        CreateTypeAs::Record { .. } => CatalogType::Record {
             fields: record_field_names
                 .into_iter()
                 .zip(ids.iter().cloned())
