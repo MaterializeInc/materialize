@@ -37,15 +37,10 @@ struct UpsertSourceData {
     /// The actual value
     value: Option<Result<Row, DataflowError>>,
     /// The source's reported position for this record
-    ///
-    /// e.g. kafka offset or file location
     position: i64,
-
     /// The time that the upstream source believes that the message was created
-    ///
     /// Currently only applies to Kafka
     upstream_time_millis: Option<i64>,
-
     /// Metadata for this row
     metadata: Row,
 }

@@ -139,7 +139,8 @@ where
     pub key: K,
     /// The record's value
     pub value: V,
-    /// The position in the source, if such a concept exists (e.g., Kafka offset, file line number)
+    /// The position in the source (e.g., Kafka offset, file line number, monotonic increasing
+    /// number, etc.)
     pub position: i64,
     /// The time the record was created in the upstream systsem, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
