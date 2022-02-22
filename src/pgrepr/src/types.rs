@@ -48,7 +48,7 @@ pub enum Type {
     Int4,
     /// An 8-byte signed integer.
     Int8,
-    /// A time interval 
+    /// A time interval
     Interval {
         /// Optional precision
         precision: Option<IntervalPrecision>,
@@ -489,7 +489,7 @@ impl Type {
                 max_length: Some(max_length),
             } => max_length.into_typmod(),
             Type::Interval {
-                precision: Some(precision)
+                precision: Some(precision),
             } => precision.into_typmod(),
             Type::Array(_)
             | Type::Bool
@@ -634,7 +634,9 @@ impl From<&ScalarType> for Type {
             ScalarType::Int32 => Type::Int4,
             ScalarType::Int64 => Type::Int8,
             // ScalarType::Interval hardcodes a precision of 6 for now
-            ScalarType::Interval => Type::Interval { precision: Some(IntervalPrecision(6)) },
+            ScalarType::Interval => Type::Interval {
+                precision: Some(IntervalPrecision(6)),
+            },
             ScalarType::Jsonb => Type::Jsonb,
             ScalarType::List { element_type, .. } => {
                 Type::List(Box::new(From::from(&**element_type)))
