@@ -47,8 +47,8 @@ def workflow_postgres(c: Composition) -> None:
     c.wait_for_postgres(service="postgres")
     c.wait_for_materialized("materialized")
 
-    c.run("testdrive-svc", "debezium-postgres.td.initialize")
-    c.run("testdrive-svc", "*.td")
+    c.run("testdrive-svc", "postgres/debezium-postgres.td.initialize")
+    c.run("testdrive-svc", "postgres/*.td")
 
 
 def workflow_sql_server(c: Composition) -> None:
