@@ -397,10 +397,11 @@ lazy_static! {
                 if from_type.unwrap_record_element_type().len() != to_type.unwrap_record_element_type().len() {
                     return None;
                 }
-                let mut cast_exprs = vec![];
-                for (f, t) in from_type.unwrap_record_element_type().iter().zip_eq(to_type.unwrap_record_element_type()) {
-                    cast_exprs.push(plan_hypothetical_cast(ecx, ccx, f, t)?);
-                }
+                let cast_exprs = from_type.unwrap_record_element_type()
+                    .iter()
+                    .zip_eq(to_type.unwrap_record_element_type())
+                    .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
+                    .collect::<Option<Vec<_>>>()?;
                 let to = to_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2{ return_ty: to, cast_exprs }))
             }),

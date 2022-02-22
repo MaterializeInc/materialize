@@ -748,7 +748,7 @@ impl ParamList {
                 // params are basic binary functions to other records: `=, <>, <, <=, >, >=`.
                 // This makes our lives a bit easier as we just need to ensure that both params
                 // are records. Later when executing the actual function, we will validate that
-                // they are truly comparable into each other
+                // they are truly field-wise comparable to each other
                 (ParamType::RecordAny, Some(t @ ScalarType::Record { .. }), None) => {
                     constrained_type = Some(t.clone());
                 }
