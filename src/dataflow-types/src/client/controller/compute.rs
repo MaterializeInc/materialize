@@ -124,6 +124,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .map(|dataflow| {
                 (
                     dataflow.debug_name.clone(),
+                    dataflow.id,
                     dataflow.as_of.clone(),
                     dataflow.source_imports.clone(),
                 )
