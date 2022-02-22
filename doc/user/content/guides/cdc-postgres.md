@@ -120,7 +120,7 @@ CREATE MATERIALIZED VIEW cnt_view1 AS
 
 ## Kafka + Debezium
 
-If Kafka is part of your stack, you can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/avro-kafka/#debezium-envelope-details) to propagate CDC data from Postgres to Materialize. Debezium captures row-level changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database and publishes them as events to Kafka using Kafka Connect-compatible connectors.
+If Kafka is part of your stack, you can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium) to propagate CDC data from Postgres to Materialize. Debezium captures row-level changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database and publishes them as events to Kafka using Kafka Connect-compatible connectors.
 
 ### Database setup
 
@@ -217,7 +217,7 @@ If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://doc
 Currently, Materialize only supports Avro-encoded Debezium records. If you’re interested in JSON support, please reach out in the community Slack or leave a comment on [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
 {{</ note >}}
 
-Debezium emits change events using an envelope that contains detailed information about upstream database operations, like the `before` and `after` values for each record. To create a source that interprets the [Debezium envelope](/sql/create-source/avro-kafka/#debezium-envelope-details) in Materialize:
+Debezium emits change events using an envelope that contains detailed information about upstream database operations, like the `before` and `after` values for each record. To create a source that interprets the [Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
 
 ```sql
 CREATE SOURCE kafka_repl

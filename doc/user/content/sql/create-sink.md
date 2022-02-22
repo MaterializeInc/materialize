@@ -48,7 +48,7 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 _sink&lowbar;with&lowbar;options_ | Options affecting sink creation. For more detail, see [`WITH` options](#with-options).
 _with&lowbar;options_ | Options affecting Materialize's connection to Kafka. For more detail, see [Format `WITH` options](#format-with-options).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source. This is the default.
-**ENVELOPE UPSERT** | The sink emits data with upsert semantics: updates and inserts for the given key are expressed as a value, and deletes are expressed as a null value payload in Kafka. For more detail, see [Upsert source details](/sql/create-source/text-kafka/#upsert-envelope-details).
+**ENVELOPE UPSERT** | The sink emits data with upsert semantics: updates and inserts for the given key are expressed as a value, and deletes are expressed as a null value payload in Kafka. For more detail, see [Handling upserts](/sql/create-source/kafka/#handling-upserts).
 
 {{< version-changed v0.7.1 >}}
 The `AS OF` option was removed.
@@ -74,7 +74,7 @@ Field                | Value type | Description
 #### SSL `WITH` options
 
 Use the following options to connect Materialize to an SSL-encrypted Kafka
-cluster. For more detail, see [SSL-encrypted Kafka details](/sql/create-source/avro-kafka/#ssl-encrypted-kafka-details).
+cluster. For more detail, see [SSL-encrypted Kafka details](/sql/create-source/kafka/#ssl).
 
 Field | Value | Description
 ------|-------|------------
@@ -88,7 +88,7 @@ Field | Value | Description
 
 Use the following options to connect Materialize using SASL.
 
-For more detail, see [Kerberized Kafka details](/sql/create-source/avro-kafka/#kerberized-kafka-details).
+For more detail, see [Kerberized Kafka details](/sql/create-source/kafka/#saslgssapi-kerberos).
 
 Field | Value | Description
 ------|-------|------------
