@@ -7,7 +7,7 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-semver = { version = "1.0.5", optional = true }
+semver = { version = "1.0.6", optional = true }
 
 [features]
 default = ["semver"]
