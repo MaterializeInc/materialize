@@ -51,6 +51,7 @@ pub mod boundary;
 mod compute_state;
 mod metrics;
 mod storage_state;
+pub mod tcp_boundary;
 
 use crate::server::boundary::EventLinkBoundary;
 use boundary::{ComputeReplay, StorageCapture};
