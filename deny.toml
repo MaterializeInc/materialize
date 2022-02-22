@@ -27,8 +27,9 @@ skip = [
     # Waiting for csv, http, and aws_smithy_types to upgrade to v1.0.
     { name = "itoa", version = "0.4.1" },
 
-    # Waiting for tokio to upgrade to mio 0.8
-    { name = "mio", version = "0.7.11" },
+    # Waiting for pprof and prometheus to upgrade.
+    { name = "parking_lot_core", version = "0.8.3" },
+    { name = "parking_lot", version = "0.11.1" },
 
     # Waiting for vte to upgrade to v0.7.0.
     { name = "arrayvec", version = "0.5.2" },

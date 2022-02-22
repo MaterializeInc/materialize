@@ -13,5 +13,5 @@ mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
 openssl = { version = "0.10.38", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tokio = { version = "1.16.1", features = ["fs"] }
+tokio = { version = "1.17.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

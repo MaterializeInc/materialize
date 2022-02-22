@@ -38,7 +38,7 @@ regex = "1.5.4"
 reqwest = "0.11.9"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
-tokio = { version = "1.16.1", features = ["fs"] }
+tokio = { version = "1.17.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tracing = "0.1.31"
 typemap_rev = "0.1.5"

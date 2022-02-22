@@ -11,6 +11,6 @@ anyhow = "1.0.55"
 itertools = "0.10.3"
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["task"] }
-tokio = "1.16.1"
+tokio = "1.17.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tracing = "0.1.31"
