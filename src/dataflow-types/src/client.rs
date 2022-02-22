@@ -257,6 +257,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                                 as_of: dataflow.as_of.clone(),
                                 debug_name: dataflow.debug_name.clone(),
                                 id: dataflow.id,
+                                compute_instance_id: dataflow.compute_instance_id,
                             });
                         }
                     }

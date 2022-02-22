@@ -145,11 +145,13 @@ pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     pub debug_name: String,
     /// Unique ID of the dataflow
     pub id: GlobalId,
+    /// The target compute instance for this dataflow.
+    pub compute_instance_id: usize,
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String, id: GlobalId) -> Self {
+    pub fn new(name: String, id: GlobalId, compute_instance_id: usize) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),
@@ -160,6 +162,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
             as_of: Default::default(),
             debug_name: name,
             id,
+            compute_instance_id,
         }
     }
 
