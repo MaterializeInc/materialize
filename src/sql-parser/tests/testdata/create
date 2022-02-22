@@ -18,84 +18,105 @@ CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
 ----
 CREATE TYPE custom AS MAP ( key_type = text, value_type = bool )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map, with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map { with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (KEY_TYPE=text, VaLuE_tYpE=custom_type)
 ----
 CREATE TYPE custom AS MAP ( key_type = text, value_type = custom_type )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map, with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("custom_type")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map { with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("custom_type")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text)
 ----
 CREATE TYPE custom AS MAP ( key_type = text )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map, with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map { with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (value_type=bool)
 ----
 CREATE TYPE custom AS MAP ( value_type = bool )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map, with_options: [DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map { with_options: [DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool, random_type=int)
 ----
 CREATE TYPE custom AS MAP ( key_type = text, value_type = bool, random_type = int4 )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map, with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] } }, DataType { name: Ident("random_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map { with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("value_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] } }, DataType { name: Ident("random_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text, random_type=int)
 ----
 CREATE TYPE custom AS MAP ( key_type = text, random_type = int4 )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map, with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("random_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: Map { with_options: [DataType { name: Ident("key_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }, DataType { name: Ident("random_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS LIST (element_type=text)
 ----
 CREATE TYPE custom AS LIST ( element_type = text )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: List, with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: List { with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS LIST (element_type=x)
 ----
 CREATE TYPE custom AS LIST ( element_type = x )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: List, with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("x")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: List { with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("x")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE custom AS LIST (element_type=_text)
 ----
 CREATE TYPE custom AS LIST ( element_type = _text )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: List, with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("_text")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("custom")]), as_type: List { with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("_text")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE schema.t2 AS LIST (element_type=schema.t1)
 ----
 CREATE TYPE schema.t2 AS LIST ( element_type = schema.t1 )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("schema"), Ident("t2")]), as_type: List, with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("schema"), Ident("t1")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("schema"), Ident("t2")]), as_type: List { with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("schema"), Ident("t1")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE db2.schema2.t2 AS LIST (element_type=db1.schema1.t1)
 ----
 CREATE TYPE db2.schema2.t2 AS LIST ( element_type = db1.schema1.t1 )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("db2"), Ident("schema2"), Ident("t2")]), as_type: List, with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db1"), Ident("schema1"), Ident("t1")])), typ_mod: [] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("db2"), Ident("schema2"), Ident("t2")]), as_type: List { with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db1"), Ident("schema1"), Ident("t1")])), typ_mod: [] } }] } })
 
 parse-statement
 CREATE TYPE numeric_list AS LIST (element_type=numeric(100,100,100))
 ----
 CREATE TYPE numeric_list AS LIST ( element_type = numeric(100, 100, 100) )
 =>
-CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("numeric_list")]), as_type: List, with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("numeric")])), typ_mod: [100, 100, 100] } }] })
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("numeric_list")]), as_type: List { with_options: [DataType { name: Ident("element_type"), data_type: Other { name: Name(UnresolvedObjectName([Ident("numeric")])), typ_mod: [100, 100, 100] } }] } })
+
+parse-statement
+CREATE TYPE named_composite AS (a int, b text, c float8);
+----
+CREATE TYPE named_composite AS ( a int4, b text, c float8 )
+=>
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }] } })
+
+parse-statement
+CREATE TYPE named_composite AS (a InT,     b text, c flOAt8   );
+----
+CREATE TYPE named_composite AS ( a int4, b text, c float8 )
+=>
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }] } })
+
+parse-statement
+CREATE TYPE named_composite AS (a int, b other_type, c yet_another_type);
+----
+CREATE TYPE named_composite AS ( a int4, b other_type, c yet_another_type )
+=>
+CreateType(CreateTypeStatement { name: UnresolvedObjectName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedObjectName([Ident("other_type")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("yet_another_type")])), typ_mod: [] }, collation: None, options: [] }] } })
 
 parse-statement
 CREATE ROLE arjun
