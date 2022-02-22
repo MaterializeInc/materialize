@@ -342,7 +342,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 // our own very convenient format.
                 ScalarType::Interval => Value::Fixed(16, {
                     let iv = datum.unwrap_interval();
-                    let mut buf = Vec::with_capacity(20);
+                    let mut buf = Vec::with_capacity(16);
                     buf.extend(&iv.months.to_le_bytes());
                     buf.extend(&iv.days.to_le_bytes());
                     buf.extend(&iv.micros.to_le_bytes());
