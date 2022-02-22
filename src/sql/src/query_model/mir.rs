@@ -291,6 +291,10 @@ impl<'a> Lowerer<'a> {
                                         )
                                         .project((0..(oa + la)).collect());
 
+                                        // Rows in `left` that are not matched in the inner equijoin.
+                                        let left_absent =
+                                            left_present.negate().union(get_lhs.clone());
+
                                         // Determine the types of nulls to use as filler.
                                         let right_fill = rt
                                             .into_iter()
@@ -301,12 +305,8 @@ impl<'a> Lowerer<'a> {
                                             })
                                             .collect();
 
-                                        // Add to `result` absent elements, filled with typed nulls.
-                                        result = left_present
-                                            .negate()
-                                            .union(get_lhs.clone())
-                                            .map(right_fill)
-                                            .union(result);
+                                        // Right-fill all left-absent elements with nulls and add them to the result.
+                                        result = left_absent.map(right_fill).union(result);
                                     }
 
                                     if self.model.get_quantifier(rhs_id).quantifier_type
@@ -323,6 +323,10 @@ impl<'a> Lowerer<'a> {
                                         )
                                         .project((0..(oa + ra)).collect());
 
+                                        // Rows in `left` that are not matched in the inner equijoin.
+                                        let right_absent =
+                                            right_present.negate().union(get_rhs.clone());
+
                                         // Determine the types of nulls to use as filler.
                                         let left_fill = lt
                                             .into_iter()
@@ -333,10 +337,8 @@ impl<'a> Lowerer<'a> {
                                             })
                                             .collect();
 
-                                        // Add to `result` absent elements, prepended with typed nulls.
-                                        result = right_present
-                                            .negate()
-                                            .union(get_rhs.clone())
+                                        // Left-fill all right-absent elements with nulls and add them to the result.
+                                        result = right_absent
                                             .map(left_fill)
                                             // Permute left fill before right values.
                                             .project(
@@ -394,6 +396,7 @@ impl<'a> Lowerer<'a> {
                                 result
                             }
                         });
+
                         // 4) Lower the project component.
                         if !the_box.columns.is_empty() {
                             result = result.map(
