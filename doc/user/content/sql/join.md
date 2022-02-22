@@ -6,7 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-`JOIN` lets you combine two more more table expressions into a single table
+`JOIN` lets you combine two or more table expressions into a single table
 expression.
 
 ## Conceptual framework
