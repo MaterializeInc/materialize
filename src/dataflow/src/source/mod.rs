@@ -11,7 +11,7 @@
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sources::AwsExternalId;
-use mz_dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
+use mz_dataflow_types::{DecodeError, SourceErrorDetails};
 use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
 use mz_persist::indexed::Snapshot;
 use mz_persist::operators::stream::Persist;
@@ -145,22 +145,6 @@ where
     pub upstream_time_millis: Option<i64>,
     /// The partition of this message, present iff the partition comes from Kafka
     pub partition: PartitionId,
-}
-
-/// The data that we send from Upsert to the decode process
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
-pub(crate) struct SourceData {
-    /// The actual value
-    pub(crate) value: Option<Result<Row, DataflowError>>,
-    /// The source's reported position for this record
-    ///
-    /// e.g. kafka offset or file location
-    pub(crate) position: i64,
-
-    /// The time that the upstream source believes that the message was created
-    ///
-    /// Currently only applies to Kafka
-    pub(crate) upstream_time_millis: Option<i64>,
 }
 
 /// The output of the decoding operator

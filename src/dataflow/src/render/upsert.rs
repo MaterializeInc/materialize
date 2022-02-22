@@ -30,11 +30,23 @@ use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use tracing::error;
 
 use crate::operator::StreamExt;
-use crate::source::{DecodeResult, SourceData};
+use crate::source::DecodeResult;
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
-    raw_data: SourceData,
+    /// The actual value
+    value: Option<Result<Row, DataflowError>>,
+    /// The source's reported position for this record
+    ///
+    /// e.g. kafka offset or file location
+    position: i64,
+
+    /// The time that the upstream source believes that the message was created
+    ///
+    /// Currently only applies to Kafka
+    upstream_time_millis: Option<i64>,
+
+    /// Metadata for this row
     metadata: Row,
 }
 
@@ -347,13 +359,11 @@ where
                             .entry(key);
 
                         let new_entry = UpsertSourceData {
-                            raw_data: SourceData {
-                                value: new_value.map(ResultExt::err_into),
-                                position: new_position,
-                                // upsert sources don't have a column for this, so setting it to
-                                // `None` is fine.
-                                upstream_time_millis: None,
-                            },
+                            value: new_value.map(ResultExt::err_into),
+                            position: new_position,
+                            // upsert sources don't have a column for this, so setting it to
+                            // `None` is fine.
+                            upstream_time_millis: None,
                             metadata,
                         };
 
@@ -361,7 +371,7 @@ where
                             std::collections::hash_map::Entry::Occupied(mut e) => {
                                 // If the time is equal, toss out the row with the
                                 // lower offset
-                                if e.get().raw_data.position < new_position {
+                                if e.get().position < new_position {
                                     e.insert(new_entry);
                                 }
                             }
@@ -386,7 +396,7 @@ where
                             // we could produce and then remove the error from the output).
                             match key {
                                 Some(Ok(decoded_key)) => {
-                                    let decoded_value = match data.raw_data.value {
+                                    let decoded_value = match data.value {
                                         None => Ok(None),
                                         Some(value) => match value {
                                             Ok(row) => {
