@@ -421,6 +421,25 @@ fn test_record_types() -> Result<(), Box<dyn Error>> {
     let record: Record<(i32, String)> = row.get(0);
     assert_eq!(record, Record((1, "a".into())));
 
+    client.batch_execute("CREATE TYPE named_composite AS (a int, b text)")?;
+    let row = client.query_one("SELECT ROW(321, '123')::named_composite", &[])?;
+    let record: Record<(i32, String)> = row.get(0);
+    assert_eq!(record, Record((321, "123".into())));
+
+    client.batch_execute("CREATE TABLE has_named_composites (f named_composite)")?;
+    client.batch_execute(
+        "INSERT INTO has_named_composites (f) VALUES ((10, '10')), ((20, '20')::named_composite)",
+    )?;
+    let rows = client.query(
+        "SELECT f FROM has_named_composites ORDER BY (f).a DESC",
+        &[],
+    )?;
+    let record: Record<(i32, String)> = rows[0].get(0);
+    assert_eq!(record, Record((20, "20".into())));
+    let record: Record<(i32, String)> = rows[1].get(0);
+    assert_eq!(record, Record((10, "10".into())));
+    assert_eq!(rows.len(), 2);
+
     Ok(())
 }
 
