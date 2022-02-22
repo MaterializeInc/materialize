@@ -19,7 +19,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID};
 use mz_dataflow_types::{
     sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
     sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
@@ -546,6 +546,7 @@ pub struct Index {
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub enabled: bool,
+    pub compute_instance_id: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -972,6 +973,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![log.id],
                             enabled: catalog.index_enabled_by_default(&log.index_id),
+                            compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -1025,6 +1027,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![table.id],
                             enabled: catalog.index_enabled_by_default(&table.index_id),
+                            compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -2263,6 +2266,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
