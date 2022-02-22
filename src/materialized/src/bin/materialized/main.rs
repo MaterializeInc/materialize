@@ -69,7 +69,7 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 
 /// The streaming SQL materialized view engine.
 #[derive(Parser)]
-#[clap(global_setting = AppSettings::NextLineHelp, global_setting = AppSettings::NoAutoVersion)]
+#[clap(next_line_help = true, global_setting = AppSettings::NoAutoVersion)]
 struct Args {
     // === Special modes. ===
     /// Print version information and exit.

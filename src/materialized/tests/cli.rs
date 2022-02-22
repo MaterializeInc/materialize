@@ -39,7 +39,7 @@ fn test_version() {
 fn test_threads() {
     let assert_fail = |cmd: &mut Command| {
         cmd.assert().failure().stderr(predicate::str::starts_with(
-            "error: Invalid value for '--workers <N>': must be greater than zero",
+            "error: Invalid value \"0\" for '--workers <N>': must be greater than zero",
         ))
     };
     assert_fail(cmd().arg("-w0"));
@@ -50,7 +50,7 @@ fn test_threads() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            "error: Invalid value for '--workers <N>': invalid digit found in string",
+            "error: Invalid value \"-1\" for '--workers <N>': invalid digit found in string",
         ));
 
     cmd()
