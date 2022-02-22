@@ -8,6 +8,11 @@ menu:
 
 `interval` data expresses a duration of time.
 
+`interval` data keeps months, days, and microseconds completely separate and will not try to convert between any of
+those fields when comparing `interval`s. This may lead to some unexpected behavior. For example `1 month` is considered
+greater than `100 days`. See ['justify_days'](../justify_days), ['justify_hours'](../justify_hours), and
+['justify_interval'](../justify_interval) to explicitly convert between these fields.
+
 Detail | Info
 -------|-----
 **Quick Syntax** | `INTERVAL '1' MINUTE` <br/> `INTERVAL '1-2 3 4:5:6.7'` <br/>`INTERVAL '1 year 2.3 days 4.5 seconds'`

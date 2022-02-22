@@ -2144,6 +2144,27 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     }
 }
 
+fn justify_days(a: Datum) -> Result<Datum, EvalError> {
+    a.unwrap_interval()
+        .justify_days()
+        .map(Datum::from)
+        .map_err(|_| EvalError::IntervalOutOfRange)
+}
+
+fn justify_hours(a: Datum) -> Result<Datum, EvalError> {
+    a.unwrap_interval()
+        .justify_hours()
+        .map(Datum::from)
+        .map_err(|_| EvalError::IntervalOutOfRange)
+}
+
+fn justify_interval(a: Datum) -> Result<Datum, EvalError> {
+    a.unwrap_interval()
+        .justify_interval()
+        .map(Datum::from)
+        .map_err(|_| EvalError::IntervalOutOfRange)
+}
+
 fn jsonb_array_length<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
         Datum::List(list) => Datum::Int64(list.iter().count() as i64),
@@ -3424,6 +3445,9 @@ pub enum UnaryFunc {
         wall_time: NaiveDateTime,
     },
     ToTimestamp(ToTimestamp),
+    JustifyDays,
+    JustifyHours,
+    JustifyInterval,
     JsonbArrayLength,
     JsonbTypeof,
     JsonbStripNulls,
@@ -3850,6 +3874,9 @@ impl UnaryFunc {
             TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
             TimezoneTimestampTz(tz) => Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz())),
             TimezoneTime { tz, wall_time } => Ok(timezone_time(*tz, a.unwrap_time(), wall_time)),
+            JustifyDays => justify_days(a),
+            JustifyHours => justify_hours(a),
+            JustifyInterval => justify_interval(a),
             JsonbArrayLength => Ok(jsonb_array_length(a)),
             JsonbTypeof => Ok(jsonb_typeof(a)),
             JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
@@ -4092,6 +4119,8 @@ impl UnaryFunc {
             DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(nullable),
             DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(nullable),
 
+            JustifyDays | JustifyHours | JustifyInterval => ScalarType::Interval.nullable(nullable),
+
             JsonbArrayLength => ScalarType::Int64.nullable(nullable),
             JsonbTypeof => ScalarType::String.nullable(nullable),
             JsonbStripNulls => ScalarType::Jsonb.nullable(nullable),
@@ -4330,6 +4359,7 @@ impl UnaryFunc {
             | DatePartTimestamp(_)
             | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
+            JustifyDays | JustifyHours | JustifyInterval => false,
             RescaleNumeric(_) => false,
         }
     }
@@ -4606,6 +4636,9 @@ impl UnaryFunc {
             TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),
             TimezoneTimestampTz(tz) => write!(f, "timezone_{}_tstz", tz),
             TimezoneTime { tz, .. } => write!(f, "timezone_{}_t", tz),
+            JustifyDays => write!(f, "justify_days"),
+            JustifyHours => write!(f, "justify_hours"),
+            JustifyInterval => write!(f, "justify_interval"),
             JsonbArrayLength => f.write_str("jsonb_array_length"),
             JsonbTypeof => f.write_str("jsonb_typeof"),
             JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
