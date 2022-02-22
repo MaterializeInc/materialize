@@ -393,20 +393,19 @@ where
                 .await;
         }
 
-        // Maybe send row description.
-        if let Some(relation_desc) = &stmt_desc.relation_desc {
-            if !stmt_desc.is_copy {
-                let formats = vec![mz_pgrepr::Format::Text; stmt_desc.arity()];
-                self.send(BackendMessage::RowDescription(
-                    message::encode_row_description(relation_desc, &formats),
-                ))
-                .await?;
-            }
-        }
-
         self.metrics.query_count.inc();
         let result = match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
             Ok(response) => {
+                // Maybe send row description, only if query was successful.
+                if let Some(relation_desc) = &stmt_desc.relation_desc {
+                    if !stmt_desc.is_copy {
+                        let formats = vec![mz_pgrepr::Format::Text; stmt_desc.arity()];
+                        self.send(BackendMessage::RowDescription(
+                            message::encode_row_description(relation_desc, &formats),
+                        ))
+                        .await?;
+                    }
+                }
                 self.send_execute_response(
                     response,
                     stmt_desc.relation_desc,
