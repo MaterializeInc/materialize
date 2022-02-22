@@ -13,8 +13,8 @@
 //! [`Into<mz_expr::MirRelationExpr>`] for [`Model`].
 
 use crate::query_model::model::{
-    BaseColumn, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get, Model,
-    QuantifierId, QuantifierSet, QuantifierType,
+    BaseColumn, BoundRef, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get,
+    Model, QuantifierId, QuantifierSet, QuantifierType, QueryBox,
 };
 use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
@@ -124,23 +124,7 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // 3) Lower the project component.
-                if !the_box.columns.is_empty() {
-                    input = input.map(
-                        the_box
-                            .columns
-                            .iter()
-                            .map(|c| Self::lower_expression(&c.expr, &column_map))
-                            .collect_vec(),
-                    );
-                }
-
-                // Project the outer columns plus the ones in the projection of
-                // this select box
-                input.project(
-                    (0..outer_arity)
-                        .chain(input_arity..input_arity + the_box.columns.len())
-                        .collect_vec(),
-                )
+                Self::lower_box_columns(input, &the_box, &column_map, outer_arity, input_arity)
             }
             BoxType::Grouping(grouping) => {
                 // Note: a grouping box must only contain a single quantifier but we can still
@@ -267,7 +251,7 @@ impl<'a> Lowerer<'a> {
                         inner_join = inner_join.filter(lowered_predicates.into_iter());
 
                         // 3) Calculate preserved rows
-                        let mut result = inner_join.let_in(id_gen, |id_gen, get_join| {
+                        let result = inner_join.let_in(id_gen, |id_gen, get_join| {
                             let mut result = get_join.clone();
                             if let Some((l_keys, r_keys)) = equijoin_keys {
                                 // Equijoin case
@@ -398,23 +382,7 @@ impl<'a> Lowerer<'a> {
                         });
 
                         // 4) Lower the project component.
-                        if !the_box.columns.is_empty() {
-                            result = result.map(
-                                the_box
-                                    .columns
-                                    .iter()
-                                    .map(|c| Self::lower_expression(&c.expr, &column_map))
-                                    .collect_vec(),
-                            );
-                        }
-
-                        // Project the outer columns plus the ones in the projection of
-                        // this outer join box
-                        result.project(
-                            (0..oa)
-                                .chain((oa + la + ra)..(oa + la + ra + the_box.columns.len()))
-                                .collect_vec(),
-                        )
+                        Self::lower_box_columns(result, &the_box, &column_map, oa, oa + la + ra)
                     })
                 })
             }
@@ -566,6 +534,39 @@ impl<'a> Lowerer<'a> {
         }
 
         input
+    }
+
+    fn lower_box_columns(
+        rel: mz_expr::MirRelationExpr,
+        the_box: &BoundRef<'_, QueryBox>,
+        column_map: &ColumnMap,
+        outer_arity: usize,
+        input_arity: usize,
+    ) -> mz_expr::MirRelationExpr {
+        if let Some(column_refs) = the_box.columns_as_refs() {
+            // if all columns projected by this box are references, we only need a projection
+            let mut outputs = Vec::<usize>::new();
+            outputs.extend(0..outer_arity);
+            outputs.extend(column_refs.iter().map(|c| column_map.get(c).unwrap()));
+            rel.project(outputs)
+        } else if !the_box.columns.is_empty() {
+            // otherwise, we need to apply a map to compute the outputs and then project them
+            rel.map(
+                the_box
+                    .columns
+                    .iter()
+                    .map(|c| Self::lower_expression(&c.expr, &column_map))
+                    .collect_vec(),
+            )
+            .project(
+                (0..outer_arity)
+                    .chain((input_arity)..(input_arity + the_box.columns.len()))
+                    .collect_vec(),
+            )
+        } else {
+            // for boxes without output columns, only project the outer part
+            rel.project((0..outer_arity).collect_vec())
+        }
     }
 
     /// Join the given inputs on a shared common prefix.
