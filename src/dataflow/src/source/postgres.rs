@@ -502,7 +502,23 @@ impl PostgresSourceReader {
                         Origin(_) | Type(_) => {
                             self.metrics.ignored.inc();
                         }
-                        Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
+                        Truncate(truncate) => {
+                            let tables = truncate
+                                .rel_ids()
+                                .iter()
+                                // Filter here makes option handling in map "safe"
+                                .filter(|id| self.source_tables.contains_key(&id))
+                                .map(|id| {
+                                    let table =
+                                        self.source_tables.get(id).expect("id is for valid table");
+                                    format!("name: {} id: {}", table.name, id)
+                                })
+                                .collect::<Vec<String>>();
+                            return Err(Fatal(anyhow!(
+                                "source table(s) {} got truncated",
+                                tables.join(", ")
+                            )));
+                        }
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
                         _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
