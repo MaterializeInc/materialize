@@ -452,6 +452,9 @@ class Composition:
 
         self._write_compose()
 
+        # Ensure image freshness
+        self.pull_if_variable([service.name for service in services])
+
         try:
             # Run the next composition.
             yield
@@ -567,6 +570,20 @@ class Composition:
             *args,
             capture=capture,
         )
+
+    def pull_if_variable(self, services: List[str]) -> None:
+        """Pull fresh service images in case the tag indicates thee underlying image may change over time.
+
+        Args:
+            services: List of service names
+        """
+
+        for service in services:
+            if "image" in self.compose["services"][service] and any(
+                self.compose["services"][service]["image"].endswith(tag)
+                for tag in [":latest", ":unstable", ":rolling"]
+            ):
+                self.invoke("pull", service)
 
     def up(self, *services: str, detach: bool = True) -> None:
         """Build, (re)create, and start the named services.

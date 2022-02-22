@@ -81,7 +81,7 @@ SERVICES = [
     # We are going to override this service definition during the actual benchmark
     # we put "latest" here so that we avoid recompiling the current source unless
     # we will actually be benchmarking it.
-    Materialized(image="latest"),
+    Materialized(image="materialize/materialized:latest"),
     Testdrive(
         validate_catalog=False,
         default_timeout=default_timeout,

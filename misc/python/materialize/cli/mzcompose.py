@@ -435,6 +435,9 @@ class DockerComposeCommand(Command):
             self.check_docker_resource_limits()
             composition.dependencies.acquire()
 
+            if "services" in composition.compose:
+                composition.pull_if_variable(composition.compose["services"].keys())
+
         self.handle_composition(args, composition)
 
     def handle_composition(
