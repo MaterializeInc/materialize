@@ -34,3 +34,15 @@
 > CREATE TYPE int4_map_map AS MAP (key_type=text, value_type=int4_map);
 
 > CREATE MATERIALIZED VIEW int4_map_map_view AS SELECT '{a=>{"a a"=>1}}'::int4_map_map AS custom_nested_map;
+
+> DROP TYPE IF EXISTS composite_type;
+
+> DROP TYPE IF EXISTS nested_composite_type;
+
+> CREATE TYPE composite_type AS (a int, b text, c float8);
+
+> CREATE MATERIALIZED VIEW composite_type_view AS SELECT (1, 'abc', 2.0)::composite as composite_type;
+
+> CREATE TYPE nested_composite_type AS (a int, b composite_type);
+
+> CREATE MATERIALIZED VIEW nested_composite_type_view AS SELECT (3, (1, 'abc', 2.0))::nested_composite_type as nested_composite_type;
