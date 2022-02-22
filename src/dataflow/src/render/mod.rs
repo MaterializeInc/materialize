@@ -144,6 +144,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     debug_name: &str,
     as_of: Option<Antichain<mz_repr::Timestamp>>,
     source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
+    dataflow_id: GlobalId,
     boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
@@ -157,14 +158,14 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
             let as_of = as_of.clone().unwrap();
-            let dataflow_id = scope.addr().into_element();
+            let source_dataflow_id = scope.addr().into_element();
             let debug_name = format!("{debug_name}-sources");
 
             // Import declared sources into the rendering context.
             for (src_id, source) in &source_imports {
                 let ((ok, err), token) = crate::render::sources::import_source(
                     &debug_name,
-                    dataflow_id,
+                    source_dataflow_id,
                     &as_of,
                     source.clone(),
                     storage_state,
@@ -174,7 +175,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                 );
 
                 let source_key = source.with_id(*src_id);
-                boundary.capture(source_key, ok, err, token, &debug_name);
+                boundary.capture(source_key, ok, err, token, &debug_name, dataflow_id);
             }
         })
     });
@@ -209,8 +210,12 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
                 let source_key = source.with_id(*source_id);
-                let (ok, err, token) =
-                    boundary.replay(source_key, region, &format!("{name}-{source_id}"));
+                let (ok, err, token) = boundary.replay(
+                    source_key,
+                    region,
+                    &format!("{name}-{source_id}"),
+                    dataflow.id,
+                );
 
                 // Associate collection bundle with the source identifier.
                 context.insert_id(
