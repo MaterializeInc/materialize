@@ -236,7 +236,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .into_iter()
             .map(|id| (id, Antichain::new()))
             .collect();
-        self.allow_compaction(compaction_commands).await;
+        self.allow_compaction(compaction_commands).await?;
         Ok(())
     }
     /// Drops the read capability for the indexes and allows their resources to be reclaimed.
@@ -248,7 +248,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .into_iter()
             .map(|id| (id, Antichain::new()))
             .collect();
-        self.allow_compaction(compaction_commands).await;
+        self.allow_compaction(compaction_commands).await?;
         Ok(())
     }
     /// Initiate a peek request for the contents of `id` at `timestamp`.
@@ -296,12 +296,15 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
     ///
     /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
-    pub async fn allow_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<T>)>) {
+    pub async fn allow_compaction(
+        &mut self,
+        frontiers: Vec<(GlobalId, Antichain<T>)>,
+    ) -> Result<(), ComputeError> {
         // The coordinator currently sends compaction commands for identifiers that do not exist.
         // Until that changes, we need to be oblivious to errors, or risk not compacting anything.
 
-        // // Validate that the ids exist.
-        // self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+        // Validate that the ids exist.
+        self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
 
         let mut updates = BTreeMap::new();
         for (id, mut frontier) in frontiers.into_iter() {
@@ -328,6 +331,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         }
 
         self.update_read_capabilities(&mut updates).await;
+        Ok(())
     }
 }
 

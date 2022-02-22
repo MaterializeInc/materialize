@@ -1573,7 +1573,8 @@ impl Coordinator {
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .allow_compaction(index_since_updates)
-                .await;
+                .await
+                .unwrap();
         }
 
         let source_since_updates: Vec<_> = self
@@ -4371,7 +4372,23 @@ impl Coordinator {
     async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            dataflow_plans.push(self.finalize_dataflow(dataflow));
+            let plan = self.finalize_dataflow(dataflow);
+
+            // Capture `as_of` to initialize the `since` frontiers of indexes.
+            let as_of = plan.as_of.clone().unwrap();
+
+            // For each produced arrangement, start tracking the arrangement with
+            // a compaction frontier of at least `since`.
+            for (global_id, _description, _typ) in plan.index_exports.iter() {
+                let frontiers = self.new_index_frontiers(
+                    *global_id,
+                    as_of.elements().to_vec(),
+                    self.logical_compaction_window_ms,
+                );
+                self.indexes.insert(*global_id, frontiers);
+            }
+
+            dataflow_plans.push(plan);
         }
         self.dataflow_client
             .compute(DEFAULT_COMPUTE_INSTANCE_ID)
@@ -4397,7 +4414,10 @@ impl Coordinator {
     ///
     /// Panics if the dataflow descriptions contain an invalid plan.
     fn finalize_dataflow(
-        &mut self,
+        // This should not be made mutable unless the side effects are safe for all
+        // callers. For example, sequence_peek calls this function without calling
+        // ship_dataflow.
+        &self,
         mut dataflow: DataflowDesc,
     ) -> mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan> {
         // This function must succeed because catalog_transact has generally been run
@@ -4440,20 +4460,6 @@ impl Coordinator {
         } else {
             // Bind the since frontier to the dataflow description.
             dataflow.set_as_of(since);
-        }
-
-        // Capture `as_of` to initialize the `since` frontiers of indexes.
-        let as_of = dataflow.as_of.clone().unwrap();
-
-        // For each produced arrangement, start tracking the arrangement with
-        // a compaction frontier of at least `since`.
-        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            let frontiers = self.new_index_frontiers(
-                *global_id,
-                as_of.elements().to_vec(),
-                self.logical_compaction_window_ms,
-            );
-            self.indexes.insert(*global_id, frontiers);
         }
 
         // TODO: Produce "valid from" information for each sink.
@@ -5169,6 +5175,15 @@ impl Coordinator {
         let df = DataflowDesc::new("".into(), GlobalId::Explain);
         let _: () = self.ship_dataflow(df.clone()).await;
         let _: () = self.ship_dataflows(vec![df.clone()]).await;
-        let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);
+        let _: DataflowDescription<mz_dataflow_types::plan::Plan> =
+            self.finalize_dataflow(df.clone());
+
+        // finalize_dataflow is called by sequence_peek but doesn't actually
+        // ship the dataflow. We thus want finalize_dataflow to not have any side
+        // effects itself, and so it should not take a `&mut self`, but instead a
+        // `&self`. Prevent folks from changing this in the future with a compilation
+        // error should they try to make it mut again.
+        let no_mut: &Coordinator = &self;
+        no_mut.finalize_dataflow(df.clone());
     }
 }
