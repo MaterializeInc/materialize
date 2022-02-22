@@ -544,6 +544,7 @@ pub struct Index {
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub enabled: bool,
+    pub cluster_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -957,6 +958,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![log.id],
                             enabled: catalog.index_enabled_by_default(&log.index_id),
+                            cluster_id: 0,
                         }),
                     );
                 }
@@ -1010,6 +1012,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![table.id],
                             enabled: catalog.index_enabled_by_default(&table.index_id),
+                            cluster_id: 0,
                         }),
                     );
                 }
@@ -2257,6 +2260,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
+                cluster_id: 0,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,

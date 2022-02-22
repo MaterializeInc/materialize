@@ -2720,6 +2720,7 @@ impl Coordinator {
             conn_id: None,
             depends_on: index.depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
+            cluster_id: 0,
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -4768,6 +4769,7 @@ fn auto_generate_primary_idx(
         conn_id,
         depends_on,
         enabled,
+        cluster_id: 0,
     }
 }
 
