@@ -210,14 +210,16 @@ impl DateTimeField {
     pub fn micros_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
-            Day => 1_000_000 * 60 * 60 * 24,
-            Hour => 1_000_000 * 60 * 60,
-            Minute => 1_000_000 * 60,
-            Second => 1_000_000,
-            Milliseconds => 1_000,
-            Microseconds => 1,
+            Day => {}
+            Hour => {}
+            Minute => {}
+            Second => {}
+            Milliseconds => {}
+            Microseconds => {}
             _other => unreachable!("Do not call with a non-time/day field"),
         }
+
+        Interval::convert_date_time_unit(self, Self::Microseconds, 1i64).unwrap()
     }
 
     /// Returns the number of months in a single unit of `field`.
@@ -228,12 +230,14 @@ impl DateTimeField {
     pub fn month_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
-            Millennium => 12 * 1_000,
-            Century => 12 * 100,
-            Decade => 12 * 10,
-            Year => 12,
+            Millennium => {}
+            Century => {}
+            Decade => {}
+            Year => {}
             _other => unreachable!("Do not call with a duration field"),
         }
+
+        Interval::convert_date_time_unit(self, Self::Microseconds, 1i64).unwrap()
     }
 }
 

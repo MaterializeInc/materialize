@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use chrono::{NaiveTime, Timelike};
+use mz_repr::adt::datetime::DateTimeField;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
@@ -29,9 +30,12 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     fn cast_time_to_interval<'a>(t: NaiveTime) -> Result<Interval, EvalError> {
         // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
-        let micros: i64 = i64::from(t.num_seconds_from_midnight())
-            * i64::from(Interval::MILLISECOND_PER_SECOND)
-            * i64::from(Interval::MICROSECOND_PER_MILLISECOND)
+        let micros: i64 = Interval::convert_date_time_unit(
+            DateTimeField::Second,
+            DateTimeField::Microseconds,
+            i64::from(t.num_seconds_from_midnight()),
+        )
+        .unwrap()
             + i64::from(t.nanosecond()) / i64::from(Interval::NANOSECOND_PER_MICROSECOND);
 
         Interval::new(0, 0, micros).map_err(|_| EvalError::IntervalOutOfRange)
