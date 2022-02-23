@@ -539,7 +539,7 @@ impl KafkaSinkState {
                     // clone is a cheap: Option<Arc<..>> internally
                     last_error = KafkaError::Transaction(e.clone());
                     if e.txn_requires_abort() {
-                        info!("Error requiring abort in kafka sink: {:?}", e);
+                        info!("Error requiring tx abort in kafka sink: {:?}", e);
                         let self_self_producer = self_producer.clone();
                         // Only actually used for retriable errors.
                         let should_shutdown = Retry::default()
