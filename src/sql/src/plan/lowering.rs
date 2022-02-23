@@ -351,7 +351,7 @@ impl HirRelationExpr {
                                 &mut input,
                                 &Some(&subquery_map),
                             );
-                            input = input.map(vec![scalar]);
+                            input = input.map_one(scalar);
                             scalar_columns.push(input.arity() - 1);
                         }
 
@@ -790,7 +790,7 @@ impl HirScalarExpr {
                             );
                             let then_arity = then_inner.arity();
                             then_inner = then_inner
-                                .map(vec![then_expr])
+                                .map_one(then_expr)
                                 .project((0..inner_arity).chain(Some(then_arity)).collect());
 
                             // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
@@ -815,7 +815,7 @@ impl HirScalarExpr {
                             );
                             let else_arity = else_inner.arity();
                             else_inner = else_inner
-                                .map(vec![else_expr])
+                                .map_one(else_expr)
                                 .project((0..inner_arity).chain(Some(else_arity)).collect());
 
                             // concatenate the two results.
@@ -911,7 +911,7 @@ impl HirScalarExpr {
                                             if let mz_expr::MirScalarExpr::Column(c) = key {
                                                 group_key.push(c);
                                             } else {
-                                                get_inner = get_inner.map(vec![key]);
+                                                get_inner = get_inner.map_one(key);
                                                 group_key.push(get_inner.arity() - 1);
                                             }
                                         }
@@ -1005,8 +1005,10 @@ impl HirScalarExpr {
 
                                             // Unpack the record
                                             for c in 0..input_arity {
-                                                reduce = reduce.take_dangerous().map(vec![
-                                                    mz_expr::MirScalarExpr::CallUnary {
+                                                reduce =
+                                                    reduce
+                                                        .take_dangerous()
+                                                        .map_one(mz_expr::MirScalarExpr::CallUnary {
                                                         func: mz_expr::UnaryFunc::RecordGet(c),
                                                         expr: Box::new(
                                                             mz_expr::MirScalarExpr::CallUnary {
@@ -1020,19 +1022,18 @@ impl HirScalarExpr {
                                                                 ),
                                                             },
                                                         ),
-                                                    },
-                                                ]);
+                                                    });
                                             }
 
                                             // Append the column with the result of the window function.
-                                            reduce = reduce.take_dangerous().map(vec![
+                                            reduce = reduce.take_dangerous().map_one(
                                                 mz_expr::MirScalarExpr::CallUnary {
                                                     func: mz_expr::UnaryFunc::RecordGet(0),
                                                     expr: Box::new(mz_expr::MirScalarExpr::Column(
                                                         record_col,
                                                     )),
                                                 },
-                                            ]);
+                                            );
 
                                             let agg_col = record_col + 1 + input_arity;
                                             reduce.project(
@@ -1423,10 +1424,10 @@ fn apply_scalar_subquery(
                             mz_expr::BinaryFunc::Gt,
                         )])
                     .project((0..inner_arity).collect::<Vec<_>>())
-                    .map(vec![mz_expr::MirScalarExpr::literal(
+                    .map_one(mz_expr::MirScalarExpr::literal(
                         Err(mz_expr::EvalError::MultipleRowsFromSubquery),
                         col_type.clone().scalar_type,
-                    )]);
+                    ));
                 // Return `get_select` and any errors added in.
                 get_select.union(errors)
             });

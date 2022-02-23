@@ -817,6 +817,14 @@ impl MirRelationExpr {
         }
     }
 
+    /// Append to each row a single `scalar`.
+    pub fn map_one(self, scalar: MirScalarExpr) -> Self {
+        MirRelationExpr::Map {
+            input: Box::new(self),
+            scalars: vec![scalar],
+        }
+    }
+
     /// Like `map`, but yields zero-or-more output rows per input row
     pub fn flat_map(self, func: TableFunc, exprs: Vec<MirScalarExpr>) -> Self {
         MirRelationExpr::FlatMap {

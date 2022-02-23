@@ -550,10 +550,10 @@ impl<'a> Lowerer<'a> {
                                 mz_expr::BinaryFunc::Gt,
                             )])
                         .project((0..outer_arity).collect::<Vec<_>>())
-                        .map(vec![mz_expr::MirScalarExpr::literal(
+                        .map_one(mz_expr::MirScalarExpr::literal(
                             Err(mz_expr::EvalError::MultipleRowsFromSubquery),
                             col_type.clone().scalar_type,
-                        )]);
+                        ));
                     // Return `get_select` and any errors added in.
                     get_select.union(errors)
                 });
