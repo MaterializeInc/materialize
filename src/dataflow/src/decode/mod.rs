@@ -531,9 +531,6 @@ where
                         &value_buf
                     };
 
-                    // At this point, `value` is non-empty, as it came from a
-                    // `MessagePayload::Data`
-
                     let value_bytes_remaining = &mut value.as_slice();
                     // The intent is that the below loop runs as long as there are more bytes to decode.
                     //

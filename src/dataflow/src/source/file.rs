@@ -91,7 +91,6 @@ impl SourceReader for FileSourceReader {
                         };
                         br.consume(chunk.len());
                         if chunk.len() > 0 {
-                            // `chunk` is always non-empty
                             Some(Ok(MessagePayload::Data(chunk)))
                         } else {
                             None

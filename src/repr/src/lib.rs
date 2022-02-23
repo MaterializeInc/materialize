@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub enum MessagePayload {
     /// Data from the source connector.
-    /// The `Vec` should be non-empty.
+    // TODO(guswynn): Determine if `Vec` needs to be non-empty.
     Data(Vec<u8>),
     /// Forces the decoder to consider this a delimiter.
     ///
