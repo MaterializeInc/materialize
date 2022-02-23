@@ -151,7 +151,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
             /* debug_name */ String,
             /* dataflow_id */ GlobalId,
             /* as_of */ Option<Antichain<T>>,
-            /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc>,
+            /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc<T>>,
         )>,
     ),
     /// Enable compaction in storage-managed collections.
