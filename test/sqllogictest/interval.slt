@@ -1016,12 +1016,17 @@ SELECT INTERVAL '0.6 microseconds';
 ----
 00:00:00.000001
 
+# PostgreSQL actually has a bug where when using EXTRACT it truncates this value to 365, but
+# when using date_part it does not truncate this value. Therefore our EXTRACT function may differ
+# from PostgreSQL.
+# EXTRACT: https://github.com/postgres/postgres/blob/c2e8bd27519f47ff56987b30eb34a01969b9a9e8/src/backend/utils/adt/timestamp.c#L5270-L5273
+# date_part: https://github.com/postgres/postgres/blob/c2e8bd27519f47ff56987b30eb34a01969b9a9e8/src/backend/utils/adt/timestamp.c#L5301
 query T
 SELECT EXTRACT(epoch FROM INTERVAL '2147483647 months 2147483647 days 2147483647 hours 59 minutes 59.999999 seconds');
 ----
-5836860552297600.000000
+5840726022849599.999999
 
 query T
 SELECT EXTRACT(epoch FROM INTERVAL '-2147483648 months -2147483648 days -2147483648 hours -59 minutes -59.999999 seconds');
 ----
--5836860554979600.000000
+-5840726025531599.999999

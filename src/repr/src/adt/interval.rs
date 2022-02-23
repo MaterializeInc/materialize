@@ -84,7 +84,11 @@ impl Interval {
     pub const MILLISECOND_PER_SECOND: u16 = 1_000;
     pub const MICROSECOND_PER_MILLISECOND: u16 = 1_000;
     pub const NANOSECOND_PER_MICROSECOND: u16 = 1_000;
-    // When extracting an epoch, PostgreSQL considers a year 365.25 days.
+    // PostgreSQL actually has a bug where when using EXTRACT it truncates this value to 365, but
+    // when using date_part it does not truncate this value. Therefore our EXTRACT function may differ
+    // from PostgreSQL.
+    // EXTRACT: https://github.com/postgres/postgres/blob/c2e8bd27519f47ff56987b30eb34a01969b9a9e8/src/backend/utils/adt/timestamp.c#L5270-L5273
+    // date_part: https://github.com/postgres/postgres/blob/c2e8bd27519f47ff56987b30eb34a01969b9a9e8/src/backend/utils/adt/timestamp.c#L5301
     pub const EPOCH_DAYS_PER_YEAR: f64 = 365.25;
 
     /// Constructs a new `Interval` with the specified units of time.
