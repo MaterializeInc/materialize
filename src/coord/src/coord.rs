@@ -109,7 +109,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
+use mz_dataflow_types::client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID};
 use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
 use mz_dataflow_types::client::{
     CreateSourceCommand, Response as DataflowResponse, StorageResponse,
@@ -347,6 +347,11 @@ pub struct Coordinator {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
+
+    /// Correlates an index's global ID to the instance ID hosting it. Note that
+    /// this cannot be shoehorned into the catalog for the sake of transient
+    /// arrangements, which do not live in the catalog.
+    arrangement_instance_map: HashMap<GlobalId, ComputeInstanceId>,
 }
 
 /// Metadata about an active connection.
@@ -612,7 +617,7 @@ impl Coordinator {
                         .await
                         .unwrap();
                 }
-                CatalogItem::Index(_) => {
+                CatalogItem::Index(index) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
@@ -625,9 +630,11 @@ impl Coordinator {
                         // that everything else uses?
                         let frontiers = self.new_index_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
+                        self.arrangement_instance_map
+                            .insert(entry.id(), index.compute_instance_id);
                     } else {
                         let index_id = entry.id();
-                        if let Some((name, description)) =
+                        if let Some((name, instance_id, description)) =
                             Self::prepare_index_build(self.catalog.state(), &index_id)
                         {
                             let df = self.dataflow_builder().build_index_dataflow(
@@ -635,7 +642,7 @@ impl Coordinator {
                                 index_id,
                                 description,
                             )?;
-                            self.ship_dataflow(df).await;
+                            self.ship_dataflow(instance_id, df).await;
                         }
                     }
                 }
@@ -1597,13 +1604,27 @@ impl Coordinator {
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
 
-        if !index_since_updates.is_empty() {
-            // Error value is ignored because this call attempts to modify ids
-            // for indexes that have not been installed. See above, presumably.
+        let mut compute_instance_update_map = HashMap::new();
+
+        for isu in index_since_updates {
+            let instance_id = match self.arrangement_instance_map.get(&isu.0) {
+                Some(id) => *id,
+                // We eagerly generate frontiers for IDs that never make it to
+                // dataflow, so no need to permit compaction on them.
+                None => continue,
+            };
+            // Aggregate compute instance ID.
+            compute_instance_update_map
+                .entry(instance_id)
+                .or_insert(vec![])
+                .push(isu);
+        }
+
+        for (instance_id, isu) in compute_instance_update_map {
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
-                .allow_compaction(index_since_updates)
+                .allow_compaction(isu)
                 .await;
         }
 
@@ -1811,7 +1832,7 @@ impl Coordinator {
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        let df = self
+        let (instance_id, df) = self
             .catalog_transact(ops, |mut builder| {
                 let sink_description = mz_dataflow_types::sinks::SinkDesc {
                     from: sink.from,
@@ -1825,7 +1846,10 @@ impl Coordinator {
                     envelope: Some(sink.envelope),
                     as_of,
                 };
-                Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description)?)
+                Ok((
+                    sink.compute_instance_id,
+                    builder.build_sink_dataflow(name.to_string(), id, sink_description)?,
+                ))
             })
             .await?;
 
@@ -1847,7 +1871,7 @@ impl Coordinator {
             let sink_writes = SinkWrites::new(tokens);
             self.sink_writes.insert(id, sink_writes);
         }
-        Ok(self.ship_dataflow(df).await)
+        Ok(self.ship_dataflow(instance_id, df).await)
     }
 
     async fn sequence_plan(
@@ -2210,6 +2234,7 @@ impl Coordinator {
             index_depends_on,
             self.catalog.index_enabled_by_default(&index_id),
         );
+
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
         let df = self
@@ -2229,11 +2254,11 @@ impl Coordinator {
                     },
                 ],
                 |mut builder| {
-                    if let Some((name, description)) =
+                    if let Some((name, instance_id, description)) =
                         Self::prepare_index_build(builder.catalog, &index_id)
                     {
                         let df = builder.build_index_dataflow(name, index_id, description)?;
-                        Ok(Some(df))
+                        Ok(Some((instance_id, df)))
                     } else {
                         Ok(None)
                     }
@@ -2241,7 +2266,7 @@ impl Coordinator {
             )
             .await;
         match df {
-            Ok(df) => {
+            Ok(res) => {
                 // Determine the initial validity for the table.
                 self.persister
                     .add_table(table_id, &table)
@@ -2270,7 +2295,7 @@ impl Coordinator {
                     .await
                     .unwrap();
                 // Install the dataflow if so required.
-                if let Some(df) = df {
+                if let Some((instance_id, df)) = res {
                     let frontiers = self.new_source_frontiers(
                         table_id,
                         [since_ts],
@@ -2281,7 +2306,7 @@ impl Coordinator {
                     // like they are, e.g. they are rendered as a SourceConnector::Local.
                     self.sources.insert(table_id, frontiers);
 
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(instance_id, df).await;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -2302,24 +2327,33 @@ impl Coordinator {
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
         match self
             .catalog_transact(ops, move |mut builder| {
+                let mut compute_instance_id = None;
                 let mut dfs = Vec::new();
                 let mut source_ids = Vec::new();
                 for (source_id, idx_id) in metadata {
                     source_ids.push(source_id);
                     if let Some(index_id) = idx_id {
-                        if let Some((name, description)) =
+                        if let Some((name, instance_id, description)) =
                             Self::prepare_index_build(builder.catalog, &index_id)
                         {
+                            match compute_instance_id {
+                                None => compute_instance_id = Some(instance_id),
+                                Some(id) => assert_eq!(
+                                    id, instance_id,
+                                    "all indexes must go to the same instances",
+                                ),
+                            }
+
                             let df = builder.build_index_dataflow(name, index_id, description)?;
                             dfs.push(df);
                         }
                     }
                 }
-                Ok((dfs, source_ids))
+                Ok((compute_instance_id, dfs, source_ids))
             })
             .await
         {
-            Ok((dfs, source_ids)) => {
+            Ok((compute_instance_id, dfs, source_ids)) => {
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
@@ -2379,7 +2413,14 @@ impl Coordinator {
                     .create_sources(source_descriptions)
                     .await
                     .unwrap();
-                self.ship_dataflows(dfs).await;
+
+                if !dfs.is_empty() {
+                    self.ship_dataflows(
+                        compute_instance_id.expect("shipping dataflows requires instance"),
+                        dfs,
+                    )
+                    .await;
+                }
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2655,11 +2696,11 @@ impl Coordinator {
         match self
             .catalog_transact(ops, |mut builder| {
                 if let Some(index_id) = index_id {
-                    if let Some((name, description)) =
+                    if let Some((name, instance_id, description)) =
                         Self::prepare_index_build(&builder.catalog, &index_id)
                     {
                         let df = builder.build_index_dataflow(name, index_id, description)?;
-                        return Ok(Some(df));
+                        return Ok(Some((instance_id, df)));
                     }
                 }
                 Ok(None)
@@ -2667,8 +2708,8 @@ impl Coordinator {
             .await
         {
             Ok(df) => {
-                if let Some(df) = df {
-                    self.ship_dataflow(df).await;
+                if let Some((instance_id, df)) = df {
+                    self.ship_dataflow(instance_id, df).await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2699,21 +2740,36 @@ impl Coordinator {
 
         match self
             .catalog_transact(ops, |mut builder| {
+                let mut compute_instance_id = None;
                 let mut dfs = vec![];
                 for index_id in index_ids {
-                    if let Some((name, description)) =
+                    if let Some((name, instance_id, description)) =
                         Self::prepare_index_build(builder.catalog, &index_id)
                     {
+                        match compute_instance_id {
+                            None => compute_instance_id = Some(instance_id),
+                            Some(id) => assert_eq!(
+                                id, instance_id,
+                                "all indexes must go to the same instances",
+                            ),
+                        }
+
                         let df = builder.build_index_dataflow(name, index_id, description)?;
                         dfs.push(df);
                     }
                 }
-                Ok(dfs)
+                Ok((compute_instance_id, dfs))
             })
             .await
         {
-            Ok(dfs) => {
-                self.ship_dataflows(dfs).await;
+            Ok((compute_instance_id, dfs)) => {
+                if !dfs.is_empty() {
+                    self.ship_dataflows(
+                        compute_instance_id.expect("shipping dataflows requires instance"),
+                        dfs,
+                    )
+                    .await;
+                }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -2751,9 +2807,11 @@ impl Coordinator {
         };
         match self
             .catalog_transact(vec![op], |mut builder| {
-                if let Some((name, description)) = Self::prepare_index_build(builder.catalog, &id) {
+                if let Some((name, instance_id, description)) =
+                    Self::prepare_index_build(builder.catalog, &id)
+                {
                     let df = builder.build_index_dataflow(name, id, description)?;
-                    Ok(Some(df))
+                    Ok(Some((instance_id, df)))
                 } else {
                     Ok(None)
                 }
@@ -2761,8 +2819,8 @@ impl Coordinator {
             .await
         {
             Ok(df) => {
-                if let Some(df) = df {
-                    self.ship_dataflow(df).await;
+                if let Some((instance_id, df)) = df {
+                    self.ship_dataflow(instance_id, df).await;
                     self.set_index_options(id, options).expect("index enabled");
                 }
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -3241,6 +3299,7 @@ impl Coordinator {
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         let mut builder = self.dataflow_builder();
+
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
             builder.prep_relation_expr(
@@ -3367,7 +3426,13 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
             .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
-        self.ship_dataflow(dataflow).await;
+
+        let instance_id = match self.catalog.try_get_by_id(*sink_id) {
+            Some(entry) => entry.sink().unwrap().compute_instance_id,
+            None => DEFAULT_COMPUTE_INSTANCE_ID,
+        };
+
+        self.ship_dataflow(instance_id, dataflow).await;
 
         let resp = ExecuteResponse::Tailing { rx };
         match copy_to {
@@ -4138,15 +4203,16 @@ impl Coordinator {
 
         // If ops is not empty, index was disabled.
         if !ops.is_empty() {
-            let df = self
+            let (instance_id, df) = self
                 .catalog_transact(ops, |mut builder| {
-                    let (name, description) = Self::prepare_index_build(builder.catalog, &plan.id)
-                        .expect("index enabled");
+                    let (name, instance_id, description) =
+                        Self::prepare_index_build(builder.catalog, &plan.id)
+                            .expect("index enabled");
                     let df = builder.build_index_dataflow(name, plan.id, description)?;
-                    Ok(df)
+                    Ok((instance_id, df))
                 })
                 .await?;
-            self.ship_dataflow(df).await;
+            self.ship_dataflow(instance_id, df).await;
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
@@ -4258,6 +4324,8 @@ impl Coordinator {
                 for id in sinks_to_drop.iter() {
                     self.sink_writes.remove(id);
                 }
+
+                // TODO: Get instance from sink.
                 self.dataflow_client
                     .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                     .unwrap()
@@ -4351,9 +4419,20 @@ impl Coordinator {
     }
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
-        if !dataflow_names.is_empty() {
+        let mut instance_key_map = HashMap::new();
+        for id in dataflow_names {
+            // Find the instances for each index to remove.
+            let instance_id = self.arrangement_instance_map.remove(&id).unwrap();
+            // Aggregate them by instance ID.
+            instance_key_map
+                .entry(instance_id)
+                .or_insert_with(|| Vec::new())
+                .push(id);
+        }
+
+        for (instance_id, dataflow_names) in instance_key_map {
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
                 .drop_sinks(dataflow_names)
                 .await
@@ -4362,16 +4441,25 @@ impl Coordinator {
     }
 
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
-        let mut trace_keys = Vec::new();
+        let mut instance_key_map = HashMap::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
-                trace_keys.push(id);
+                // Find the instances for each index to remove.
+                let instance_id = self.arrangement_instance_map[&id];
+                // Aggregate them by instance ID.
+                instance_key_map
+                    .entry(instance_id)
+                    .or_insert_with(|| Vec::new())
+                    .push(id);
             }
+            self.index_since_updates.borrow_mut().remove(&id);
+            self.arrangement_instance_map.remove(&id);
             self.since_handles.remove(&id);
         }
-        if !trace_keys.is_empty() {
+
+        for (instance_id, trace_keys) in instance_key_map {
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
                 .drop_indexes(trace_keys)
                 .await
@@ -4410,18 +4498,29 @@ impl Coordinator {
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
-        self.ship_dataflows(vec![dataflow]).await
+    async fn ship_dataflow(&mut self, instance_id: ComputeInstanceId, dataflow: DataflowDesc) {
+        self.ship_dataflows(instance_id, vec![dataflow]).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+    async fn ship_dataflows(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        dataflows: Vec<DataflowDesc>,
+    ) {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
+            for (index_id, ..) in &dataflow.index_exports {
+                self.arrangement_instance_map.insert(*index_id, instance_id);
+            }
+            for (index_id, ..) in &dataflow.sink_exports {
+                self.arrangement_instance_map.insert(*index_id, instance_id);
+            }
             dataflow_plans.push(self.finalize_dataflow(dataflow));
         }
+
         self.dataflow_client
-            .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+            .compute(instance_id)
             .unwrap()
             .create_dataflows(dataflow_plans)
             .await
@@ -4704,6 +4803,7 @@ pub async fn serve(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
+                arrangement_instance_map: HashMap::new(),
             };
             let logging = logging.map(|config| DataflowLoggingConfig {
                 granularity_ns: config.granularity.as_nanos(),
@@ -4991,8 +5091,10 @@ pub mod fast_path_peek {
                                 "OneShot plan has temporal constraints"
                             ))
                         })?;
-                    // We should only get excited if we can track down an index for `id`.
-                    // If `keys` is non-empty, that means we think one exists.
+                    // We should only get excited if we can track down an index
+                    // for `id`. If `keys` is non-empty, that means we think one
+                    // exists. Note that in cases where we do find something,
+                    // the transient ID we pass into this function is discarded.
                     for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
                         if let Some((key, val)) = key_val {
                             if Id::Global(desc.on_id) == *id && &desc.key == key {
@@ -5075,10 +5177,20 @@ pub mod fast_path_peek {
 
             // If we must build the view, ship the dataflow.
             let (peek_command, drop_dataflow) = match fast_path {
-                Plan::PeekExisting(id, key, map_filter_project) => (
-                    (id, key, timestamp, finishing.clone(), map_filter_project),
-                    None,
-                ),
+                Plan::PeekExisting(id, key, map_filter_project) => {
+                    let instance_id = self.arrangement_instance_map[&id];
+                    (
+                        (
+                            id,
+                            key,
+                            timestamp,
+                            finishing.clone(),
+                            map_filter_project,
+                            instance_id,
+                        ),
+                        None,
+                    )
+                }
                 Plan::PeekDataflow(PeekDataflowPlan {
                     desc: dataflow,
                     id: index_id,
@@ -5087,12 +5199,18 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
+
+                    // TODO: Get default instance
+                    self.arrangement_instance_map
+                        .insert(index_id, DEFAULT_COMPUTE_INSTANCE_ID);
+
                     self.dataflow_client
                         .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                         .unwrap()
                         .create_dataflows(vec![dataflow])
                         .await
                         .unwrap();
+
                     // Create an identity MFP operator.
                     let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
                     map_filter_project
@@ -5113,6 +5231,7 @@ pub mod fast_path_peek {
                             timestamp,
                             finishing.clone(),
                             map_filter_project,
+                            DEFAULT_COMPUTE_INSTANCE_ID,
                         ),
                         Some(index_id),
                     )
@@ -5145,9 +5264,9 @@ pub mod fast_path_peek {
                 .entry(conn_id)
                 .or_insert_with(BTreeSet::new)
                 .insert(uuid);
-            let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
+            let (id, key, timestamp, _finishing, map_filter_project, instance_id) = peek_command;
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
                 .peek(
                     id,
@@ -5207,8 +5326,12 @@ impl Coordinator {
         // (which has happened twice and is the motivation for this test).
 
         let df = DataflowDesc::new("".into(), GlobalId::Explain);
-        let _: () = self.ship_dataflow(df.clone()).await;
-        let _: () = self.ship_dataflows(vec![df.clone()]).await;
+        let _: () = self
+            .ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df.clone())
+            .await;
+        let _: () = self
+            .ship_dataflows(DEFAULT_COMPUTE_INSTANCE_ID, vec![df.clone()])
+            .await;
         let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);
     }
 }

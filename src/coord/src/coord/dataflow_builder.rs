@@ -14,6 +14,7 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::{
@@ -72,7 +73,7 @@ impl Coordinator {
     pub fn prepare_index_build(
         catalog: &CatalogState,
         index_id: &GlobalId,
-    ) -> Option<(String, IndexDesc)> {
+    ) -> Option<(String, ComputeInstanceId, IndexDesc)> {
         let index_entry = catalog.get_by_id(&index_id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
@@ -83,6 +84,7 @@ impl Coordinator {
         } else {
             Some((
                 index_entry.name().to_string(),
+                index.compute_instance_id,
                 mz_dataflow_types::IndexDesc {
                     on_id: index.on,
                     key: index.keys.clone(),
@@ -192,6 +194,7 @@ impl<'a> DataflowBuilder<'a> {
                     if !self.indexes.contains_key(*id) {
                         continue;
                     }
+
                     let on_entry = self.catalog.get_by_id(&get_id);
                     let on_type = on_entry.desc().unwrap().typ().clone();
                     let index_desc = IndexDesc {

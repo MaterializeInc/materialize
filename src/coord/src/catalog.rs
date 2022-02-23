@@ -754,6 +754,13 @@ impl CatalogEntry {
         }
     }
 
+    pub fn sink(&self) -> Option<&Sink> {
+        match self.item() {
+            CatalogItem::Sink(sink) => Some(sink),
+            _ => None,
+        }
+    }
+
     /// Returns the inner [`Source`] if this entry is a source, else `None`.
     pub fn source(&self) -> Option<&Source> {
         match self.item() {
