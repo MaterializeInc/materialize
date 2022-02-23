@@ -3,7 +3,7 @@ title: "Materialize CDC"
 description: "The Materialize CDC format is a format for change datafeeds that has been designed especially to prevent errors resulting from record duplication or missequencing."
 menu:
   main:
-    parent: "sources"
+    parent: "connections"
 ---
 
 {{< beta />}}

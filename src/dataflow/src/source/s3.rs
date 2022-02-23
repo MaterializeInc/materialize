@@ -756,6 +756,9 @@ where
                 chunks += 1;
                 if tx
                     .send(Ok(InternalMessage {
+                        // ReaderStream return's `None` if the underlying `AsyncRead`
+                        // gives out 0 bytes, so the chunk is always !empty.
+                        // See https://github.com/tokio-rs/tokio/blob/e8f19e771f501408427f7f9ee6ba4f54b2d4094c/tokio-util/src/io/reader_stream.rs#L102-L108
                         record: MessagePayload::Data(chunk.to_vec()),
                     }))
                     .await

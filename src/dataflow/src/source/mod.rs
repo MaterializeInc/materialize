@@ -11,7 +11,7 @@
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sources::AwsExternalId;
-use mz_dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
+use mz_dataflow_types::{DecodeError, SourceErrorDetails};
 use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
 use mz_persist::indexed::Snapshot;
 use mz_persist::operators::stream::Persist;
@@ -139,28 +139,14 @@ where
     pub key: K,
     /// The record's value
     pub value: V,
-    /// The position in the source, if such a concept exists (e.g., Kafka offset, file line number)
-    pub position: Option<i64>,
+    /// The position in the partition described by the `partition` in the source
+    /// (e.g., Kafka offset, file line number, monotonic increasing
+    /// number, etc.)
+    pub position: i64,
     /// The time the record was created in the upstream systsem, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition of this message, present iff the partition comes from Kafka
     pub partition: PartitionId,
-}
-
-/// The data that we send from Upsert to the decode process
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
-pub(crate) struct SourceData {
-    /// The actual value
-    pub(crate) value: Option<Result<Row, DataflowError>>,
-    /// The source's reported position for this record
-    ///
-    /// e.g. kafka offset or file location
-    pub(crate) position: Option<i64>,
-
-    /// The time that the upstream source believes that the message was created
-    ///
-    /// Currently only applies to Kafka
-    pub(crate) upstream_time_millis: Option<i64>,
 }
 
 /// The output of the decoding operator
@@ -171,7 +157,7 @@ pub struct DecodeResult {
     /// The decoded value
     pub value: Option<Result<Row, DecodeError>>,
     /// The index of the decoded value in the stream
-    pub position: Option<i64>,
+    pub position: i64,
     /// The time the record was created in the upstream systsem, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition this record came from
@@ -202,7 +188,7 @@ where
     pub fn new(
         key: K,
         value: V,
-        position: Option<i64>,
+        position: i64,
         upstream_time_millis: Option<i64>,
         partition: PartitionId,
     ) -> SourceOutput<K, V> {
@@ -245,13 +231,7 @@ where
     where
         V: Hashable<Output = u64>,
     {
-        Exchange::new(|x: &Self| {
-            if let Some(position) = x.position {
-                position.hashed()
-            } else {
-                x.value.hashed()
-            }
-        })
+        Exchange::new(|x: &Self| x.position.hashed())
     }
 }
 
@@ -1578,7 +1558,7 @@ fn handle_message<S: SourceReader>(
     output.session(&ts_cap).give(Ok(SourceOutput::new(
         key,
         out,
-        Some(offset.offset),
+        offset.offset,
         message.upstream_time_millis,
         message.partition,
     )));

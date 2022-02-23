@@ -131,7 +131,7 @@ struct DebeziumDeduplicationState {
     ///
     /// [`DebeziumEnvelope`] determines whether messages that are not ahead
     /// of the last recorded position will be skipped.
-    last_position_and_offset: Option<(RowCoordinates, Option<i64>)>,
+    last_position_and_offset: Option<(RowCoordinates, i64)>,
     /// Whether or not to track every message we've ever seen
     full: Option<TrackFull>,
     messages_processed: u64,
@@ -428,7 +428,7 @@ impl DebeziumDeduplicationState {
         &mut self,
         key: Option<Row>,
         value: &Row,
-        connector_offset: Option<i64>,
+        connector_offset: i64,
         upstream_time_millis: Option<i64>,
         debug_name: &str,
     ) -> Result<bool, DataflowError> {
@@ -583,13 +583,13 @@ impl DebeziumDeduplicationState {
 /// Helper to track information for logging on deduplication
 struct SkipInfo {
     old_position: RowCoordinates,
-    old_offset: Option<i64>,
+    old_offset: i64,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn log_duplication_info(
     position: RowCoordinates,
-    connector_offset: Option<i64>,
+    connector_offset: i64,
     upstream_time_millis: Option<i64>,
     debug_name: &str,
     is_new: bool,
@@ -613,7 +613,7 @@ fn log_duplication_info(
                  message_time={} max_seen_time={}",
                 debug_name,
                 position,
-                connector_offset.unwrap_or(-1),
+                connector_offset,
                 skipinfo.old_position,
                 fmt_timestamp(upstream_time_millis),
                 fmt_timestamp(*max_seen_time),
@@ -628,7 +628,7 @@ fn log_duplication_info(
                 debug_name,
                 position,
                 skipinfo.old_position,
-                skipinfo.old_offset.unwrap_or(-1),
+                skipinfo.old_offset,
                 fmt_timestamp(upstream_time_millis),
                 fmt_timestamp(*original_time),
                 fmt_timestamp(*max_seen_time),
@@ -644,7 +644,7 @@ fn log_duplication_info(
                     is beyond the highest record we've ever seen. {:?} connector offset={} \
                     message_time={} message_first_seen={} max_seen_time={}",
                 position,
-                connector_offset.unwrap_or(-1),
+                connector_offset,
                 fmt_timestamp(upstream_time_millis),
                 fmt_timestamp(*original_time),
                 fmt_timestamp(*max_seen_time),
