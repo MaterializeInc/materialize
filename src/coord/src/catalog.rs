@@ -546,7 +546,7 @@ pub struct Index {
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub enabled: bool,
-    pub cluster_id: i64,
+    pub cluster_id: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

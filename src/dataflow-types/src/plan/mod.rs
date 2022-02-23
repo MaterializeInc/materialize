@@ -952,6 +952,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             as_of: desc.as_of,
             debug_name: desc.debug_name,
             id: desc.id,
+            cluster_id: desc.cluster_id,
         })
     }
 

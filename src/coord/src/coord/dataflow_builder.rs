@@ -222,7 +222,7 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<DataflowDesc, CoordError> {
         let on_entry = self.catalog.get_by_id(&index_description.on_id);
         let on_type = on_entry.desc().unwrap().typ().clone();
-        let mut dataflow = DataflowDesc::new(name, id);
+        let mut dataflow = DataflowDesc::new(name, id, index_description.cluster_id);
         self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
         for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
             self.prep_relation_expr(view, ExprPrepStyle::Index)?;
@@ -249,7 +249,7 @@ impl<'a> DataflowBuilder<'a> {
         id: GlobalId,
         sink_description: SinkDesc,
     ) -> Result<DataflowDesc, CoordError> {
-        let mut dataflow = DataflowDesc::new(name, id);
+        let mut dataflow = DataflowDesc::new(name, id, 0);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
         Ok(dataflow)
     }

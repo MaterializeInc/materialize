@@ -1994,7 +1994,7 @@ pub fn plan_create_index(
     } = &mut stmt;
     let on = scx.resolve_item(on_name.clone())?;
 
-    // TODO: Get cluster name from statement.
+    // TODO: Get cluster name from statement/env var.
     let in_cluster = scx
         .resolve_cluster(UnresolvedObjectName::unqualified("default"))
         .expect("default cluster exists");
