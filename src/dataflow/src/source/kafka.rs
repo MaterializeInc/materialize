@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use mz_dataflow_types::sources::AwsExternalId;
@@ -63,6 +64,18 @@ pub struct KafkaSourceReader {
     last_stats: Option<Jsonb>,
     /// The last partition we received
     partition_info: Arc<Mutex<Option<Vec<i32>>>>,
+    /// A handle to the spawned metadata thread
+    // Drop order is important here, we want the thread to be unparked after the `partition_info`
+    // Arc has been dropped, so that the unpacked thread notices it and exits immediately
+    _metadata_thread_handle: UnparkOnDrop<()>,
+}
+
+struct UnparkOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for UnparkOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.thread().unpark();
+    }
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -134,7 +147,7 @@ impl SourceReader for KafkaSourceReader {
         }
 
         let partition_info = Arc::new(Mutex::new(None));
-        {
+        let metadata_thread_handle = {
             let partition_info = Arc::downgrade(&partition_info);
             let topic = topic.clone();
             let consumer = Arc::clone(&consumer);
@@ -146,21 +159,22 @@ impl SourceReader for KafkaSourceReader {
                 // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 .unwrap_or_else(|| Duration::from_secs(300));
 
-            std::thread::Builder::new()
+            let handle = std::thread::Builder::new()
                 .name("kafka-metadata".to_string())
                 .spawn(move || {
                     while let Some(partition_info) = partition_info.upgrade() {
                         match get_kafka_partitions(&consumer, &topic, Duration::from_secs(30)) {
                             Ok(info) => {
                                 *partition_info.lock().unwrap() = Some(info);
-                                std::thread::sleep(metadata_refresh_frequency);
+                                std::thread::park_timeout(metadata_refresh_frequency);
                             }
-                            Err(_) => std::thread::sleep(Duration::from_secs(30)),
+                            Err(_) => std::thread::park_timeout(Duration::from_secs(30)),
                         }
                     }
                 })
                 .unwrap();
-        }
+            UnparkOnDrop(handle)
+        };
 
         Ok(KafkaSourceReader {
             topic_name: topic,
@@ -176,6 +190,7 @@ impl SourceReader for KafkaSourceReader {
             stats_rx,
             last_stats: None,
             partition_info,
+            _metadata_thread_handle: metadata_thread_handle,
         })
     }
 
