@@ -22,14 +22,14 @@ rm -rf scratch
 
 # Run the railroad diagram generator, using a pinned version from our custom
 # fork.
-docker run --rm -i materialize/rr:0.0.4 -nostyles -svg -noinline -width:600 - < sql-grammar.bnf > diagrams.zip
+docker run --rm -i materialize/rr:v0.0.5 -nostyles -svg -noinline -width:600 - < sql-grammar.bnf > diagrams.zip
 
 # Extract the SVGs we care about and move them into place.
 mkdir scratch
 (
     cd scratch
     unzip -j ../diagrams.zip
-    rm ./diagrams.zip rr-1.62.svg index.html
+    rm ../diagrams.zip Railroad-Diagram-Generator.svg index.html
     for f in *; do
         # Rewrite any underscores in filenames to hyphens, for consistency with
         # other Hugo partials.
