@@ -25,7 +25,7 @@ $ set schema={
   }
 
 $ kafka-create-topic topic=avro-data partitions=1
-$ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1
+$ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1 publish=true
 {"id": 1} {"id": 2, "b": 3}
 
 ! CREATE SOURCE missing_key_format
@@ -40,6 +40,18 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
   INCLUDE KEY AS key_col
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
+# "Bare" format works when the key format is in a registry
+> CREATE MATERIALIZED SOURCE bareformatconfluent
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE KEY AS named
+  ENVELOPE UPSERT
+
+> SELECT * from bareformatconfluent
+named         id       b
+------------------------
+1             2        3
 
 ! CREATE SOURCE not_supported
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'

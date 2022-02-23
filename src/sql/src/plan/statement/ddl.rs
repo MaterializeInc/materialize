@@ -1219,33 +1219,40 @@ fn get_key_envelope(
         bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
     }
     if let Some(kd) = key_definition {
-        Ok(Some(match &kd.alias {
-            Some(name) => KeyEnvelope::Named(name.as_str().to_string()),
-            None if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
-            None => {
+        Ok(Some(match (&kd.alias, encoding) {
+            (Some(name), SourceDataEncoding::KeyValue { .. }) => {
+                KeyEnvelope::Named(name.as_str().to_string())
+            }
+            (None, _) if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
+            (None, SourceDataEncoding::KeyValue { key, .. }) => {
                 // If the key is requested but comes from an unnamed type then it gets the name "key"
                 //
                 // Otherwise it gets the names of the columns in the type
-                if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
-                    let is_composite = match key {
-                        DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
-                            bail!("{} sources cannot use INCLUDE KEY", key.op_name())
-                        }
-                        DataEncoding::Bytes | DataEncoding::Text => false,
-                        DataEncoding::Avro(_)
-                        | DataEncoding::Csv(_)
-                        | DataEncoding::Protobuf(_)
-                        | DataEncoding::Regex { .. } => true,
-                    };
-
-                    if is_composite {
-                        KeyEnvelope::Flattened
-                    } else {
-                        KeyEnvelope::Named("key".to_string())
+                let is_composite = match key {
+                    DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
+                        bail!("{} sources cannot use INCLUDE KEY", key.op_name())
                     }
+                    DataEncoding::Bytes | DataEncoding::Text => false,
+                    DataEncoding::Avro(_)
+                    | DataEncoding::Csv(_)
+                    | DataEncoding::Protobuf(_)
+                    | DataEncoding::Regex { .. } => true,
+                };
+
+                if is_composite {
+                    KeyEnvelope::Flattened
                 } else {
-                    bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
+                    KeyEnvelope::Named("key".to_string())
                 }
+            }
+            (_, SourceDataEncoding::Single(_)) => {
+                // `kd.alias` == `None` means `INCLUDE KEY`
+                // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
+                // These both make sense with the same error message
+                bail!(
+                    "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, \
+                        got bare FORMAT"
+                );
             }
         }))
     } else {
