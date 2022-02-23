@@ -376,7 +376,7 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
-    pub fn resolve_cluster(&self, name: UnresolvedObjectName) -> Result<usize, PlanError> {
+    pub fn resolve_cluster(&self, name: UnresolvedObjectName) -> Result<String, PlanError> {
         let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_cluster(&name)?)
     }

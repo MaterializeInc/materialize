@@ -86,10 +86,7 @@ impl Coordinator {
                 mz_dataflow_types::IndexDesc {
                     on_id: index.on,
                     key: index.keys.clone(),
-                    cluster_id: index
-                        .cluster_id
-                        .try_into()
-                        .expect("cluster ID always compatible with usize"),
+                    cluster_id: index.cluster_id,
                 },
             ))
         }
@@ -249,6 +246,7 @@ impl<'a> DataflowBuilder<'a> {
         id: GlobalId,
         sink_description: SinkDesc,
     ) -> Result<DataflowDesc, CoordError> {
+        // TODO: get cluster ID from sink description
         let mut dataflow = DataflowDesc::new(name, id, 0);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
         Ok(dataflow)

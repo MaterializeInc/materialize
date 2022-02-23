@@ -108,7 +108,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// clusters within the catalog.
-    fn resolve_cluster(&self, item_name: &PartialName) -> Result<usize, CatalogError>;
+    fn resolve_cluster(&self, item_name: &PartialName) -> Result<String, CatalogError>;
 
     /// Gets an item by its ID.
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
@@ -477,7 +477,7 @@ impl SessionCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn resolve_cluster(&self, _: &PartialName) -> Result<usize, CatalogError> {
+    fn resolve_cluster(&self, _: &PartialName) -> Result<String, CatalogError> {
         unimplemented!();
     }
 

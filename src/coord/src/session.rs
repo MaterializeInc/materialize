@@ -143,6 +143,7 @@ impl Session {
     pub fn clear_transaction(&mut self) -> (Vec<GlobalId>, TransactionStatus) {
         self.portals.clear();
         self.pcx = None;
+        // TODO: Get cluster ID of sinks to drop and propagate to return.
         let drop_sinks = mem::take(&mut self.drop_sinks);
         let txn = mem::take(&mut self.transaction);
         (drop_sinks, txn)
@@ -213,6 +214,7 @@ impl Session {
     /// Adds a sink that will need to be dropped when the current transaction is
     /// cleared.
     pub fn add_drop_sink(&mut self, name: GlobalId) {
+        // TODO: include cluster ID of sink.
         self.drop_sinks.push(name);
     }
 

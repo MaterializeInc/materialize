@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use chrono::{DateTime, TimeZone, Utc};
 use fail::fail_point;
 use itertools::Itertools;
@@ -34,6 +34,7 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::{
+    client::DEFAULT_COMPUTE_INSTANCE_ID,
     sinks::{SinkConnector, SinkConnectorBuilder},
     sources::{AwsExternalId, SourceConnector, Timeline},
 };
@@ -310,7 +311,7 @@ impl CatalogState {
 
                     // If index not already enabled, add it.
                     if !idxs.iter().any(|(index_id, ..)| index_id == &id) {
-                        idxs.push((id, index.cluster_id.try_into().unwrap(), index.keys.clone()));
+                        idxs.push((id, index.cluster_id, index.keys.clone()));
                     }
                 }
             }
@@ -452,7 +453,7 @@ pub struct Role {
 #[derive(Debug, Serialize, Clone)]
 pub struct Cluster {
     pub name: String,
-    pub id: i64,
+    pub id: usize,
     #[serde(skip)]
     pub oid: u32,
 }
@@ -904,7 +905,7 @@ impl Catalog {
                 name.clone(),
                 Cluster {
                     name: name.clone(),
-                    id,
+                    id: id.try_into().expect("no negative cluster IDs"),
                     oid,
                 },
             );
@@ -960,7 +961,8 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![log.id],
                             enabled: catalog.index_enabled_by_default(&log.index_id),
-                            cluster_id: 0,
+                            // TODO: get default instance id from var
+                            cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -1014,7 +1016,8 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![table.id],
                             enabled: catalog.index_enabled_by_default(&table.index_id),
-                            cluster_id: 0,
+                            // TODO: get default instance id from var
+                            cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -2264,7 +2267,11 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
-                cluster_id: 0,
+                // TODO: Once Index has name, extract ID
+                cluster_id: self
+                    .get_cluster_by_name(&index.in_cluster)
+                    .ok_or(anyhow!("unknown cluster {}", index.in_cluster))?
+                    .id,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2741,13 +2748,13 @@ impl SessionCatalog for ConnCatalog<'_> {
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
     }
 
-    fn resolve_cluster(&self, name: &PartialName) -> Result<usize, SqlCatalogError> {
+    fn resolve_cluster(&self, name: &PartialName) -> Result<String, SqlCatalogError> {
         match (
             name.database.is_some() || name.schema.is_some(),
             self.catalog.get_cluster_by_name(&name.item),
         ) {
             (true, _) | (_, None) => Err(SqlCatalogError::UnknownCluster(name.to_string())),
-            (false, Some(cluster)) => Ok(cluster.id.try_into().expect("id is valid usize")),
+            (false, Some(cluster)) => Ok(cluster.name.clone()),
         }
     }
 

@@ -2082,10 +2082,10 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
             depends_on,
+            in_cluster,
         },
         options,
         if_not_exists,
-        in_cluster,
     }))
 }
 

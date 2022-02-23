@@ -184,7 +184,6 @@ pub struct CreateIndexPlan {
     pub index: Index,
     pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
-    pub in_cluster: usize,
 }
 
 #[derive(Debug)]
@@ -402,6 +401,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
+    pub in_cluster: String,
 }
 
 #[derive(Clone, Debug)]
