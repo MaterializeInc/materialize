@@ -17,7 +17,7 @@ use num_traits::CheckedMul;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
-use crate::adt::numeric::DecimalLike;
+use crate::adt::numeric::{DecimalLike, Numeric};
 
 /// An interval of time meant to express SQL intervals.
 ///
@@ -127,37 +127,45 @@ impl Interval {
     }
 
     pub fn checked_mul(&self, other: f64) -> Option<Self> {
-        let months = self.months as f64 * other;
-        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
-            return None;
-        }
-
-        let days = self.days as f64 * other + months.fract() * 30.0;
-        if days.is_nan() || days < i32::MIN as f64 || days > i32::MAX as f64 {
-            return None;
-        }
-
-        let micros = self.micros as f64 * other + days.fract() * 1e6 * 60.0 * 60.0 * 24.0;
-        if micros.is_nan() || micros < i64::MIN as f64 || days > i64::MAX as f64 {
-            return None;
-        }
-
-        Self::new(months as i32, days as i32, micros as i64).ok()
+        self.checked_op(other, |f1, f2| f1 * f2)
     }
 
     pub fn checked_div(&self, other: f64) -> Option<Self> {
-        let months = self.months as f64 / other;
-        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
+        self.checked_op(other, |f1, f2| f1 / f2)
+    }
+
+    fn checked_op<F1>(&self, other: f64, op: F1) -> Option<Self>
+    where
+        F1: Fn(f64, f64) -> f64,
+    {
+        let months = op(f64::from(self.months), other);
+        if months.is_nan()
+            || months.is_infinite()
+            || months < i32::MIN.into()
+            || months > i32::MAX.into()
+        {
             return None;
         }
 
-        let days = self.days as f64 / other + months.fract() * 30.0;
-        if days.is_nan() || days < i32::MIN as f64 || days > i32::MAX as f64 {
+        let days =
+            op(f64::from(self.days), other) + months.fract() * f64::from(Self::DAY_PER_MONTH);
+        if days.is_nan() || days.is_infinite() || days < i32::MIN.into() || days > i32::MAX.into() {
             return None;
         }
 
-        let micros = self.micros as f64 / other + days.fract() * 1e6 * 60.0 * 60.0 * 24.0;
-        if micros.is_nan() || micros < i64::MIN as f64 || days > i64::MAX as f64 {
+        let micros = op(self.micros as f64, other)
+            + days.fract()
+                * f64::from(Self::HOUR_PER_DAY)
+                * f64::from(Self::MINUTE_PER_HOUR)
+                * f64::from(Self::SECOND_PER_MINUTE)
+                * f64::from(Self::MILLISECOND_PER_SECOND)
+                * f64::from(Self::MICROSECOND_PER_MILLISECOND);
+
+        if micros.is_nan()
+            || micros.is_infinite()
+            || Numeric::from(micros) < Numeric::from(i64::MIN)
+            || Numeric::from(micros) > Numeric::from(i64::MAX)
+        {
             return None;
         }
 

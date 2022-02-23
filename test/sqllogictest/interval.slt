@@ -704,6 +704,12 @@ SELECT INTERVAL '1' YEAR * 13/12
 ----
 1 year 1 month
 
+query error interval out of range
+SELECT INTERVAL '10 years' *  9999999999.999999999;
+
+query error interval out of range
+SELECT INTERVAL '10 years' / 0.000000000000000001;
+
 # In an idiosyncratic fashion when dividing/multiplying an interval,
 # PostgreSQL considers a year 360 days. But when extracting an epoch,
 # it's considered 365.25 days instead.
@@ -1011,11 +1017,11 @@ SELECT INTERVAL '0.6 microseconds';
 00:00:00.000001
 
 query T
-SELECT EXTRACT(epoch FROM INTERVAL '2147483647 hours 59 minutes 59.999999 seconds');
+SELECT EXTRACT(epoch FROM INTERVAL '2147483647 months 2147483647 days 2147483647 hours 59 minutes 59.999999 seconds');
 ----
-7730941132800.000000
+5836860552297600.000000
 
 query T
-SELECT EXTRACT(epoch FROM INTERVAL '-2147483648 hours -59 minutes -59.999999 seconds');
+SELECT EXTRACT(epoch FROM INTERVAL '-2147483648 months -2147483648 days -2147483648 hours -59 minutes -59.999999 seconds');
 ----
--7730941136400.000000
+-5836860554979600.000000
