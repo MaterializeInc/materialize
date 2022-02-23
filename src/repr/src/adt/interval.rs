@@ -68,23 +68,24 @@ impl Interval {
     // SELECT INTERVAL '2147483647 hours 59 minutes 59.999999 seconds';
     // SELECT INTERVAL '-2147483648 hours -59 minutes -59.999999 seconds';
     // ```
-    const MAX_MICROSECONDS: i64 = (((i32::MAX as i64 * 60) + 59) * 60) * 1_000_000 + 59_999_999;
-    const MIN_MICROSECONDS: i64 = (((i32::MIN as i64 * 60) - 59) * 60) * 1_000_000 - 59_999_999;
+    pub const MAX_MICROSECONDS: i64 = (((i32::MAX as i64 * 60) + 59) * 60) * 1_000_000 + 59_999_999;
+    pub const MIN_MICROSECONDS: i64 = (((i32::MIN as i64 * 60) - 59) * 60) * 1_000_000 - 59_999_999;
 
-    const CENTURY_PER_MILLENNIUM: i32 = 10;
-    const DECADE_PER_CENTURY: i32 = 10;
-    const YEAR_PER_DECADE: i32 = 10;
-    const MONTH_PER_YEAR: i32 = 12;
+    pub const CENTURY_PER_MILLENNIUM: u16 = 10;
+    pub const DECADE_PER_CENTURY: u16 = 10;
+    pub const YEAR_PER_DECADE: u16 = 10;
+    pub const MONTH_PER_YEAR: u16 = 12;
     // Interval type considers 30 days == 1 month
-    const DAY_PER_MONTH: i32 = 30;
+    pub const DAY_PER_MONTH: u16 = 30;
     // Interval type considers 24 hours == 1 day
-    const HOUR_PER_DAY: i32 = 24;
-    const MINUTE_PER_HOUR: i32 = 60;
-    const SECOND_PER_MINUTE: i32 = 60;
-    const MILLISECOND_PER_SECOND: i32 = 1_000;
-    const MICROSECOND_PER_MILLISECOND: i32 = 1_000;
+    pub const HOUR_PER_DAY: u16 = 24;
+    pub const MINUTE_PER_HOUR: u16 = 60;
+    pub const SECOND_PER_MINUTE: u16 = 60;
+    pub const MILLISECOND_PER_SECOND: u16 = 1_000;
+    pub const MICROSECOND_PER_MILLISECOND: u16 = 1_000;
+    pub const NANOSECOND_PER_MICROSECOND: u16 = 1_000;
     // When extracting an epoch, PostgreSQL considers a year 365.25 days.
-    const EPOCH_DAYS_PER_YEAR: f64 = 365.25;
+    pub const EPOCH_DAYS_PER_YEAR: f64 = 365.25;
 
     /// Constructs a new `Interval` with the specified units of time.
     pub fn new(months: i32, days: i32, micros: i64) -> Result<Interval, anyhow::Error> {
@@ -214,7 +215,7 @@ impl Interval {
     /// For example, this function returns `4` for the interval `3 years 4
     /// months`.
     pub fn months(&self) -> i32 {
-        self.months % Self::MONTH_PER_YEAR
+        self.months % i32::from(Self::MONTH_PER_YEAR)
     }
 
     /// Computes the day part of the interval.
@@ -304,12 +305,15 @@ impl Interval {
         let days = T::from(self.years()) * T::from(Self::EPOCH_DAYS_PER_YEAR)
             + T::from(self.months()) * T::from(Self::DAY_PER_MONTH)
             + T::from(self.days);
-        let seconds =
-            days * T::from(Self::HOUR_PER_DAY * Self::MINUTE_PER_HOUR * Self::SECOND_PER_MINUTE);
+        let seconds = days
+            * T::from(Self::HOUR_PER_DAY)
+            * T::from(Self::MINUTE_PER_HOUR)
+            * T::from(Self::SECOND_PER_MINUTE);
 
         seconds
             + T::lossy_from(self.micros)
-                / T::from(Self::MICROSECOND_PER_MILLISECOND * Self::MILLISECOND_PER_SECOND)
+                / (T::from(Self::MICROSECOND_PER_MILLISECOND)
+                    * T::from(Self::MILLISECOND_PER_SECOND))
     }
 
     /// Computes the total number of microseconds in the interval.
@@ -453,7 +457,7 @@ impl Interval {
         val: T,
     ) -> Option<T>
     where
-        T: From<i32> + CheckedMul + std::ops::DivAssign,
+        T: From<u16> + CheckedMul + std::ops::DivAssign,
     {
         if source < dest {
             Self::convert_date_time_unit_increasing(source, dest, val)
@@ -470,7 +474,7 @@ impl Interval {
         val: T,
     ) -> Option<T>
     where
-        T: From<i32> + std::ops::DivAssign,
+        T: From<u16> + std::ops::DivAssign,
     {
         let mut cur_unit = source;
         let mut res = val;
@@ -501,7 +505,7 @@ impl Interval {
         val: T,
     ) -> Option<T>
     where
-        T: From<i32> + CheckedMul,
+        T: From<u16> + CheckedMul,
     {
         let mut cur_unit = source;
         let mut res = val;
