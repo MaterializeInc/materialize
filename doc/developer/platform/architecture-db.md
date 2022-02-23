@@ -42,17 +42,17 @@ Materialize Platform is broken into three logical components.
 
 * STORAGE records and when asked produces definite collections.
 * COMPUTE executes and maintains views over definite collections.
-* CONTROL interprets user commands and instructs the STORAGE and COMPUTE layers.
+* ADAPTER interprets user commands and instructs the STORAGE and COMPUTE layers.
 
 The partitioning into logical components assists us in designing their implementations, as they clarify who are responsible for which properties, and which components can be developed independently.
 It is meant to provide more autonomy, agency, and responsibility.
 
 One part of the design is that these components are actually *layers*.
 * STORAGE is the lowest layer, and makes no assumptions about the other layers (e.g. determinism, correctness).
-* COMPUTE is the next layer, and relies on STORAGE but makes no assumptions about CONTROL.
-* CONTROL relies on the lower layers.
+* COMPUTE is the next layer, and relies on STORAGE but makes no assumptions about ADAPTER.
+* ADAPTER relies on the lower layers.
 
-This moves the onus of some behaviors on to higher layers. STORAGE is not expected to understand CONTROL, and so must be explicitly instructed if it has goals. STORAGE should not believe that COMPUTE is deterministic, and should treat its output with suspicion.
+This moves the onus of some behaviors on to higher layers. STORAGE is not expected to understand ADAPTER, and so must be explicitly instructed if it has goals. STORAGE should not believe that COMPUTE is deterministic, and should treat its output with suspicion.
 
 ### STORAGE
 
@@ -61,12 +61,12 @@ The STORAGE layer is tasked with creating and maintaining definite collections.
 It relies on no other layers of the stack, and has great lattitude in defining what it requires of others.
 
 Its primary requirements include
-1. define and respond to `CreateSource` commands (likely from CONTROL) with the identifier of definite collections.
-2. define and respond to `Subscribe` commands (CONTROL or COMPUTE) with a snapshot and stream of updates for a specified collection.
-3. define and respond to `WriteBack` commands (CONTROL or COMPUTE) by recording updates to a specified collection.
+1. define and respond to `CreateSource` commands (likely from ADAPTER) with the identifier of definite collections.
+2. define and respond to `Subscribe` commands (ADAPTER or COMPUTE) with a snapshot and stream of updates for a specified collection.
+3. define and respond to `WriteBack` commands (ADAPTER or COMPUTE) by recording updates to a specified collection.
 
 The layer gets to determine how it exposes these commands and what information must be provided with each of them.
-For example, STORAGE may reasonably conclude that it cannot rely on determinism of CONTROL or COMPUTE, and therefore require `Subscribe` commands must come with a "rendition" identifier, where STORAGE is then allowed to reconcile the renditions of a collection (perhaps taking the most recent information).
+For example, STORAGE may reasonably conclude that it cannot rely on determinism of ADAPTER or COMPUTE, and therefore require `Subscribe` commands must come with a "rendition" identifier, where STORAGE is then allowed to reconcile the renditions of a collection (perhaps taking the most recent information).
 
 There are any number of secondary requirements and additional commands that can be exposed (for example, to drop sources, manage timeouts of subscriptions, advance compaction of collections, set and modify rendition reconciliation policies, etc).
 
@@ -78,11 +78,11 @@ The COMPUTE layer is tasked with creating and maintaining views over definite co
 
 It relies on STORAGE to provide definite collections (sources) and receive updates to be written back (sinks).
 
-Its primary requirements include (all from CONTROL)
-1. define and respond to commands from CONTROL to spin up or shut down a COMPUTE INSTANCE (the atom of COMPUTE).
-2. define and respond to commands from CONTROL to install and modify maintained views over data.
-3. define and respond to commands from CONTROL to inspect the contents of maintained data (peeks).
-4. define and respond to commands from CONTROL to inspect the metadata of maintained data (frontiers).
+Its primary requirements include (all from ADAPTER)
+1. define and respond to commands from ADAPTER to spin up or shut down a COMPUTE INSTANCE (the atom of COMPUTE).
+2. define and respond to commands from ADAPTER to install and modify maintained views over data.
+3. define and respond to commands from ADAPTER to inspect the contents of maintained data (peeks).
+4. define and respond to commands from ADAPTER to inspect the metadata of maintained data (frontiers).
 
 Each COMPUTE INSTANCE is by design stateless, and should be explicitly instructed in what is required of it.
 
@@ -90,22 +90,22 @@ COMPUTE can be sharded into COMPUTE INSTANCEs.
 Each COMPUTE INSTANCE is bound to one STORAGE INSTANCE.
 Views installed in one COMPUTE INSTANCE can be used in that same COMPUTE INSTANCE, but cannot be used by others without a round-trip through STORAGE.
 
-### CONTROL
+### ADAPTER
 
-The CONTROL layer translates user input into commands for the STORAGE and COMPUTE layers.
+The ADAPTER layer translates user input into commands for the STORAGE and COMPUTE layers.
 
 It relies on STORAGE to make sources definite, and on COMPUTE to compute and maintain views as specified.
 
-CONTROL has no requirements imposed on it by other layers, and has great lattitude in defining what it asks others to do.
+ADAPTER has no requirements imposed on it by other layers, and has great lattitude in defining what it asks others to do.
 
-Although at the moment CONTROL is "SQL", there is no reason this layer needs to provide exactly this interface.
+Although at the moment ADAPTER is "SQL", there is no reason this layer needs to provide exactly this interface.
 It could also provide more direct access to STORAGE and COMPUTE, for other frameworks, applications, languages.
 
-CONTROL is where Materialize Platform provides the experience of consistency.
+ADAPTER is where Materialize Platform provides the experience of consistency.
 Users that write to STORAGE and then view COMPUTE may expect to see results reflecting their writes.
 Users that view COMPUTE then tell their coworker may expect them to see compatible results.
 
-CONTROL can be sharded into TIMELINEs.
+ADAPTER can be sharded into TIMELINEs.
 Users on the same TIMELINE can be provided with consistency guarantees, whereas users on independent timelines cannot.
 
 ## Physical architecture design
@@ -113,7 +113,7 @@ Users on the same TIMELINE can be provided with consistency guarantees, whereas 
 The physical architecture tracks the logical architecture somewhat, in that each layer is intended to manage its own resources.
 * The STORAGE layer is expected to spin up threads, processes, containers for each maintained collection.
 * The COMPUTE layer is expected to spin up threads, processes, containers for each indepedent cluster.
-* The CONTROL layer is expected to spin up threads, processes, containers for each user session, timeline, frontend, etc.
+* The ADAPTER layer is expected to spin up threads, processes, containers for each user session, timeline, frontend, etc.
 
 Each of these layers needs to orchestrate its resources: spinning up, instructing, spinning down, etc.
 However, this orchestration is not required to be physically isolated.
@@ -124,7 +124,7 @@ When running in Materialize Cloud, orchestrators will communicate with a CLOUD O
 
 ### Roadmap to Platform
 
-Our current codebase has a monolithic implementation of STORAGE, COMPUTE, and CONTROL in the form of `materialized`.
+Our current codebase has a monolithic implementation of STORAGE, COMPUTE, and ADAPTER in the form of `materialized`.
 
 However, we already have hints of scalable architecture:
 * The `dataflow` module spins up new timely dataflow worker threads,
@@ -156,7 +156,7 @@ Should we reach a point where we like the boundaries, each layer can iteratively
 For example:
 * STORAGE can investigate pivoting off of timely dataflow where appropriate (moving logic out of the "fat client").
 * COMPUTE can investigate spinning up independent clusters, vs the single cluster it currently uses.
-* CONTROL can continue to divest itself of concepts that other layers should be managing. Perhaps spin up workers for e.g. optimization.
+* ADAPTER can continue to divest itself of concepts that other layers should be managing. Perhaps spin up workers for e.g. optimization.
 
 The intended result of this work is a core binary that largely *orchestrates* the work in STORAGE and COMPUTE.
 It is not arbitrarily scalable (the single-threaded `determine_timestamp` logic lies at the core if nothing else), but a solid start.
@@ -178,9 +178,9 @@ We also want the orchestration to be able to stop and restart correctly, which m
 For example, we might expect:
 * STORAGE durably records the definitions of sources it is maintaining.
 * COMPUTE durably records the COMPUTE INSTANCEs that should be running and the views maintained on each.
-* CONTROL durably records sufficient state to reconstruct whatever users expect (e.g. catalog contents, timeline timestamp).
+* ADAPTER durably records sufficient state to reconstruct whatever users expect (e.g. catalog contents, timeline timestamp).
 
 Ideally, the orchestration could stop and restart without forcing the same of its orchestrated resources.
 * STORAGE could continue to read sources and serve subscriptions.
 * COMPUTE could continue to read subscriptions and produce outputs.
-* CONTROL could continue to handle user requests, optimize things, assign timestamps.
+* ADAPTER could continue to handle user requests, optimize things, assign timestamps.
