@@ -10,6 +10,7 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -341,7 +342,7 @@ impl PendingPeek {
     }
 
     /// Collects data for a known-complete peek.
-    fn collect_finished_data(&mut self) -> Result<Vec<Row>, String> {
+    fn collect_finished_data(&mut self) -> Result<Vec<(Row, NonZeroUsize)>, String> {
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -367,8 +368,10 @@ impl PendingPeek {
 
         // Cursor and bound lifetime for `Row` data in the backing trace.
         let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
-        // Accumulated `Vec<Datum>` results that we are likely to return.
+        // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
+        // Σ_{(row, count) ∈ results} count
+        let mut total_count = 0;
 
         // When set, a bound on the number of records we need to return.
         // The requirements on the records are driven by the finishing's
@@ -411,26 +414,19 @@ impl PendingPeek {
                             copies += diff;
                         }
                     });
-                    if copies < 0 {
+                    let copies: usize = if copies < 0 {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
                             copies * -1,
                             &*borrow,
                         ));
-                    }
-
-                    // When we have a LIMIT we can restrict the number of copies we make.
-                    // This protects us when we have many copies of the same records, as
-                    // the DD representation uses a binary count and may not exhaust our
-                    // memory in situtations where this copying might.
-                    if let Some(limit) = max_results {
-                        let limit = std::convert::TryInto::<Diff>::try_into(limit);
-                        if let Ok(limit) = limit {
-                            copies = std::cmp::min(copies, limit);
-                        }
-                    }
-                    for _ in 0..copies {
-                        results.push(result.clone());
+                    } else {
+                        copies.try_into().unwrap()
+                    };
+                    // if copies > 0 ... otherwise skip
+                    if let Some(copies) = NonZeroUsize::new(copies) {
+                        results.push((result, copies));
+                        total_count += copies.get();
                     }
 
                     // If we hold many more than `max_results` records, we can thin down
@@ -439,7 +435,7 @@ impl PendingPeek {
                         // We use a threshold twice what we intend, to amortize the work
                         // across all of the insertions. We could tighten this, but it
                         // works for the moment.
-                        if results.len() >= 2 * max_results {
+                        if total_count >= 2 * max_results {
                             if self.finishing.order_by.is_empty() {
                                 results.truncate(max_results);
                                 return Ok(results);
@@ -453,13 +449,13 @@ impl PendingPeek {
                                 // inner test (as we prefer not to maintain `Vec<Datum>`
                                 // in the other case).
                                 results.sort_by(|left, right| {
-                                    let left_datums = l_datum_vec.borrow_with(left);
-                                    let right_datums = r_datum_vec.borrow_with(right);
+                                    let left_datums = l_datum_vec.borrow_with(&left.0);
+                                    let right_datums = r_datum_vec.borrow_with(&right.0);
                                     mz_expr::compare_columns(
                                         &self.finishing.order_by,
                                         &left_datums,
                                         &right_datums,
-                                        || left.cmp(&right),
+                                        || left.0.cmp(&right.0),
                                     )
                                 });
                                 results.truncate(max_results);

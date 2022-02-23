@@ -76,7 +76,7 @@ use tokio::sync::Mutex as TokioMutex;
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_coord::session::{EndTransactionAction, Session};
 use mz_coord::{ExecuteResponse, PersistConfig, SessionClient, StartupResponse};
-use mz_dataflow_types::PeekResponse;
+use mz_dataflow_types::PeekResponseUnary;
 use mz_expr::GlobalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -261,8 +261,8 @@ impl CoordTest {
     // Processes PeekResponse messages until rows has a response.
     async fn wait_for_peek(
         &mut self,
-        mut rows: std::pin::Pin<Box<dyn Future<Output = PeekResponse>>>,
-    ) -> PeekResponse {
+        mut rows: std::pin::Pin<Box<dyn Future<Output = PeekResponseUnary>>>,
+    ) -> PeekResponseUnary {
         loop {
             if let futures::task::Poll::Ready(rows) = futures::poll!(rows.as_mut()) {
                 return rows;
@@ -388,7 +388,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                                     match r {
                                         ExecuteResponse::SendingRows(rows) => {
                                             match ct.wait_for_peek(rows).await {
-                                                PeekResponse::Rows(rows) => {
+                                                PeekResponseUnary::Rows(rows) => {
                                                     for row in rows {
                                                         for col in row.iter() {
                                                             if col != Datum::True {

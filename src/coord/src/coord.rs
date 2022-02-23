@@ -117,7 +117,9 @@ use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnec
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
-use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
+use mz_dataflow_types::{
+    DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary, Update,
+};
 use mz_expr::{
     permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -3958,7 +3960,7 @@ impl Coordinator {
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows(batch) => match batch.await {
-                    PeekResponse::Rows(rows) => {
+                    PeekResponseUnary::Rows(rows) => {
                         |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
                             // Use 2x row len incase there's some assignments.
                             let mut diffs = Vec::with_capacity(rows.len() * 2);
@@ -4000,10 +4002,10 @@ impl Coordinator {
                             Ok(diffs)
                         }(rows)
                     }
-                    PeekResponse::Canceled => {
+                    PeekResponseUnary::Canceled => {
                         Err(CoordError::Unstructured(anyhow!("execution canceled")))
                     }
-                    PeekResponse::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
+                    PeekResponseUnary::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
                 },
                 _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
             };
@@ -4774,7 +4776,7 @@ enum ExprPrepStyle {
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows(Box::pin(async { PeekResponse::Rows(rows) }))
+    ExecuteResponse::SendingRows(Box::pin(async { PeekResponseUnary::Rows(rows) }))
 }
 
 fn auto_generate_primary_idx(
@@ -4942,7 +4944,8 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
-    use std::collections::HashMap;
+    use mz_dataflow_types::PeekResponseUnary;
+    use std::{collections::HashMap, num::NonZeroUsize};
 
     use crate::CoordError;
     use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
@@ -5075,19 +5078,18 @@ pub mod fast_path_peek {
                 differential_dataflow::consolidation::consolidate_updates(&mut rows);
 
                 let mut results = Vec::new();
-                for (ref row, _time, count) in rows {
+                for (row, _time, count) in rows {
                     if count < 0 {
                         Err(EvalError::InvalidParameterValue(format!(
                             "Negative multiplicity in constant result: {}",
                             count
                         )))?
                     };
-                    for _ in 0..count {
-                        // TODO: If `count` is too large, or `results` too full, we could error.
-                        results.push(row.clone());
+                    if count > 0 {
+                        results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                     }
                 }
-                finishing.finish(&mut results);
+                let results = finishing.finish(results);
                 return Ok(crate::coord::send_immediate_rows(results));
             }
 
@@ -5194,11 +5196,10 @@ pub mod fast_path_peek {
                         }
                     }
                 })
-                .map(move |mut resp| {
-                    if let PeekResponse::Rows(rows) = &mut resp {
-                        finishing.finish(rows)
-                    }
-                    resp
+                .map(move |resp| match resp {
+                    PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+                    PeekResponse::Canceled => PeekResponseUnary::Canceled,
+                    PeekResponse::Error(e) => PeekResponseUnary::Error(e),
                 });
 
             // If it was created, drop the dataflow once the peek command is sent.
