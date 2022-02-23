@@ -414,6 +414,56 @@ select min(a), c, count(*), b, max(a) from x group by c, b;
 ----
 
 lower
+select min(a), count(*), max(a) from x;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map #0, true
+| Project (#3, #4)
+| Reduce group=()
+| | agg min(#0)
+| | agg count(#1)
+| | agg max(#0)
+
+%3 =
+| Get %2 (l1)
+| Distinct group=()
+| Negate
+
+%4 =
+| Get %0 (l0)
+| Distinct group=()
+
+%5 =
+| Union %3 %4
+
+%6 =
+| Join %5 %0
+| | implementation = Unimplemented
+| Project ()
+
+%7 =
+| Constant (null, 0, null)
+
+%8 =
+| Join %6 %7
+| | implementation = Unimplemented
+
+%9 =
+| Union %2 %8
+| Project (#0..=#2)
+----
+----
+
+lower
 select x.a, x.b, y.a from x left join y on x.a > y.b
 ----
 ----
