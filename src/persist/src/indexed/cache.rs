@@ -323,7 +323,8 @@ impl<B: Blob> BlobCache<B> {
         &mut self,
         key: String,
         batch: BlobUnsealedBatch,
-    ) -> Result<(ProtoBatchFormat, u64), Error> {
+        format: ProtoBatchFormat,
+    ) -> Result<u64, Error> {
         let async_guard = self.async_runtime.enter();
 
         if key == Self::META_KEY {
@@ -333,10 +334,17 @@ impl<B: Blob> BlobCache<B> {
             )
             .into());
         }
+
+        if format != ProtoBatchFormat::ParquetKvtd {
+            return Err(format!(
+                "cannot write unsealed batch with unsupported format {:?}",
+                format
+            )
+            .into());
+        }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
-        let format = ProtoBatchFormat::ParquetKvtd;
         batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 
@@ -354,7 +362,7 @@ impl<B: Blob> BlobCache<B> {
             .maybe_add_unsealed(key, usize::cast_from(val_len), Arc::new(batch))?;
 
         drop(async_guard);
-        Ok((format, val_len))
+        Ok(val_len)
     }
 
     /// Removes a batch from both [Blob] storage and the local cache.
@@ -385,16 +393,23 @@ impl<B: Blob> BlobCache<B> {
         &self,
         key: String,
         batch: BlobTraceBatch,
-    ) -> Result<(ProtoBatchFormat, u64), Error> {
+        format: ProtoBatchFormat,
+    ) -> Result<u64, Error> {
         let async_guard = self.async_runtime.enter();
 
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }
+        if format != ProtoBatchFormat::ParquetKvtd {
+            return Err(format!(
+                "cannot write trace batch with unsupported format {:?}",
+                format
+            )
+            .into());
+        }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
-        let format = ProtoBatchFormat::ParquetKvtd;
         batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 
@@ -412,7 +427,7 @@ impl<B: Blob> BlobCache<B> {
             .maybe_add_trace(key, usize::cast_from(val_len), Arc::new(batch))?;
 
         drop(async_guard);
-        Ok((format, val_len))
+        Ok(val_len)
     }
 
     /// Removes a batch from both [Blob] storage and the local cache.

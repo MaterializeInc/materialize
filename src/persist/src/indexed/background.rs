@@ -21,6 +21,7 @@ use tokio::runtime::Runtime as AsyncRuntime;
 use mz_ore::task::RuntimeExt;
 
 use crate::error::Error;
+use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::ColumnarRecordsVec;
@@ -184,7 +185,8 @@ impl<B: Blob> Maintainer<B> {
         };
 
         let merged_key = Arrangement::new_blob_key();
-        let (format, size_bytes) = blob.set_trace_batch(merged_key.clone(), new_batch)?;
+        let format = ProtoBatchFormat::ParquetKvtd;
+        let size_bytes = blob.set_trace_batch(merged_key.clone(), new_batch, format)?;
 
         // Only upgrade the compaction level if we know this new batch represents
         // an increase in data over both of its parents so that we know we need
@@ -254,7 +256,8 @@ mod tests {
             .collect::<ColumnarRecordsVec>()
             .into_inner(),
         };
-        let (b0_format, b0_size_bytes) = blob.set_trace_batch("b0".into(), b0.clone())?;
+        let format = ProtoBatchFormat::ParquetKvtd;
+        let b0_size_bytes = blob.set_trace_batch("b0".into(), b0.clone(), format)?;
 
         let b1 = BlobTraceBatch {
             desc: desc_from(1, 3, 0),
@@ -266,19 +269,19 @@ mod tests {
             .collect::<ColumnarRecordsVec>()
             .into_inner(),
         };
-        let (b1_format, b1_size_bytes) = blob.set_trace_batch("b1".into(), b1.clone())?;
+        let b1_size_bytes = blob.set_trace_batch("b1".into(), b1.clone(), format)?;
 
         let req = CompactTraceReq {
             b0: TraceBatchMeta {
                 key: "b0".into(),
-                format: b0_format,
+                format,
                 desc: b0.desc,
                 level: 0,
                 size_bytes: b0_size_bytes,
             },
             b1: TraceBatchMeta {
                 key: "b1".into(),
-                format: b1_format,
+                format,
                 desc: b1.desc,
                 level: 0,
                 size_bytes: b1_size_bytes,
