@@ -192,7 +192,7 @@ impl PartitionTimestamps {
             );
             assert!(
                 timestamp > *last_ts,
-                "timestamp must go forwards but {} <= {}",
+                "timestamp must go forwards, but {} <= {}",
                 timestamp,
                 last_ts
             );
@@ -371,6 +371,12 @@ impl TimestampBindingBox {
             panic!("missing partition {:?} when adding binding", partition);
         }
 
+        assert!(
+            timestamp < self.proposer.upper(),
+            "timestamp {} must be less than current proposer state {:?}",
+            timestamp,
+            self
+        );
         let partition = self.partitions.get_mut(&partition).expect("known to exist");
         partition.add_binding(timestamp, offset);
     }
