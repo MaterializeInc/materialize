@@ -143,51 +143,26 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         Ok(())
     }
-    pub async fn drop_sinks(
-        &mut self,
-        sink_identifiers: Vec<GlobalId>,
-    ) -> Result<(), ComputeError> {
+    pub async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
-        self.validate_ids(sink_identifiers.iter().cloned())?;
+        self.validate_ids(identifiers.iter().cloned())?;
 
-        for id in sink_identifiers.iter() {
-            // Apply the updates but ignore the results for now.
-            // TODO(mcsherry): observe the results and allow compaction.
-            let _ = self
-                .collection_mut(*id)?
-                .capability_downgrade(Antichain::new());
-        }
-        self.client
-            .send(Command::Compute(
-                ComputeCommand::DropSinks(sink_identifiers),
-                self.instance,
-            ))
-            .await;
-
+        let compaction_commands = identifiers
+            .into_iter()
+            .map(|id| (id, Antichain::new()))
+            .collect();
+        self.allow_index_compaction(compaction_commands).await;
         Ok(())
     }
-    pub async fn drop_indexes(
-        &mut self,
-        index_identifiers: Vec<GlobalId>,
-    ) -> Result<(), ComputeError> {
+    pub async fn drop_indexes(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
-        self.validate_ids(index_identifiers.iter().cloned())?;
+        self.validate_ids(identifiers.iter().cloned())?;
 
-        for id in index_identifiers.iter() {
-            // Apply the updates but ignore the results for now.
-            // TODO(mcsherry): observe the results and allow compaction.
-            let _ = self
-                .collection_mut(*id)?
-                .capability_downgrade(Antichain::new());
-        }
-
-        self.client
-            .send(Command::Compute(
-                ComputeCommand::DropIndexes(index_identifiers),
-                self.instance,
-            ))
-            .await;
-
+        let compaction_commands = identifiers
+            .into_iter()
+            .map(|id| (id, Antichain::new()))
+            .collect();
+        self.allow_index_compaction(compaction_commands).await;
         Ok(())
     }
     pub async fn peek(
@@ -249,7 +224,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         self.client
             .send(Command::Compute(
-                ComputeCommand::AllowIndexCompaction(frontiers),
+                ComputeCommand::AllowCompaction(frontiers),
                 self.instance,
             ))
             .await;

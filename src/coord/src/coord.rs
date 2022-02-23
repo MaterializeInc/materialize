@@ -1614,7 +1614,7 @@ impl Coordinator {
             self.persisted_table_allow_compaction(&source_since_updates);
             self.dataflow_client
                 .storage()
-                .allow_source_compaction(source_since_updates)
+                .allow_compaction(source_since_updates)
                 .await
                 .unwrap();
         }
@@ -4164,7 +4164,8 @@ impl Coordinator {
                 self.dataflow_client
                     .storage()
                     .drop_sources(sources_to_drop)
-                    .await;
+                    .await
+                    .unwrap();
             }
             if !tables_to_drop.is_empty() {
                 // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
@@ -4177,7 +4178,8 @@ impl Coordinator {
                 self.dataflow_client
                     .storage()
                     .drop_sources(tables_to_drop)
-                    .await;
+                    .await
+                    .unwrap();
             }
             if !sinks_to_drop.is_empty() {
                 for id in sinks_to_drop.iter() {

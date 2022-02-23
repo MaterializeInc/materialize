@@ -61,6 +61,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     CreateInstance(Option<LoggingConfig>),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
+
     /// Create a sequence of dataflows.
     ///
     /// Each of the dataflows must contain `as_of` members that are valid
@@ -70,10 +71,12 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
     CreateDataflows(Vec<DataflowDescription<crate::plan::Plan, T>>),
-    /// Drop the sinks bound to these names.
-    DropSinks(Vec<GlobalId>),
-    /// Drop the indexes bound to these namees.
-    DropIndexes(Vec<GlobalId>),
+    /// Enable compaction in compute-managed collections.
+    ///
+    /// Each entry in the vector names a collection and provides a frontier after which
+    /// accumulations must be correct. The workers gain the liberty of compacting
+    /// the corresponding maintained traces up through that frontier.
+    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 
     /// Peek at an arrangement.
     ///
@@ -108,13 +111,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// The identifier of the peek request to cancel.
         conn_id: u32,
     },
-    /// Enable compaction in views.
-    ///
-    /// Each entry in the vector names a view and provides a frontier after which
-    /// accumulations must be correct. The workers gain the liberty of compacting
-    /// the corresponding maintained traces up through that frontier.
-    // TODO: Could be called `AllowTraceCompaction` or `AllowArrangementCompaction`?
-    AllowIndexCompaction(Vec<(GlobalId, Antichain<T>)>),
 }
 
 impl ComputeCommandKind {
@@ -126,11 +122,9 @@ impl ComputeCommandKind {
             // TODO: This breaks metrics. Not sure that's a problem.
             ComputeCommandKind::CreateInstance => "create_instance",
             ComputeCommandKind::DropInstance => "drop_instance",
-            ComputeCommandKind::AllowIndexCompaction => "allow_index_compaction",
+            ComputeCommandKind::AllowCompaction => "allow_compute_compaction",
             ComputeCommandKind::CancelPeek => "cancel_peek",
             ComputeCommandKind::CreateDataflows => "create_dataflows",
-            ComputeCommandKind::DropIndexes => "drop_indexes",
-            ComputeCommandKind::DropSinks => "drop_sinks",
             ComputeCommandKind::Peek => "peek",
         }
     }
@@ -160,8 +154,11 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
             /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc>,
         )>,
     ),
-    /// Drop the sources bound to these names.
-    DropSources(Vec<GlobalId>),
+    /// Enable compaction in storage-managed collections.
+    ///
+    /// Each entry in the vector names a collection and provides a frontier after which
+    /// accumulations must be correct.
+    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 
     /// Insert `updates` into the local input named `id`.
     Insert {
@@ -185,11 +182,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
         /// Previously stored timestamp bindings.
         bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
     },
-    /// Enable compaction in sources.
-    ///
-    /// Each entry in the vector names a source and provides a frontier after which
-    /// accumulations must be correct.
-    AllowSourceCompaction(Vec<(GlobalId, Antichain<T>)>),
     /// Drop all timestamping info for a source
     DropSourceTimestamping {
         /// The ID id of the formerly timestamped source.
@@ -211,9 +203,8 @@ impl StorageCommandKind {
             StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
             StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
-            StorageCommandKind::AllowSourceCompaction => "allows_source_compaction",
+            StorageCommandKind::AllowCompaction => "allows_storage_compaction",
             StorageCommandKind::CreateSources => "create_sources",
-            StorageCommandKind::DropSources => "drop_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::Insert => "insert",
             StorageCommandKind::RenderSources => "render_sources",
@@ -305,14 +296,11 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::DropIndexes(index_ids), _instance) => {
-                for id in index_ids.iter() {
-                    cease.push(*id);
-                }
-            }
-            Command::Compute(ComputeCommand::DropSinks(sink_ids), _instance) => {
-                for id in sink_ids.iter() {
-                    cease.push(*id);
+            Command::Compute(ComputeCommand::AllowCompaction(frontiers), _instance) => {
+                for (id, frontier) in frontiers.iter() {
+                    if frontier.is_empty() {
+                        cease.push(*id);
+                    }
                 }
             }
             Command::Storage(StorageCommand::AddSourceTimestamping { id, .. }) => {
