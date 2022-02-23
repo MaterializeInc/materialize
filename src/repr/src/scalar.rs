@@ -575,9 +575,15 @@ impl<'a> Datum<'a> {
                     (Datum::Array(array), ScalarType::Array(t)) => {
                         array.elements.iter().all(|e| match e {
                             Datum::Null => true,
-                            Datum::Array(_) => is_instance_of_scalar(e, scalar_type),
                             _ => is_instance_of_scalar(e, t),
                         })
+                    }
+                    (Datum::Array(array), ScalarType::Int2Vector) => {
+                        array.dims().len() == 1
+                            && array
+                                .elements
+                                .iter()
+                                .all(|e| is_instance_of_scalar(e, &ScalarType::Int16))
                     }
                     (Datum::Array(_), _) => false,
                     (Datum::List(list), ScalarType::List { element_type, .. }) => list
@@ -932,6 +938,9 @@ pub enum ScalarType {
     RegType,
     /// A PostgreSQL class name.
     RegClass,
+    /// A vector on small ints; this is a legacy type in PG used primarily in
+    /// the catalog.
+    Int2Vector,
 }
 
 /// Types that implement this trait can be stored in an SQL column with the specified ColumnType
@@ -1449,15 +1458,38 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`].
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`] or the
+    /// elements of a vector type, e.g. [`ScalarType::Int16`] for
+    /// [`ScalarType::Int2Vector`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Array`].
+    /// Panics if called on anything other than a [`ScalarType::Array`] or
+    /// [`ScalarType::Int2Vector`].
     pub fn unwrap_array_element_type(&self) -> &ScalarType {
         match self {
             ScalarType::Array(s) => &**s,
+            ScalarType::Int2Vector => &ScalarType::Int16,
             _ => panic!("ScalarType::unwrap_array_element_type called on {:?}", self),
+        }
+    }
+
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`],
+    /// [`ScalarType::Int2Vector`], or [`ScalarType::List`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Array`],
+    /// [`ScalarType::Int2Vector`], or [`ScalarType::List`].
+    pub fn unwrap_collection_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Array(element_type) => element_type,
+            ScalarType::Int2Vector => &ScalarType::Int16,
+            ScalarType::List { element_type, .. } => element_type,
+            _ => panic!(
+                "ScalarType::unwrap_collection_element_type called on {:?}",
+                self
+            ),
         }
     }
 
@@ -1507,10 +1539,13 @@ impl<'a> ScalarType {
     }
 
     /// Returns whether or not `self` is a vector-like type, i.e.
-    /// [`ScalarType::List`] or [`ScalarType::Array`], irrespective of its
-    /// element type.
+    /// [`ScalarType::Array`], [`ScalarType::Int2Vector`], or
+    /// [`ScalarType::List`], irrespective of its element type.
     pub fn is_vec(&self) -> bool {
-        matches!(self, ScalarType::List { .. } | ScalarType::Array(_))
+        matches!(
+            self,
+            ScalarType::Array(_) | ScalarType::Int2Vector | ScalarType::List { .. }
+        )
     }
 
     pub fn is_custom_type(&self) -> bool {

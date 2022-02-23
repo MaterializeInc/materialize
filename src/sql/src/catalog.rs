@@ -356,6 +356,7 @@ pub enum CatalogType {
     TimestampTz,
     Uuid,
     VarChar,
+    Int2Vector,
 }
 
 /// An error returned by the catalog.

@@ -2338,6 +2338,7 @@ fn invent_column_name(
     //
     // See: https://github.com/postgres/postgres/blob/1f655fdc3/src/backend/parser/parse_target.c#L1716-L1728
 
+    #[derive(Debug)]
     enum NameQuality {
         Low,
         High,
@@ -3003,8 +3004,6 @@ fn plan_field_access(
     }
 }
 
-// Currently, slicing subscripts only work on `list`s, but should be expanded
-// to arrays.
 fn plan_subscript(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
@@ -3019,7 +3018,16 @@ fn plan_subscript(
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
     match &ty {
-        ScalarType::Array(..) => plan_subscript_array(ecx, expr, positions),
+        ScalarType::Array(..) | ScalarType::Int2Vector => plan_subscript_array(
+            ecx,
+            expr,
+            positions,
+            if matches!(ty, ScalarType::Array(..)) {
+                1
+            } else {
+                0
+            },
+        ),
         ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
         ScalarType::List { element_type, .. } => {
             let elem_type_name = ecx.humanize_scalar_type(&element_type);
@@ -3055,6 +3063,7 @@ fn plan_subscript_array(
     ecx: &ExprContext,
     expr: HirScalarExpr,
     positions: &[SubscriptPosition<Aug>],
+    offset: usize,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let mut exprs = Vec::with_capacity(positions.len() + 1);
     exprs.push(expr);
@@ -3068,7 +3077,7 @@ fn plan_subscript_array(
     }
 
     Ok(HirScalarExpr::CallVariadic {
-        func: VariadicFunc::ArrayIndex,
+        func: VariadicFunc::ArrayIndex { offset },
         exprs,
     }
     .into())
@@ -4327,6 +4336,7 @@ fn scalar_type_from_catalog(
                 CatalogType::Timestamp => Ok(ScalarType::Timestamp),
                 CatalogType::TimestampTz => Ok(ScalarType::TimestampTz),
                 CatalogType::Uuid => Ok(ScalarType::Uuid),
+                CatalogType::Int2Vector => Ok(ScalarType::Int2Vector),
                 CatalogType::Numeric => unreachable!("handled above"),
                 CatalogType::Char => unreachable!("handled above"),
                 CatalogType::VarChar => unreachable!("handled above"),

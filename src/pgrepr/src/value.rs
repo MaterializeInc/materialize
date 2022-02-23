@@ -83,6 +83,11 @@ pub enum Value {
     VarChar(String),
     /// A universally unique identifier.
     Uuid(Uuid),
+    /// A small int vector.
+    Int2Vector {
+        /// The elements of the vector.
+        elements: Vec<Option<Value>>,
+    },
 }
 
 impl Value {
@@ -129,6 +134,16 @@ impl Value {
                     .collect();
                 Some(Value::Array { dims, elements })
             }
+            (Datum::Array(array), ScalarType::Int2Vector) => {
+                let dims: Vec<_> = array.dims().into_iter().collect();
+                assert!(dims.len() == 1, "int2vector must be 1 dimensional");
+                let elements = array
+                    .elements()
+                    .iter()
+                    .map(|elem| Value::from_datum(elem, &ScalarType::Int16))
+                    .collect();
+                Some(Value::Int2Vector { elements })
+            }
             (Datum::List(list), ScalarType::List { element_type, .. }) => {
                 let elements = list
                     .iter()
@@ -162,6 +177,11 @@ impl Value {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
                 unreachable!("into_datum cannot be called on Value::Array");
+            }
+            Value::Int2Vector { .. } => {
+                // This situation is handled gracefully by Value::decode; if we
+                // wind up here it's a programming error.
+                unreachable!("into_datum cannot be called on Value::Int2Vector");
             }
             Value::Bool(true) => Datum::True,
             Value::Bool(false) => Datum::False,
@@ -243,6 +263,13 @@ impl Value {
                     Some(elem) => elem.encode_text(buf.nonnull_buffer()),
                 })
             }
+            Value::Int2Vector { elements } => {
+                strconv::format_legacy_vector(buf, elements, |buf, elem| {
+                    elem.as_ref()
+                        .expect("Int2Vector does not support NULL values")
+                        .encode_text(buf.nonnull_buffer())
+                })
+            }
             Value::Bool(b) => strconv::format_bool(buf, *b),
             Value::Bytea(b) => strconv::format_bytes(buf, b),
             Value::Date(d) => strconv::format_date(buf, *d),
@@ -296,6 +323,10 @@ impl Value {
                     encode_element(buf, elem.as_ref(), elem_type)?;
                 }
                 Ok(postgres_types::IsNull::No)
+            }
+            // TODO: what is the binary format of vector types?
+            Value::Int2Vector { .. } => {
+                Err("binary encoding of int2vector is not implemented".into())
             }
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
@@ -394,6 +425,9 @@ impl Value {
         let raw = str::from_utf8(raw)?;
         Ok(match ty {
             Type::Array(_) => return Err("input of array types is not implemented".into()),
+            Type::Int2Vector { .. } => {
+                return Err("input of Int2Vector types is not implemented".into())
+            }
             Type::Bool => Value::Bool(strconv::parse_bool(raw)?),
             Type::Bytea => Value::Bytea(strconv::parse_bytes(raw)?),
             Type::Date => Value::Date(strconv::parse_date(raw)?),
@@ -438,6 +472,7 @@ impl Value {
     pub fn decode_binary(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         match ty {
             Type::Array(_) => Err("input of array types is not implemented".into()),
+            Type::Int2Vector => Err("input of int2vector types is not implemented".into()),
             Type::Bool => bool::from_sql(ty.inner(), raw).map(Value::Bool),
             Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
             Type::Date => chrono::NaiveDate::from_sql(ty.inner(), raw).map(Value::Date),
