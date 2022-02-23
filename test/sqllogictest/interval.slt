@@ -1009,3 +1009,13 @@ query T
 SELECT INTERVAL '0.6 microseconds';
 ----
 00:00:00.000001
+
+query T
+SELECT EXTRACT(epoch FROM INTERVAL '2147483647 hours 59 minutes 59.999999 seconds');
+----
+7730941132800.000000
+
+query T
+SELECT EXTRACT(epoch FROM INTERVAL '-2147483648 hours -59 minutes -59.999999 seconds');
+----
+-7730941136400.000000

@@ -1765,7 +1765,7 @@ where
 {
     let interval = interval.unwrap_interval();
     match units {
-        DateTimeUnits::Epoch => Ok(interval.as_seconds::<D>().into()),
+        DateTimeUnits::Epoch => Ok(interval.as_epoch_seconds::<D>().into()),
         DateTimeUnits::Millennium => Ok(D::from(interval.millennia()).into()),
         DateTimeUnits::Century => Ok(D::from(interval.centuries()).into()),
         DateTimeUnits::Decade => Ok(D::from(interval.decades()).into()),

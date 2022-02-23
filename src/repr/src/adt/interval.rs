@@ -13,6 +13,7 @@ use std::fmt::{self, Write};
 use std::time::Duration;
 
 use anyhow::bail;
+use num_traits::CheckedMul;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
@@ -69,6 +70,21 @@ impl Interval {
     // ```
     const MAX_MICROSECONDS: i64 = (((i32::MAX as i64 * 60) + 59) * 60) * 1_000_000 + 59_999_999;
     const MIN_MICROSECONDS: i64 = (((i32::MIN as i64 * 60) - 59) * 60) * 1_000_000 - 59_999_999;
+
+    const CENTURY_PER_MILLENNIUM: i32 = 10;
+    const DECADE_PER_CENTURY: i32 = 10;
+    const YEAR_PER_DECADE: i32 = 10;
+    const MONTH_PER_YEAR: i32 = 12;
+    // Interval type considers 30 days == 1 month
+    const DAY_PER_MONTH: i32 = 30;
+    // Interval type considers 24 hours == 1 day
+    const HOUR_PER_DAY: i32 = 24;
+    const MINUTE_PER_HOUR: i32 = 60;
+    const SECOND_PER_MINUTE: i32 = 60;
+    const MILLISECOND_PER_SECOND: i32 = 1_000;
+    const MICROSECOND_PER_MILLISECOND: i32 = 1_000;
+    // When extracting an epoch, PostgreSQL considers a year 365.25 days.
+    const EPOCH_DAYS_PER_YEAR: f64 = 365.25;
 
     /// Constructs a new `Interval` with the specified units of time.
     pub fn new(months: i32, days: i32, micros: i64) -> Result<Interval, anyhow::Error> {
@@ -147,22 +163,13 @@ impl Interval {
         Self::new(months as i32, days as i32, micros as i64).ok()
     }
 
-    /// Returns the total number of whole seconds in the `Interval`'s duration.
-    pub fn dur_as_secs(&self) -> i64 {
-        self.micros / 1_000_000
-    }
-
-    /// Returns the total number of microseconds in the `Interval`'s duration.
-    pub fn dur_as_microsecs(&self) -> i64 {
-        self.micros
-    }
-
     /// Computes the millennium part of the interval.
     ///
     /// The millennium part is the number of whole millennia in the interval. For example,
     /// this function returns `3` for the interval `3400 years`.
     pub fn millennia(&self) -> i32 {
-        self.months / 12_000
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Millennium, self.months)
+            .unwrap()
     }
 
     /// Computes the century part of the interval.
@@ -170,7 +177,8 @@ impl Interval {
     /// The century part is the number of whole centuries in the interval. For example,
     /// this function returns `3` for the interval `340 years`.
     pub fn centuries(&self) -> i32 {
-        self.months / 1_200
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Century, self.months)
+            .unwrap()
     }
 
     /// Computes the decade part of the interval.
@@ -178,7 +186,8 @@ impl Interval {
     /// The decade part is the number of whole decades in the interval. For example,
     /// this function returns `3` for the interval `34 years`.
     pub fn decades(&self) -> i32 {
-        self.months / 120
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Decade, self.months)
+            .unwrap()
     }
 
     /// Computes the year part of the interval.
@@ -186,7 +195,8 @@ impl Interval {
     /// The year part is the number of whole years in the interval. For example,
     /// this function returns `3` for the interval `3 years 4 months`.
     pub fn years(&self) -> i32 {
-        self.months / 12
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Year, self.months)
+            .unwrap()
     }
 
     /// Computes the quarter part of the interval.
@@ -195,7 +205,7 @@ impl Interval {
     /// and assigning quarter #1 for months 0-2, #2 for 3-5, #3 for 6-8 and #4 for 9-11.
     /// For example, this function returns `4` for the interval `11 months`.
     pub fn quarters(&self) -> i32 {
-        (self.months % 12) / 3 + 1
+        self.months() / 3 + 1
     }
 
     /// Computes the month part of the interval.
@@ -204,7 +214,7 @@ impl Interval {
     /// For example, this function returns `4` for the interval `3 years 4
     /// months`.
     pub fn months(&self) -> i32 {
-        self.months % 12
+        self.months % Self::MONTH_PER_YEAR
     }
 
     /// Computes the day part of the interval.
@@ -222,7 +232,13 @@ impl Interval {
     /// For example, this function returns `4` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
     pub fn hours(&self) -> i64 {
-        (self.dur_as_secs() / (60 * 60)) % 24
+        Self::convert_date_time_unit(
+            DateTimeField::Microseconds,
+            DateTimeField::Hour,
+            self.micros,
+        )
+        .unwrap()
+            % i64::from(Self::HOUR_PER_DAY)
     }
 
     /// Computes the minute part of the interval.
@@ -231,7 +247,13 @@ impl Interval {
     /// 60. For example, this function returns `3` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
     pub fn minutes(&self) -> i64 {
-        (self.dur_as_secs() / 60) % 60
+        Self::convert_date_time_unit(
+            DateTimeField::Microseconds,
+            DateTimeField::Minute,
+            self.micros,
+        )
+        .unwrap()
+            % i64::from(Self::MINUTE_PER_HOUR)
     }
 
     /// Computes the second part of the interval.
@@ -272,16 +294,57 @@ impl Interval {
         (self.micros % 1_000_000 * 1_000).try_into().unwrap()
     }
 
-    /// Computes the total number of seconds in the interval.
-    pub fn as_seconds<T>(&self) -> T
+    /// Computes the total number of epoch seconds in the interval.
+    /// When extracting an epoch, PostgreSQL considers a year
+    /// 365.25 days.
+    pub fn as_epoch_seconds<T>(&self) -> T
     where
         T: DecimalLike,
     {
-        T::from(self.years() * 60 * 60 * 24) * T::from(365.25)
-            + T::from(self.months() * 60 * 60 * 24 * 30)
-            + T::from(self.days * 60 * 60 * 24)
-            + T::lossy_from(self.dur_as_secs())
-            + T::from(self.nanoseconds()) / T::from(1e9)
+        let days = T::from(self.years()) * T::from(Self::EPOCH_DAYS_PER_YEAR)
+            + T::from(self.months()) * T::from(Self::DAY_PER_MONTH)
+            + T::from(self.days);
+        let seconds =
+            days * T::from(Self::HOUR_PER_DAY * Self::MINUTE_PER_HOUR * Self::SECOND_PER_MINUTE);
+
+        seconds
+            + T::lossy_from(self.micros)
+                / T::from(Self::MICROSECOND_PER_MILLISECOND * Self::MILLISECOND_PER_SECOND)
+    }
+
+    /// Computes the total number of microseconds in the interval.
+    pub fn as_microseconds(&self) -> i128 {
+        // unwrap is safe because i32::MAX/i32::MIN number of months will not overflow an i128 when
+        // converted to microseconds.
+        Self::convert_date_time_unit(
+            DateTimeField::Month,
+            DateTimeField::Microseconds,
+            i128::from(self.months),
+        ).unwrap() +
+        // unwrap is safe because i32::MAX/i32::MIN number of days will not overflow an i128 when
+        // converted to microseconds.
+        Self::convert_date_time_unit(
+            DateTimeField::Day,
+            DateTimeField::Microseconds,
+            i128::from(self.days),
+        ).unwrap() +
+        i128::from(self.micros)
+    }
+
+    /// Converts this `Interval`'s duration into `chrono::Duration`.
+    pub fn duration_as_chrono(&self) -> chrono::Duration {
+        use chrono::Duration;
+        Duration::days(self.days.into()) + Duration::microseconds(self.micros)
+    }
+
+    pub fn duration(&self) -> Result<Duration, anyhow::Error> {
+        if self.months != 0 {
+            bail!("cannot convert interval with months to duration");
+        }
+        if self.duration_as_chrono() < chrono::Duration::zero() {
+            bail!("cannot convert negative interval to duration");
+        }
+        Ok(self.duration_as_chrono().to_std()?)
     }
 
     /// Truncate the "head" of the interval, removing all time units greater than `f`.
@@ -303,22 +366,6 @@ impl Interval {
                 unreachable!(format!("Cannot truncate interval by {}", f))
             }
         }
-    }
-
-    /// Converts this `Interval`'s duration into `chrono::Duration`.
-    pub fn duration_as_chrono(&self) -> chrono::Duration {
-        use chrono::Duration;
-        Duration::days(self.days.into()) + Duration::microseconds(self.micros)
-    }
-
-    pub fn duration(&self) -> Result<Duration, anyhow::Error> {
-        if self.months != 0 {
-            bail!("cannot convert interval with months to duration");
-        }
-        if self.duration_as_chrono() < chrono::Duration::zero() {
-            bail!("cannot convert negative interval to duration");
-        }
-        Ok(self.duration_as_chrono().to_std()?)
     }
 
     /// Truncate the "tail" of the interval, removing all time units less than `f`.
@@ -387,6 +434,99 @@ impl Interval {
             }
         }
         Ok(())
+    }
+
+    /// Returns a new Interval with only the time component
+    pub fn as_time_interval(&self) -> Self {
+        Self::new(0, 0, self.micros).unwrap()
+    }
+
+    /// Convert val from source unit to dest unit. Does not maintain fractional values.
+    /// Returns None if the result overflows/underflows.
+    ///
+    /// WARNING: Due to the fact that Intervals consider months to have 30 days, you may get
+    /// unexpected and incorrect results when trying to convert from a non-year type to a year type
+    /// and vice versa. For example from years to days.
+    pub fn convert_date_time_unit<T>(
+        source: DateTimeField,
+        dest: DateTimeField,
+        val: T,
+    ) -> Option<T>
+    where
+        T: From<i32> + CheckedMul + std::ops::DivAssign,
+    {
+        if source < dest {
+            Self::convert_date_time_unit_increasing(source, dest, val)
+        } else if source > dest {
+            Self::convert_date_time_unit_decreasing(source, dest, val)
+        } else {
+            Some(val)
+        }
+    }
+
+    fn convert_date_time_unit_increasing<T>(
+        source: DateTimeField,
+        dest: DateTimeField,
+        val: T,
+    ) -> Option<T>
+    where
+        T: From<i32> + std::ops::DivAssign,
+    {
+        let mut cur_unit = source;
+        let mut res = val;
+        while cur_unit < dest {
+            let divisor: T = match cur_unit {
+                DateTimeField::Millennium => 1.into(),
+                DateTimeField::Century => Self::CENTURY_PER_MILLENNIUM.into(),
+                DateTimeField::Decade => Self::DECADE_PER_CENTURY.into(),
+                DateTimeField::Year => Self::YEAR_PER_DECADE.into(),
+                DateTimeField::Month => Self::MONTH_PER_YEAR.into(),
+                DateTimeField::Day => Self::DAY_PER_MONTH.into(),
+                DateTimeField::Hour => Self::HOUR_PER_DAY.into(),
+                DateTimeField::Minute => Self::MINUTE_PER_HOUR.into(),
+                DateTimeField::Second => Self::SECOND_PER_MINUTE.into(),
+                DateTimeField::Milliseconds => Self::MILLISECOND_PER_SECOND.into(),
+                DateTimeField::Microseconds => Self::MICROSECOND_PER_MILLISECOND.into(),
+            };
+            res /= divisor;
+            cur_unit = cur_unit.next_largest();
+        }
+
+        Some(res)
+    }
+
+    fn convert_date_time_unit_decreasing<T>(
+        source: DateTimeField,
+        dest: DateTimeField,
+        val: T,
+    ) -> Option<T>
+    where
+        T: From<i32> + CheckedMul,
+    {
+        let mut cur_unit = source;
+        let mut res = val;
+        while cur_unit > dest {
+            let multiplier: T = match cur_unit {
+                DateTimeField::Millennium => Self::CENTURY_PER_MILLENNIUM.into(),
+                DateTimeField::Century => Self::DECADE_PER_CENTURY.into(),
+                DateTimeField::Decade => Self::YEAR_PER_DECADE.into(),
+                DateTimeField::Year => Self::MONTH_PER_YEAR.into(),
+                DateTimeField::Month => Self::DAY_PER_MONTH.into(),
+                DateTimeField::Day => Self::HOUR_PER_DAY.into(),
+                DateTimeField::Hour => Self::MINUTE_PER_HOUR.into(),
+                DateTimeField::Minute => Self::SECOND_PER_MINUTE.into(),
+                DateTimeField::Second => Self::MILLISECOND_PER_SECOND.into(),
+                DateTimeField::Milliseconds => Self::MICROSECOND_PER_MILLISECOND.into(),
+                DateTimeField::Microseconds => 1.into(),
+            };
+            res = match res.checked_mul(&multiplier) {
+                Some(r) => r,
+                None => return None,
+            };
+            cur_unit = cur_unit.next_smallest();
+        }
+
+        Some(res)
     }
 }
 
@@ -933,5 +1073,46 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_convert_date_time_unit() {
+        assert_eq!(
+            Some(1_123_200_000_000),
+            Interval::convert_date_time_unit(
+                DateTimeField::Day,
+                DateTimeField::Microseconds,
+                13i64
+            )
+        );
+
+        assert_eq!(
+            Some(3_558_399_705),
+            Interval::convert_date_time_unit(
+                DateTimeField::Milliseconds,
+                DateTimeField::Month,
+                i64::MAX
+            )
+        );
+
+        assert_eq!(
+            None,
+            Interval::convert_date_time_unit(
+                DateTimeField::Minute,
+                DateTimeField::Second,
+                i32::MAX
+            )
+        );
+
+        assert_eq!(
+            Some(1),
+            Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Year, 365)
+        );
+
+        // Strange behavior due to months having 30 days
+        assert_eq!(
+            Some(360),
+            Interval::convert_date_time_unit(DateTimeField::Year, DateTimeField::Day, 1)
+        );
     }
 }

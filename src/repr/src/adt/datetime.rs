@@ -118,19 +118,20 @@ impl FromStr for DateTimeUnits {
     }
 }
 
+// Order of definition is important for PartialOrd and Ord to be derived correctly
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
-    Millennium,
-    Century,
-    Decade,
-    Year,
-    Month,
-    Day,
-    Hour,
-    Minute,
-    Second,
-    Milliseconds,
     Microseconds,
+    Milliseconds,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Month,
+    Year,
+    Decade,
+    Century,
+    Millennium,
 }
 
 impl fmt::Display for DateTimeField {
@@ -453,7 +454,7 @@ impl ParsedDateTime {
         // Add all DateTimeFields, from Millennium to Microseconds.
         self.add_field(Millennium, &mut months, &mut days, &mut micros)?;
 
-        for field in Millennium.into_iter().take_while(|f| *f <= Microseconds) {
+        for field in Millennium.into_iter().take_while(|f| *f >= Microseconds) {
             self.add_field(field, &mut months, &mut days, &mut micros)?;
         }
 
@@ -476,6 +477,7 @@ impl ParsedDateTime {
         micros: &mut i64,
     ) -> Result<(), String> {
         use DateTimeField::*;
+        /// divide i by d rounding to the closest integer
         fn div_and_round(i: i128, d: i64) -> Option<i64> {
             let mut res = i / i128::from(d);
             let round_digit = (i / (i128::from(d) / 10)) % 10;
@@ -492,9 +494,8 @@ impl ParsedDateTime {
                     Some(y) => (y.unit, y.fraction),
                     None => return Ok(()),
                 };
-                // months += y * month_multiplier(d)
-                *months = y
-                    .checked_mul(d.month_multiplier())
+                // months += y.to_month()
+                *months = Interval::convert_date_time_unit(d, DateTimeField::Month, y)
                     .and_then(|y_m| i32::try_from(y_m).ok())
                     .and_then(|y_m| months.checked_add(y_m))
                     .ok_or_else(|| {
@@ -505,9 +506,8 @@ impl ParsedDateTime {
                         )
                     })?;
 
-                // months += y_f * month_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
-                *months = y_f
-                    .checked_mul(d.month_multiplier())
+                // months += y_f.to_month() / DateTimeFieldValue::FRACTION_MULTIPLIER
+                *months = Interval::convert_date_time_unit(d, DateTimeField::Month, y_f)
                     .and_then(|y_f_m| {
                         y_f_m.checked_div(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
                     })
@@ -540,10 +540,9 @@ impl ParsedDateTime {
                         )
                     })?;
 
-                let m_f_days = m_f
-                    .checked_mul(30)
+                let m_f_days = Interval::convert_date_time_unit(d, DateTimeField::Day, m_f)
                     .ok_or_else(|| "Intermediate overflow in MONTH fraction".to_owned())?;
-                // days += m_f * 30 / DateTimeFieldValue::FRACTION_MULTIPLIER
+                // days += m_f.to_day() / DateTimeFieldValue::FRACTION_MULTIPLIER
                 *days = m_f_days
                     .checked_div(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
                     .and_then(|m_f_days| i32::try_from(m_f_days).ok())
@@ -556,10 +555,16 @@ impl ParsedDateTime {
                         )
                     })?;
 
-                // micros += m_f * 30 % DateTimeFieldValue::FRACTION_MULTIPLIER * micros_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
+                // micros += (m_f.to_day() % DateTimeFieldValue::FRACTION_MULTIPLIER).to_micros() / DateTimeFieldValue::FRACTION_MULTIPLIER
                 *micros = i128::from(m_f_days)
                     .checked_rem(DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION.into())
-                    .and_then(|m_f_us| m_f_us.checked_mul(Day.micros_multiplier().into()))
+                    .and_then(|m_f_us| {
+                        Interval::convert_date_time_unit(
+                            DateTimeField::Day,
+                            DateTimeField::Microseconds,
+                            m_f_us,
+                        )
+                    })
                     .and_then(|m_f_us| {
                         div_and_round(m_f_us, DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
                     })
@@ -592,20 +597,23 @@ impl ParsedDateTime {
                         )
                     })?;
 
-                // micros += t_f * micros_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
-                *micros = i128::from(t_f)
-                    .checked_mul(d.micros_multiplier().into())
-                    .and_then(|t_f_us| {
-                        div_and_round(t_f_us, DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
-                    })
-                    .and_then(|t_f_us| micros.checked_add(t_f_us))
-                    .ok_or_else(|| {
-                        format!(
-                            "Overflows maximum microseconds; cannot exceed {}/{} microseconds",
-                            i64::MAX,
-                            i64::MIN
-                        )
-                    })?;
+                // micros += t_f.to_micros() / DateTimeFieldValue::FRACTION_MULTIPLIER
+                *micros = Interval::convert_date_time_unit(
+                    d,
+                    DateTimeField::Microseconds,
+                    i128::from(t_f),
+                )
+                .and_then(|t_f_us| {
+                    div_and_round(t_f_us, DateTimeFieldValue::FRACTIONAL_DIGIT_PRECISION)
+                })
+                .and_then(|t_f_us| micros.checked_add(t_f_us))
+                .ok_or_else(|| {
+                    format!(
+                        "Overflows maximum microseconds; cannot exceed {}/{} microseconds",
+                        i64::MAX,
+                        i64::MIN
+                    )
+                })?;
 
                 Ok(())
             }
@@ -615,9 +623,8 @@ impl ParsedDateTime {
                     None => return Ok(()),
                 };
 
-                // micros += t * micros_multiplier(d)
-                *micros = t
-                    .checked_mul(d.micros_multiplier())
+                // micros += t.to_micros()
+                *micros = Interval::convert_date_time_unit(d, DateTimeField::Microseconds, t)
                     .and_then(|t_s| micros.checked_add(t_s))
                     .ok_or_else(|| {
                         format!(
@@ -627,9 +634,8 @@ impl ParsedDateTime {
                         )
                     })?;
 
-                // micros += t_f * micros_multiplier(d) / DateTimeFieldValue::FRACTION_MULTIPLIER
-                *micros = t_f
-                    .checked_mul(d.micros_multiplier())
+                // micros += t_f.to_micros() / DateTimeFieldValue::FRACTION_MULTIPLIER
+                *micros = Interval::convert_date_time_unit(d, DateTimeField::Microseconds, t_f)
                     .and_then(|t_f_ns| {
                         div_and_round(
                             t_f_ns.into(),

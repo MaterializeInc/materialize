@@ -31,7 +31,7 @@ sqlfunc!(
         if i.duration_as_chrono() < chrono::Duration::zero() {
             i = Interval::new(0, 0, 86_400_000_000)
                 .unwrap()
-                .checked_add(&Interval::new(0, 0, i.dur_as_microsecs()).unwrap())
+                .checked_add(&i.as_time_interval())
                 .unwrap();
         }
 

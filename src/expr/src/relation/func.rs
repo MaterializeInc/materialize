@@ -961,9 +961,7 @@ fn generate_series_ts(
     step: Interval,
     conv: fn(NaiveDateTime) -> Datum<'static>,
 ) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
-    let normalized_step = i64::from(step.months) * 30 * 24 * 60 * 60 * 1_000_000
-        + i64::from(step.days) * 24 * 60 * 60 * 1_000_000
-        + step.micros;
+    let normalized_step = step.as_microseconds();
     if normalized_step == 0 {
         return Err(EvalError::InvalidParameterValue(
             "step size cannot equal zero".to_owned(),
