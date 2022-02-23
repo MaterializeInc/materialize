@@ -402,6 +402,38 @@ impl CatalogState {
         &self.by_id[id]
     }
 
+    pub fn add_index_to_instance(&mut self, instance_id: usize, index_id: GlobalId) {
+        self.compute_instances_by_id
+            .get_mut(&instance_id)
+            .unwrap()
+            .current_indexes
+            .insert(index_id);
+    }
+
+    pub fn find_index_among_instances(&self, index_id: &GlobalId) -> usize {
+        for (id, instance) in self.compute_instances_by_id.iter() {
+            if instance.current_indexes.contains(index_id) {
+                return *id;
+            }
+        }
+        panic!("Lost track of which cluster has index {:?}", index_id);
+    }
+
+    pub fn remove_indexes_from_instances(&mut self, index_ids: &[GlobalId]) {
+        for id in index_ids {
+            let mut removed_from = 0;
+            for instance in self.compute_instances_by_id.values_mut() {
+                if instance.current_indexes.remove(id) {
+                    removed_from += 1;
+                }
+            }
+            assert_eq!(
+                removed_from, 1,
+                "only remove items actually on clusters; removed items should only be on one cluster"
+            );
+        }
+    }
+
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
@@ -2457,6 +2489,18 @@ impl Catalog {
             }
         }
         relations.into_iter().collect()
+    }
+
+    pub fn add_index_to_instance(&mut self, instance_id: usize, index_id: GlobalId) {
+        self.state.add_index_to_instance(instance_id, index_id);
+    }
+
+    pub fn find_index_among_instances(&self, index_id: &GlobalId) -> usize {
+        self.state.find_index_among_instances(&index_id)
+    }
+
+    pub fn remove_indexes_from_instances(&mut self, index_ids: &[GlobalId]) {
+        self.state.remove_indexes_from_instances(index_ids)
     }
 }
 

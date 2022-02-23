@@ -1568,13 +1568,22 @@ impl Coordinator {
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
 
-        if !index_since_updates.is_empty() {
-            // Error value is ignored because this call attempts to modify ids
-            // for indexes that have not been installed. See above, presumably.
+        let mut compute_instance_update_map = HashMap::new();
+
+        for isu in index_since_updates {
+            let instance_id = self.catalog.find_index_among_instances(&isu.0);
+            // Aggregate compute instance ID.
+            compute_instance_update_map
+                .entry(instance_id)
+                .or_insert(vec![])
+                .push(isu);
+        }
+
+        for (instance_id, isu) in compute_instance_update_map {
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
-                .allow_compaction(index_since_updates)
+                .allow_compaction(isu)
                 .await;
         }
 
@@ -1711,6 +1720,7 @@ impl Coordinator {
 
             // Allow dataflow to cancel any pending peeks.
             self.dataflow_client
+                // TODO: Get default instance ID
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .cancel_peek(conn_id)
@@ -2179,6 +2189,7 @@ impl Coordinator {
             index_depends_on,
             self.catalog.index_enabled_by_default(&index_id),
         );
+
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
         let df = self
@@ -3219,6 +3230,7 @@ impl Coordinator {
             IndexDesc {
                 on_id: view_id,
                 key: key.clone(),
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
             },
             typ,
         );
@@ -4226,6 +4238,8 @@ impl Coordinator {
                 for id in sinks_to_drop.iter() {
                     self.sink_writes.remove(id);
                 }
+
+                // TODO: Get instance from sink.
                 self.dataflow_client
                     .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                     .unwrap()
@@ -4330,16 +4344,24 @@ impl Coordinator {
     }
 
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
-        let mut trace_keys = Vec::new();
+        let mut instance_key_map = HashMap::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
-                trace_keys.push(id);
+                // Find the instances for each index to remove.
+                let instance_id = self.catalog.find_index_among_instances(&id);
+                // Aggregate them by instance ID.
+                instance_key_map
+                    .entry(instance_id)
+                    .or_insert(vec![])
+                    .push(id);
             }
             self.since_handles.remove(&id);
         }
-        if !trace_keys.is_empty() {
+
+        for (instance_id, trace_keys) in instance_key_map {
+            self.catalog.remove_indexes_from_instances(&trace_keys);
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
                 .drop_indexes(trace_keys)
                 .await
@@ -4478,6 +4500,8 @@ impl Coordinator {
                 self.logical_compaction_window_ms,
             );
             self.indexes.insert(*global_id, frontiers);
+            self.catalog
+                .add_index_to_instance(dataflow.compute_instance_id, *global_id);
         }
 
         // TODO: Produce "valid from" information for each sink.
@@ -5092,6 +5116,7 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
+                    // TODO: Get default instance
                     self.dataflow_client
                         .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                         .unwrap()
@@ -5135,6 +5160,7 @@ pub mod fast_path_peek {
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks.insert(conn_id, rows_tx);
             let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
+            // TODO: Get default instance
             self.dataflow_client
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()

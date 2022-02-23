@@ -86,6 +86,7 @@ impl Coordinator {
                 mz_dataflow_types::IndexDesc {
                     on_id: index.on,
                     key: index.keys.clone(),
+                    compute_instance_id: index.compute_instance_id,
                 },
             ))
         }
@@ -112,9 +113,11 @@ impl<'a> DataflowBuilder<'a> {
                 .iter()
                 .find(|(id, _keys)| self.indexes.contains_key(*id));
             if let Some((index_id, keys)) = valid_index {
+                let compute_instance_id = self.catalog.find_index_among_instances(index_id);
                 let index_desc = IndexDesc {
                     on_id: *id,
                     key: keys.to_vec(),
+                    compute_instance_id,
                 };
                 let desc = self
                     .catalog
@@ -192,11 +195,14 @@ impl<'a> DataflowBuilder<'a> {
                     if !self.indexes.contains_key(*id) {
                         continue;
                     }
+
                     let on_entry = self.catalog.get_by_id(&get_id);
                     let on_type = on_entry.desc().unwrap().typ().clone();
+                    let compute_instance_id = self.catalog.find_index_among_instances(id);
                     let index_desc = IndexDesc {
                         on_id: get_id,
                         key: keys.clone(),
+                        compute_instance_id,
                     };
                     dataflow.import_index(*id, index_desc, on_type, *view_id);
                 }
