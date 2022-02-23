@@ -11,7 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::iter;
 use std::path::Path;
@@ -237,6 +237,7 @@ pub fn purify(
                             ExternalSourceConnector::Postgres(PostgresSourceConnector {
                                 conn,
                                 publication,
+                                details,
                                 ..
                             }),
                         ..
@@ -244,22 +245,46 @@ pub fn purify(
                         let pub_info =
                             mz_postgres_util::publication_info(&conn, &publication).await?;
 
-                        // If the user didn't specify targets we'll generate views for all of them
-                        let targets = targets.clone().unwrap_or_else(|| {
-                            pub_info
-                                .iter()
-                                .map(|table_info| {
-                                    let name = UnresolvedObjectName::qualified(&[
-                                        &table_info.namespace,
-                                        &table_info.name,
-                                    ]);
-                                    CreateViewsSourceTarget {
-                                        name: name.clone(),
-                                        alias: Some(name),
-                                    }
-                                })
-                                .collect()
-                        });
+                        // If the user specified targets, validate they are all in the PostgresSourceDetails
+                        // otherwise create them from the contents of PostgresSourceDetails
+                        let targets = {
+                            if targets.is_some() {
+                                let known: HashSet<String> =
+                                    HashSet::from_iter(details.tables.iter().map(|t| {
+                                        UnresolvedObjectName::qualified(&[&t.namespace, &t.name])
+                                            .to_string()
+                                    }));
+                                let wanted: HashSet<String> = HashSet::from_iter(
+                                    targets.clone().unwrap().iter().map(|t| t.name.to_string()),
+                                );
+                                let diff = known.difference(&wanted);
+                                if diff.clone().count() > 0 {
+                                    return Err(anyhow!(
+                                        "Table(s) {} not found in source",
+                                        diff.map(|d| d.to_owned())
+                                            .collect::<Vec<String>>()
+                                            .join(", ")
+                                    ));
+                                } else {
+                                    targets.clone().unwrap()
+                                }
+                            } else {
+                                details
+                                    .tables
+                                    .iter()
+                                    .map(|t| {
+                                        let name = UnresolvedObjectName::qualified(&[
+                                            &t.namespace,
+                                            &t.name,
+                                        ]);
+                                        CreateViewsSourceTarget {
+                                            name: name.clone(),
+                                            alias: Some(name),
+                                        }
+                                    })
+                                    .collect()
+                            }
+                        };
 
                         let mut views = Vec::with_capacity(pub_info.len());
 
