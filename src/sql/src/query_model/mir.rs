@@ -127,10 +127,21 @@ impl<'a> Lowerer<'a> {
                 Self::lower_box_columns(input, &the_box, &column_map, outer_arity, input_arity)
             }
             BoxType::Grouping(grouping) => {
+                // Reduce may not contain expressions with correlated subqueries, due to the constraints asserted
+                // by the HIR ⇒ QGM conversion (aggregate and key are pushed to a preceding Select box and
+                // are always trivial in the Grouping box).
+
+                // In addition, here an empty reduction key signifies that we need to supply default values
+                // in the case that there are no results (as in a SQL aggregation without an explicit GROUP BY).
+
                 // Note: a grouping box must only contain a single quantifier but we can still
                 // re-use `lower_join` for single quantifier joins
-                let (mut input, column_map) =
-                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers, id_gen);
+                let (mut input, column_map) = self.lower_join(
+                    get_outer.clone(),
+                    outer_column_map,
+                    &the_box.quantifiers,
+                    id_gen,
+                );
 
                 // Build the reduction
                 let group_key = grouping
@@ -158,46 +169,72 @@ impl<'a> Lowerer<'a> {
                         }
                     })
                     .collect_vec();
-                input = SR::Reduce {
-                    input: Box::new(input),
-                    group_key,
-                    aggregates,
-                    monotonic: false,
-                    expected_group_size: None,
-                };
 
-                // Put the columns in the same order as projected by the Grouping box by
-                // adding an additional projection.
-                //
-                // The aggregate expression are usually projected after the grouping key.
-                // However, as a result of query rewrite, aggregate expression may be
-                // replaced with grouping key items. For example, the following query:
-                //
-                //   select a, max(b), max(a) from t group by a;
-                //
-                // could be rewritten as:
-                //
-                //   select a, max(b), a from t group by a;
-                //
-                // resulting in a Grouping box projecting [a, max(b), a]. Even though
-                // another query rewrite should remove duplicated columns in the projection
-                // of the Grouping box, we should be able to lower any semantically valid
-                // query graph.
-                let mut aggregate_count = 0;
-                let projection = the_box.columns.iter().map(|c| {
-                    if let BoxScalarExpr::Aggregate { .. } = &c.expr {
-                        let aggregate_pos = grouping.key.len() + aggregate_count;
-                        aggregate_count += 1;
-                        aggregate_pos
-                    } else {
-                        grouping
-                            .key
-                            .iter()
-                            .position(|k| c.expr == *k)
-                            .expect("expression in the projection of a Grouping box not included in the grouping key")
-                    }
-                }).collect_vec();
-                input.project(projection)
+                if group_key.is_empty() {
+                    // SQL semantics require default values for global aggregates
+                    let input_type = input.typ();
+                    let default = aggregates
+                        .iter()
+                        .map(|agg| {
+                            (
+                                agg.func.default(),
+                                agg.typ(&input_type).nullable(agg.func.default().is_null()),
+                            )
+                        })
+                        .collect_vec();
+
+                    input = SR::Reduce {
+                        input: Box::new(input),
+                        group_key,
+                        aggregates,
+                        monotonic: false,
+                        expected_group_size: None,
+                    };
+
+                    get_outer.lookup(id_gen, input, default)
+                } else {
+                    // Put the columns in the same order as projected by the Grouping box by
+                    // adding an additional projection.
+                    //
+                    // The aggregate expressions are usually projected after the grouping key.
+                    // However, as a result of query rewrite, aggregate expressions may be
+                    // replaced with grouping key items. For example, the following query:
+                    //
+                    //   select a, max(b), max(a) from t group by a;
+                    //
+                    // could be rewritten as:
+                    //
+                    //   select a, max(b), a from t group by a;
+                    //
+                    // resulting in a Grouping box projecting [a, max(b), a]. Even though
+                    // another query rewrite should remove duplicated columns in the projection
+                    // of the Grouping box, we should be able to lower any semantically valid
+                    // query graph.
+                    let mut aggregate_count = 0;
+                    let projection = the_box.columns.iter().map(|c| {
+                        if let BoxScalarExpr::Aggregate { .. } = &c.expr {
+                            let aggregate_pos = grouping.key.len() + aggregate_count;
+                            aggregate_count += 1;
+                            aggregate_pos
+                        } else {
+                            grouping
+                                .key
+                                .iter()
+                                .position(|k| c.expr == *k)
+                                .expect("expression in the projection of a Grouping box not included in the grouping key")
+                        }
+                    }).collect_vec();
+
+                    input = SR::Reduce {
+                        input: Box::new(input),
+                        group_key,
+                        aggregates,
+                        monotonic: false,
+                        expected_group_size: None,
+                    };
+
+                    input.project(projection)
+                }
             }
             BoxType::OuterJoin(box_struct) => {
                 // TODO: Correlated outer joins are not yet supported.
