@@ -482,14 +482,14 @@ impl HirRelationExpr {
                     // depending on the type of join.
                     let oa = get_outer.arity();
                     let left = left.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
-                    let lt = left.typ();
-                    let la = left.arity() - oa;
+                    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+                    let la = lt.len();
                     left.let_in(id_gen, |id_gen, get_left| {
                         let right_col_map = col_map.enter_scope(0);
                         let right =
                             right.applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map);
-                        let rt = right.typ();
-                        let ra = right.arity() - oa;
+                        let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+                        let ra = rt.len();
                         right.let_in(id_gen, |id_gen, get_right| {
                             let mut product = SR::join(
                                 vec![get_left.clone(), get_right.clone()],
@@ -536,9 +536,7 @@ impl HirRelationExpr {
                                     let left_outer = get_left.clone().anti_lookup(
                                         id_gen,
                                         get_join.clone(),
-                                        rt.column_types
-                                            .into_iter()
-                                            .skip(oa)
+                                        rt.into_iter()
                                             .map(|typ| (Datum::Null, typ.nullable(true)))
                                             .collect(),
                                     );
@@ -557,9 +555,7 @@ impl HirRelationExpr {
                                                         .chain((oa)..(oa + la))
                                                         .collect(),
                                                 ),
-                                            lt.column_types
-                                                .into_iter()
-                                                .skip(oa)
+                                            lt.into_iter()
                                                 .map(|typ| (Datum::Null, typ.nullable(true)))
                                                 .collect(),
                                         )
@@ -1505,30 +1501,25 @@ impl AggregateExpr {
     }
 }
 
-/// Attempts an efficient outer join, if `on` has equijoin structure.
-fn attempt_outer_join(
-    left: mz_expr::MirRelationExpr,
-    right: mz_expr::MirRelationExpr,
-    on: mz_expr::MirScalarExpr,
-    kind: JoinKind,
+// TODO: move this to the `mz_expr` crate.
+/// If the on clause of an outer join is an equijoin, figure out the join keys.
+///
+/// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs
+/// respectively.
+pub(crate) fn derive_equijoin_cols(
     oa: usize,
-    id_gen: &mut mz_ore::id_gen::IdGen,
-) -> Option<mz_expr::MirRelationExpr> {
+    la: usize,
+    ra: usize,
+    on: Vec<mz_expr::MirScalarExpr>,
+) -> Option<(Vec<usize>, Vec<usize>)> {
     use mz_expr::BinaryFunc;
-
-    // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
-    // correspond to an outer context: we should do the outer join independently
-    // for each prefix. In the case that `on` is just some equality tests between
-    // columns of `left` and `right`, we can employ a relatively simple plan.
-
-    let la = left.arity() - oa;
-    let lt = left.typ();
-    let ra = right.arity() - oa;
-    let rt = right.typ();
-
+    // TODO: Replace this predicate deconstruction with
+    // `mz_expr::canonicalize::canonicalize_predicates`, which will also enable
+    // treating select * from lhs left join rhs on lhs.id = rhs.id and true as
+    // an equijoin.
     // Deconstruct predicates that may be ands of multiple conditions.
     let mut predicates = Vec::new();
-    let mut todo = vec![on.clone()];
+    let mut todo = on;
     while let Some(next) = todo.pop() {
         if let mz_expr::MirScalarExpr::CallBinary {
             expr1,
@@ -1568,8 +1559,37 @@ fn attempt_outer_join(
     }
     // If any predicates were not column equivs, give up.
     if l_keys.len() < predicates.len() {
+        None
+    } else {
+        Some((l_keys, r_keys))
+    }
+}
+
+/// Attempts an efficient outer join, if `on` has equijoin structure.
+fn attempt_outer_join(
+    left: mz_expr::MirRelationExpr,
+    right: mz_expr::MirRelationExpr,
+    on: mz_expr::MirScalarExpr,
+    kind: JoinKind,
+    oa: usize,
+    id_gen: &mut mz_ore::id_gen::IdGen,
+) -> Option<mz_expr::MirRelationExpr> {
+    // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
+    // correspond to an outer context: we should do the outer join independently
+    // for each prefix. In the case that `on` is just some equality tests between
+    // columns of `left` and `right`, we can employ a relatively simple plan.
+
+    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+    let la = lt.len();
+    let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+    let ra = rt.len();
+
+    let equijoin_keys = derive_equijoin_cols(oa, la, ra, vec![on.clone()]);
+    if equijoin_keys.is_none() {
         return None;
     }
+
+    let (l_keys, r_keys) = equijoin_keys.unwrap();
 
     // If we've gotten this far, we can do the clever thing.
     // We'll want to use left and right multiple times
@@ -1622,9 +1642,7 @@ fn attempt_outer_join(
 
                         // Determine the types of nulls to use as filler.
                         let right_fill = rt
-                            .column_types
                             .into_iter()
-                            .skip(oa)
                             .map(|typ| mz_expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
@@ -1650,9 +1668,7 @@ fn attempt_outer_join(
 
                         // Determine the types of nulls to use as filler.
                         let left_fill = lt
-                            .column_types
                             .into_iter()
-                            .skip(oa)
                             .map(|typ| mz_expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 

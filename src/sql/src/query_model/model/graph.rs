@@ -638,6 +638,18 @@ impl QueryBox {
         }
     }
 
+    /// Returns a vector of [`ColumnReference`] if all column expressions projected
+    /// by this [`QueryBox`] of that form.
+    pub fn columns_as_refs(&self) -> Option<Vec<&ColumnReference>> {
+        self.columns
+            .iter()
+            .map(|c| match &c.expr {
+                BoxScalarExpr::ColumnReference(cr) => Some(cr),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+    }
+
     /// Visit all the expressions in this query box.
     pub fn visit_expressions<F, E>(&self, f: &mut F) -> Result<(), E>
     where
