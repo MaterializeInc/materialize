@@ -13,8 +13,8 @@ use std::cmp;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -26,7 +26,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
-use rdkafka::message::{Message, ToBytes};
+use rdkafka::message::{Message, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use rdkafka::{Offset, TopicPartitionList};
@@ -62,7 +62,7 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use super::KafkaBaseMetrics;
 use crate::render::sinks::SinkRender;
-use prometheus::core::{AtomicI64, AtomicU64};
+use prometheus::core::{AtomicI64 as PrometheusAtomicI64, AtomicU64 as PrometheusAtomicU64};
 
 impl<G> SinkRender<G> for KafkaSinkConnector
 where
@@ -152,10 +152,10 @@ where
 
 /// Per-Kafka sink metrics.
 pub struct SinkMetrics {
-    messages_sent_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
-    message_send_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
-    message_delivery_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
-    rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    messages_sent_counter: DeleteOnDropCounter<'static, PrometheusAtomicI64, Vec<String>>,
+    message_send_errors_counter: DeleteOnDropCounter<'static, PrometheusAtomicI64, Vec<String>>,
+    message_delivery_errors_counter: DeleteOnDropCounter<'static, PrometheusAtomicI64, Vec<String>>,
+    rows_queued: DeleteOnDropGauge<'static, PrometheusAtomicU64, Vec<String>>,
 }
 
 impl SinkMetrics {
@@ -187,11 +187,21 @@ impl SinkMetrics {
 
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
+    retry_queue: Arc<Mutex<VecDeque<OwnedMessage>>>,
+    outstanding_send_count: Arc<AtomicU64>,
 }
 
 impl SinkProducerContext {
-    pub fn new(metrics: Arc<SinkMetrics>) -> Self {
-        SinkProducerContext { metrics }
+    pub fn new(
+        metrics: Arc<SinkMetrics>,
+        retry_queue: Arc<Mutex<VecDeque<OwnedMessage>>>,
+        outstanding_send_count: Arc<AtomicU64>,
+    ) -> Self {
+        SinkProducerContext {
+            metrics,
+            retry_queue,
+            outstanding_send_count,
+        }
     }
 }
 
@@ -211,15 +221,13 @@ impl ProducerContext for SinkProducerContext {
     fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
         match result {
             Ok(_) => (),
-            Err((e, msg)) => {
+            Err((_e, msg)) => {
                 self.metrics.message_delivery_errors_counter.inc();
-                error!(
-                    "received error while writing to kafka sink topic {}: {}",
-                    msg.topic(),
-                    e
-                );
+                // Should be bounded by the size of the kafka buffer
+                self.retry_queue.lock().unwrap().push_back(msg.detach());
             }
         }
+        self.outstanding_send_count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -363,6 +371,8 @@ struct KafkaSinkState {
     transactional: bool,
     pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
+    retry_queue: Arc<Mutex<VecDeque<OwnedMessage>>>,
+    outstanding_send_count: Arc<AtomicU64>,
     sink_state: KafkaSinkStateEnum,
 
     /// Timestamp of the latest `END` record that was written out to Kafka.
@@ -400,12 +410,17 @@ impl KafkaSinkState {
             &worker_id,
         ));
 
+        let outstanding_send_count = Arc::new(AtomicU64::new(0));
+        let retry_queue = Arc::new(Mutex::new(VecDeque::new()));
+
         let producer = KafkaTxProducer {
             name: sink_name.clone(),
             inner: Arc::new(
                 config
                     .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
                         Arc::clone(&metrics),
+                        Arc::clone(&retry_queue),
+                        Arc::clone(&outstanding_send_count),
                     ))
                     .expect("creating kafka producer for Kafka sink failed"),
             ),
@@ -431,6 +446,8 @@ impl KafkaSinkState {
             transactional: connector.exactly_once,
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
+            outstanding_send_count,
+            retry_queue,
             sink_state,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
@@ -597,6 +614,7 @@ impl KafkaSinkState {
             match self.producer.send(record) {
                 Ok(_) => {
                     self.metrics.messages_sent_counter.inc();
+                    self.outstanding_send_count.fetch_add(1, Ordering::SeqCst);
                     return Ok(());
                 }
                 Err((e, rec)) => {
@@ -626,6 +644,30 @@ impl KafkaSinkState {
     }
 
     async fn flush(&self) -> KafkaResult<()> {
+        loop {
+            self.flush_inner().await?;
+            if self.outstanding_send_count.load(Ordering::SeqCst) == 0
+                && self.retry_queue.lock().unwrap().len() == 0
+            {
+                break;
+            }
+            while let Some(msg) = { self.retry_queue.lock().unwrap().pop_front() } {
+                let mut transformed_msg = BaseRecord::to(msg.topic());
+                transformed_msg = match msg.key() {
+                    Some(k) => transformed_msg.key(k),
+                    None => transformed_msg,
+                };
+                transformed_msg = match msg.payload() {
+                    Some(p) => transformed_msg.payload(p),
+                    None => transformed_msg,
+                };
+                self.send(transformed_msg).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn flush_inner(&self) -> KafkaResult<()> {
         let self_producer = self.producer.clone();
         // Only actually used for retriable errors.
         Retry::default()
@@ -1217,6 +1259,10 @@ where
                     }
                 }
 
+                // Flush to make sure that errored messages have been properly retried before
+                // sending consistency records and commit transactions.
+                bail_err!(s.flush().await);
+
                 if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
                     bail_err!(
                         s.send_consistency_record(
@@ -1275,6 +1321,7 @@ where
             }
 
             debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
+            debug_assert_eq!(s.retry_queue.lock().unwrap().len(), 0);
 
             if !s.pending_rows.is_empty() {
                 // We have some more rows that we need to wait for frontiers to advance before we
