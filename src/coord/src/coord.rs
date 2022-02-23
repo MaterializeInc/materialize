@@ -146,7 +146,7 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
-    MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
+    MutationKind, Params, PeekPlan, PeekWhen, Plan, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
     SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
@@ -1219,7 +1219,8 @@ impl Coordinator {
                                 | Statement::ShowVariable(_)
                                 | Statement::SetVariable(_)
                                 | Statement::StartTransaction(_)
-                                | Statement::Tail(_) => {
+                                | Statement::Tail(_)
+                                | Statement::Raise(_) => {
                                     // Always safe.
                                 }
 
@@ -2071,6 +2072,9 @@ impl Coordinator {
                     tx.send(Ok(ExecuteResponse::Deallocate { all: true }), session);
                 }
             },
+            Plan::Raise(RaisePlan { severity }) => {
+                tx.send(Ok(ExecuteResponse::Raise { severity }), session);
+            }
         }
     }
 

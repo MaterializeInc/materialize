@@ -38,7 +38,7 @@ use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::ast::{FetchDirection, Ident, NoticeSeverity, Raw, Statement};
 use mz_sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
@@ -1261,6 +1261,27 @@ where
             ExecuteResponse::Prepare => command_complete!("PREPARE"),
             ExecuteResponse::Deallocate { all } => {
                 command_complete!("DEALLOCATE{}", if all { " ALL" } else { "" })
+            }
+            ExecuteResponse::Raise { severity } => {
+                let msg = match severity {
+                    NoticeSeverity::Debug => {
+                        ErrorResponse::debug(SqlState::WARNING, "raised a test debug")
+                    }
+                    NoticeSeverity::Info => {
+                        ErrorResponse::info(SqlState::WARNING, "raised a test info")
+                    }
+                    NoticeSeverity::Log => {
+                        ErrorResponse::log(SqlState::WARNING, "raised a test log")
+                    }
+                    NoticeSeverity::Notice => {
+                        ErrorResponse::notice(SqlState::WARNING, "raised a test notice")
+                    }
+                    NoticeSeverity::Warning => {
+                        ErrorResponse::warning(SqlState::WARNING, "raised a test warning")
+                    }
+                };
+                self.send(msg).await?;
+                command_complete!("RAISE")
             }
         }
     }

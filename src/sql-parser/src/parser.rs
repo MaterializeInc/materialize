@@ -259,6 +259,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(PREPARE) => Ok(self.parse_prepare()?),
                 Token::Keyword(EXECUTE) => Ok(self.parse_execute()?),
                 Token::Keyword(DEALLOCATE) => Ok(self.parse_deallocate()?),
+                Token::Keyword(RAISE) => Ok(self.parse_raise()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -4472,6 +4473,22 @@ impl<'a> Parser<'a> {
             count,
             options,
         }))
+    }
+
+    /// Parse a `RAISE` statement, assuming that the `RAISE` token
+    /// has already been consumed.
+    fn parse_raise(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let severity = match self.parse_one_of_keywords(&[DEBUG, INFO, LOG, NOTICE, WARNING]) {
+            Some(DEBUG) => NoticeSeverity::Debug,
+            Some(INFO) => NoticeSeverity::Info,
+            Some(LOG) => NoticeSeverity::Log,
+            Some(NOTICE) => NoticeSeverity::Notice,
+            Some(WARNING) => NoticeSeverity::Warning,
+            Some(_) => unreachable!(),
+            None => self.expected(self.peek_pos(), "severity level", self.peek_token())?,
+        };
+
+        Ok(Statement::Raise(RaiseStatement { severity }))
     }
 }
 
