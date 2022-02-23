@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
-use tracing::error;
 
 use crate::client::SourceConnector;
 use crate::client::{Client, Command, StorageCommand};
@@ -96,26 +95,13 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
 
         Ok(())
     }
-    pub async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) {
-        // Dropping a source is equivalent to releasing any implicit capability.
-        // TODO(mcsherry): hold back this announcement until all capabilities are released.
-        for id in identifiers.iter() {
-            match self.collection_mut(*id) {
-                Ok(collection) => {
-                    // Apply the updates but ignore the results for now.
-                    // TODO(mcsherry): observe the results and allow compaction.
-                    let _ = collection.capability_downgrade(Antichain::new());
-                }
-                Err(_identifier_missing) => {
-                    // This isn't an unrecoverable error, just .. probably wrong.
-                    error!("Source id {} dropped without first being created", id);
-                }
-            }
-        }
-
-        self.client
-            .send(Command::Storage(StorageCommand::DropSources(identifiers)))
-            .await
+    pub async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        self.validate_ids(identifiers.iter().cloned())?;
+        let compaction_commands = identifiers
+            .into_iter()
+            .map(|id| (id, Antichain::new()))
+            .collect();
+        self.allow_compaction(compaction_commands).await
     }
     pub async fn table_insert(&mut self, id: GlobalId, updates: Vec<Update<T>>) {
         self.client
@@ -143,7 +129,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             }))
             .await
     }
-    pub async fn allow_source_compaction(
+    pub async fn allow_compaction(
         &mut self,
         frontiers: Vec<(GlobalId, Antichain<T>)>,
     ) -> Result<(), StorageError> {
@@ -160,9 +146,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         }
         // TODO(mcsherry): Delay compation subject to read capability constraints.
         self.client
-            .send(Command::Storage(StorageCommand::AllowSourceCompaction(
-                frontiers,
-            )))
+            .send(Command::Storage(StorageCommand::AllowCompaction(frontiers)))
             .await;
 
         Ok(())

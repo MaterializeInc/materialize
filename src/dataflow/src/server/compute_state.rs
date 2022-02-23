@@ -86,6 +86,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 }
             }
             ComputeCommand::DropInstance => {}
+
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
@@ -117,27 +118,33 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                     );
                 }
             }
+            ComputeCommand::AllowCompaction(list) => {
+                for (id, frontier) in list {
+                    if frontier.is_empty() {
+                        // Indicates that we may drop `id`, as there are no more valid times to read.
 
-            ComputeCommand::DropSinks(ids) => {
-                for id in ids {
-                    self.compute_state.reported_frontiers.remove(&id);
-                    self.compute_state.sink_write_frontiers.remove(&id);
-                    self.compute_state.dataflow_tokens.remove(&id);
-                }
-            }
-            ComputeCommand::DropIndexes(ids) => {
-                for id in ids {
-                    self.compute_state.traces.del_trace(&id);
-                    let frontier = self
-                        .compute_state
-                        .reported_frontiers
-                        .remove(&id)
-                        .expect("Dropped index with no frontier");
-                    if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                        logger.log(MaterializedEvent::Dataflow(id, false));
-                        for time in frontier.elements().iter() {
-                            logger.log(MaterializedEvent::Frontier(id, *time, -1));
+                        // Sink-specific work:
+                        self.compute_state.sink_write_frontiers.remove(&id);
+                        self.compute_state.dataflow_tokens.remove(&id);
+                        // Index-specific work:
+                        self.compute_state.traces.del_trace(&id);
+
+                        // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
+                        let frontier = self
+                            .compute_state
+                            .reported_frontiers
+                            .remove(&id)
+                            .expect("Dropped compute collection with no frontier");
+                        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+                            logger.log(MaterializedEvent::Dataflow(id, false));
+                            for time in frontier.elements().iter() {
+                                logger.log(MaterializedEvent::Frontier(id, *time, -1));
+                            }
                         }
+                    } else {
+                        self.compute_state
+                            .traces
+                            .allow_compaction(id, frontier.borrow());
                     }
                 }
             }
@@ -187,7 +194,6 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                     self.compute_state.pending_peeks.push(peek);
                 }
             }
-
             ComputeCommand::CancelPeek { conn_id } => {
                 let pending_peeks_len = self.compute_state.pending_peeks.len();
                 let mut pending_peeks = std::mem::replace(
@@ -200,13 +206,6 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                     } else {
                         self.compute_state.pending_peeks.push(peek);
                     }
-                }
-            }
-            ComputeCommand::AllowIndexCompaction(list) => {
-                for (id, frontier) in list {
-                    self.compute_state
-                        .traces
-                        .allow_compaction(id, frontier.borrow());
                 }
             }
         }

@@ -102,13 +102,24 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 }
             }
             StorageCommand::RenderSources(sources) => self.build_storage_dataflow(sources),
-            StorageCommand::DropSources(names) => {
-                for name in names {
-                    // Drop table-related state.
-                    self.storage_state.local_inputs.remove(&name);
+            StorageCommand::AllowCompaction(list) => {
+                for (id, frontier) in list {
+                    if frontier.is_empty() {
+                        // Indicates that we may drop `id`, as there are no more valid times to read.
 
-                    // Clean up potentially left over persisted source state.
-                    self.storage_state.persisted_sources.del_source(&name);
+                        // Drop table-related state.
+                        self.storage_state.local_inputs.remove(&id);
+                        // Clean up potentially left over persisted source state.
+                        self.storage_state.persisted_sources.del_source(&id);
+                    } else {
+                        if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
+                            ts_history.set_compaction_frontier(frontier.borrow());
+                        }
+
+                        self.storage_state
+                            .persisted_sources
+                            .allow_compaction(id, frontier);
+                    }
                 }
             }
 
@@ -213,17 +224,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         .insert(id, Antichain::from_elem(0));
                 } else {
                     assert!(bindings.is_empty());
-                }
-            }
-            StorageCommand::AllowSourceCompaction(list) => {
-                for (id, frontier) in list {
-                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
-                        ts_history.set_compaction_frontier(frontier.borrow());
-                    }
-
-                    self.storage_state
-                        .persisted_sources
-                        .allow_compaction(id, frontier);
                 }
             }
             StorageCommand::DropSourceTimestamping { id } => {
