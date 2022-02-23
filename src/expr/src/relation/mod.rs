@@ -12,6 +12,7 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
+use std::num::NonZeroUsize;
 
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -2115,43 +2116,97 @@ impl RowSetFinishing {
             && self.offset == 0
             && self.project.iter().copied().eq(0..arity)
     }
-    /// Applies finishing actions to a row set.
-    pub fn finish(&self, rows: &mut Vec<Row>) {
+    /// Determines the index of the (Row, count) pair, and the
+    /// index into the count within that pair, corresponding to a particular offset.
+    ///
+    /// For example, if `self.offset` is 42, and `rows` is
+    /// `&[(_, 10), (_, 17), (_, 20), (_, 11)]`,
+    /// then this function will return `(2, 15)`, because after applying
+    /// the offset, we will start at the row/diff pair in position 2,
+    /// and skip 15 of the 20 rows that that entry represents.
+    fn find_offset(&self, rows: &[(Row, NonZeroUsize)]) -> (usize, usize) {
+        let mut offset_remaining = self.offset;
+        for (i, (_, count)) in rows.iter().enumerate() {
+            let count = count.get();
+            if count > offset_remaining {
+                return (i, offset_remaining);
+            }
+            offset_remaining -= count;
+        }
+        // The offset is past the end of the rows; we will
+        // return nothing.
+        (rows.len(), 0)
+    }
+    /// Applies finishing actions to a row set,
+    /// and unrolls it to a unary representation.
+    pub fn finish(&self, mut rows: Vec<(Row, NonZeroUsize)>) -> Vec<Row> {
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
-        let mut sort_by = |left: &Row, right: &Row| {
+        let sort_by = |(left, _): &(Row, _), (right, _): &(Row, _)| {
             let left_datums = left_datum_vec.borrow_with(left);
             let right_datums = right_datum_vec.borrow_with(right);
             compare_columns(&self.order_by, &left_datums, &right_datums, || {
                 left.cmp(&right)
             })
         };
-        let offset = self.offset;
-        if offset > rows.len() {
-            *rows = Vec::new();
-        } else {
-            if let Some(limit) = self.limit {
-                let offset_plus_limit = offset + limit;
-                if rows.len() > offset_plus_limit {
-                    pdqselect::select_by(rows, offset_plus_limit, &mut sort_by);
-                    rows.truncate(offset_plus_limit);
+        rows.sort_by(sort_by);
+
+        let (offset_nth_row, offset_kth_copy) = self.find_offset(&rows);
+
+        // Adjust the first returned row's count to account for the offset.
+        if let Some((_, nth_diff)) = rows.get_mut(offset_nth_row) {
+            // Justification for `unwrap`:
+            // we only get here if we return from `get_offset`
+            // having found something to return,
+            // which can only happen if the count of
+            // this row is greater than the offset remaining.
+            *nth_diff = NonZeroUsize::new(nth_diff.get() - offset_kth_copy).unwrap();
+        }
+
+        let limit = self.limit.unwrap_or(std::usize::MAX);
+
+        // The code below is logically equivalent to:
+        //
+        // let mut total = 0;
+        // for (_, count) in &rows[offset_nth_row..] {
+        //     total += count.get();
+        // }
+        // let return_size = std::cmp::min(total, limit);
+        //
+        // but it breaks early if the limit is reached, instead of scanning the entire code.
+        let return_size = rows[offset_nth_row..]
+            .iter()
+            .try_fold(0, |sum, (_, count)| {
+                let new_sum = sum + count.get();
+                if new_sum > limit {
+                    None
+                } else {
+                    Some(new_sum)
                 }
+            })
+            .unwrap_or(limit);
+
+        let mut ret = Vec::with_capacity(return_size);
+        let mut remaining = limit;
+        let mut row_packer = Row::default();
+        let mut datum_vec = mz_repr::DatumVec::new();
+        for (row, count) in &rows[offset_nth_row..] {
+            if remaining == 0 {
+                break;
             }
-            if offset > 0 {
-                pdqselect::select_by(rows, offset, &mut sort_by);
-                rows.drain(..offset);
-            }
-            rows.sort_by(&mut sort_by);
-            let mut row_packer = Row::default();
-            let mut datum_vec = mz_repr::DatumVec::new();
-            for row in rows.iter_mut() {
-                *row = {
+            let count = std::cmp::min(count.get(), remaining);
+            for _ in 0..count {
+                let new_row = {
                     let datums = datum_vec.borrow_with(&row);
                     row_packer.extend(self.project.iter().map(|i| &datums[*i]));
                     row_packer.finish_and_reuse()
                 };
+                ret.push(new_row);
             }
+            remaining -= count;
         }
+
+        ret
     }
 }
 

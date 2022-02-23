@@ -117,7 +117,9 @@ use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnec
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
-use mz_dataflow_types::{DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update};
+use mz_dataflow_types::{
+    DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary, Update,
+};
 use mz_expr::{
     permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -1612,7 +1614,7 @@ impl Coordinator {
             self.persisted_table_allow_compaction(&source_since_updates);
             self.dataflow_client
                 .storage()
-                .allow_source_compaction(source_since_updates)
+                .allow_compaction(source_since_updates)
                 .await
                 .unwrap();
         }
@@ -3227,7 +3229,7 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
         // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
+        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         self.dataflow_builder()
             .import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
@@ -3333,7 +3335,7 @@ impl Coordinator {
                 let expr = self.prep_relation_expr(expr, ExprPrepStyle::Static)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
-                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
+                let mut dataflow = DataflowDesc::new(format!("tail-{}", id), id);
                 let mut dataflow_builder = self.dataflow_builder();
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
@@ -3609,7 +3611,7 @@ impl Coordinator {
                 let start = Instant::now();
                 let optimized_plan =
                     coord.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
                 coord.dataflow_builder().import_view_into_dataflow(
                     // TODO: If explaining a view, pipe the actual id of the view.
                     &GlobalId::Explain,
@@ -3960,7 +3962,7 @@ impl Coordinator {
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows(batch) => match batch.await {
-                    PeekResponse::Rows(rows) => {
+                    PeekResponseUnary::Rows(rows) => {
                         |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
                             // Use 2x row len incase there's some assignments.
                             let mut diffs = Vec::with_capacity(rows.len() * 2);
@@ -4002,10 +4004,10 @@ impl Coordinator {
                             Ok(diffs)
                         }(rows)
                     }
-                    PeekResponse::Canceled => {
+                    PeekResponseUnary::Canceled => {
                         Err(CoordError::Unstructured(anyhow!("execution canceled")))
                     }
-                    PeekResponse::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
+                    PeekResponseUnary::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
                 },
                 _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
             };
@@ -4164,7 +4166,8 @@ impl Coordinator {
                 self.dataflow_client
                     .storage()
                     .drop_sources(sources_to_drop)
-                    .await;
+                    .await
+                    .unwrap();
             }
             if !tables_to_drop.is_empty() {
                 // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
@@ -4177,7 +4180,8 @@ impl Coordinator {
                 self.dataflow_client
                     .storage()
                     .drop_sources(tables_to_drop)
-                    .await;
+                    .await
+                    .unwrap();
             }
             if !sinks_to_drop.is_empty() {
                 for id in sinks_to_drop.iter() {
@@ -4776,7 +4780,7 @@ enum ExprPrepStyle {
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows(Box::pin(async { PeekResponse::Rows(rows) }))
+    ExecuteResponse::SendingRows(Box::pin(async { PeekResponseUnary::Rows(rows) }))
 }
 
 fn auto_generate_primary_idx(
@@ -4944,7 +4948,8 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
-    use std::collections::HashMap;
+    use mz_dataflow_types::PeekResponseUnary;
+    use std::{collections::HashMap, num::NonZeroUsize};
 
     use crate::CoordError;
     use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
@@ -5077,19 +5082,18 @@ pub mod fast_path_peek {
                 differential_dataflow::consolidation::consolidate_updates(&mut rows);
 
                 let mut results = Vec::new();
-                for (ref row, _time, count) in rows {
+                for (row, _time, count) in rows {
                     if count < 0 {
                         Err(EvalError::InvalidParameterValue(format!(
                             "Negative multiplicity in constant result: {}",
                             count
                         )))?
                     };
-                    for _ in 0..count {
-                        // TODO: If `count` is too large, or `results` too full, we could error.
-                        results.push(row.clone());
+                    if count > 0 {
+                        results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                     }
                 }
-                finishing.finish(&mut results);
+                let results = finishing.finish(results);
                 return Ok(crate::coord::send_immediate_rows(results));
             }
 
@@ -5196,11 +5200,10 @@ pub mod fast_path_peek {
                         }
                     }
                 })
-                .map(move |mut resp| {
-                    if let PeekResponse::Rows(rows) = &mut resp {
-                        finishing.finish(rows)
-                    }
-                    resp
+                .map(move |resp| match resp {
+                    PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+                    PeekResponse::Canceled => PeekResponseUnary::Canceled,
+                    PeekResponse::Error(e) => PeekResponseUnary::Error(e),
                 });
 
             // If it was created, drop the dataflow once the peek command is sent.
@@ -5223,7 +5226,7 @@ impl Coordinator {
         // prevent us from incorrectly teaching those functions how to return errors
         // (which has happened twice and is the motivation for this test).
 
-        let df = DataflowDesc::new("".into());
+        let df = DataflowDesc::new("".into(), GlobalId::Explain);
         let _: () = self.ship_dataflow(df.clone()).await;
         let _: () = self.ship_dataflows(vec![df.clone()]).await;
         let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);

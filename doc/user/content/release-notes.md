@@ -161,6 +161,9 @@ changes that have not yet been documented.
 - Add [`chr`](/sql/functions#string-func) function to convert a Unicode codepoint
   into a string.
 
+- Support bare `FORMAT` with `INCLUDE KEY AS` when using the confluent schema
+  registry {{% gh 10766 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 

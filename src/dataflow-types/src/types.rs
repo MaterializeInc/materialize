@@ -14,12 +14,13 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use std::collections::{BTreeMap, HashSet};
+use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::{Diff, RelationType, Row, Timestamp};
+use mz_repr::{Diff, RelationType, Row};
 
 use crate::sources::persistence::SourcePersistDesc;
 use crate::types::sources::SourceDesc;
@@ -30,13 +31,24 @@ use crate::types::sources::SourceDesc;
 /// we expect a 1:1 contract between `Peek` and `PeekResponse`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
+    Rows(Vec<(Row, NonZeroUsize)>),
+    Error(String),
+    Canceled,
+}
+
+/// The response from a `Peek`, with row multiplicities represented in unary.
+///
+/// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
+/// we expect a 1:1 contract between `Peek` and `PeekResponseUnary`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum PeekResponseUnary {
     Rows(Vec<Row>),
     Error(String),
     Canceled,
 }
 
 impl PeekResponse {
-    pub fn unwrap_rows(self) -> Vec<Row> {
+    pub fn unwrap_rows(self) -> Vec<(Row, NonZeroUsize)> {
         match self {
             PeekResponse::Rows(rows) => rows,
             PeekResponse::Error(_) | PeekResponse::Canceled => {
@@ -84,31 +96,31 @@ pub struct BuildDesc<View> {
 /// context-dependent options like the ability to apply filtering and
 /// projection to the records as they emerge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceInstanceDesc {
+pub struct SourceInstanceDesc<T = mz_repr::Timestamp> {
     /// A description of the source to construct.
     pub description: crate::types::sources::SourceDesc,
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::types::LinearOperator>,
     /// A description of how to persist the source.
-    pub persist: Option<sources::persistence::SourcePersistDesc>,
+    pub persist: Option<sources::persistence::SourcePersistDesc<T>>,
 }
 
 /// A representation of `SourceInstanceDesc` which elides the source details.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct SourceInstanceKey {
+pub struct SourceInstanceKey<T = mz_repr::Timestamp> {
     /// The globally unique identifier of the source.
     pub identifier: GlobalId,
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::types::LinearOperator>,
     /// A description of how to persist the source.
-    pub persist: Option<sources::persistence::SourcePersistDesc>,
+    pub persist: Option<sources::persistence::SourcePersistDesc<T>>,
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -131,11 +143,13 @@ pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     pub as_of: Option<Antichain<T>>,
     /// Human readable name
     pub debug_name: String,
+    /// Unique ID of the dataflow
+    pub id: GlobalId,
 }
 
-impl DataflowDescription<OptimizedMirRelationExpr> {
+impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, id: GlobalId) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),
@@ -145,6 +159,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
             dependent_objects: Default::default(),
             as_of: Default::default(),
             debug_name: name,
+            id,
         }
     }
 
@@ -172,7 +187,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
         &mut self,
         id: GlobalId,
         description: SourceDesc,
-        persist: Option<SourcePersistDesc>,
+        persist: Option<SourcePersistDesc<T>>,
     ) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
@@ -259,7 +274,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     /// Generally, one should consider setting `as_of` at least to the `since`
     /// frontiers of contributing data sources and as aggressively as the
     /// computation permits.
-    pub fn set_as_of(&mut self, as_of: Antichain<Timestamp>) {
+    pub fn set_as_of(&mut self, as_of: Antichain<T>) {
         self.as_of = Some(as_of);
     }
 
@@ -585,7 +600,7 @@ pub mod sources {
 
         /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-        pub struct SourcePersistDesc {
+        pub struct SourcePersistDesc<T = mz_repr::Timestamp> {
             /// The _current_ upper seal timestamp of all involved streams.
             ///
             /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
@@ -601,7 +616,7 @@ pub mod sources {
             ///
             /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
             /// source running already.
-            pub upper_seal_ts: u64,
+            pub upper_seal_ts: T,
 
             /// The _current_ compaction frontier (aka _since_) of all involved streams.
             ///
@@ -618,7 +633,7 @@ pub mod sources {
             ///
             /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
             /// source running already.
-            pub since_ts: u64,
+            pub since_ts: T,
 
             /// Name of the primary persisted stream of this source. This is what a consumer of the
             /// persisted data would be interested in while the secondary stream(s) of the source are an

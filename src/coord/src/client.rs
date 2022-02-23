@@ -14,7 +14,7 @@ use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use mz_dataflow_types::PeekResponse;
+use mz_dataflow_types::PeekResponseUnary;
 use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::thread::JoinOnDropHandle;
@@ -463,9 +463,9 @@ impl SessionClient {
                 _ => return Err(CoordError::Unsupported("statements of the executed type")),
             };
             let rows = match rows {
-                PeekResponse::Rows(rows) => rows,
-                PeekResponse::Error(e) => coord_bail!("{}", e),
-                PeekResponse::Canceled => coord_bail!("execution canceled"),
+                PeekResponseUnary::Rows(rows) => rows,
+                PeekResponseUnary::Error(e) => coord_bail!("{}", e),
+                PeekResponseUnary::Canceled => coord_bail!("execution canceled"),
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
             let col_names = match desc.relation_desc {

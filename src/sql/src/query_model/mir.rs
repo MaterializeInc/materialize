@@ -13,8 +13,8 @@
 //! [`Into<mz_expr::MirRelationExpr>`] for [`Model`].
 
 use crate::query_model::model::{
-    BaseColumn, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get, Model,
-    QuantifierId, QuantifierSet, QuantifierType,
+    BaseColumn, BoundRef, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get,
+    Model, QuantifierId, QuantifierSet, QuantifierType, QueryBox,
 };
 use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
@@ -124,23 +124,7 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // 3) Lower the project component.
-                if !the_box.columns.is_empty() {
-                    input = input.map(
-                        the_box
-                            .columns
-                            .iter()
-                            .map(|c| Self::lower_expression(&c.expr, &column_map))
-                            .collect_vec(),
-                    );
-                }
-
-                // Project the outer columns plus the ones in the projection of
-                // this select box
-                input.project(
-                    (0..outer_arity)
-                        .chain(input_arity..input_arity + the_box.columns.len())
-                        .collect_vec(),
-                )
+                Self::lower_box_columns(input, &the_box, &column_map, outer_arity, input_arity)
             }
             BoxType::Grouping(grouping) => {
                 // Note: a grouping box must only contain a single quantifier but we can still
@@ -215,6 +199,193 @@ impl<'a> Lowerer<'a> {
                 }).collect_vec();
                 input.project(projection)
             }
+            BoxType::OuterJoin(box_struct) => {
+                // TODO: Correlated outer joins are not yet supported.
+                let correlation_info = the_box.correlation_info();
+                if !correlation_info.is_empty() {
+                    panic!("correlated joins are not supported yet");
+                }
+
+                let ot = get_outer.typ();
+                let oa = ot.arity();
+
+                // An OuterJoin box is similar to a Select box in that the
+                // operations join, filter, project happen in that order.
+                // However, between the filter and project stage, we union in
+                // the rows that should be preserved.
+
+                // 0) Lower the lhs and rhs.
+                let mut q_iter = the_box.quantifiers.iter();
+                let lhs_id = *q_iter.next().unwrap();
+                let rhs_id = *q_iter.next().unwrap();
+                let lhs =
+                    self.lower_quantifier(lhs_id, get_outer.clone(), outer_column_map, id_gen);
+                let lt = lhs.typ().column_types.into_iter().skip(oa).collect_vec();
+                let la = lt.len();
+                let rhs = self.lower_quantifier(rhs_id, get_outer, outer_column_map, id_gen);
+                let rt = rhs.typ().column_types.into_iter().skip(oa).collect_vec();
+                let ra = rt.len();
+
+                lhs.let_in(id_gen, |id_gen, get_lhs| {
+                    rhs.let_in(id_gen, |id_gen, get_rhs| {
+                        // 1) Lower the inner join
+                        let (mut inner_join, column_map) = self.lower_join_inner(
+                            outer_column_map,
+                            oa,
+                            vec![(lhs_id, get_lhs.clone()), (rhs_id, get_rhs.clone())],
+                        );
+
+                        // 2) Lower the predicates as a filter following the
+                        //    join.
+                        let lowered_predicates = box_struct
+                            .predicates
+                            .iter()
+                            .map(|p| Self::lower_expression(p, &column_map))
+                            .collect_vec();
+                        let equijoin_keys = crate::plan::lowering::derive_equijoin_cols(
+                            oa,
+                            la,
+                            ra,
+                            lowered_predicates.clone(),
+                        );
+                        inner_join = inner_join.filter(lowered_predicates.into_iter());
+
+                        // 3) Calculate preserved rows
+                        let result = inner_join.let_in(id_gen, |id_gen, get_join| {
+                            let mut result = get_join.clone();
+                            if let Some((l_keys, r_keys)) = equijoin_keys {
+                                // Equijoin case
+
+                                // A collection of keys present in both left and right collections.
+                                let both_keys = get_join
+                                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                                    .distinct();
+                                both_keys.let_in(id_gen, |_id_gen, get_both| {
+                                    if self.model.get_quantifier(lhs_id).quantifier_type
+                                        == QuantifierType::PreservedForeach
+                                    {
+                                        // Rows in `left` that are matched in the inner equijoin.
+                                        let left_present = mz_expr::MirRelationExpr::join(
+                                            vec![get_lhs.clone(), get_both.clone()],
+                                            (0..oa)
+                                                .chain(l_keys.clone())
+                                                .enumerate()
+                                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                                .collect::<Vec<_>>(),
+                                        )
+                                        .project((0..(oa + la)).collect());
+
+                                        // Rows in `left` that are not matched in the inner equijoin.
+                                        let left_absent =
+                                            left_present.negate().union(get_lhs.clone());
+
+                                        // Determine the types of nulls to use as filler.
+                                        let right_fill = rt
+                                            .into_iter()
+                                            .map(|typ| {
+                                                mz_expr::MirScalarExpr::literal_null(
+                                                    typ.scalar_type,
+                                                )
+                                            })
+                                            .collect();
+
+                                        // Right-fill all left-absent elements with nulls and add them to the result.
+                                        result = left_absent.map(right_fill).union(result);
+                                    }
+
+                                    if self.model.get_quantifier(rhs_id).quantifier_type
+                                        == QuantifierType::PreservedForeach
+                                    {
+                                        // Rows in `right` that are matched in the inner equijoin.
+                                        let right_present = mz_expr::MirRelationExpr::join(
+                                            vec![get_rhs.clone(), get_both],
+                                            (0..oa)
+                                                .chain(r_keys.clone())
+                                                .enumerate()
+                                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                                .collect::<Vec<_>>(),
+                                        )
+                                        .project((0..(oa + ra)).collect());
+
+                                        // Rows in `left` that are not matched in the inner equijoin.
+                                        let right_absent =
+                                            right_present.negate().union(get_rhs.clone());
+
+                                        // Determine the types of nulls to use as filler.
+                                        let left_fill = lt
+                                            .into_iter()
+                                            .map(|typ| {
+                                                mz_expr::MirScalarExpr::literal_null(
+                                                    typ.scalar_type,
+                                                )
+                                            })
+                                            .collect();
+
+                                        // Left-fill all right-absent elements with nulls and add them to the result.
+                                        result = right_absent
+                                            .map(left_fill)
+                                            // Permute left fill before right values.
+                                            .project(
+                                                (0..oa)
+                                                    .chain(oa + ra..oa + ra + la)
+                                                    .chain(oa..oa + ra)
+                                                    .collect(),
+                                            )
+                                            .union(result)
+                                    }
+
+                                    result
+                                })
+                            } else {
+                                // General join case
+                                if self.model.get_quantifier(lhs_id).quantifier_type
+                                    == QuantifierType::PreservedForeach
+                                {
+                                    let left_outer = get_lhs.anti_lookup(
+                                        id_gen,
+                                        get_join.clone(),
+                                        rt.into_iter()
+                                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                                            .collect(),
+                                    );
+                                    result = result.union(left_outer);
+                                }
+                                if self.model.get_quantifier(rhs_id).quantifier_type
+                                    == QuantifierType::PreservedForeach
+                                {
+                                    let right_outer = get_rhs
+                                        .anti_lookup(
+                                            id_gen,
+                                            get_join
+                                                // need to swap left and right to make the anti_lookup work
+                                                .project(
+                                                    (0..oa)
+                                                        .chain((oa + la)..(oa + la + ra))
+                                                        .chain((oa)..(oa + la))
+                                                        .collect(),
+                                                ),
+                                            lt.into_iter()
+                                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                                .collect(),
+                                        )
+                                        // swap left and right back again
+                                        .project(
+                                            (0..oa)
+                                                .chain((oa + ra)..(oa + ra + la))
+                                                .chain((oa)..(oa + ra))
+                                                .collect(),
+                                        );
+                                    result = result.union(right_outer);
+                                }
+                                result
+                            }
+                        });
+
+                        // 4) Lower the project component.
+                        Self::lower_box_columns(result, &the_box, &column_map, oa, oa + la + ra)
+                    })
+                })
+            }
             _ => panic!(),
         };
 
@@ -251,13 +422,35 @@ impl<'a> Lowerer<'a> {
 
         let outer_arity = get_outer.arity();
 
-        let join_inputs = quantifiers
+        let inputs = quantifiers
             .iter()
-            .map(|q_id| self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map, id_gen))
+            .map(|q_id| {
+                (
+                    *q_id,
+                    self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map, id_gen),
+                )
+            })
             .collect_vec();
 
-        let join = if join_inputs.len() == 1 {
-            join_inputs.into_iter().next().unwrap()
+        self.lower_join_inner(outer_column_map, outer_arity, inputs)
+    }
+
+    /// Same as `lower_join` except the outer relation has already been applied
+    /// to the quantifiers.
+    fn lower_join_inner(
+        &mut self,
+        outer_column_map: &ColumnMap,
+        outer_arity: usize,
+        inputs: Vec<(QuantifierId, mz_expr::MirRelationExpr)>,
+    ) -> (mz_expr::MirRelationExpr, ColumnMap) {
+        let (quantifiers, join_inputs): (Vec<_>, Vec<_>) = inputs.into_iter().unzip();
+        let (join, input_mapper) = if join_inputs.len() == 1 {
+            let only_input = join_inputs.into_iter().next().unwrap();
+            let input_mapper = mz_expr::JoinInputMapper::new_from_input_arities(vec![
+                outer_arity,
+                only_input.arity() - outer_arity,
+            ]);
+            (only_input, input_mapper)
         } else {
             Self::join_on_prefix(join_inputs, outer_arity)
         };
@@ -265,21 +458,16 @@ impl<'a> Lowerer<'a> {
         // Generate a column map with the projection of the join plus the
         // columns from the outer context.
         let mut column_map = outer_column_map.clone();
-        let mut next_column = outer_arity;
-        for q_id in quantifiers.iter() {
-            let input_box = self.model.get_quantifier(*q_id).input_box;
-            let arity = self.model.get_box(input_box).columns.len();
-            for c in 0..arity {
+        for (index, q_id) in quantifiers.iter().enumerate() {
+            for c in input_mapper.global_columns(index + 1) {
                 column_map.insert(
                     ColumnReference {
                         quantifier_id: *q_id,
-                        position: c,
+                        position: input_mapper.map_column_to_local(c).0,
                     },
-                    next_column + c,
+                    c,
                 );
             }
-
-            next_column += arity;
         }
 
         (join, column_map)
@@ -298,7 +486,7 @@ impl<'a> Lowerer<'a> {
         let mut input = self.apply(input_box, get_outer.clone(), outer_column_map, id_gen);
 
         match &quantifier.quantifier_type {
-            QuantifierType::Foreach => {
+            QuantifierType::Foreach | QuantifierType::PreservedForeach => {
                 // No special handling required
             }
             QuantifierType::Scalar => {
@@ -348,6 +536,39 @@ impl<'a> Lowerer<'a> {
         input
     }
 
+    fn lower_box_columns(
+        rel: mz_expr::MirRelationExpr,
+        the_box: &BoundRef<'_, QueryBox>,
+        column_map: &ColumnMap,
+        outer_arity: usize,
+        input_arity: usize,
+    ) -> mz_expr::MirRelationExpr {
+        if let Some(column_refs) = the_box.columns_as_refs() {
+            // if all columns projected by this box are references, we only need a projection
+            let mut outputs = Vec::<usize>::new();
+            outputs.extend(0..outer_arity);
+            outputs.extend(column_refs.iter().map(|c| column_map.get(c).unwrap()));
+            rel.project(outputs)
+        } else if !the_box.columns.is_empty() {
+            // otherwise, we need to apply a map to compute the outputs and then project them
+            rel.map(
+                the_box
+                    .columns
+                    .iter()
+                    .map(|c| Self::lower_expression(&c.expr, &column_map))
+                    .collect_vec(),
+            )
+            .project(
+                (0..outer_arity)
+                    .chain((input_arity)..(input_arity + the_box.columns.len()))
+                    .collect_vec(),
+            )
+        } else {
+            // for boxes without output columns, only project the outer part
+            rel.project((0..outer_arity).collect_vec())
+        }
+    }
+
     /// Join the given inputs on a shared common prefix.
     ///
     /// TODO(asenac) Given the lack of support for decorrelation at the moment, this
@@ -355,7 +576,7 @@ impl<'a> Lowerer<'a> {
     fn join_on_prefix(
         join_inputs: Vec<mz_expr::MirRelationExpr>,
         prefix_length: usize,
-    ) -> mz_expr::MirRelationExpr {
+    ) -> (mz_expr::MirRelationExpr, mz_expr::JoinInputMapper) {
         let input_mapper = mz_expr::JoinInputMapper::new(&join_inputs);
         // Join on the outer columns
         let equivalences = (0..prefix_length)
@@ -374,18 +595,27 @@ impl<'a> Lowerer<'a> {
         // Project only one copy of the outer columns
         let projection = (0..prefix_length)
             .chain(
-                join_inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, input)| {
-                        (prefix_length..input.arity())
+                (0..join_inputs.len())
+                    .map(|index| {
+                        (prefix_length..input_mapper.input_arity(index))
                             .map(|c| input_mapper.map_column_to_global(c, index))
                             .collect_vec()
                     })
                     .flatten(),
             )
             .collect_vec();
-        mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection)
+        (
+            mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection),
+            mz_expr::JoinInputMapper::new_from_input_arities(
+                std::iter::once(prefix_length)
+                    .chain(
+                        (0..input_mapper.total_inputs())
+                            .into_iter()
+                            .map(|i| input_mapper.input_arity(i) - prefix_length),
+                    )
+                    .collect_vec(),
+            ),
+        )
     }
 
     /// Lowers a scalar expression, resolving the column references using

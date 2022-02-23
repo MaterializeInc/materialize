@@ -3119,7 +3119,6 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-timely-util",
- "pdqselect",
  "postgres-protocol",
  "prometheus",
  "prost",
@@ -3239,7 +3238,6 @@ dependencies = [
  "num_enum",
  "ordered-float",
  "paste",
- "pdqselect",
  "proc-macro2",
  "regex",
  "regex-syntax",
@@ -4371,12 +4369,6 @@ name = "paste"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0744126afe1a6dd7f394cb50a716dbe086cb06e255e53d8d0185d82828358fb5"
-
-[[package]]
-name = "pdqselect"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7778906d9321dd56cde1d1ffa69a73e59dcf5fda6d366f62727adf2bd4193aee"
 
 [[package]]
 name = "peeking_take_while"
