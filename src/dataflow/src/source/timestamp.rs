@@ -184,6 +184,15 @@ impl PartitionTimestamps {
 
     fn add_binding(&mut self, timestamp: Timestamp, offset: MzOffset) {
         if let Some((last_ts, last_offset)) = self.bindings.last() {
+            // TODO(rkhaitan): remove this error log and change the assertion
+            // below to be strictly greater than once we fix 10742.
+            if timestamp == *last_ts {
+                log::error!(
+                    "newly added timestamps should go forwards but {} == {}. Continuing",
+                    timestamp,
+                    last_ts
+                );
+            }
             assert!(
                 offset >= *last_offset,
                 "offset should not go backwards, but {} < {}",
@@ -191,8 +200,8 @@ impl PartitionTimestamps {
                 last_offset
             );
             assert!(
-                timestamp > *last_ts,
-                "timestamp must go forwards but {} <= {}",
+                timestamp >= *last_ts,
+                "timestamp should not go backwards, but {} < {}",
                 timestamp,
                 last_ts
             );
