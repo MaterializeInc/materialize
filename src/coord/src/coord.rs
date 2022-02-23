@@ -594,7 +594,7 @@ impl Coordinator {
                         .await
                         .unwrap();
                 }
-                CatalogItem::Index(_) => {
+                CatalogItem::Index(index) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
@@ -617,7 +617,14 @@ impl Coordinator {
                                 index_id,
                                 description,
                             )?;
-                            self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
+                            self.ship_dataflow(
+                                index
+                                    .cluster_id
+                                    .try_into()
+                                    .expect("cluster IDs always compatible with usize"),
+                                df,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -2199,6 +2206,12 @@ impl Coordinator {
             index_depends_on,
             self.catalog.index_enabled_by_default(&index_id),
         );
+
+        let cluster_id = index
+            .cluster_id
+            .try_into()
+            .expect("cluster ID always compatible with usize");
+
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
         let df = self
@@ -2268,7 +2281,7 @@ impl Coordinator {
                     // like they are, e.g. they are rendered as a SourceConnector::Local.
                     self.sources.insert(table_id, frontiers);
 
-                    self.ship_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, df).await;
+                    self.ship_dataflow(cluster_id, df).await;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -2289,6 +2302,7 @@ impl Coordinator {
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
         match self
             .catalog_transact(ops, move |mut builder| {
+                let mut index_cluster = None;
                 let mut dfs = Vec::new();
                 let mut source_ids = Vec::new();
                 for (source_id, idx_id) in metadata {
@@ -2297,16 +2311,23 @@ impl Coordinator {
                         if let Some((name, description)) =
                             Self::prepare_index_build(builder.catalog, &index_id)
                         {
+                            match index_cluster {
+                                None => index_cluster = Some(description.cluster_id),
+                                Some(ref cluster_id) => {
+                                    assert_eq!(&description.cluster_id, cluster_id)
+                                }
+                            }
+
                             let df = builder.build_index_dataflow(name, index_id, description)?;
                             dfs.push(df);
                         }
                     }
                 }
-                Ok((dfs, source_ids))
+                Ok((index_cluster, dfs, source_ids))
             })
             .await
         {
-            Ok((dfs, source_ids)) => {
+            Ok((cluster_id, dfs, source_ids)) => {
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
@@ -2359,7 +2380,7 @@ impl Coordinator {
                     .create_sources(source_descriptions)
                     .await
                     .unwrap();
-                self.ship_dataflows(0, dfs).await;
+                self.ship_dataflows(cluster_id, dfs).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2678,21 +2699,29 @@ impl Coordinator {
 
         match self
             .catalog_transact(ops, |mut builder| {
+                let mut index_cluster = None;
                 let mut dfs = vec![];
                 for index_id in index_ids {
                     if let Some((name, description)) =
                         Self::prepare_index_build(builder.catalog, &index_id)
                     {
+                        match index_cluster {
+                            None => index_cluster = Some(description.cluster_id),
+                            Some(ref cluster_id) => {
+                                assert_eq!(&description.cluster_id, cluster_id)
+                            }
+                        }
+
                         let df = builder.build_index_dataflow(name, index_id, description)?;
                         dfs.push(df);
                     }
                 }
-                Ok(dfs)
+                Ok((index_cluster, dfs))
             })
             .await
         {
-            Ok(dfs) => {
-                self.ship_dataflows(0, dfs).await;
+            Ok((index_cluster, dfs)) => {
+                self.ship_dataflows(index_cluster, dfs).await;
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -3235,6 +3264,7 @@ impl Coordinator {
             IndexDesc {
                 on_id: view_id,
                 key: key.clone(),
+                cluster_id: 0,
             },
             typ,
         );
@@ -4386,15 +4416,21 @@ impl Coordinator {
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
     async fn ship_dataflow(&mut self, in_instance: ComputeInstanceId, dataflow: DataflowDesc) {
-        self.ship_dataflows(in_instance, vec![dataflow]).await
+        self.ship_dataflows(Some(in_instance), vec![dataflow]).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
     async fn ship_dataflows(
         &mut self,
-        in_instance: ComputeInstanceId,
+        in_instance: Option<ComputeInstanceId>,
         dataflows: Vec<DataflowDesc>,
     ) {
+        let in_instance = if dataflows.is_empty() {
+            return;
+        } else {
+            in_instance.expect("if specified dataflows, must specify instance")
+        };
+
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow));

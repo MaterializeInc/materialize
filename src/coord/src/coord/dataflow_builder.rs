@@ -86,6 +86,10 @@ impl Coordinator {
                 mz_dataflow_types::IndexDesc {
                     on_id: index.on,
                     key: index.keys.clone(),
+                    cluster_id: index
+                        .cluster_id
+                        .try_into()
+                        .expect("cluster ID always compatible with usize"),
                 },
             ))
         }
@@ -111,10 +115,11 @@ impl<'a> DataflowBuilder<'a> {
             let valid_index = self.catalog.enabled_indexes()[id]
                 .iter()
                 .find(|(id, _cluster_id, _keys)| self.indexes.contains_key(*id));
-            if let Some((index_id, _cluster_id, keys)) = valid_index {
+            if let Some((index_id, cluster_id, keys)) = valid_index {
                 let index_desc = IndexDesc {
                     on_id: *id,
                     key: keys.to_vec(),
+                    cluster_id: *cluster_id,
                 };
                 let desc = self
                     .catalog
@@ -186,7 +191,7 @@ impl<'a> DataflowBuilder<'a> {
             // TODO: indexes should be imported after the optimization process, and only those
             // actually used by the optimized plan
             if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
-                for (id, _cluster_id, keys) in indexes.iter() {
+                for (id, cluster_id, keys) in indexes.iter() {
                     // Ensure only valid indexes (i.e. those in self.indexes) are imported.
                     // TODO(#8318): Ensure this logic is accounted for.
                     if !self.indexes.contains_key(*id) {
@@ -197,6 +202,7 @@ impl<'a> DataflowBuilder<'a> {
                     let index_desc = IndexDesc {
                         on_id: get_id,
                         key: keys.clone(),
+                        cluster_id: *cluster_id,
                     };
                     dataflow.import_index(*id, index_desc, on_type, *view_id);
                 }

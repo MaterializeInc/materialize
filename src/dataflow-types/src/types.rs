@@ -1787,6 +1787,7 @@ pub struct IndexDesc {
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
     pub key: Vec<MirScalarExpr>,
+    pub cluster_id: usize,
 }
 
 // TODO: change contract to ensure that the operator is always applied to
