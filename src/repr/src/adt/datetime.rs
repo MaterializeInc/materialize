@@ -210,12 +210,7 @@ impl DateTimeField {
     pub fn micros_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
-            Day => {}
-            Hour => {}
-            Minute => {}
-            Second => {}
-            Milliseconds => {}
-            Microseconds => {}
+            Day | Hour | Minute | Second | Milliseconds | Microseconds => {}
             _other => unreachable!("Do not call with a non-time/day field"),
         }
 
@@ -230,10 +225,7 @@ impl DateTimeField {
     pub fn month_multiplier(self) -> i64 {
         use DateTimeField::*;
         match self {
-            Millennium => {}
-            Century => {}
-            Decade => {}
-            Year => {}
+            Millennium | Century | Decade | Year => {}
             _other => unreachable!("Do not call with a duration field"),
         }
 
