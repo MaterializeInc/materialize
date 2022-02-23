@@ -14,7 +14,7 @@ pprof = "0.6.2"
 serde = { version = "1.0.136", features = ["derive"] }
 tempfile = "3.2.0"
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
-tokio = { version = "1.16.1", features = ["time"] }
+tokio = { version = "1.17.0", features = ["time"] }
 
 [features]
 # Whether to enable profiling features that depend on jemalloc.

@@ -15,6 +15,6 @@ futures = "0.3.21"
 indicatif = "0.16.2"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ore = { path = "../ore" }
-tokio = { version = "1.16.1", features = ["macros", "net", "rt", "time"] }
+tokio = { version = "1.17.0", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.31"
 tracing-subscriber = { version = "0.3.9", default-features = false, features = ["env-filter", "fmt"] }

@@ -100,6 +100,8 @@ pub enum Type {
     RegType,
     /// A class name.
     RegClass,
+    /// A small int vector.
+    Int2Vector,
 }
 
 /// A length associated with [`Type::Char`] and [`Type::VarChar`].
@@ -289,6 +291,8 @@ impl Type {
             postgres_types::Type::REGCLASS_ARRAY => Type::Array(Box::new(Type::RegClass)),
             postgres_types::Type::REGPROC_ARRAY => Type::Array(Box::new(Type::RegProc)),
             postgres_types::Type::REGTYPE_ARRAY => Type::Array(Box::new(Type::RegType)),
+            postgres_types::Type::INT2_VECTOR => Type::Int2Vector,
+            postgres_types::Type::INT2_VECTOR_ARRAY => Type::Array(Box::new(Type::Int2Vector)),
             _ => bail!("Unknown OID: {oid}"),
         })
     }
@@ -324,6 +328,7 @@ impl Type {
                 Type::RegClass => &postgres_types::Type::REGCLASS_ARRAY,
                 Type::RegProc => &postgres_types::Type::REGPROC_ARRAY,
                 Type::RegType => &postgres_types::Type::REGTYPE_ARRAY,
+                Type::Int2Vector => &postgres_types::Type::INT2_VECTOR_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -352,6 +357,7 @@ impl Type {
             Type::RegClass => &postgres_types::Type::REGCLASS,
             Type::RegProc => &postgres_types::Type::REGPROC,
             Type::RegType => &postgres_types::Type::REGTYPE,
+            Type::Int2Vector => &postgres_types::Type::INT2_VECTOR,
         }
     }
 
@@ -392,6 +398,7 @@ impl Type {
             &postgres_types::Type::REGCLASS_ARRAY => "regclass[]",
             &postgres_types::Type::REGPROC_ARRAY => "regproc[]",
             &postgres_types::Type::REGTYPE_ARRAY => "regtype[]",
+            &postgres_types::Type::INT2_VECTOR => "int2vector",
             other => other.name(),
         }
     }
@@ -435,6 +442,7 @@ impl Type {
             Type::RegClass => 4,
             Type::RegProc => 4,
             Type::RegType => 4,
+            Type::Int2Vector => -1,
         }
     }
 
@@ -484,7 +492,8 @@ impl Type {
             | Type::Timestamp
             | Type::TimestampTz
             | Type::Uuid
-            | Type::VarChar { max_length: None } => -1,
+            | Type::VarChar { max_length: None }
+            | Type::Int2Vector => -1,
         }
     }
 }
@@ -582,6 +591,7 @@ impl TryFrom<&Type> for ScalarType {
             Type::RegClass => ScalarType::RegClass,
             Type::RegProc => ScalarType::RegProc,
             Type::RegType => ScalarType::RegType,
+            Type::Int2Vector => ScalarType::Int2Vector,
         })
     }
 }
@@ -636,6 +646,7 @@ impl From<&ScalarType> for Type {
             ScalarType::RegClass => Type::RegClass,
             ScalarType::RegProc => Type::RegProc,
             ScalarType::RegType => Type::RegType,
+            ScalarType::Int2Vector => Type::Int2Vector,
         }
     }
 }

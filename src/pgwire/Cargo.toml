@@ -28,7 +28,7 @@ mz-sql = { path = "../sql" }
 openssl = { version = "0.10.38", features = ["vendored"] }
 ordered-float = { version = "2.10.0", features = ["serde"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tokio = "1.16.1"
+tokio = "1.17.0"
 tokio-openssl = "0.6.3"
 tokio-stream = "0.1.8"
 tokio-util = { version = "0.6.9", features = ["codec"] }

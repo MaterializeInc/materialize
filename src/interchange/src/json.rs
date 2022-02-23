@@ -175,9 +175,11 @@ impl<'a> ToJson for TypedDatum<'_> {
                 }
                 ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
                 ScalarType::Uuid => json!(datum.unwrap_uuid()),
-                ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
+                ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
                     let list = match typ.scalar_type {
-                        ScalarType::Array(_) => datum.unwrap_array().elements(),
+                        ScalarType::Array(_) | ScalarType::Int2Vector => {
+                            datum.unwrap_array().elements()
+                        }
                         ScalarType::List { .. } => datum.unwrap_list(),
                         _ => unreachable!(),
                     };
@@ -188,7 +190,7 @@ impl<'a> ToJson for TypedDatum<'_> {
                                 datum,
                                 ColumnType {
                                     nullable: true,
-                                    scalar_type: (**element_type).clone(),
+                                    scalar_type: ty.unwrap_collection_element_type().clone(),
                                 },
                             );
                             datum.json(namer)
@@ -289,13 +291,13 @@ fn build_row_schema_field<F: FnMut() -> String>(
             "type": "string",
             "logicalType": "uuid",
         }),
-        ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
+        ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
             let inner = build_row_schema_field(
                 namer,
                 names_seen,
                 &ColumnType {
                     nullable: true,
-                    scalar_type: (**element_type).clone(),
+                    scalar_type: ty.unwrap_collection_element_type().clone(),
                 },
             );
             json!({

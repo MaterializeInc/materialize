@@ -11,4 +11,4 @@ futures-util = "0.3.19"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1.16.1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread", "time"] }

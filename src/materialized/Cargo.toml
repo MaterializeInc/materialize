@@ -47,7 +47,7 @@ headers = "0.3.5"
 hex = "0.4.3"
 http = "0.2.6"
 hyper = { version = "0.14.17", features = ["http1", "server"] }
-hyper-openssl = "0.9.1"
+hyper-openssl = "0.9.2"
 include_dir = "0.7.2"
 itertools = "0.10.3"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
@@ -84,7 +84,7 @@ sysctl = "0.4.3"
 sysinfo = "0.23.2"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.16.1", features = ["sync"] }
+tokio = { version = "1.17.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
 tracing = "0.1.31"
@@ -99,7 +99,7 @@ uuid = "0.8.2"
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
 mz-prof = { path = "../prof", features = ["jemalloc"] }
-tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
+tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
 assert_cmd = "2.0.4"
