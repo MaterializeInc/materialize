@@ -457,6 +457,11 @@ impl Interval {
         Self::new(0, 0, self.micros).unwrap()
     }
 
+    /// Returns true if combining all fields results in a negative number, false otherwise
+    pub fn is_negative(&self) -> bool {
+        self.as_microseconds() < 0
+    }
+
     /// Convert val from source unit to dest unit. Does not maintain fractional values.
     /// Returns None if the result overflows/underflows.
     ///
