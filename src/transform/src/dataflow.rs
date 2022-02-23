@@ -28,7 +28,7 @@ use crate::{monotonic::MonotonicFlag, Optimizer, TransformError};
 /// information to dataflow sources and lifts monotonicity information.
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
-    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, usize, Vec<MirScalarExpr>)>>,
 ) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
@@ -161,7 +161,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 /// dataflow using the supplied set of indexes.
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
-    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, usize, Vec<MirScalarExpr>)>>,
     optimizer: &Optimizer,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow

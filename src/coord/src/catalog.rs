@@ -115,7 +115,7 @@ pub struct CatalogState {
     by_oid: HashMap<u32, GlobalId>,
     /// Contains only enabled indexes from objects in the catalog; does not
     /// contain indexes disabled by e.g. the disable_user_indexes flag.
-    enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, usize, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
@@ -155,7 +155,9 @@ impl CatalogState {
         }
     }
 
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+    pub fn enabled_indexes(
+        &self,
+    ) -> &HashMap<GlobalId, Vec<(GlobalId, usize, Vec<MirScalarExpr>)>> {
         &self.enabled_indexes
     }
 
@@ -186,7 +188,7 @@ impl CatalogState {
             // Include all indexes on an id so the dataflow builder can safely use any
             // of them.
             if !catalog.enabled_indexes[&id].is_empty() {
-                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
+                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, ..)| id));
                 return;
             }
 
@@ -307,8 +309,8 @@ impl CatalogState {
                         .expect("object known to exist");
 
                     // If index not already enabled, add it.
-                    if !idxs.iter().any(|(index_id, _)| index_id == &id) {
-                        idxs.push((id, index.keys.clone()));
+                    if !idxs.iter().any(|(index_id, ..)| index_id == &id) {
+                        idxs.push((id, index.cluster_id.try_into().unwrap(), index.keys.clone()));
                     }
                 }
             }
@@ -2083,7 +2085,9 @@ impl Catalog {
                             .enabled_indexes
                             .get_mut(&index.on)
                             .expect("catalog out of sync");
-                        let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
+                        let i = indexes
+                            .iter()
+                            .position(|(idx_id, _cluster_id, _keys)| *idx_id == id);
                         match i {
                             Some(i) => {
                                 indexes.remove(i);
@@ -2299,7 +2303,9 @@ impl Catalog {
     ///
     /// Note that when `self.config.disable_user_indexes` is `true`, this does
     /// not include any user indexes.
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+    pub fn enabled_indexes(
+        &self,
+    ) -> &HashMap<GlobalId, Vec<(GlobalId, usize, Vec<MirScalarExpr>)>> {
         &self.state.enabled_indexes
     }
 
