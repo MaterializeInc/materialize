@@ -357,10 +357,11 @@ impl Interval {
         if self.months != 0 {
             bail!("cannot convert interval with months to duration");
         }
-        if self.duration_as_chrono() < chrono::Duration::zero() {
+        if self.is_negative() {
             bail!("cannot convert negative interval to duration");
         }
-        Ok(self.duration_as_chrono().to_std()?)
+        let micros: u64 = u64::try_from(self.as_microseconds())?;
+        Ok(Duration::from_micros(micros))
     }
 
     /// Truncate the "head" of the interval, removing all time units greater than `f`.
