@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# v20 version broke backwards compatibility by separating the day
+# v0.20.X version broke backwards compatibility by separating the day
 # and microsecond fields in Intervals.
 $ skip-if
 select split_part(ltrim('${arg.upgrade-from-version}', 'v'), '.', 1)::int = 0 and split_part(ltrim('${arg.upgrade-from-version}', 'v'), '.', 2)::int > 20;
