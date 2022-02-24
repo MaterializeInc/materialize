@@ -1574,6 +1574,7 @@ impl Coordinator {
         // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
 
         let index_since_updates: Vec<_> = self
+            // TODO: put cluster ID in index_since_updates
             .index_since_updates
             .borrow_mut()
             .drain()
@@ -1735,6 +1736,7 @@ impl Coordinator {
 
             // Allow dataflow to cancel any pending peeks.
             self.dataflow_client
+                // TODO: Get default cluster ID
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .cancel_peek(conn_id)
@@ -4286,6 +4288,8 @@ impl Coordinator {
                 for id in sinks_to_drop.iter() {
                     self.sink_writes.remove(id);
                 }
+
+                // TODO: Get cluster from sink.
                 self.dataflow_client
                     .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                     .unwrap()
@@ -4776,7 +4780,7 @@ pub async fn serve(
             handle.block_on(
                 coord
                     .dataflow_client
-                    // TODO: what is the default instance in a post-cluster world?
+                    // TODO: get default instance
                     .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
             );
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
@@ -5151,6 +5155,7 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
+                    // TODO: Get default instance
                     self.dataflow_client
                         .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                         .unwrap()
@@ -5194,6 +5199,7 @@ pub mod fast_path_peek {
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks.insert(conn_id, rows_tx);
             let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
+            // TODO: Get default instance
             self.dataflow_client
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
