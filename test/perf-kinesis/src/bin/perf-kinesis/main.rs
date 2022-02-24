@@ -25,15 +25,16 @@
 /// "Time behind external source," which indicates our lag behind the tip of the Kinesis
 /// stream, should not drift over time. (These measurements should become more concrete as
 /// we get more experience running this test).
-///
-///
+use std::io;
+
 use anyhow::Context;
 use rand::Rng;
+use tracing::info;
+use tracing_subscriber::filter::EnvFilter;
 
 use mz_aws_util::config::AwsConfig;
 use mz_ore::task;
 use mz_test_util::mz_client;
-use tracing::info;
 
 mod kinesis;
 mod mz;
@@ -49,7 +50,11 @@ async fn main() {
 async fn run() -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
     let args: Args = mz_ore::cli::parse_args();
-    env_logger::init();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(args.log_filter)
+        .with_writer(io::stderr)
+        .init();
 
     // Initialize and log test variables.
     let seed: u32 = rand::thread_rng().gen();
@@ -114,7 +119,7 @@ async fn run() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-#[derive(Clone, Debug, clap::Parser)]
+#[derive(Debug, clap::Parser)]
 pub struct Args {
     /// The materialized host
     #[clap(long, default_value = "materialized")]
@@ -139,4 +144,10 @@ pub struct Args {
     /// The name of the stream to use, will always have a nonce
     #[clap(long, default_value = "testdrive-perf-kinesis")]
     pub stream_prefix: String,
+
+    /// Which log messages to emit.
+    ///
+    /// See materialized's `--log-filter` option for details.
+    #[clap(long, value_name = "FILTER", default_value = "perf-kinesis=debug,info")]
+    pub log_filter: EnvFilter,
 }

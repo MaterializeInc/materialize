@@ -10,6 +10,7 @@
 use chrono::format::ParseResult;
 use chrono::prelude::*;
 use chrono::DateTime;
+use tracing_subscriber::filter::EnvFilter;
 
 pub static KAFKA_SOURCE_NAME: &str = "billing_source";
 pub static CSV_SOURCE_NAME: &str = "price_source";
@@ -28,7 +29,7 @@ fn parse_seed(s: &str) -> u64 {
     s.parse().unwrap_or_else(|_| rand::random())
 }
 
-#[derive(Clone, Debug, clap::Parser)]
+#[derive(Debug, clap::Parser)]
 pub struct Args {
     /// The materialized host
     #[clap(long, default_value = "localhost")]
@@ -102,6 +103,12 @@ pub struct Args {
     // Whether or not to enable persistence for input Kafka sources
     #[clap(long)]
     enable_persistence: bool,
+
+    /// Which log messages to emit.
+    ///
+    /// See materialized's `--log-filter` option for details.
+    #[clap(long, value_name = "FILTER", default_value = "billing-demo=debug,info")]
+    pub log_filter: EnvFilter,
 }
 
 impl Args {

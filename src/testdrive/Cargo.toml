@@ -25,7 +25,6 @@ flate2 = "1.0.22"
 futures = "0.3.21"
 globset = "0.4.8"
 http = "0.2.6"
-env_logger = "0.9.0"
 itertools = "0.10.3"
 junit-report = "0.7.0"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
@@ -59,6 +58,7 @@ tempfile = "3.2.0"
 termcolor = "1.1.2"
 tiberius = { version = "0.7.1", default-features = false }
 time = "0.3.7"
+tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 tokio = { version = "1.17.0", features = ["process"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.8"
