@@ -24,7 +24,7 @@ use tokio::runtime::Runtime as AsyncRuntime;
 use crate::error::Error;
 use crate::gen::persist::{ProtoBatchFormat, ProtoMeta};
 use crate::indexed::encoding::{
-    BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
+    BlobMeta, BlobTraceBatchPart, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
@@ -189,7 +189,7 @@ impl<B: BlobRead> BlobCache<B> {
         &self,
         key: &str,
         hint: CacheHint,
-    ) -> Result<Arc<BlobTraceBatch>, Error> {
+    ) -> Result<Arc<BlobTraceBatchPart>, Error> {
         let async_guard = self.async_runtime.enter();
 
         let bytes = block_on(self.blob.lock()?.get(key))?
@@ -198,7 +198,7 @@ impl<B: BlobRead> BlobCache<B> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes_len));
-        let batch: BlobTraceBatch = BlobTraceBatch::decode(&bytes)
+        let batch: BlobTraceBatchPart = BlobTraceBatchPart::decode(&bytes)
             .map_err(|err| Error::from(format!("invalid trace batch at key {}: {}", key, err)))?;
 
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
@@ -220,7 +220,7 @@ impl<B: BlobRead> BlobCache<B> {
         &self,
         key: &str,
         hint: CacheHint,
-    ) -> PFuture<Arc<BlobTraceBatch>> {
+    ) -> PFuture<Arc<BlobTraceBatchPart>> {
         let (tx, rx) = PFuture::new();
         match self.cache.get_trace(key) {
             Err(err) => {
@@ -392,7 +392,7 @@ impl<B: Blob> BlobCache<B> {
     pub fn set_trace_batch(
         &self,
         key: String,
-        batch: BlobTraceBatch,
+        batch: BlobTraceBatchPart,
         format: ProtoBatchFormat,
     ) -> Result<u64, Error> {
         let async_guard = self.async_runtime.enter();
@@ -435,8 +435,10 @@ impl<B: Blob> BlobCache<B> {
         let async_guard = self.async_runtime.enter();
 
         let delete_start = Instant::now();
-        self.cache.remove_trace(&batch.key)?;
-        block_on(self.blob.lock()?.delete(&batch.key))?;
+        for key in batch.keys.iter() {
+            self.cache.remove_trace(&key)?;
+            block_on(self.blob.lock()?.delete(key))?;
+        }
         self.metrics
             .trace
             .blob_delete_seconds
@@ -508,7 +510,7 @@ impl<B: Blob> BlobCache<B> {
 struct BlobCacheInner {
     // TODO: Use a disk-backed LRU cache.
     unsealed: Arc<Mutex<BlobCacheCore<BlobUnsealedBatch>>>,
-    trace: Arc<Mutex<BlobCacheCore<BlobTraceBatch>>>,
+    trace: Arc<Mutex<BlobCacheCore<BlobTraceBatchPart>>>,
 }
 
 impl BlobCacheInner {
@@ -545,14 +547,14 @@ impl BlobCacheInner {
         &self,
         key: String,
         size: usize,
-        data: Arc<BlobTraceBatch>,
+        data: Arc<BlobTraceBatchPart>,
     ) -> Result<(), Error> {
         let mut trace = self.trace.lock()?;
         trace.add(key, size, data);
         Ok(())
     }
 
-    fn get_trace(&self, key: &str) -> Result<Option<Arc<BlobTraceBatch>>, Error> {
+    fn get_trace(&self, key: &str) -> Result<Option<Arc<BlobTraceBatchPart>>, Error> {
         let trace = self.trace.lock()?;
         Ok(trace.get(key))
     }

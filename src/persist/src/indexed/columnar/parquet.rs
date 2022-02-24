@@ -29,7 +29,7 @@ use crate::indexed::columnar::arrow::{
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
-    encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
+    encode_unsealed_inline_meta, BlobTraceBatchPart, BlobUnsealedBatch,
 };
 use crate::storage::SeqNo;
 
@@ -47,8 +47,8 @@ pub fn encode_unsealed_parquet<W: Write>(
     )
 }
 
-/// Encodes an BlobTraceBatch into the Parquet format.
-pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result<(), Error> {
+/// Encodes an BlobTraceBatchPart into the Parquet format.
+pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Result<(), Error> {
     encode_parquet_kvtd(
         w,
         encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKvtd),
@@ -81,8 +81,8 @@ pub fn decode_unsealed_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealed
     Ok(ret)
 }
 
-/// Decodes a BlobTraceBatch from the Parquet format.
-pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, Error> {
+/// Decodes a BlobTraceBatchPart from the Parquet format.
+pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatchPart, Error> {
     let metadata = read_metadata(r).map_err(|err| err.to_string())?;
     let metadata = metadata
         .key_value_metadata()
@@ -98,7 +98,7 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch,
         ProtoBatchFormat::ParquetKvtd => decode_parquet_file_kvtd(r)?,
     };
 
-    let ret = BlobTraceBatch {
+    let ret = BlobTraceBatchPart {
         desc: meta.desc.map_or_else(
             || {
                 Description::new(
@@ -109,6 +109,7 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch,
             },
             |x| x.into(),
         ),
+        index: meta.index,
         updates,
     };
     ret.validate()?;
