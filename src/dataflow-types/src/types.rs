@@ -1541,10 +1541,6 @@ pub mod sources {
                     if let AwsCredentials::Profile { profile_name } = &self.credentials {
                         rc = rc.profile_name(profile_name);
                     }
-                    // This doesn't work for profiles which do not provide their own region but
-                    // instead specify a source_profile that does have a region.
-                    //
-                    // https://github.com/awslabs/aws-sdk-rust/issues/443
                     rc.build().region().await
                 }
             };

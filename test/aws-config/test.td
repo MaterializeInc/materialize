@@ -66,6 +66,19 @@ a1
 > SELECT text FROM s3_profile_allowed
 a1
 
+# Check using a profile that does not itself configure a region, but references
+# another profile which does.
+> CREATE MATERIALIZED SOURCE s3_allowed_no_region
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${td-bucket}'
+  WITH (
+    profile = 'allowed-no-region'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_allowed_no_region
+a1
+
+
 # Error cases
 
 # aws timeout is pretty long, so things just show up as pending but empty for awhile
@@ -101,17 +114,3 @@ regex: Unable to list S3 bucket.*Access Denied
 
 ! SELECT text FROM s3_role_denied
 regex: Unable to list S3 bucket.*Access Denied
-
-
-# Unexpected failure case
-
-# This profile should work -- the specified profile has a source_profile that
-# specifies a region -- but is currently a known limitation. If it starts
-# working or we make it start working we can remove the known limitation.
-! CREATE MATERIALIZED SOURCE s3_allowed_no_region
-  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${td-bucket}'
-  WITH (
-    profile = 'allowed-no-region'
-  )
-  FORMAT TEXT;
-contains: Unable to validate AWS credentials: failed to construct request: NoRegion
