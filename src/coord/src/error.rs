@@ -38,7 +38,7 @@ pub enum CoordError {
     ConstrainedParameter {
         parameter: &'static (dyn Var + Send + Sync),
         value: String,
-        valid_values: Vec<&'static str>,
+        valid_values: Option<Vec<&'static str>>,
     },
     /// The cursor already exists.
     DuplicateCursor(String),
@@ -233,9 +233,10 @@ impl CoordError {
                 ))
             }
             CoordError::Catalog(c) => c.hint(),
-            CoordError::ConstrainedParameter { valid_values, .. } => {
-                Some(format!("Available values: {}.", valid_values.join(", ")))
-            }
+            CoordError::ConstrainedParameter {
+                valid_values: Some(valid_values),
+                ..
+            } => Some(format!("Available values: {}.", valid_values.join(", "))),
             CoordError::Eval(e) => e.hint(),
             CoordError::InvalidAlterOnDisabledIndex(idx) => Some(format!(
                 "To perform this ALTER, first enable the index using ALTER \

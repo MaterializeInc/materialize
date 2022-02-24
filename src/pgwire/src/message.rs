@@ -381,7 +381,7 @@ impl ErrorResponse {
             CoordError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
             CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
-            CoordError::UnknownParameter(_) => SqlState::INVALID_SQL_STATEMENT_NAME,
+            CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             CoordError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             CoordError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,

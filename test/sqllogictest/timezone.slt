@@ -21,7 +21,7 @@ SET TIME ZONE 'uTc'
 statement ok
 SET TimeZone = 'uTc'
 
-statement error parameter "TimeZone" can only be set to "UTC"
+statement error invalid value for parameter "TimeZone": "bad"
 SET TIME ZONE bad
 
 query T
@@ -33,6 +33,22 @@ query T
 SHOW TIME ZONE
 ----
 UTC
+
+statement ok
+SET TimeZone = '+00:00'
+
+statement ok
+SET TIMEZONE to '+00:00'
+
+query T
+SHOW TIMEZONE
+----
++00:00
+
+query T
+SHOW TIME ZONE
+----
++00:00
 
 query T
 SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'

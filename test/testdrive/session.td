@@ -88,7 +88,7 @@ contains:parameter "server_version" cannot be changed
 contains:parameter "server_version_num" cannot be changed
 
 ! SET TimeZone = 'nope'
-contains:parameter "TimeZone" can only be set to "UTC"
+contains:invalid value for parameter "TimeZone": "nope"
 
 # The `transaction_isolation` variable has dedicated syntax as mandated by the
 # SQL standard.
