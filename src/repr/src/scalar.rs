@@ -1410,7 +1410,6 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns number of layers (akin to array dimensions) on a
     /// Returns vector of [`ScalarType`] elements in a [`ScalarType::Record`].
     ///
     /// # Panics

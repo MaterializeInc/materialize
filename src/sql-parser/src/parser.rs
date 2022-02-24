@@ -759,33 +759,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_composite_type_definition(&mut self) -> Result<Vec<ColumnDef<Raw>>, ParserError> {
-        let mut fields = vec![];
         self.expect_token(&Token::LParen)?;
-        loop {
-            if let Some(column_name) = self.consume_identifier() {
-                let data_type = self.parse_data_type()?;
-                fields.push(ColumnDef {
-                    name: column_name,
-                    data_type,
-                    collation: None,
-                    options: vec![],
-                });
-            } else {
-                return self.expected(self.peek_pos(), "field name and type", self.peek_token());
-            }
-            if self.consume_token(&Token::Comma) {
-                // Continue.
-            } else if self.consume_token(&Token::RParen) {
-                break;
-            } else {
-                return self.expected(
-                    self.peek_pos(),
-                    "',' or ')' after field definition",
-                    self.peek_token(),
-                );
-            }
-        }
-
+        let fields = self.parse_comma_separated(|parser| {
+            Ok(ColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
+                collation: None,
+                options: vec![],
+            })
+        })?;
+        self.expect_token(&Token::RParen)?;
         Ok(fields)
     }
 
