@@ -8,9 +8,5 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
-GRANT ALL PRIVILEGES ON DATABASE "postgres" TO debezium;
-GRANT ALL PRIVILEGES ON SCHEMA "public" TO debezium;
-
-CREATE PUBLICATION mz_source;
-CREATE PUBLICATION mz_source_alter;
+ALTER TABLE to_be_altered ADD COLUMN f2 INTEGER;
+INSERT INTO to_be_altered VALUES (1, 2);
