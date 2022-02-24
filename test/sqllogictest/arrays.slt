@@ -843,3 +843,9 @@ SELECT ARRAY[ARRAY[customer.first_name], ARRAY[customer.zip], ARRAY[customer.id:
 ----
 {{alice},{10003},{1}}
 {{charlie},{11217},{3}}
+
+# Create arrays of anonymous records
+query T
+SELECT ARRAY[(1,2), (2,3)]
+----
+{"(1,2)","(3,4)","(5,6)"}

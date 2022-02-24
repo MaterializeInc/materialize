@@ -396,6 +396,16 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
         _ => panic!("unexpected simple query message"),
     }
 
+    let message = client
+        .simple_query("SELECT ARRAY[ROW(1,2), ROW(3,4), ROW(5,6)]")?
+        .into_first();
+    match message {
+        SimpleQueryMessage::Row(row) => {
+            assert_eq!(row.get(0).unwrap(), r#"{"(1,2)","(3,4)","(5,6)"}"#);
+        }
+        _ => panic!("unexpected simple query message"),
+    }
+
     Ok(())
 }
 

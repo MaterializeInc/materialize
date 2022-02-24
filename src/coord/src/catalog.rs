@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use fail::fail_point;
-use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
