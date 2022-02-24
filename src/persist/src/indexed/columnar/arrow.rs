@@ -27,7 +27,7 @@ use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
-    encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
+    encode_unsealed_inline_meta, BlobTraceBatchPart, BlobUnsealedBatch,
 };
 use crate::storage::SeqNo;
 
@@ -91,11 +91,11 @@ pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> 
     Ok(())
 }
 
-/// Encodes an BlobTraceBatch into the Arrow file format.
+/// Encodes an BlobTraceBatchPart into the Arrow file format.
 ///
 /// NB: This is currently unused, but it's here because we may want to use it
 /// for the local cache and so we can easily compare arrow vs parquet.
-pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result<(), Error> {
+pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Result<(), Error> {
     let mut metadata = HashMap::with_capacity(1);
     metadata.insert(
         INLINE_METADATA_KEY.into(),
@@ -136,11 +136,11 @@ pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBa
     Ok(ret)
 }
 
-/// Decodes a BlobTraceBatch from the Arrow file format.
+/// Decodes a BlobTraceBatchPart from the Arrow file format.
 ///
 /// NB: This is currently unused, but it's here because we may want to use it
 /// for the local cache and so we can easily compare arrow vs parquet.
-pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, Error> {
+pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatchPart, Error> {
     let file_meta = read_file_metadata(r)?;
     let (format, meta) =
         decode_trace_inline_meta(file_meta.schema().metadata().get(INLINE_METADATA_KEY))?;
@@ -153,7 +153,7 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
         }
     };
 
-    let ret = BlobTraceBatch {
+    let ret = BlobTraceBatchPart {
         desc: meta.desc.map_or_else(
             || {
                 Description::new(
@@ -164,6 +164,7 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
             },
             |x| x.into(),
         ),
+        index: meta.index,
         updates,
     };
     ret.validate()?;

@@ -31,7 +31,7 @@ use mz_persist::error::Error;
 use mz_persist::file::{FileBlob, FileLog};
 use mz_persist::gen::persist::ProtoBatchFormat;
 use mz_persist::indexed::cache::BlobCache;
-use mz_persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
+use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobUnsealedBatch, Id};
 use mz_persist::indexed::metrics::Metrics;
 use mz_persist::indexed::{Cmd, Indexed};
 use mz_persist::mem::MemRegistry;
@@ -298,12 +298,13 @@ pub fn bench_encode_batch(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallT
         desc: SeqNo(0)..SeqNo(1),
         updates: data.batches().collect::<Vec<_>>(),
     };
-    let trace = BlobTraceBatch {
+    let trace = BlobTraceBatchPart {
         desc: Description::new(
             Antichain::from_elem(0),
             Antichain::from_elem(1),
             Antichain::from_elem(0),
         ),
+        index: 0,
         updates: data.batches().collect::<Vec<_>>(),
     };
 

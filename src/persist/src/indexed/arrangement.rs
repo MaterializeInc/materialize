@@ -29,7 +29,7 @@ use crate::indexed::background::{
 use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{
-    ArrangementMeta, BlobTraceBatch, TraceBatchMeta, UnsealedBatchMeta, UnsealedSnapshotMeta,
+    ArrangementMeta, BlobTraceBatchPart, TraceBatchMeta, UnsealedBatchMeta, UnsealedSnapshotMeta,
 };
 use crate::indexed::{BlobUnsealedBatch, Id, Snapshot};
 use crate::pfuture::PFuture;
@@ -412,8 +412,9 @@ impl Arrangement {
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         let updates = updates.iter().collect::<ColumnarRecordsVec>().into_inner();
-        let batch = BlobTraceBatch {
+        let batch = BlobTraceBatchPart {
             desc: req.desc.clone(),
+            index: 0,
             updates,
         };
 
@@ -423,7 +424,7 @@ impl Arrangement {
         let size_bytes = blob.set_trace_batch(key.clone(), batch, format)?;
         // Batches are inserted into the trace with compaction level set to 0.
         let drained = TraceBatchMeta {
-            key,
+            keys: vec![key],
             format,
             desc,
             level: 0,
@@ -625,7 +626,9 @@ impl Arrangement {
             // to populate the cache because the default cache size is small
             // enough that in real workloads large batches won't pollute the
             // cache.
-            batches.push(blob.get_trace_batch_async(&meta.key, CacheHint::MaybeAdd));
+            for key in meta.keys.iter() {
+                batches.push(blob.get_trace_batch_async(key, CacheHint::MaybeAdd));
+            }
         }
         TraceSnapshot {
             ts_upper,
@@ -795,7 +798,7 @@ pub struct TraceSnapshot {
     /// All updates not at times greater than this frontier must be advanced
     /// to a time that is equivalent to this frontier.
     pub since: Antichain<u64>,
-    batches: Vec<PFuture<Arc<BlobTraceBatch>>>,
+    batches: Vec<PFuture<Arc<BlobTraceBatchPart>>>,
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
@@ -821,7 +824,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 // important.
 pub struct TraceSnapshotIter {
     current_batch: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
-    batches: VecDeque<PFuture<Arc<BlobTraceBatch>>>,
+    batches: VecDeque<PFuture<Arc<BlobTraceBatchPart>>>,
 }
 
 impl Default for TraceSnapshotIter {
@@ -1080,7 +1083,7 @@ mod tests {
             .iter()
             .cloned()
             .map(|mut b| {
-                b.key = "KEY".to_string();
+                b.keys = vec![];
                 b.size_bytes = 0;
                 b
             })
@@ -1099,7 +1102,7 @@ mod tests {
         let mut f = Arrangement::new(ArrangementMeta {
             id: Id(0),
             trace_batches: vec![TraceBatchMeta {
-                key: "key1".to_string(),
+                keys: vec![],
                 format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 2, 0),
                 level: 1,
@@ -1352,7 +1355,7 @@ mod tests {
         let mut t = Arrangement::new(ArrangementMeta {
             id: Id(0),
             trace_batches: vec![TraceBatchMeta {
-                key: "key1".to_string(),
+                keys: vec![],
                 format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 10, 5),
                 level: 1,
@@ -1389,7 +1392,7 @@ mod tests {
         let mut t = Arrangement::new(ArrangementMeta {
             id: Id(0),
             trace_batches: vec![TraceBatchMeta {
-                key: "key1".to_string(),
+                keys: vec![],
                 format: ProtoBatchFormat::Unknown,
                 desc: Description::new(
                     Antichain::from_elem(0),
@@ -1490,14 +1493,14 @@ mod tests {
             cleared_trace(&t.trace_batches),
             vec![
                 TraceBatchMeta {
-                    key: "KEY".to_string(),
+                    keys: vec![],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 0,
                 },
                 TraceBatchMeta {
-                    key: "KEY".to_string(),
+                    keys: vec![],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(3, 9, 0),
                     level: 0,
@@ -1552,14 +1555,14 @@ mod tests {
             cleared_trace(&t.trace_batches),
             vec![
                 TraceBatchMeta {
-                    key: "KEY".to_string(),
+                    keys: vec![],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 0,
                 },
                 TraceBatchMeta {
-                    key: "KEY".to_string(),
+                    keys: vec![],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(3, 10, 10),
                     level: 0,
