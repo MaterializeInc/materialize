@@ -176,12 +176,12 @@ impl FromStr for DateTimeField {
             "MILLENNIUM" | "MILLENNIA" | "MIL" | "MILS" => Ok(Self::Millennium),
             "CENTURY" | "CENTURIES" | "CENT" | "C" => Ok(Self::Century),
             "DECADE" | "DECADES" | "DEC" | "DECS" => Ok(Self::Decade),
-            "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
+            "YEAR" | "YEARS" | "YR" | "YRS" | "Y" => Ok(Self::Year),
             "MONTH" | "MONTHS" | "MON" | "MONS" => Ok(Self::Month),
             "DAY" | "DAYS" | "D" => Ok(Self::Day),
-            "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
-            "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
-            "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
+            "HOUR" | "HOURS" | "HR" | "HRS" | "H" => Ok(Self::Hour),
+            "MINUTE" | "MINUTES" | "MIN" | "MINS" | "M" => Ok(Self::Minute),
+            "SECOND" | "SECONDS" | "SEC" | "SECS" | "S" => Ok(Self::Second),
             "MILLISECOND" | "MILLISECONDS" | "MILLISECON" | "MILLISECONS" | "MSECOND"
             | "MSECONDS" | "MSEC" | "MSECS" | "MS" => Ok(Self::Milliseconds),
             "MICROSECOND" | "MICROSECONDS" | "MICROSECON" | "MICROSECONS" | "USECOND"
