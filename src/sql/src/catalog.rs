@@ -56,9 +56,6 @@ use crate::plan::statement::StatementDesc;
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
-    /// Returns the search path used by the catalog.
-    fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
-
     /// Returns the name of the user who is issuing the query.
     fn user(&self) -> &str;
 
@@ -434,10 +431,6 @@ lazy_static! {
 }
 
 impl SessionCatalog for DummyCatalog {
-    fn search_path(&self, _: bool) -> Vec<&str> {
-        vec!["dummy"]
-    }
-
     fn user(&self) -> &str {
         "dummy"
     }

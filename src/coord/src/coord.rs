@@ -98,7 +98,6 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use mz_repr::adt::interval::Interval;
 use rand::Rng;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -118,10 +117,11 @@ use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
 use mz_dataflow_types::{
-    DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary, Update,
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary,
+    Update,
 };
 use mz_expr::{
-    permutation_for_arrangement, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    permutation_for_arrangement, ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
@@ -130,8 +130,9 @@ use mz_ore::retry::Retry;
 use mz_ore::soft_assert_eq;
 use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
-use mz_repr::adt::numeric;
-use mz_repr::{Datum, Diff, RelationDesc, Row, RowArena, ScalarType, Timestamp};
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::{Datum, Diff, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
@@ -154,15 +155,13 @@ use mz_transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
-use crate::catalog::{
-    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
-};
+use crate::catalog::{self, storage, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
 use crate::client::{Client, Handle};
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::antichain::AntichainToken;
-use crate::coord::dataflow_builder::DataflowBuilder;
+use crate::coord::dataflow_builder::{DataflowBuilder, ExprPrepStyle};
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
 use crate::session::{
@@ -2567,8 +2566,7 @@ impl Coordinator {
         }
         let view_id = self.catalog.allocate_id()?;
         let view_oid = self.catalog.allocate_oid()?;
-        // Optimize the expression so that we can form an accurately typed description.
-        let optimized_expr = self.prep_relation_expr(view.expr, ExprPrepStyle::Static)?;
+        let optimized_expr = self.view_optimizer.optimize(view.expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
@@ -2708,14 +2706,11 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
             name,
-            mut index,
+            index,
             options,
             if_not_exists,
         } = plan;
 
-        for key in &mut index.keys {
-            Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
-        }
         let id = self.catalog.allocate_id()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
@@ -3098,7 +3093,7 @@ impl Coordinator {
         plan: PeekPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let PeekPlan {
-            source,
+            mut source,
             when,
             finishing,
             copy_to,
@@ -3119,12 +3114,8 @@ impl Coordinator {
         // queries.
         let timestamp = if in_transaction && when == PeekWhen::Immediately {
             // Queries are independent of the logical timestamp iff there are no referenced
-            // sources or indexes and there is no reference to `mz_logical_timestamp()`
-            // which we check by using a Static prep style.
-            let timestamp_independent = source_ids.is_empty()
-                && self
-                    .prep_relation_expr(source.clone(), ExprPrepStyle::Static)
-                    .is_ok();
+            // sources or indexes and there is no reference to `mz_logical_timestamp()`.
+            let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
 
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
@@ -3134,7 +3125,7 @@ impl Coordinator {
                 }
             }
 
-            let timestamp = session.get_transaction_timestamp(|| {
+            let timestamp = session.get_transaction_timestamp(|session| {
                 // Determine a timestamp that will be valid for anything in any schema
                 // referenced by the first query.
                 let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
@@ -3142,7 +3133,7 @@ impl Coordinator {
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
                 let (timestamp, timestamp_ids) =
-                    self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
+                    self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
                 // Add the used indexes to the recorded ids.
                 timedomain_ids.extend(&timestamp_ids);
                 let mut handles = vec![];
@@ -3204,15 +3195,10 @@ impl Coordinator {
 
             timestamp
         } else {
-            self.determine_timestamp(&source_ids, when)?.0
+            self.determine_timestamp(session, &source_ids, when)?.0
         };
 
-        let source = self.prep_relation_expr(
-            source,
-            ExprPrepStyle::OneShot {
-                logical_time: timestamp,
-            },
-        )?;
+        let source = self.view_optimizer.optimize(source)?;
 
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
@@ -3231,8 +3217,17 @@ impl Coordinator {
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
         dataflow.set_as_of(Antichain::from_elem(timestamp));
-        self.dataflow_builder()
-            .import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
+        let mut builder = self.dataflow_builder();
+        builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
+        for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
+            builder.prep_relation_expr(
+                view,
+                ExprPrepStyle::OneShot {
+                    logical_time: Some(timestamp),
+                    session,
+                },
+            )?;
+        }
         dataflow.export_index(
             index_id,
             IndexDesc {
@@ -3298,7 +3293,7 @@ impl Coordinator {
             // Updates greater or equal to this frontier will be produced.
             let frontier = if let Some(ts) = ts {
                 // If a timestamp was explicitly requested, use that.
-                let ts = coord.determine_timestamp(uses, PeekWhen::AtTimestamp(ts))?;
+                let ts = coord.determine_timestamp(session, uses, PeekWhen::AtTimestamp(ts))?;
                 Antichain::from_elem(ts.0)
             } else {
                 coord.determine_frontier(uses)
@@ -3332,7 +3327,7 @@ impl Coordinator {
                 depends_on,
             } => {
                 let id = self.allocate_transient_id()?;
-                let expr = self.prep_relation_expr(expr, ExprPrepStyle::Static)?;
+                let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
                 let mut dataflow = DataflowDesc::new(format!("tail-{}", id), id);
@@ -3370,6 +3365,7 @@ impl Coordinator {
     /// used is also returned.
     fn determine_timestamp(
         &mut self,
+        session: &Session,
         uses_ids: &[GlobalId],
         when: PeekWhen,
     ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
@@ -3400,7 +3396,37 @@ impl Coordinator {
         // timestamp, or the latest timestamp known to be immediately available.
         let timestamp = match when {
             // Explicitly requested timestamps should be respected.
-            PeekWhen::AtTimestamp(timestamp) => timestamp,
+            PeekWhen::AtTimestamp(mut timestamp) => {
+                let temp_storage = RowArena::new();
+                self.dataflow_builder().prep_scalar_expr(
+                    &mut timestamp,
+                    ExprPrepStyle::OneShot {
+                        logical_time: None,
+                        session,
+                    },
+                )?;
+                let evaled = timestamp.eval(&[], &temp_storage)?;
+                let ty = timestamp.typ(&RelationType::empty());
+                match ty.scalar_type {
+                    ScalarType::Numeric { .. } => {
+                        let n = evaled.unwrap_numeric().0;
+                        u64::try_from(n)?
+                    }
+                    ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
+                    ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
+                    ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+                    ScalarType::TimestampTz => {
+                        evaled.unwrap_timestamptz().timestamp_millis().try_into()?
+                    }
+                    ScalarType::Timestamp => {
+                        evaled.unwrap_timestamp().timestamp_millis().try_into()?
+                    }
+                    _ => coord_bail!(
+                        "can't use {} as a timestamp for AS OF",
+                        self.catalog.for_session(session).humanize_column_type(&ty)
+                    ),
+                }
+            }
 
             // These two strategies vary in terms of which traces drive the
             // timestamp determination process: either the trace itself or the
@@ -3609,8 +3635,7 @@ impl Coordinator {
              decorrelated_plan: MirRelationExpr|
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
                 let start = Instant::now();
-                let optimized_plan =
-                    coord.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
+                let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
                 let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
                 coord.dataflow_builder().import_view_into_dataflow(
                     // TODO: If explaining a view, pipe the actual id of the view.
@@ -3784,11 +3809,17 @@ impl Coordinator {
         mut session: Session,
         plan: InsertPlan,
     ) {
-        let optimized_mir = match self.prep_relation_expr(plan.values, ExprPrepStyle::Write) {
-            Ok(m) => m,
-            Err(e) => {
-                tx.send(Err(e), session);
-                return;
+        let optimized_mir = if let MirRelationExpr::Constant { .. } = &plan.values {
+            // We don't perform any optimizations on an expression that is already
+            // a constant for writes, as we want to maximize bulk-insert throughput.
+            OptimizedMirRelationExpr(plan.values)
+        } else {
+            match self.view_optimizer.optimize(plan.values) {
+                Ok(m) => m,
+                Err(e) => {
+                    tx.send(Err(e.into()), session);
+                    return;
+                }
             }
         };
 
@@ -3798,7 +3829,7 @@ impl Coordinator {
                 session,
             ),
             // All non-constant values must be planned as read-then-writes.
-            selection => {
+            mut selection => {
                 let desc_arity = match self.catalog.try_get_by_id(plan.id) {
                     Some(table) => table.desc().expect("desc called on table").arity(),
                     None => {
@@ -3811,6 +3842,16 @@ impl Coordinator {
                         return;
                     }
                 };
+
+                if selection.contains_temporal() {
+                    tx.send(
+                        Err(CoordError::Unsupported(
+                            "calls to mz_logical_timestamp in write statements are not supported",
+                        )),
+                        session,
+                    );
+                    return;
+                }
 
                 let finishing = RowSetFinishing {
                     order_by: vec![],
@@ -3880,13 +3921,9 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let catalog = self.catalog.for_session(session);
         let values = mz_sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
-
-        let constants = self
-            .prep_relation_expr(values.lower(), ExprPrepStyle::Write)?
-            .into_inner();
-
+        let values = self.view_optimizer.optimize(values.lower())?;
         // Copied rows must always be constants.
-        self.sequence_insert_constant(session, id, constants)
+        self.sequence_insert_constant(session, id, values.into_inner())
     }
 
     // ReadThenWrite is a plan whose writes depend on the results of a
@@ -3938,6 +3975,12 @@ impl Coordinator {
         }
 
         let ts = self.get_local_read_ts();
+        let ts = MirScalarExpr::literal_ok(
+            Datum::from(Numeric::from(ts)),
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            },
+        );
         let peek_response = match self
             .sequence_peek(
                 &mut session,
@@ -4091,6 +4134,8 @@ impl Coordinator {
     /// returned by this function. This allows callers to error while building
     /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
     /// function successfully returns on any built `DataflowDesc`.
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
     async fn catalog_transact<F, T>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<T, CoordError>
     where
         F: FnOnce(DataflowBuilder) -> Result<T, CoordError>,
@@ -4331,76 +4376,6 @@ impl Coordinator {
                     index.set_compaction_window_ms(window);
                 }
             }
-        }
-        Ok(())
-    }
-
-    /// Prepares a relation expression for execution by preparing all contained
-    /// scalar expressions (see `prep_scalar_expr`), then optimizing the
-    /// relation expression.
-    fn prep_relation_expr(
-        &mut self,
-        mut expr: MirRelationExpr,
-        style: ExprPrepStyle,
-    ) -> Result<OptimizedMirRelationExpr, CoordError> {
-        if let ExprPrepStyle::Static = &style {
-            let mut opt_expr = self.view_optimizer.optimize(expr)?;
-            opt_expr.0.try_visit_mut_post(&mut |e| {
-                // Carefully test filter expressions, which may represent temporal filters.
-                if let mz_expr::MirRelationExpr::Filter { input, predicates } = &*e {
-                    let mfp = mz_expr::MapFilterProject::new(input.arity())
-                        .filter(predicates.iter().cloned());
-                    match mfp.into_plan() {
-                        Err(e) => coord_bail!("{:?}", e),
-                        Ok(_) => Ok(()),
-                    }
-                } else {
-                    e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
-                }
-            })?;
-            Ok(opt_expr)
-        } else {
-            expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
-
-            if let (ExprPrepStyle::Write, mz_expr::MirRelationExpr::Constant { .. }) =
-                (&style, &expr)
-            {
-                // We don't perform any optimizations on an expression that is already
-                // a constant for writes, as we want to maximize bulk-insert throughput.
-                Ok(OptimizedMirRelationExpr(expr))
-            } else {
-                // TODO (wangandi): Is there anything that optimizes to a
-                // constant expression that originally contains a global get? Is
-                // there anything not containing a global get that cannot be
-                // optimized to a constant expression?
-                Ok(self.view_optimizer.optimize(expr)?)
-            }
-        }
-    }
-
-    /// Prepares a scalar expression for execution by replacing any placeholders
-    /// with their correct values.
-    ///
-    /// Specifically, calls to the special function `MzLogicalTimestamp` are
-    /// replaced if `style` is `OneShot { logical_timestamp }`. Calls are not
-    /// replaced for the `Explain` style nor for `Static` which should not
-    /// reach this point if we have correctly validated the use of placeholders.
-    fn prep_scalar_expr(expr: &mut MirScalarExpr, style: ExprPrepStyle) -> Result<(), CoordError> {
-        // Replace calls to `MzLogicalTimestamp` as described above.
-        let mut observes_ts = false;
-        expr.visit_mut_post(&mut |e| {
-            if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
-                observes_ts = true;
-                if let ExprPrepStyle::OneShot { logical_time } = style {
-                    let ts = numeric::Numeric::from(logical_time);
-                    *e = MirScalarExpr::literal_ok(Datum::from(ts), f.output_type().scalar_type);
-                }
-            }
-        });
-        if observes_ts && matches!(style, ExprPrepStyle::Static | ExprPrepStyle::Write) {
-            return Err(CoordError::Unsupported(
-                "calls to mz_logical_timestamp in in static or write queries",
-            ));
         }
         Ok(())
     }
@@ -4758,22 +4733,6 @@ pub async fn serve(
         }
         Err(e) => Err(e),
     }
-}
-
-/// The styles in which an expression can be prepared.
-#[derive(Clone, Copy, Debug)]
-enum ExprPrepStyle {
-    /// The expression is being prepared for output as part of an `EXPLAIN`
-    /// query.
-    Explain,
-    /// The expression is being prepared for installation in a static context,
-    /// like in a view.
-    Static,
-    /// The expression is being prepared to run once at the specified logical
-    /// time.
-    OneShot { logical_time: u64 },
-    /// The expression is being prepared to run in an INSERT or other write.
-    Write,
 }
 
 /// Constructs an [`ExecuteResponse`] that that will send some rows to the

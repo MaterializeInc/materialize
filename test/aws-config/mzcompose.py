@@ -255,6 +255,11 @@ source_profile = credentials
 role_arn = {allowed_role_arn}
 region = {region}
 
+# The region should be discovered in the source_profile, but it is not.
+[profile allowed-no-region]
+source_profile = credentials
+role_arn = {allowed_role_arn}
+
 # expect fail in first case
 
 [profile allowed-eid]
@@ -277,13 +282,6 @@ region = {region}
 
 [profile no-credentials]
 region = {region}
-
-# unexpected failure profiles
-
-# The region should be discovered in the source_profile, but it is not.
-[profile allowed-no-region]
-source_profile = credentials
-role_arn = {allowed_role_arn}
 """
 
 

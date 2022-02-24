@@ -29,6 +29,7 @@ use tokio::runtime::Runtime as AsyncRuntime;
 use mz_persist::client::WriteReqBuilder;
 use mz_persist::error::Error;
 use mz_persist::file::{FileBlob, FileLog};
+use mz_persist::gen::persist::ProtoBatchFormat;
 use mz_persist::indexed::cache::BlobCache;
 use mz_persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
 use mz_persist::indexed::metrics::Metrics;
@@ -217,7 +218,11 @@ fn bench_set_unsealed_batch<B: Blob>(
                 updates,
             };
             cache
-                .set_unsealed_batch(format!("{}", rng.gen::<usize>()), batch)
+                .set_unsealed_batch(
+                    format!("{}", rng.gen::<usize>()),
+                    batch,
+                    ProtoBatchFormat::ParquetKvtd,
+                )
                 .expect("writing to blobcache failed");
         }
         start.elapsed()

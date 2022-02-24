@@ -1,22 +1,23 @@
 <!--
-
 Describe the contents of the PR briefly but completely.
 
 If you write detailed commit messages, it is acceptable to copy/paste them
 here, or write "see commit messages for details." If there is only one commit
 in the PR, GitHub will have already added its commit message above.
-
 -->
 
 ### Motivation
 
 <!--
-
 Which of the following best describes the motivation behind this PR?
 
-  * This PR fixes a recognized bug: [Link to issue.]
+  * This PR fixes a recognized bug.
 
-  * This PR adds a known-desirable feature: [Link to issue.]
+    [Ensure issue is linked somewhere.]
+
+  * This PR adds a known-desirable feature.
+
+    [Ensure issue is linked somewhere.]
 
   * This PR fixes a previously unreported bug.
 
@@ -31,13 +32,11 @@ Which of the following best describes the motivation behind this PR?
    * This PR refactors existing code.
 
     [Describe what was wrong with the existing code, if it is not obvious.]
-
 -->
 
 ### Tips for reviewer
 
 <!--
-
 Leave some tips for your reviewer, like:
 
     * The diff is much smaller if viewed with whitespace hidden.
@@ -45,10 +44,14 @@ Leave some tips for your reviewer, like:
     * [Some function/module/file] is pure code movement and only needs a skim.
 
 Delete this section if no tips.
-
 -->
 
-### Checklist
+### Testing
 
 - [ ] This PR has adequate test coverage / QA involvement has been duly considered.
-- [ ] This PR adds a release note for any [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md#what-changes-require-a-release-note).
+
+### Release notes
+
+This PR includes the following [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/guide-changes.md#what-changes-require-a-release-note):
+
+  - <!-- Add release notes here or explicitly state that there are no user-facing behavior changes. -->

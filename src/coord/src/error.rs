@@ -9,9 +9,12 @@
 
 use std::error::Error;
 use std::fmt;
+use std::num::TryFromIntError;
+
+use dec::TryFromDecimalError;
 
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_expr::EvalError;
+use mz_expr::{EvalError, NullaryFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::NotNullViolation;
@@ -115,6 +118,8 @@ pub enum CoordError {
     Unstructured(anyhow::Error),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
+    /// The specified function cannot be materialized.
+    UnmaterializableFunction(NullaryFunc),
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
 }
@@ -380,6 +385,9 @@ impl fmt::Display for CoordError {
             CoordError::UnknownParameter(name) => {
                 write!(f, "unrecognized configuration parameter {}", name.quoted())
             }
+            CoordError::UnmaterializableFunction(func) => {
+                write!(f, "cannot materialize call to {}", func)
+            }
             CoordError::Unsupported(features) => write!(f, "{} are not supported", features),
             CoordError::Unstructured(e) => write!(f, "{:#}", e),
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
@@ -393,6 +401,18 @@ impl fmt::Display for CoordError {
 impl From<anyhow::Error> for CoordError {
     fn from(e: anyhow::Error) -> CoordError {
         CoordError::Unstructured(e)
+    }
+}
+
+impl From<TryFromIntError> for CoordError {
+    fn from(e: TryFromIntError) -> CoordError {
+        CoordError::Unstructured(e.into())
+    }
+}
+
+impl From<TryFromDecimalError> for CoordError {
+    fn from(e: TryFromDecimalError) -> CoordError {
+        CoordError::Unstructured(e.into())
     }
 }
 

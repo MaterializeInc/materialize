@@ -22,6 +22,7 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::Error;
+use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::background::{
     CompactTraceReq, CompactTraceRes, DrainUnsealedReq, DrainUnsealedRes,
 };
@@ -251,7 +252,8 @@ impl Arrangement {
         };
 
         debug_assert!(ts_upper >= ts_lower);
-        let (format, size_bytes) = blob.set_unsealed_batch(key.clone(), batch)?;
+        let format = ProtoBatchFormat::ParquetKvtd;
+        let size_bytes = blob.set_unsealed_batch(key.clone(), batch, format)?;
         Ok(UnsealedBatchMeta {
             key,
             format,
@@ -417,7 +419,8 @@ impl Arrangement {
 
         let desc = batch.desc.clone();
         let key = Self::new_blob_key();
-        let (format, size_bytes) = blob.set_trace_batch(key.clone(), batch)?;
+        let format = ProtoBatchFormat::ParquetKvtd;
+        let size_bytes = blob.set_trace_batch(key.clone(), batch, format)?;
         // Batches are inserted into the trace with compaction level set to 0.
         let drained = TraceBatchMeta {
             key,

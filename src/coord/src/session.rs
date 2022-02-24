@@ -227,7 +227,7 @@ impl Session {
     /// Assumes an active transaction. Returns its read timestamp. Errors if not
     /// a read transaction. Calls get_ts to get a timestamp if the transaction
     /// doesn't have an operation yet, converting the transaction to a read.
-    pub fn get_transaction_timestamp<F: FnMut() -> Result<Timestamp, CoordError>>(
+    pub fn get_transaction_timestamp<F: FnMut(&Session) -> Result<Timestamp, CoordError>>(
         &mut self,
         mut get_ts: F,
     ) -> Result<Timestamp, CoordError> {
@@ -242,7 +242,7 @@ impl Session {
                 write_lock_guard: _,
                 access: _,
             }) => *ts,
-            _ => get_ts()?,
+            _ => get_ts(self)?,
         };
         self.add_transaction_ops(TransactionOps::Peeks(ts))?;
         Ok(ts)

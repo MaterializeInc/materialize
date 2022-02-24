@@ -138,12 +138,95 @@ A classic example of a bad commit message is
 ### Release notes
 
 If your PR contains one or more user-visible changes, be sure to add a
-preliminary release note to
-[doc/user/content/release-notes](doc/user/content/release-notes). See the
-comment within that file for details on writing a release note with the correct
-style.
+preliminary release note to the PR description in the marked location in the
+template.
 
 Your release note may sound very similar to your commit message. That's okay!
+
+#### What changes require a release note?
+
+Any behavior change to a stable, user-visible API requires a release note.
+Roughly speaking, Materialize's stable APIs are:
+
+  * The syntax and semantics of all documented SQL statements.
+  * The observable behavior of any source or sink.
+  * The behavior of all documented command-line flags.
+
+For details, see the [backwards compatibility policy](https://materialize.com/docs//versions/#Backwards-compatibility).
+
+Notably, changes to experimental or unstable APIs should *not* have release
+notes. The point of having experimental and unstable APIs is to decrease the
+engineering burden when those features are changed. Instead, write a release
+note introducing the feature for the release in which the feature is
+de-experimentalized.
+
+Examples of changes that require release notes:
+
+  * The addition of a new, documented SQL function.
+  * The stabilization of a new source type.
+  * A bug fix that fixes a panic in any component.
+  * A bug fix that changes the output format of a particular data type in a
+    sink.
+
+Examples of changes that do not require release notes:
+
+  * **An improvement to the build system.** The build system is not user
+    visible.
+  * **The addition of a feature to testdrive.** Similarly, our test frameworks
+    are not user visible.
+  * **An upgrade of an internal Rust dependency.** Most dependency upgrades
+    do not result in user-visible changes. (If they do, document the change
+    itself, not the fact that the dependency was upgraded. Users care about
+    the visible behavior of Materialize, not its implementation!)
+
+Performance improvements are a borderline case. A small performance improvement
+does not need a release note, but a large performance improvement may warrant
+one if it results in a noticeable improvement for a large class of users or
+unlocks new use cases for Materialize. Examples of performance improvements
+that warrant a release note include:
+
+  * Improving the speed of Avro decoding by 2x
+  * Converting an O(n<sup>2</sup>) algorithm in the optimizer to an O(n)
+    algorithm so that queries with several dozen `UNION` operations can be
+    planned in a reasonable amount of time
+
+#### How to write a good release note
+
+Every release note should be phrased in the imperative mood, like a Git
+commit message. They should complete the sentence, "This release will...".
+
+Good release notes:
+
+  - [This release will...] Require the `-w` / `--workers` command-line option.
+  - [This release will...] In the event of a crash, print the stack trace.
+
+Misbehaved release notes:
+
+  - Users must now specify the `-w` / `-threads` command line option.
+  - Materialize will print a stack trace if it crashes.
+  - Instead of limiting SQL statements to 8KiB, limit them to 1024KiB instead.
+
+Link to at least one page where users can learn more about either the change or
+the area which the change was made. Notes about new features can be concise if
+the new feature has comprehensive documentation. Notes about changes to features
+must be more detailed, as the note is likely the only documentation of the
+change in behavior. Consider linking to a GitHub issue or pull request via the
+`gh` shortcode if there is no good section of the documentation to link to.
+
+Strive for some variety of verbs. "Support new feature" gets boring as a release
+note.
+
+Use relative links (/path/to/doc), not absolute links
+(https://materialize.com/docs/path/to/doc).
+
+Wrap your release notes at the 80 character mark.
+
+#### Internal note order
+
+Put breaking changes before other release notes, and mark them with
+`**Breaking change.**` at the start.
+
+List new features before bug fixes.
 
 ### PR size limits
 

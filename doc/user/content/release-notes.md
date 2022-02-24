@@ -14,184 +14,57 @@ This page details changes between versions of Materialize, including:
 For information about available versions, see our [Versions page](/versions).
 
 {{< comment >}}
-# What changes require a release note?
-
-Any behavior change to a stable, user-visible API requires a release note.
-Roughly speaking, Materialize's stable APIs are:
-
-  * The syntax and semantics of all documented SQL statements.
-  * The observable behavior of any source or sink.
-  * The behavior of all documented command-line flags.
-
-For details, see the [backwards compatibility policy](/versions/#Backwards-compatibility).
-
-Notably, changes to experimental or unstable APIs should *not* have release
-notes. The point of having experimental and unstable APIs is to decrease the
-engineering burden when those features are changed. Instead, write a release
-note introducing the feature for the release in which the feature is
-de-experimentalized.
-
-Examples of changes that require release notes:
-
-  * The addition of a new, documented SQL function.
-  * The stabilization of a new source type.
-  * A bug fix that fixes a panic in any component.
-  * A bug fix that changes the output format of a particular data type in a
-    sink.
-
-Examples of changes that do not require release notes:
-
-  * **An improvement to the build system.** The build system is not user
-    visible.
-  * **The addition of a feature to testdrive.** Similarly, our test frameworks
-    are not user visible.
-  * **An upgrade of an internal Rust dependency.** Most dependency upgrades
-    do not result in user-visible changes. (If they do, document the change
-    itself, not the fact that the dependency was upgraded. Users care about
-    the visible behavior of Materialize, not its implementation!)
-
-Performance improvements are a borderline case. A small performance improvement
-does not need a release note, but a large performance improvement may warrant
-one if it results in a noticeable improvement for a large class of users or
-unlocks new use cases for Materialize. Examples of performance improvements
-that warrant a release note include:
-
-  * Improving the speed of Avro decoding by 2x
-  * Converting an O(n<sup>2</sup>) algorithm in the optimizer to an O(n)
-    algorithm so that queries with several dozen `UNION` operations can be
-    planned in a reasonable amount of time
-
-# How to write a good release note
-
-Every release note should be phrased in the imperative mood, like a Git
-commit message. They should complete the sentence, "This release will...".
-
-Good release notes:
-
-  - [This release will...] Require the `-w` / `--workers` command-line option.
-  - [This release will...] In the event of a crash, print the stack trace.
-
-Misbehaved release notes:
-
-  - Users must now specify the `-w` / `-threads` command line option.
-  - Materialize will print a stack trace if it crashes.
-  - Instead of limiting SQL statements to 8KiB, limit them to 1024KiB instead.
-
-Link to at least one page where users can learn more about either the change or
-the area which the change was made. Notes about new features can be concise if
-the new feature has comprehensive documentation. Notes about changes to features
-must be more detailed, as the note is likely the only documentation of the
-change in behavior. Consider linking to a GitHub issue or pull request via the
-`gh` shortcode if there is no good section of the documentation to link to.
-
-Strive for some variety of verbs. "Support new feature" gets boring as a release
-note.
-
-Use relative links (/path/to/doc), not absolute links
-(https://materialize.com/docs/path/to/doc).
-
-Wrap your release notes at the 80 character mark.
-
-## Internal note order
-
-Put breaking changes before other release notes, and mark them with
-`**Breaking change.**` at the start.
-
-List new features before bug fixes.
-
+ATTENTION: Don't add new release notes here! Add them in the designated spot in
+the PR description instead. They will be migrated here during the release
+process by the release notes team.
 {{< /comment >}}
-
-## Unstable
-
-These changes are present in [unstable builds](/versions/#unstable-builds) and
-are slated for inclusion in the next stable release. There may be additional
-changes that have not yet been documented.
-
-- **Breaking change.** Return an empty list for slice operations that retrieve
-  no elements (e.g. the beginning of the slice's range exceeds the length of the
-  list); previously Materialize returned NULL.
-
-- **Breaking change.** Store days separately in [`interval`](/sql/types/interval).
-  Unlike the previous version, Hours are never converted to days. This
-  means that an Interval of 24 hours will not be equal to an Interval
-  of 1 day, you cannot subtract hours from days, and when ordering
-  Intervals d days > h hours for all d,h {{% gh 10708 %}}.
-
-- **Breaking change.** Print all negative [`interval`](/sql/types/interval)
-  units as plural. So `-1 days` will be  printed instead of `-1 day`. This
-  matches the behavior of PostgreSQL.
-
-- **Breaking change.** Round microsecond field of
-  [`interval`](/sql/types/interval) to 6 places before applying the
-  given precision. For example `INTERVAL '1.2345649' SECOND(5)` will be
-  rounded to `00:00:01.23457` not `00:00:01.23456`. This matches the
-  behavior of PostgreSQL.
-
-- **Breaking change.** Decrease minimum [`interval`](/sql/types/interval) value
-  from '-2147483647 months -2147483647 days -2147483647 hours -59 minutes
-  -59.999999 seconds' to '-2147483648 months -2147483648 days -2147483648 hours
-  -59 minutes -59.999999 seconds' to match PostgreSQL's behavior {{% gh 10598 %}}.
-
-- Fix a bug where too many columns were returned when both `*` and a
-  table function appeared in the `SELECT` list {{% gh 10363 %}}.
-
-- Improve the clarity of any Avro schema resolution errors found when
-  creating materialized sources and views. {{% gh 8415 %}}
-
-- Allow setting `standard_conforming_strings` to its default value of `on`.
-  Setting it to `off` is still not supported.
-
-- Support sequences of subscript operations on [`array`] values when
-  indexing/accessing individual elements (as opposed to taking slices/ranges of
-  values) {{% gh 9815 %}}.
-
-- Allow setting `client_min_messages` to support filtering which messages are
-  sent to the client based on the severity level.
-
-- Add support for `ESCAPE` clauses in `LIKE` and `ILIKE` expressions.
-
-- Add support for `ARRAY(<subquery>)` constructor {{% gh 10700 %}}.
-
-- `INCLUDE KEY AS` ([see this for more details](/sql/create-source/kafka#exposing-source-metadata)
-  now works when using `ENVELOPE UPSERT`
-  {{% gh 10730 %}}.
-
-- Change inclusive ranges of column indices in `EXPLAIN PLAN` to use `..=` instead of `..`.
-
-- Add [`chr`](/sql/functions#string-func) function to convert a Unicode codepoint
-  into a string.
-
-- Support bare `FORMAT` with `INCLUDE KEY AS` when using the confluent schema
-  registry {{% gh 10766 %}}.
-
-{{< comment >}}
-Only add new release notes above this line.
-
-The presence of this comment ensures that PRs that are alive across a release
-boundary don't silently merge their release notes into the wrong place.
-{{</ comment >}}
 
 {{% version-header v0.21.0 %}}
 
-- **Breaking change.** Return an empty list for slice operations that yield
-  no elements (e.g., the beginning of the slice's range exceeds the length of the
-  list); previously these operations returned `NULL` {{% gh 10557 %}}.
+- **Breaking change.** Return an empty list for slice operations that yield no
+  elements (e.g., when the beginning of the slice's range exceeds the length of
+  the list); previously these operations returned `NULL` {{% gh 10557 %}}.
 
-- **Breaking change.** Decrease the minimum [`interval`](/sql/types/interval)
-  value from `-2147483647 months -2147483647 days -2147483647 hours -59 minutes
-  -59.999999 seconds` to `-2147483648 months -2147483648 days -2147483648 hours
-  -59 minutes -59.999999 seconds` to match PostgreSQL {{% gh 10598 %}}.
+- **Breaking change.** Decrease the minimum [`interval`] value from `-2147483647
+  months -2147483647 days -2147483647 hours -59 minutes -59.999999 seconds` to
+  `-2147483648 months -2147483648 days -2147483648 hours -59 minutes -59.999999
+  seconds` to match PostgreSQL {{% gh 10598 %}}.
+
+- Support sequences of subscript operations on [`array`] values when
+  indexing/accessing individual elements (as opposed to slicing/accessing ranges
+  of elements) {{% gh 9815 %}}.
 
 - Allow setting the `standard_conforming_strings` session parameter to its
   default value of `on` {{% gh 10691 %}}. Setting it to `off` remains
   unsupported.
 
+- Allow setting the `client_min_messages` session parameter, which controls
+  which messages are sent to the client based on the severity level
+  {{% gh 10693 %}}.
+
+- Improve the clarity of schema resolution errors generated by Avro-formatted
+  sources {{% gh 8415 %}}.
+
+- Add the [`chr`](/sql/functions#string-func) function to convert a Unicode
+  codepoint into a string.
+
+- Change inclusive ranges of column indices in the plans generated by
+  [`EXPLAIN`](/sql/explain) to use `..=` instead of `..`.
+
+- Support the `ARRAY(<subquery>)` expression for constructing an [`array`]
+  from the result of a subquery {{% gh 10700 %}}.
+
+- In Kafka sources that use `ENVELOPE UPSERT`, fix renaming the key column via
+  [`INCLUDE KEY AS`](/sql/create-source/kafka#key) {{% gh 10730 %}}.
+
 - Return the correct number of columns when both a wildcard (`*`) and a [table
   function](/sql/functions#table-func) appear in the `SELECT` list
   {{% gh 10363 %}}.
 
-- Improve the clarity of schema resolution errors generated by Avro-formatted
-  sources {{% gh 8415 %}}.
+- Avoid panicking when negating certain intervals {{% gh 10729 %}}.
+
+- Fix an issue in Avro-formatted sources where an invalid record could corrupt
+  the next record, yielding either wrong results or a panic {{% gh 10767 %}}.
 
 {{% version-header v0.20.0 %}}
 
@@ -247,12 +120,11 @@ boundary don't silently merge their release notes into the wrong place.
 - Add the [cryptography functions](/sql/functions/#cryptography-func) `md5`,
   `sha224`, `sha256`, `sha384`, and `sha512`.
 
-- Add `microsecond`, `month`, `decade`, `century`, `millennium` units
-  to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
-  format.
+- Add `microsecond`, `month`, `decade`, `century`, `millennium` units to
+  [`interval`] parsing using the PostgreSQL verbose format.
 
-- Improve millisecond parsing for [`interval`](/sql/types/interval) using the
-  PostgreSQL verbose format {{% gh 6420 %}}.
+- Improve millisecond parsing for [`interval`] using the PostgreSQL verbose
+  format {{% gh 6420 %}}.
 
 - Support casting [`array`] types to [`list`] types.
 
@@ -1245,15 +1117,14 @@ a problem with PostgreSQL JDBC 42.3.0.
 
   - Allow specifying units of `microseconds`, `milliseconds`, `month`,
     `quarter`, `decade`, `century`, or `millenium` when applying the `EXTRACT`
-    function to an [`interval`](/sql/types/interval) {{% gh 5107 %}}. Previously
-    these units were only supported with the [`timestamp`](/sql/types/timestamp)
-    and [`timestamptz`](/sql/types/timestamptz) types.
+    function to an [`interval`] {{% gh 5107 %}}. Previously these units were
+    only supported with the [`timestamp`](/sql/types/timestamp) and
+    [`timestamptz`](/sql/types/timestamptz) types.
 
     Thanks again to external contributor
     [@zRedShift](https://github.com/zRedShift).
 
-  - Support multiplying and dividing [`interval`](/sql/types/interval)s by
-    numbers {{% gh 5107 %}}.
+  - Support multiplying and dividing [`interval`]s by numbers {{% gh 5107 %}}.
 
     Thanks once more to external contributor
     [@zRedShift](https://github.com/zRedShift).

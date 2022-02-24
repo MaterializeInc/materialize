@@ -18,9 +18,6 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use tracing::event;
 use tracing::{error, info, Level};
 use tracing_subscriber::filter::EnvFilter;
-use tracing_subscriber::fmt;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 
 use mz_aws_util::config::AwsConfig;
 use mz_ore::cast::CastFrom;
@@ -59,6 +56,12 @@ struct Args {
     /// Number of copy operations to run concurrently
     #[clap(long, default_value = "50")]
     concurrent_copies: usize,
+
+    /// Which log messages to emit.
+    ///
+    /// See materialized's `--log-filter` option for details.
+    #[clap(long, value_name = "FILTER", default_value = "off")]
+    log_filter: EnvFilter,
 }
 
 #[tokio::main]
@@ -71,11 +74,10 @@ async fn main() {
 
 async fn run() -> anyhow::Result<()> {
     let args: Args = mz_ore::cli::parse_args();
-    let env_filter =
-        EnvFilter::try_from_env("MZ_LOG_FILTER").or_else(|_| EnvFilter::try_new("info"))?;
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt::layer().with_writer(io::stderr))
+
+    tracing_subscriber::fmt()
+        .with_env_filter(args.log_filter)
+        .with_writer(io::stderr)
         .init();
 
     info!(

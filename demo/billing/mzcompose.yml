@@ -44,8 +44,6 @@ services:
     mzbuild: billing-demo
     volumes:
     - db-data:/share/billing-demo/data
-    environment:
-    - RUST_LOG=billing-demo=debug,info
     depends_on: [kafka, schema-registry, materialized]
 
 volumes:

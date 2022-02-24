@@ -35,6 +35,10 @@ skip = [
     { name = "arrayvec", version = "0.5.2" },
 ]
 
+# Use `tracing` instead.
+[[bans.deny]]
+name = "env_logger"
+
 # Use `prost` or `protobuf-native` instead.
 [[bans.deny]]
 name = "protobuf"

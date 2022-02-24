@@ -81,9 +81,9 @@ impl FoldConstants {
                     aggregate.expr.reduce(input_typ);
                 }
 
-                // Guard against evaluating an expression that may contain temporal expressions.
-                if group_key.iter().any(|e| e.contains_temporal())
-                    || aggregates.iter().any(|a| a.expr.contains_temporal())
+                // Guard against evaluating an expression that may contain nullary functions.
+                if group_key.iter().any(|e| e.contains_nullary())
+                    || aggregates.iter().any(|a| a.expr.contains_nullary())
                 {
                     return Ok(());
                 }
@@ -156,8 +156,8 @@ impl FoldConstants {
                     scalar.reduce(&current_type);
                 }
 
-                // Guard against evaluating expression that may contain temporal expressions.
-                if scalars.iter().any(|e| e.contains_temporal()) {
+                // Guard against evaluating expression that may contain nullary functions.
+                if scalars.iter().any(|e| e.contains_nullary()) {
                     return Ok(());
                 }
 
@@ -190,8 +190,8 @@ impl FoldConstants {
                     expr.reduce(input_typ);
                 }
 
-                // Guard against evaluating expression that may contain temporal expressions.
-                if exprs.iter().any(|e| e.contains_temporal()) {
+                // Guard against evaluating expression that may contain nullary functions.
+                if exprs.iter().any(|e| e.contains_nullary()) {
                     return Ok(());
                 }
 
@@ -224,8 +224,8 @@ impl FoldConstants {
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
-                // Guard against evaluating expression that may contain temporal expressions.
-                if predicates.iter().any(|e| e.contains_temporal()) {
+                // Guard against evaluating expression that may contain nullary function calls.
+                if predicates.iter().any(|e| e.contains_nullary()) {
                     return Ok(());
                 }
 
@@ -288,10 +288,10 @@ impl FoldConstants {
                     .iter()
                     .all(|i| matches!(i, MirRelationExpr::Constant { rows: Ok(_), .. }))
                 {
-                    // Guard against evaluating expression that may contain temporal expressions.
+                    // Guard against evaluating expression that may contain nullary functions.
                     if equivalences
                         .iter()
-                        .any(|equiv| equiv.iter().any(|e| e.contains_temporal()))
+                        .any(|equiv| equiv.iter().any(|e| e.contains_nullary()))
                     {
                         return Ok(());
                     }
