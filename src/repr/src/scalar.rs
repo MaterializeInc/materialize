@@ -918,6 +918,7 @@ pub enum ScalarType {
         /// The names and types of the fields of the record, in order from left
         /// to right.
         fields: Vec<(ColumnName, ColumnType)>,
+        // TODO: turn custom_oid and name into an enum. it should only be possible to set one at a time
         custom_oid: Option<u32>,
         custom_name: Option<String>,
     },
