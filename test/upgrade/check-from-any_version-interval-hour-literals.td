@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This version broke backwards compatibility by separating the day
-# and microsecond fields in Intervals. The upgrade testing
-# infrastructure doesn't support testing a feature UNTIL some
-# version. If we add support for that we can test the old behavior,
-# which would return 5 days 03:00:00
+# v20 version broke backwards compatibility by separating the day
+# and microsecond fields in Intervals.
+$ skip-if
+select split_part(ltrim('${arg.upgrade-from-version}', 'v'), '.', 1)::int = 0 and split_part(ltrim('${arg.upgrade-from-version}', 'v'), '.', 2)::int > 20;
+
 > SELECT * FROM interval_hour;
-"123:00:00"
+"5 days 3:00:00"
