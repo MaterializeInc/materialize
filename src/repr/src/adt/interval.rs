@@ -381,7 +381,7 @@ impl Interval {
             | DateTimeField::Decade
             | DateTimeField::Milliseconds
             | DateTimeField::Microseconds => {
-                unreachable!(format!("Cannot truncate interval by {}", f))
+                unreachable!("Cannot truncate interval by {f}");
             }
         }
     }
@@ -448,7 +448,7 @@ impl Interval {
                 self.micros -= self.micros % f.micros_multiplier();
             }
             Millennium | Century | Decade | Milliseconds | Microseconds => {
-                unreachable!(format!("Cannot truncate interval by {}", f))
+                unreachable!("Cannot truncate interval by {f}");
             }
         }
         Ok(())
