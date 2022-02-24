@@ -238,11 +238,15 @@ CREATE TABLE t2 (a int, b date)
 statement ok
 INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
 
-query error arguments cannot be implicitly cast to any implementation's parameters
-SELECT array_agg((a, b)) FROM t2
+query T
+SELECT array_agg((a, b) ORDER BY a DESC)::text FROM t2;
+----
+{"(,2020-01-02)","(1,2020-01-01)"}
 
-query error arguments cannot be implicitly cast to any implementation's parameters
-SELECT array_agg((a, b)), array_agg(a), array_agg(b) FROM t2
+query TTT
+SELECT array_agg((a, b) ORDER BY a DESC)::text, array_agg(a ORDER BY a DESC), array_agg(b ORDER BY b DESC) FROM t2;
+----
+{"(,2020-01-02)","(1,2020-01-01)"} {NULL,1} {2020-01-02,2020-01-01}
 
 query error arrays not yet supported
 SELECT array_agg(ARRAY[1])
