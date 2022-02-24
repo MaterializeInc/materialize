@@ -52,6 +52,6 @@ Delete this section if no tips.
 
 ### Release notes
 
-This PR includes the following [user-facing behavior changes](/doc/developer/guide-changes.md#what-changes-require-a-release-note):
+This PR includes the following [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/guide-changes.md#what-changes-require-a-release-note):
 
   - <!-- Add release notes here or explicitly state that there are no user-facing behavior changes. -->
