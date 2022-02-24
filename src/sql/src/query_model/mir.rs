@@ -12,6 +12,9 @@
 //! The public interface consists of the implementation of
 //! [`Into<mz_expr::MirRelationExpr>`] for [`Model`].
 
+use crate::query_model::error::{
+    QGMError, UnsupportedBoxScalarExpr, UnsupportedBoxType, UnsupportedQuantifierType,
+};
 use crate::query_model::model::{
     BaseColumn, BoundRef, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get,
     Model, QuantifierId, QuantifierSet, QuantifierType, QueryBox,
@@ -22,8 +25,8 @@ use mz_ore::id_gen::IdGen;
 use mz_repr::{Datum, RelationType, ScalarType};
 use std::collections::HashMap;
 
-impl From<Model> for mz_expr::MirRelationExpr {
-    fn from(model: Model) -> mz_expr::MirRelationExpr {
+impl From<Model> for Result<mz_expr::MirRelationExpr, QGMError> {
+    fn from(model: Model) -> Result<mz_expr::MirRelationExpr, QGMError> {
         Lowerer::new(&model).lower()
     }
 }
@@ -84,12 +87,12 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Converts `self.model` to a [`mz_expr::MirRelationExpr`].
-    fn lower(&mut self) -> mz_expr::MirRelationExpr {
+    fn lower(&mut self) -> Result<mz_expr::MirRelationExpr, QGMError> {
         let (initial_outer, _) = self.push_let(mz_expr::MirRelationExpr::constant(
             vec![vec![]],
             RelationType::new(vec![]),
         ));
-        let mut result = self.apply(self.model.top_box, initial_outer, &ColumnMap::new());
+        let mut result = self.apply(self.model.top_box, initial_outer, &ColumnMap::new())?;
         while let Some((id, value)) = self.lets.pop() {
             result = mz_expr::MirRelationExpr::Let {
                 id,
@@ -97,7 +100,7 @@ impl<'a> Lowerer<'a> {
                 body: Box::new(result),
             }
         }
-        result
+        Ok(result)
     }
 
     /// Applies the given box identified by its ID to the given outer relation.
@@ -106,13 +109,14 @@ impl<'a> Lowerer<'a> {
         box_id: BoxId,
         get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
-    ) -> mz_expr::MirRelationExpr {
+    ) -> Result<mz_expr::MirRelationExpr, QGMError> {
         if let Some(let_pos) = self.common_boxes.get(&box_id) {
-            return mz_expr::MirRelationExpr::Get {
+            return Ok(mz_expr::MirRelationExpr::Get {
                 id: mz_expr::Id::Local(self.lets[*let_pos].0),
                 typ: self.lets[*let_pos].1.typ(),
-            };
+            });
         }
+
         use mz_expr::MirRelationExpr as SR;
         let the_box = self.model.get_box(box_id);
 
@@ -128,29 +132,45 @@ impl<'a> Lowerer<'a> {
                             {
                                 column_type.clone()
                             } else {
+                                // TODO: the validator should make this branch unreachable.
                                 panic!("expected all columns in Get BoxType to BaseColumn");
                             }
                         })
                         .collect::<Vec<_>>(),
                 )
                 .with_keys(unique_keys.clone());
-                get_outer.product(SR::Get {
+                Ok(get_outer.product(SR::Get {
                     id: mz_expr::Id::Global(*id),
                     typ,
-                })
+                }))
             }
             BoxType::Values(values) => {
                 let identity = SR::constant(vec![vec![]], RelationType::new(vec![]));
                 // TODO(asenac) lower actual values
-                assert!(values.rows.len() == 1 && the_box.columns.len() == 0);
-                get_outer.product(identity)
+                if values.rows.len() != 1 || the_box.columns.len() != 0 {
+                    let msg = String::from("Only join identity constants are currently supported.");
+                    return Err(QGMError::from(UnsupportedBoxType {
+                        box_type: the_box.box_type.clone(),
+                        explanation: Some(msg),
+                    }));
+                }
+                Ok(get_outer.product(identity))
             }
             BoxType::Select(select) => {
-                assert!(select.order_key.is_none(), "ORDER BY is not supported yet");
-                assert!(
-                    select.limit.is_none() && select.offset.is_none(),
-                    "LIMIT/OFFSET is not supported yet"
-                );
+                if select.order_key.is_some() {
+                    let msg = String::from("ORDER BY is not supported yet");
+                    return Err(QGMError::from(UnsupportedBoxType {
+                        box_type: the_box.box_type.clone(),
+                        explanation: Some(msg),
+                    }));
+                }
+                if select.limit.is_some() || select.offset.is_some() {
+                    let msg = String::from("LIMIT/OFFSET is not supported yet");
+                    return Err(QGMError::from(UnsupportedBoxType {
+                        box_type: the_box.box_type.clone(),
+                        explanation: Some(msg),
+                    }));
+                }
                 // A Select box combines three operations, join, filter and project,
                 // in that order.
 
@@ -161,22 +181,23 @@ impl<'a> Lowerer<'a> {
                 // dependencies are satisfied.
                 let correlation_info = the_box.correlation_info();
                 if !correlation_info.is_empty() {
-                    panic!("correlated joins are not supported yet");
+                    let msg = String::from("correlated joins are not supported yet");
+                    return Err(QGMError::UnsupportedDecorrelation { msg });
                 }
 
                 let outer_arity = get_outer.arity();
                 let (mut input, column_map) =
-                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers);
+                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers)?;
                 let input_arity = input.arity();
 
+                let lowered_predicates: Vec<_> = select
+                    .predicates
+                    .iter()
+                    .map(|p| Self::lower_expression(p, &column_map))
+                    .try_collect()?;
                 // 2) Lower the filter component.
                 if !select.predicates.is_empty() {
-                    input = input.filter(
-                        select
-                            .predicates
-                            .iter()
-                            .map(|p| Self::lower_expression(p, &column_map)),
-                    );
+                    input = input.filter(lowered_predicates.into_iter());
                 }
 
                 // 3) Lower the project component.
@@ -193,13 +214,13 @@ impl<'a> Lowerer<'a> {
                 // Note: a grouping box must only contain a single quantifier but we can still
                 // re-use `lower_join` for single quantifier joins
                 let (mut input, column_map) =
-                    self.lower_join(get_outer.clone(), outer_column_map, &the_box.quantifiers);
+                    self.lower_join(get_outer.clone(), outer_column_map, &the_box.quantifiers)?;
 
                 // Build the reduction
                 let group_key = grouping
                     .key
                     .iter()
-                    .map(|k| Self::lower_expression(k, &column_map))
+                    .map(|k| Self::lower_expression(k, &column_map).unwrap())
                     .collect_vec();
                 let aggregates = the_box
                     .columns
@@ -213,7 +234,7 @@ impl<'a> Lowerer<'a> {
                         {
                             Some(mz_expr::AggregateExpr {
                                 func: func.clone(),
-                                expr: Self::lower_expression(expr, &column_map),
+                                expr: Self::lower_expression(expr, &column_map).unwrap(),
                                 distinct: *distinct,
                             })
                         } else {
@@ -238,7 +259,7 @@ impl<'a> Lowerer<'a> {
                         expected_group_size: None,
                     };
 
-                    get_outer.lookup(&mut self.id_gen, input, default)
+                    Ok(get_outer.lookup(&mut self.id_gen, input, default))
                 } else {
                     // Put the columns in the same order as projected by the Grouping box by
                     // adding an additional projection.
@@ -280,14 +301,15 @@ impl<'a> Lowerer<'a> {
                         expected_group_size: None,
                     };
 
-                    input.project(projection)
+                    Ok(input.project(projection))
                 }
             }
             BoxType::OuterJoin(box_struct) => {
                 // TODO: Correlated outer joins are not yet supported.
                 let correlation_info = the_box.correlation_info();
                 if !correlation_info.is_empty() {
-                    panic!("correlated joins are not supported yet");
+                    let msg = String::from("correlated joins are not supported yet");
+                    return Err(QGMError::UnsupportedDecorrelation { msg });
                 }
 
                 let ot = get_outer.typ();
@@ -302,11 +324,11 @@ impl<'a> Lowerer<'a> {
                 let mut q_iter = the_box.quantifiers.iter();
                 let lhs_id = *q_iter.next().unwrap();
                 let rhs_id = *q_iter.next().unwrap();
-                let lhs = self.lower_quantifier(lhs_id, get_outer.clone(), outer_column_map);
+                let lhs = self.lower_quantifier(lhs_id, get_outer.clone(), outer_column_map)?;
                 let (lhs, _) = self.push_let(lhs);
                 let lt = lhs.typ().column_types.into_iter().skip(oa).collect_vec();
                 let la = lt.len();
-                let rhs = self.lower_quantifier(rhs_id, get_outer, outer_column_map);
+                let rhs = self.lower_quantifier(rhs_id, get_outer, outer_column_map)?;
                 let (rhs, _) = self.push_let(rhs);
                 let rt = rhs.typ().column_types.into_iter().skip(oa).collect_vec();
                 let ra = rt.len();
@@ -320,11 +342,11 @@ impl<'a> Lowerer<'a> {
 
                 // 2) Lower the predicates as a filter following the
                 //    join.
-                let lowered_predicates = box_struct
+                let lowered_predicates: Vec<_> = box_struct
                     .predicates
                     .iter()
                     .map(|p| Self::lower_expression(p, &column_map))
-                    .collect_vec();
+                    .try_collect()?;
                 let equijoin_keys = crate::plan::lowering::derive_equijoin_cols(
                     oa,
                     la,
@@ -457,15 +479,20 @@ impl<'a> Lowerer<'a> {
                 // 4) Lower the project component.
                 Self::lower_box_columns(result, &the_box, &column_map, oa, oa + la + ra)
             }
-            _ => panic!(),
-        };
+            other => {
+                return Err(QGMError::from(UnsupportedBoxType {
+                    box_type: other.clone(),
+                    explanation: None,
+                }));
+            }
+        }?;
 
         let input = if the_box.distinct == DistinctOperation::Enforce {
             input.distinct()
         } else {
             input
         };
-        if the_box.ranging_quantifiers.iter().count() > 1 {
+        let input = if the_box.ranging_quantifiers.iter().count() > 1 {
             let (result, let_stack_pos) = self.push_let(input);
             if let Some(let_stack_pos) = let_stack_pos {
                 self.common_boxes.insert(box_id, let_stack_pos);
@@ -473,7 +500,8 @@ impl<'a> Lowerer<'a> {
             result
         } else {
             input
-        }
+        };
+        Ok(input)
     }
 
     /// Generates a join among the result of applying the outer relation to the given
@@ -490,13 +518,14 @@ impl<'a> Lowerer<'a> {
         get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
         quantifiers: &QuantifierSet,
-    ) -> (mz_expr::MirRelationExpr, ColumnMap) {
+    ) -> Result<(mz_expr::MirRelationExpr, ColumnMap), QGMError> {
         if let mz_expr::MirRelationExpr::Get { .. } = &get_outer {
         } else {
-            panic!(
+            let msg = format!(
                 "get_outer: expected a MirRelationExpr::Get, found {:?}",
                 get_outer
             );
+            return Err(QGMError::UnsupportedDecorrelation { msg });
         }
 
         let outer_arity = get_outer.arity();
@@ -504,14 +533,12 @@ impl<'a> Lowerer<'a> {
         let inputs = quantifiers
             .iter()
             .map(|q_id| {
-                (
-                    *q_id,
-                    self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map),
-                )
+                self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map)
+                    .map(|input| (*q_id, input))
             })
-            .collect_vec();
+            .try_collect()?;
 
-        self.lower_join_inner(outer_column_map, outer_arity, inputs)
+        Ok(self.lower_join_inner(outer_column_map, outer_arity, inputs))
     }
 
     /// Same as `lower_join` except the outer relation has already been applied
@@ -557,10 +584,10 @@ impl<'a> Lowerer<'a> {
         quantifier_id: QuantifierId,
         get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
-    ) -> mz_expr::MirRelationExpr {
+    ) -> Result<mz_expr::MirRelationExpr, QGMError> {
         let quantifier = self.model.get_quantifier(quantifier_id);
         let input_box = quantifier.input_box;
-        let mut input = self.apply(input_box, get_outer.clone(), outer_column_map);
+        let mut input = self.apply(input_box, get_outer.clone(), outer_column_map)?;
 
         match &quantifier.quantifier_type {
             QuantifierType::Foreach | QuantifierType::PreservedForeach => {
@@ -607,10 +634,14 @@ impl<'a> Lowerer<'a> {
                 let default = vec![(Datum::Null, col_type.scalar_type)];
                 input = get_outer.lookup(&mut self.id_gen, guarded, default);
             }
-            _ => panic!("Unsupported quantifier type"),
+            other => {
+                return Err(QGMError::from(UnsupportedQuantifierType {
+                    quantifier_type: other.clone(),
+                }))
+            }
         }
 
-        input
+        Ok(input)
     }
 
     fn lower_box_columns(
@@ -619,30 +650,29 @@ impl<'a> Lowerer<'a> {
         column_map: &ColumnMap,
         outer_arity: usize,
         input_arity: usize,
-    ) -> mz_expr::MirRelationExpr {
+    ) -> Result<mz_expr::MirRelationExpr, QGMError> {
         if let Some(column_refs) = the_box.columns_as_refs() {
             // if all columns projected by this box are references, we only need a projection
             let mut outputs = Vec::<usize>::new();
             outputs.extend(0..outer_arity);
             outputs.extend(column_refs.iter().map(|c| column_map.get(c).unwrap()));
-            rel.project(outputs)
+            Ok(rel.project(outputs))
         } else if !the_box.columns.is_empty() {
-            // otherwise, we need to apply a map to compute the outputs and then project them
-            rel.map(
-                the_box
-                    .columns
-                    .iter()
-                    .map(|c| Self::lower_expression(&c.expr, &column_map))
-                    .collect_vec(),
-            )
-            .project(
+            // otherwise, we need to apply a map to compute the outputs and then
+            // project them
+            let maps = the_box
+                .columns
+                .iter()
+                .map(|c| Self::lower_expression(&c.expr, &column_map))
+                .try_collect()?;
+            Ok(rel.map(maps).project(
                 (0..outer_arity)
                     .chain((input_arity)..(input_arity + the_box.columns.len()))
                     .collect_vec(),
-            )
+            ))
         } else {
             // for boxes without output columns, only project the outer part
-            rel.project((0..outer_arity).collect_vec())
+            Ok(rel.project((0..outer_arity).collect_vec()))
         }
     }
 
@@ -695,8 +725,11 @@ impl<'a> Lowerer<'a> {
 
     /// Lowers a scalar expression, resolving the column references using
     /// the supplied column map.
-    fn lower_expression(expr: &BoxScalarExpr, column_map: &ColumnMap) -> mz_expr::MirScalarExpr {
-        match expr {
+    fn lower_expression(
+        expr: &BoxScalarExpr,
+        column_map: &ColumnMap,
+    ) -> Result<mz_expr::MirScalarExpr, QGMError> {
+        let result = match expr {
             BoxScalarExpr::ColumnReference(c) => {
                 mz_expr::MirScalarExpr::Column(*column_map.get(c).unwrap())
             }
@@ -708,13 +741,13 @@ impl<'a> Lowerer<'a> {
             }
             BoxScalarExpr::CallUnary { func, expr } => mz_expr::MirScalarExpr::CallUnary {
                 func: func.clone(),
-                expr: Box::new(Self::lower_expression(&*expr, column_map)),
+                expr: Box::new(Self::lower_expression(&*expr, column_map)?),
             },
             BoxScalarExpr::CallBinary { func, expr1, expr2 } => {
                 mz_expr::MirScalarExpr::CallBinary {
                     func: func.clone(),
-                    expr1: Box::new(Self::lower_expression(expr1, column_map)),
-                    expr2: Box::new(Self::lower_expression(expr2, column_map)),
+                    expr1: Box::new(Self::lower_expression(expr1, column_map)?),
+                    expr2: Box::new(Self::lower_expression(expr2, column_map)?),
                 }
             }
             BoxScalarExpr::CallVariadic { func, exprs } => mz_expr::MirScalarExpr::CallVariadic {
@@ -722,14 +755,19 @@ impl<'a> Lowerer<'a> {
                 exprs: exprs
                     .into_iter()
                     .map(|expr| Self::lower_expression(expr, column_map))
-                    .collect::<Vec<_>>(),
+                    .try_collect()?,
             },
             BoxScalarExpr::If { cond, then, els } => mz_expr::MirScalarExpr::If {
-                cond: Box::new(Self::lower_expression(cond, column_map)),
-                then: Box::new(Self::lower_expression(then, column_map)),
-                els: Box::new(Self::lower_expression(els, column_map)),
+                cond: Box::new(Self::lower_expression(cond, column_map)?),
+                then: Box::new(Self::lower_expression(then, column_map)?),
+                els: Box::new(Self::lower_expression(els, column_map)?),
             },
-            _ => panic!("unsupported expression"),
-        }
+            other => {
+                return Err(QGMError::from(UnsupportedBoxScalarExpr {
+                    scalar: other.clone(),
+                }))
+            }
+        };
+        Ok(result)
     }
 }

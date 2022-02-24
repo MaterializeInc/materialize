@@ -106,11 +106,10 @@ fn run_command(
 
     // TODO: allow printing multiple stages of the transformation of the query.
     if matches!(directive, Directive::Lower | Directive::EndToEnd) {
-        Ok(generate_explanation(
-            catalog,
-            &model.into(),
-            args.get("format"),
-        ))
+        match model.into() {
+            Ok(mir) => Ok(generate_explanation(catalog, &mir, args.get("format"))),
+            Err(err) => Err(err.to_string()),
+        }
     } else {
         match model.as_dot(input) {
             Ok(graph) => Ok(graph),

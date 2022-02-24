@@ -64,6 +64,6 @@ impl HirRelationExpr {
         model.optimize();
 
         // decorrelate and lower the optimized query graph model into a MirRelationExpr
-        Ok(model.into())
+        model.into()
     }
 }
