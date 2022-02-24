@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# If mz_persist::gen::ProtoMeta::ENCODING_VERSION is changed, the version of this file needs to change to "current_source"
+
 # Persist data of various types
 
 > CREATE TABLE persistence_timestamp_with_time_zone (f1 TIMESTAMP WITH TIME ZONE);
