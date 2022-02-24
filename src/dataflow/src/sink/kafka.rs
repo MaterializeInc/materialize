@@ -258,7 +258,6 @@ impl ProducerContext for SinkProducerContext {
             Ok(_) => self.retry_manager.lock().unwrap().record_success(),
             Err((_e, msg)) => {
                 self.metrics.message_delivery_errors_counter.inc();
-                // Should be bounded by the size of the kafka buffer
                 self.retry_manager
                     .lock()
                     .unwrap()
