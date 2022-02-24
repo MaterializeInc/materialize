@@ -544,7 +544,7 @@ async fn purify_source_format_single(
         } => {
             purify_csv(file, connector, *delimiter, columns).await?;
         }
-        Format::Bytes | Format::Regex(_) | Format::Json | Format::Text => (),
+        Format::Bytes | Format::Regex(_) | Format::Json { .. } | Format::Text => (),
     }
     Ok(())
 }

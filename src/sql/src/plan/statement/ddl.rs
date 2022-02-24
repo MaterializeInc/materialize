@@ -1210,7 +1210,7 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
                 },
             })
         }
-        Format::Json => bail_unsupported!("JSON sources"),
+        Format::Json { .. } => bail_unsupported!("JSON sources"),
         Format::Text => DataEncoding::Text,
     }))
 }
@@ -1506,7 +1506,7 @@ fn kafka_sink_builder(
                 ccsr_config,
             }
         }
-        Some(Format::Json) => KafkaSinkFormat::Json,
+        Some(Format::Json { .. }) => KafkaSinkFormat::Json,
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
         None => bail_unsupported!("sink without format"),
     };

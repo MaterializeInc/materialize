@@ -22,6 +22,7 @@
 //! (commonly referred to as Data Definition Language, or DDL)
 
 use std::fmt;
+use std::fmt::Write;
 use std::path::PathBuf;
 
 use enum_kinds::EnumKind;
@@ -119,6 +120,30 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
     }
 }
 impl_display_t!(ProtobufSchema);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum JsonSchema {
+    Blob,
+    NamedCompositeType { name: Ident },
+}
+
+impl AstDisplay for JsonSchema {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: Write,
+    {
+        match self {
+            Self::NamedCompositeType { name } => {
+                f.write_str("USING SCHEMA ");
+                f.write_node(name);
+            }
+            Self::Blob { .. } => {
+                unimplemented!();
+            }
+        }
+    }
+}
+impl_display_t!(JsonSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorAvro<T: AstInfo> {
@@ -286,7 +311,7 @@ pub enum Format<T: AstInfo> {
         columns: CsvColumns,
         delimiter: char,
     },
-    Json,
+    Json(JsonSchema),
     Text,
 }
 
