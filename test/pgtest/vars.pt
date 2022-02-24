@@ -1,0 +1,72 @@
+# Test status codes for errors related to setting session variables.
+
+# FixedValueParameter and InvalidParameterValue are covered
+# in pgtest-mz/vars.pt
+
+# ConstrainedParameter maps to 22023
+send
+Query {"query": "SET TIMEZONE TO bad"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"},{"typ":"M","value":"invalid value for parameter \"TimeZone\": \"bad\""}]}
+ReadyForQuery {"status":"I"}
+
+# ReadOnlyParameter maps to 55P02
+send
+Query {"query": "SET SERVER_VERSION TO 10.0"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"55P02"},{"typ":"M","value":"parameter \"server_version\" cannot be changed"}]}
+ReadyForQuery {"status":"I"}
+
+# InvalidParameterType maps to 22023
+send
+Query {"query": "SET STANDARD_CONFORMING_STRINGS TO nonbool"}
+----
+
+# Our message differs from Postgres, so skip it
+until err_field_typs=SC
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"}]}
+ReadyForQuery {"status":"I"}
+
+
+# UnknownParameter maps to 42704
+send
+Query {"query": "SET I_DONT_EXIST TO any_value"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42704"},{"typ":"M","value":"unrecognized configuration parameter \"i_dont_exist\""}]}
+ReadyForQuery {"status":"I"}
+
+# client_min_messages sends hint
+send
+Query {"query": "SET client_min_messages TO bad"}
+----
+
+until err_field_typs=SCMH
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"},{"typ":"M","value":"invalid value for parameter \"client_min_messages\": \"bad\""},{"typ":"H","value":"Available values: debug5, debug4, debug3, debug2, debug1, log, notice, warning, error."}]}
+ReadyForQuery {"status":"I"}
+
+# TimeZone does not send hint
+send
+Query {"query": "SET TimeZone TO bad"}
+----
+
+until err_field_typs=SCMH
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"},{"typ":"M","value":"invalid value for parameter \"TimeZone\": \"bad\""}]}
+ReadyForQuery {"status":"I"}

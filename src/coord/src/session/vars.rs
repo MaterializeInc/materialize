@@ -114,10 +114,10 @@ const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
 };
 
-const TIMEZONE: ServerVar<str> = ServerVar {
+const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
     name: static_uncased_str!("TimeZone"),
-    value: "UTC",
+    value: &TimeZone::UTC,
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
@@ -167,7 +167,7 @@ pub struct Vars {
     server_version_num: ServerVar<i32>,
     sql_safe_updates: SessionVar<bool>,
     standard_conforming_strings: ServerVar<bool>,
-    timezone: ServerVar<str>,
+    timezone: SessionVar<TimeZone>,
     transaction_isolation: ServerVar<str>,
 }
 
@@ -188,7 +188,7 @@ impl Default for Vars {
             server_version_num: SERVER_VERSION_NUM,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
-            timezone: TIMEZONE,
+            timezone: SessionVar::new(&TIMEZONE),
             transaction_isolation: TRANSACTION_ISOLATION,
         }
     }
@@ -312,7 +312,7 @@ impl Vars {
                 return Err(CoordError::ConstrainedParameter {
                     parameter: &CLIENT_MIN_MESSAGES,
                     value: value.into(),
-                    valid_values: ClientSeverity::valid_values(),
+                    valid_values: Some(ClientSeverity::valid_values()),
                 });
             }
         } else if name == DATABASE.name {
@@ -378,10 +378,14 @@ impl Vars {
                 )),
             }
         } else if name == TIMEZONE.name {
-            if UncasedStr::new(value) != TIMEZONE.value {
-                return Err(CoordError::FixedValueParameter(&TIMEZONE));
+            if let Ok(_) = TimeZone::parse(value) {
+                self.timezone.set(value, local)
             } else {
-                Ok(())
+                return Err(CoordError::ConstrainedParameter {
+                    parameter: &TIMEZONE,
+                    value: value.into(),
+                    valid_values: None,
+                });
             }
         } else if name == TRANSACTION_ISOLATION.name {
             Err(CoordError::ReadOnlyParameter(&TRANSACTION_ISOLATION))
@@ -488,8 +492,8 @@ impl Vars {
     }
 
     /// Returns the value of the `timezone` configuration parameter.
-    pub fn timezone(&self) -> &'static str {
-        self.timezone.value
+    pub fn timezone(&self) -> &TimeZone {
+        self.timezone.value()
     }
 
     /// Returns the value of the `transaction_isolation` configuration
@@ -796,6 +800,48 @@ impl Value for ClientSeverity {
             Ok(ClientSeverity::Debug4)
         } else if s == ClientSeverity::Debug5.as_str() {
             Ok(ClientSeverity::Debug5)
+        } else {
+            Err(())
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
+    }
+}
+
+/// List of valid time zones.
+///
+/// Names are following the tz database, but only time zones equivalent
+/// to UTC±00:00 are supported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimeZone {
+    /// UTC
+    UTC,
+    /// Fixed offset from UTC, currently only "+00:00" is supported.
+    /// A string representation is kept here for compatibility with Postgres.
+    FixedOffset(&'static str),
+}
+
+impl TimeZone {
+    fn as_str(&self) -> &'static str {
+        match self {
+            TimeZone::UTC => "UTC",
+            TimeZone::FixedOffset(s) => s,
+        }
+    }
+}
+
+impl Value for TimeZone {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(s: &str) -> Result<Self::Owned, ()> {
+        let s = UncasedStr::new(s);
+
+        if s == TimeZone::UTC.as_str() {
+            Ok(TimeZone::UTC)
+        } else if s == "+00:00" {
+            Ok(TimeZone::FixedOffset("+00:00"))
         } else {
             Err(())
         }

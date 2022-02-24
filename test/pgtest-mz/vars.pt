@@ -1,0 +1,25 @@
+# Test status codes for errors related to setting session variables.
+
+# Errors shared with Postgres are covered in pgtest/vars.pt.
+
+# FixedValueParameter maps to 22023
+send
+Query {"query": "SET STANDARD_CONFORMING_STRINGS TO false"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"},{"typ":"M","value":"parameter \"standard_conforming_strings\" can only be set to \"on\""}]}
+ReadyForQuery {"status":"I"}
+
+# InvalidParameterValue maps to 22023
+send
+Query {"query": "SET STANDARD_CONFORMING_STRINGS TO not_a_boolean"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"},{"typ":"M","value":"parameter \"standard_conforming_strings\" requires a \"boolean\" value"}]}
+ReadyForQuery {"status":"I"}
