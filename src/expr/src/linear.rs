@@ -1394,7 +1394,7 @@ pub mod plan {
                     mut expr2,
                 } = predicate
                 {
-                    // Attempt to put `MzLogicalTimestamp` in the first argument position.
+                    // Attempt to put `LogicalTimestamp` in the first argument position.
                     if !expr1.contains_temporal()
                         && *expr2 == MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
                     {
@@ -1437,7 +1437,7 @@ pub mod plan {
                     // little, but we do want to know they were negative.)
                     let expr2_floor = expr2.call_unary(UnaryFunc::FloorNumeric(func::FloorNumeric));
 
-                    // MzLogicalTimestamp <OP> <EXPR2> for several supported operators.
+                    // LogicalTimestamp <OP> <EXPR2> for several supported operators.
                     match func {
                         BinaryFunc::Eq => {
                             // Lower bound of expr, upper bound of expr+1

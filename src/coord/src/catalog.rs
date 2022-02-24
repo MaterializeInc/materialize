@@ -106,7 +106,6 @@ pub struct Catalog {
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     transient_revision: u64,
-    config: mz_sql::catalog::CatalogConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +119,7 @@ pub struct CatalogState {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
+    config: mz_sql::catalog::CatalogConfig,
 }
 
 impl CatalogState {
@@ -396,6 +396,10 @@ impl CatalogState {
     pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
         let id = &self.by_oid[oid];
         &self.by_id[id]
+    }
+
+    pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
+        &self.config
     }
 }
 
@@ -803,23 +807,23 @@ impl Catalog {
                 ambient_schemas: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
                 roles: HashMap::new(),
+                config: mz_sql::catalog::CatalogConfig {
+                    start_time: to_datetime((config.now)()),
+                    start_instant: Instant::now(),
+                    nonce: rand::random(),
+                    experimental_mode: config.storage.experimental_mode(),
+                    safe_mode: config.safe_mode,
+                    cluster_id: config.storage.cluster_id(),
+                    session_id: Uuid::new_v4(),
+                    build_info: config.build_info,
+                    aws_external_id: config.aws_external_id.clone(),
+                    timestamp_frequency: config.timestamp_frequency,
+                    now: config.now.clone(),
+                    disable_user_indexes: config.disable_user_indexes,
+                },
             },
             oid_counter: FIRST_USER_OID,
             transient_revision: 0,
-            config: mz_sql::catalog::CatalogConfig {
-                start_time: to_datetime((config.now)()),
-                start_instant: Instant::now(),
-                nonce: rand::random(),
-                experimental_mode: config.storage.experimental_mode(),
-                safe_mode: config.safe_mode,
-                cluster_id: config.storage.cluster_id(),
-                session_id: Uuid::new_v4(),
-                build_info: config.build_info,
-                aws_external_id: config.aws_external_id.clone(),
-                timestamp_frequency: config.timestamp_frequency,
-                now: config.now.clone(),
-                disable_user_indexes: config.disable_user_indexes,
-            },
             storage: Arc::new(Mutex::new(config.storage)),
         };
 
@@ -1046,13 +1050,13 @@ impl Catalog {
             crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
                 Error::new(ErrorKind::FailedMigration {
                     last_seen_version,
-                    this_version: catalog.config.build_info.version,
+                    this_version: catalog.config().build_info.version,
                     cause: e.to_string(),
                 })
             })?;
             catalog
                 .storage()
-                .set_catalog_content_version(catalog.config.build_info.version)?;
+                .set_catalog_content_version(catalog.config().build_info.version)?;
         }
 
         let mut storage = catalog.storage();
@@ -2256,7 +2260,7 @@ impl Catalog {
     /// Note that it is the caller's responsibility to ensure that the `id` is
     /// used for an `Index`.
     pub fn index_enabled_by_default(&self, id: &GlobalId) -> bool {
-        !self.config.disable_user_indexes || !id.is_user()
+        !self.config().disable_user_indexes || !id.is_user()
     }
 
     /// Returns a mapping that indicates all indices that are available for each
@@ -2340,7 +2344,7 @@ impl Catalog {
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
-        &self.config
+        self.state.config()
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
@@ -2628,24 +2632,6 @@ impl ExprHumanizer for ConnCatalog<'_> {
 }
 
 impl SessionCatalog for ConnCatalog<'_> {
-    fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
-        if include_system_schemas {
-            self.search_path.to_vec()
-        } else {
-            self.search_path
-                .iter()
-                .filter(|s| {
-                    (**s != PG_CATALOG_SCHEMA)
-                        && (**s != INFORMATION_SCHEMA)
-                        && (**s != MZ_CATALOG_SCHEMA)
-                        && (**s != MZ_TEMP_SCHEMA)
-                        && (**s != MZ_INTERNAL_SCHEMA)
-                })
-                .cloned()
-                .collect()
-        }
-    }
-
     fn user(&self) -> &str {
         &self.user
     }
@@ -2728,11 +2714,11 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
-        &self.catalog.config
+        &self.catalog.config()
     }
 
     fn now(&self) -> EpochMillis {
-        (self.catalog.config.now)()
+        (self.catalog.config().now)()
     }
 }
 

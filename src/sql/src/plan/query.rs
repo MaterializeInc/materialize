@@ -30,7 +30,7 @@ use std::mem;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use mz_expr::{func as expr_func, GlobalId, Id, LocalId, RowSetFinishing};
+use mz_expr::{func as expr_func, GlobalId, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -39,7 +39,6 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
-    Timestamp,
 };
 
 use mz_sql_parser::ast::fold::Fold;
@@ -731,11 +730,11 @@ where
     Ok(expr.map(map_exprs).project(project_key))
 }
 
-/// Evaluates an expression in the AS OF position of a TAIL statement.
-pub fn eval_as_of<'a>(
+/// Plans an expression in the AS OF position of a `SELECT` or `TAIL` statement.
+pub fn plan_as_of<'a>(
     scx: &'a StatementContext,
     mut expr: Expr<Raw>,
-) -> Result<Timestamp, PlanError> {
+) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
@@ -753,28 +752,9 @@ pub fn eval_as_of<'a>(
         allow_subqueries: false,
         allow_windows: false,
     };
-
-    let ex = plan_expr(ecx, &expr)?
+    Ok(plan_expr(ecx, &expr)?
         .type_as_any(ecx)?
-        .lower_uncorrelated()?;
-    let temp_storage = &RowArena::new();
-    let evaled = ex.eval(&[], temp_storage)?;
-
-    Ok(match ex.typ(desc.typ()).scalar_type {
-        ScalarType::Numeric { .. } => {
-            let n = evaled.unwrap_numeric().0;
-            u64::try_from(n).map_err(|e| PlanError::Unstructured(e.to_string()))?
-        }
-        ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
-        ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
-        ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-        ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
-        ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
-        _ => sql_bail!(
-            "can't use {} as a timestamp for AS OF",
-            scx.humanize_column_type(&ex.typ(desc.typ()))
-        ),
-    })
+        .lower_uncorrelated()?)
 }
 
 pub fn plan_default_expr(

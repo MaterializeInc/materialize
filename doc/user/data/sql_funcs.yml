@@ -424,8 +424,8 @@
     [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
   functions:
   - signature: current_timestamp() -> timestamptz
-    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
-      Users cannot define views with queries containing `current_timestamp()`.'
+    description: 'The `timestamp with time zone` representing when the query was executed.'
+    nonpure: true
 
   - signature: 'date_bin(stride: interval, source: timestamp, origin: timestamp) -> timestamp'
     description: Align `source` with `origin` along `stride`.
@@ -448,13 +448,18 @@
     url: date-part
 
   - signature: mz_logical_timestamp() -> numeric
-    description: 'The logical time at which a query executes. Used for temporal filters and internal debugging.'
+    description: |
+      The logical time at which a query executes. Used for temporal filters and internal debugging.
+      <br><br>
+      **Note**: This function generally behaves like a [non-pure] function, but
+      can be used in limited contexts in materialized views as a [temporal filter](/guides/temporal-filters).
     url: now_and_mz_logical_timestamp
+    nonpure: true
 
   - signature: now() -> timestamptz
-    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
-      Users cannot define views with queries containing `now()`.'
+    description: 'The `timestamp with time zone` representing when the query was executed.'
     url: now_and_mz_logical_timestamp
+    nonpure: true
 
   - signature: timestamp AT TIME ZONE zone -> timestamptz
     description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
@@ -484,6 +489,7 @@
   functions:
   - signature: mz_cluster_id() -> uuid
     description: The `uuid` uniquely identifying this Materialize cluster.
+    nonpure: true
 
 - type: JSON
   functions:
@@ -620,22 +626,28 @@
   functions:
   - signature: 'mz_uptime() -> interval'
     description: Returns the length of time that the materialized process has been running.
+    nonpure: true
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
+    nonpure: true
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
   - signature: 'current_database() -> text'
     description: >-
       Returns the name of the current database.
+    nonpure: true
   - signature: 'current_role() -> text'
     description: >-
       Alias for `current_user`.
+    nonpure: true
   - signature: 'current_user() -> text'
     description: >-
       Returns the name of the user who executed the containing query.
-  - signature: 'session_user -> text'
+    nonpure: true
+  - signature: 'session_user() -> text'
     description: >-
       Returns the name of the user who executed the containing query.
+    nonpure: true
   - signature: 'mz_row_size(expr: Record) -> int'
     description: Returns the number of bytes used to store a row.
 
@@ -646,15 +658,18 @@
     description: >-
       Returns the name of the first non-implicit schema on the search path, or
       `NULL` if the search path is empty.
+    nonpure: true
   - signature: 'current_schemas(include_implicit: bool) -> text[]'
     description: >-
       Returns the names of the schemas on the search path.
       The `include_implicit` parameter controls whether implicit schemas like
       `mz_catalog` and `pg_catalog` are included in the output.
+    nonpure: true
   - signature: 'obj_description(oid: oid, catalog: text) -> text'
     description: PostgreSQL compatibility shim. Currently always returns `NULL`.
   - signature: 'pg_backend_pid() -> int'
-    description: Returns -1. Not intended for direct use.
+    description: Returns the internal connection ID.
+    nonpure: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
   - signature: 'pg_get_constraintdef(oid: oid [, pretty: bool]) -> text'
@@ -669,5 +684,7 @@
     description: PostgreSQL compatibility shim. Not intended for direct use.
   - signature: 'pg_postmaster_start_time() -> timestamptz'
     description: Returns the time when the server started.
+    nonpure: true
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
+    nonpure: true

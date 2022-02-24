@@ -725,11 +725,23 @@ SELECT current_timestamp > TIMESTAMP '2016-06-13 00:00:00'
 ----
 true
 
-query error calls to mz_logical_timestamp in in static or write queries are not supported
-CREATE VIEW timeview AS SELECT mz_logical_timestamp()
+statement ok
+CREATE VIEW logical_timestamp_view AS SELECT mz_logical_timestamp()
 
-query error now cannot be used in static queries
-CREATE VIEW timeview AS SELECT now()
+# Equivalent to running `SELECT mz_logical_timestamp()` directly and has the
+# same somewhat confusing output when there are no dependencies on any views.
+query T
+SELECT * FROM logical_timestamp_view
+----
+18446744073709551615
+
+statement ok
+CREATE VIEW now_view AS SELECT now() AS ts
+
+query B
+SELECT ts > TIMESTAMP '2016-06-13 00:00:00' FROM now_view
+----
+true
 
 query T
 SELECT (DATE '2000-01-01')::text

@@ -199,10 +199,13 @@ contains:null value in column "a" violates not-null constraint
 > INSERT INTO v VALUES (now());
 
 ! CREATE INDEX ON v (now())
-contains:now cannot be used in static queries
+contains:cannot materialize call to current_timestamp
 
 ! CREATE INDEX ON v (mz_logical_timestamp())
-contains:calls to mz_logical_timestamp in in static or write queries are not supported
+contains:cannot materialize call to mz_logical_timestamp
+
+! CREATE INDEX ON v (mz_version())
+contains:cannot materialize call to mz_version
 
 > DROP TABLE IF EXISTS s;
 

@@ -176,10 +176,6 @@ impl Default for TestCatalog {
 }
 
 impl SessionCatalog for TestCatalog {
-    fn search_path(&self, _: bool) -> Vec<&str> {
-        vec!["dummy"]
-    }
-
     fn user(&self) -> &str {
         "dummy"
     }

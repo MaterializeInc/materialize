@@ -116,6 +116,33 @@ changes that have not yet been documented.
   -59.999999 seconds' to '-2147483648 months -2147483648 days -2147483648 hours
   -59 minutes -59.999999 seconds' to match PostgreSQL's behavior {{% gh 10598 %}}.
 
+- **Breaking change.** Standardize handling of the following
+  [nonpure functions](/sql/functions/#pure-and-nonpure-functions) {{% gh 10445 %}}:
+
+  - `current_database`
+  - `current_timestamp`
+  - `current_role`
+  - `current_schema`
+  - `current_schemas`
+  - `current_user`
+  - `mz_cluster_id`
+  - `mz_logical_timestamp`
+  - `mz_uptime`
+  - `mz_version`
+  - `session_user`
+  - `pg_backend_pid`
+  - `pg_postmaster_start_time`
+  - `version`
+
+  Materialize now allows use of nonpure functions in views, but will refuse to
+  create an index that directly or indirectly depends on a nonpure function.
+  The one exception is `mz_logical_timestamp`, which can be used in limited
+  contexts in a materialized view as a [temporal filter](/guides/temporal-filters).
+
+  Previously `current_timestamp`, `mz_logical_timestamp`, and `mz_uptime` were
+  incorrectly disallowed in unmaterialized views, while the remaining nonpure
+  functions were incorrectly allowed in materialized views.
+
 - Fix a bug where too many columns were returned when both `*` and a
   table function appeared in the `SELECT` list {{% gh 10363 %}}.
 

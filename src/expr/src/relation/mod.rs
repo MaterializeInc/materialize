@@ -1206,6 +1206,13 @@ impl MirRelationExpr {
         }
     }
 
+    /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.
+    pub fn contains_temporal(&mut self) -> bool {
+        let mut contains = false;
+        self.visit_scalars_mut(&mut |e| contains = contains || e.contains_temporal());
+        contains
+    }
+
     /// Applies a fallible immutable `f` to each child of type `MirRelationExpr`.
     pub fn try_visit_children<'a, F, E>(&'a self, f: F) -> Result<(), E>
     where
