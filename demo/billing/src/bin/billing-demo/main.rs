@@ -18,6 +18,7 @@
 
 #![warn(missing_debug_implementations, missing_docs)]
 
+use std::io;
 use std::process;
 use std::sync::Arc;
 
@@ -47,17 +48,22 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let config: Args = mz_ore::cli::parse_args();
-    env_logger::init();
 
     let k_config = config.kafka_config();
     let mz_config = config.mz_config();
 
+    tracing_subscriber::fmt()
+        .with_env_filter(config.log_filter)
+        .with_writer(io::stderr)
+        .init();
+
     info!(
-        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} start_time={} seed={} enable_persistence={}",
+        "starting up message_count={} mzd={}:{} kafka={}:{} preserve_source={} start_time={} seed={} enable_persistence={}",
         config.message_count,
         config.materialized_host,
         config.materialized_port,
-        config.kafka_url(),
+        config.kafka_host,
+        config.kafka_port,
         config.preserve_source,
         k_config.start_time.to_rfc3339(),
         k_config.seed,

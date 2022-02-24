@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
@@ -24,6 +25,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use time::Instant;
+use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
 
@@ -96,6 +98,11 @@ struct Args {
     /// Generate a JUnit-compatible XML report to the specified file.
     #[clap(long, value_name = "FILE")]
     junit_report: Option<PathBuf>,
+    /// Which log messages to emit.
+    ///
+    /// See materialized's `--log-filter` option for details.
+    #[clap(long, value_name = "FILTER", default_value = "off")]
+    log_filter: EnvFilter,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
 
@@ -164,8 +171,12 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
     let args: Args = mz_ore::cli::parse_args();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(args.log_filter)
+        .with_writer(io::stderr)
+        .init();
 
     let (aws_config, aws_account) = match args.aws_region {
         Some(region) => {

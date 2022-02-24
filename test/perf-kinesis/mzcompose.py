@@ -20,7 +20,6 @@ SERVICES = [
         config={
             "mzbuild": "perf-kinesis",
             "environment": [
-                "RUST_LOG=perf-kinesis=debug,info",
                 "AWS_ACCESS_KEY_ID",
                 "AWS_DEFAULT_REGION=us-east-2",
                 "AWS_SECRET_ACCESS_KEY",
