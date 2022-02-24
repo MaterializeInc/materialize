@@ -413,7 +413,10 @@ impl Model {
     }
 
     /// Get an immutable reference to the box identified by `box_id` bound to this [`Model`].
-    pub(crate) fn get_quantifier(&self, quantifier_id: QuantifierId) -> BoundRef<'_, Quantifier> {
+    pub(crate) fn get_quantifier<'a>(
+        &'a self,
+        quantifier_id: QuantifierId,
+    ) -> BoundRef<'a, Quantifier> {
         BoundRef {
             model: self,
             r#ref: self
@@ -892,6 +895,44 @@ impl<'a> BoundRefMut<'a, QueryBox> {
     /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
     pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
+    }
+}
+
+/// Immutable [`Quantifier`] methods that depend on their enclosing [`Model`].
+#[allow(dead_code)]
+impl<'a> BoundRef<'a, Quantifier> {
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box(&'a self) -> BoundRef<'a, QueryBox> {
+        self.model.get_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.parent_box)
+    }
+}
+
+/// Mutable [`Quantifier`] methods that depend on their enclosing [`Model`].
+#[allow(dead_code)]
+impl<'a> BoundRefMut<'a, Quantifier> {
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box_mut(&mut self) -> BoundRefMut<'_, QueryBox> {
+        self.model.get_mut_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.parent_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box_mut(&mut self) -> BoundRefMut<'_, QueryBox> {
+        self.model.get_mut_box(self.parent_box)
     }
 }
 

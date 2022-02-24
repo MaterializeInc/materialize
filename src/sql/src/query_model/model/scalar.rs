@@ -214,6 +214,14 @@ impl BoxScalarExpr {
         }
     }
 
+    pub fn visit_post<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Self),
+    {
+        self.visit_children(|e| e.visit_post(f));
+        f(self);
+    }
+
     pub fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),

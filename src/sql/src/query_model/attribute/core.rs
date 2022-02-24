@@ -148,12 +148,6 @@ pub(crate) fn dependency_order(attributes: HashSet<Box<dyn Attribute>>) -> Vec<B
     let mut seen = HashSet::new() as HashSet<&'static str>;
     let mut sort = vec![] as Vec<Box<dyn Attribute>>;
 
-    // TODO: remove this
-    // let mut i = 0 as usize;
-    // println!("sort[T{}] = {:?}", i, sort);
-    // println!("seen[T{}] = {:?}", i, seen);
-    // println!("rest[T{}] = {:?}", i, rest);
-
     while !rest.is_empty() {
         let (tail, head) = rest.into_iter().partition::<Vec<_>, _>(|attr| {
             attr.requires()
@@ -165,12 +159,6 @@ pub(crate) fn dependency_order(attributes: HashSet<Box<dyn Attribute>>) -> Vec<B
         rest = tail;
         seen.extend(head.iter().map(|attr| attr.attr_id()));
         sort.extend(head);
-
-        // TODO: remove this
-        // i += 1;
-        // println!("sort[T{}] = {:?}", i, sort);
-        // println!("seen[T{}] = {:?}", i, seen);
-        // println!("rest[T{}] = {:?}", i, rest);
     }
 
     sort
