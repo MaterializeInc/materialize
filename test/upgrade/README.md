@@ -44,7 +44,14 @@ To run the tests upgrading from the current source to the current source:
 To run just a particular test or tests:
 
 ```
-./mzcompose down -v ; ./mzcompose run default 'persistent-user-tables*'
+./mzcompose down -v ; ./mzcompose run default 'avro-ocf*'
+```
+
+If you are running a particular test that specifies the version, then you
+must include the `--min-version` flag with that version:
+
+```
+./mzcompose down -v ; ./mzcompose run default 'persistent-user-tables*' --min-version 0.17.0
 ```
 
 For a full description of the command line options, run:
