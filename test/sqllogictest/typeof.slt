@@ -77,3 +77,19 @@ query T
 SELECT pg_typeof((1,'abc',2.0)::composite);
 ----
 composite
+
+statement ok
+CREATE SCHEMA other;
+
+statement ok
+CREATE TYPE other.composite AS (a text, b text, c float8);
+
+query T
+SELECT pg_typeof(ROW('1', '2', 2.0)::composite)
+----
+composite
+
+query T
+SELECT pg_typeof(ROW('1', '2', 2.0)::other.composite)
+----
+other.composite

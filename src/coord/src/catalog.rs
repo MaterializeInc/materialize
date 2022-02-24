@@ -2606,6 +2606,12 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(value_type)
             ),
             Record {
+                custom_oid: Some(oid),
+                ..
+            } => self
+                .minimal_qualification(self.get_item_by_oid(oid).name())
+                .to_string(),
+            Record {
                 custom_name: Some(name),
                 ..
             } => name.clone(),

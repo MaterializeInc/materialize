@@ -4308,7 +4308,7 @@ fn scalar_type_from_catalog(
                     let catalog_item = scx.catalog.get_item_by_id(&id);
                     Ok(ScalarType::Record {
                         fields: scalars,
-                        custom_name: Some(catalog_item.name().item.clone()),
+                        custom_name: None,
                         custom_oid: Some(catalog_item.oid()),
                     })
                 }
