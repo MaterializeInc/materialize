@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ file-append path=dynamic.csv
-San Francisco,CA,94114
-Brooklyn,NY,11217
+$ http-request method=POST url=http://toxiproxy:8474/proxies/kafka/toxics content-type=application/json
+{
+  "name": "kafka",
+  "type": "limit_data",
+  "attributes": { "bytes": 16 }
+}
