@@ -25,10 +25,10 @@ process by the release notes team.
   elements (e.g., when the beginning of the slice's range exceeds the length of
   the list); previously these operations returned `NULL` {{% gh 10557 %}}.
 
-- **Breaking change.** Decrease the minimum [`interval`](/sql/types/interval)
-  value from `-2147483647 months -2147483647 days -2147483647 hours -59 minutes
-  -59.999999 seconds` to `-2147483648 months -2147483648 days -2147483648 hours
-  -59 minutes -59.999999 seconds` to match PostgreSQL {{% gh 10598 %}}.
+- **Breaking change.** Decrease the minimum [`interval`] value from `-2147483647
+  months -2147483647 days -2147483647 hours -59 minutes -59.999999 seconds` to
+  `-2147483648 months -2147483648 days -2147483648 hours -59 minutes -59.999999
+  seconds` to match PostgreSQL {{% gh 10598 %}}.
 
 - Support sequences of subscript operations on [`array`] values when
   indexing/accessing individual elements (as opposed to slicing/accessing ranges
@@ -120,12 +120,11 @@ process by the release notes team.
 - Add the [cryptography functions](/sql/functions/#cryptography-func) `md5`,
   `sha224`, `sha256`, `sha384`, and `sha512`.
 
-- Add `microsecond`, `month`, `decade`, `century`, `millennium` units
-  to [`interval`](/sql/types/interval) parsing using the PostgreSQL verbose
-  format.
+- Add `microsecond`, `month`, `decade`, `century`, `millennium` units to
+  [`interval`] parsing using the PostgreSQL verbose format.
 
-- Improve millisecond parsing for [`interval`](/sql/types/interval) using the
-  PostgreSQL verbose format {{% gh 6420 %}}.
+- Improve millisecond parsing for [`interval`] using the PostgreSQL verbose
+  format {{% gh 6420 %}}.
 
 - Support casting [`array`] types to [`list`] types.
 
@@ -1118,15 +1117,14 @@ a problem with PostgreSQL JDBC 42.3.0.
 
   - Allow specifying units of `microseconds`, `milliseconds`, `month`,
     `quarter`, `decade`, `century`, or `millenium` when applying the `EXTRACT`
-    function to an [`interval`](/sql/types/interval) {{% gh 5107 %}}. Previously
-    these units were only supported with the [`timestamp`](/sql/types/timestamp)
-    and [`timestamptz`](/sql/types/timestamptz) types.
+    function to an [`interval`] {{% gh 5107 %}}. Previously these units were
+    only supported with the [`timestamp`](/sql/types/timestamp) and
+    [`timestamptz`](/sql/types/timestamptz) types.
 
     Thanks again to external contributor
     [@zRedShift](https://github.com/zRedShift).
 
-  - Support multiplying and dividing [`interval`](/sql/types/interval)s by
-    numbers {{% gh 5107 %}}.
+  - Support multiplying and dividing [`interval`]s by numbers {{% gh 5107 %}}.
 
     Thanks once more to external contributor
     [@zRedShift](https://github.com/zRedShift).
