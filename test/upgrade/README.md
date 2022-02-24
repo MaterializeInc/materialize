@@ -44,7 +44,16 @@ To run the tests upgrading from the current source to the current source:
 To run just a particular test or tests:
 
 ```
-./mzcompose down -v ; ./mzcompose run default 'persistent-user-tables*'
+./mzcompose down -v ; ./mzcompose run default 'avro-ocf*'
+```
+
+If you are running a particular test that specifies the version, then you
+must include the `--min-version` flag with that version. The reason is
+that the test won't be included when testing earlier versions of Materialize,
+and testdrive will error out if it has no files to test:
+
+```
+./mzcompose down -v ; ./mzcompose run default 'compile-proto*' --min-version 0.9.12
 ```
 
 For a full description of the command line options, run:
