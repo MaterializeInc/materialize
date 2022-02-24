@@ -2163,8 +2163,8 @@ pub fn plan_create_type(
                 match with_options.remove(&key.to_string()) {
                     Some(SqlOption::DataType { data_type, .. }) => {
                         let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
-                        ids.extend(dt_ids);
                         ensure_valid_data_type(scx, data_type, &as_type, key)?;
+                        ids.extend(dt_ids);
                     }
                     Some(_) => bail!("{} must be a data type", key),
                     None => bail!("{} parameter required", key),
@@ -2178,9 +2178,9 @@ pub fn plan_create_type(
                 let key = ident(column_def.name.clone());
                 let (data_type, dt_ids) =
                     resolve_names_data_type(scx, column_def.data_type.clone())?;
+                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
                 ids.extend(dt_ids);
                 record_field_names.push(ColumnName::from(key.clone()));
-                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
             }
         }
     };
@@ -2214,7 +2214,7 @@ pub fn plan_create_type(
         CreateTypeAs::Record { .. } => CatalogType::Record {
             fields: record_field_names
                 .into_iter()
-                .zip(ids.iter().cloned())
+                .zip_eq(ids.iter().cloned())
                 .collect_vec(),
         },
     };

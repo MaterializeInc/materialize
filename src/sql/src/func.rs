@@ -744,11 +744,6 @@ impl ParamList {
                         return None;
                     }
                 }
-                // As of today, with no UDFs, the only operators that accept records/row types as
-                // params are basic binary functions to other records: `=, <>, <, <=, >, >=`.
-                // This makes our lives a bit easier as we just need to ensure that both params
-                // are records. Later when executing the actual function, we will validate that
-                // they are truly field-wise comparable to each other
                 (ParamType::RecordAny, Some(t @ ScalarType::Record { .. }), None) => {
                     constrained_type = Some(t.clone());
                 }
@@ -757,6 +752,10 @@ impl ParamList {
                     Some(ScalarType::Record { .. }),
                     Some(t @ ScalarType::Record { .. }),
                 ) => {
+                    // We can directly return the scalar type here without further checks.
+                    // Record type functions will attempt to cast the second param into
+                    // the type of the first. If the record cannot be cast, it will error
+                    // out then
                     return Some(t.clone());
                 }
                 // These checks don't need to be more exhaustive (e.g. failing
