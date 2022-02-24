@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A controller than provides an interface to the storage layer.
+//! A controller that provides an interface to the storage layer.
 //!
-//! The storage controller curates the creation of sources, the progress of readers through these sources,
-//! and the eventual dropping an reclamation of these sources.
+//! The storage controller curates the creation of sources, the progress of readers through these collections,
+//! and their eventual dropping and resource reclamation.
 //!
 //! The storage controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
 //! use an identifier before it has been "created" with `create_source()`. Once created, the controller holds
@@ -158,14 +158,22 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         let mut updates = BTreeMap::new();
         for (id, mut frontier) in frontiers.into_iter() {
             let collection = self.collection_mut(id).unwrap();
-            // Add new frontier, swap, subtract old frontier.
-            let mut update = ChangeBatch::new();
-            update.extend(frontier.iter().map(|time| (time.clone(), 1)));
-            std::mem::swap(&mut collection.implied_capability, &mut frontier);
-            update.extend(frontier.iter().map(|time| (time.clone(), -1)));
-            // Record updates if something of substance changed.
-            if !update.is_empty() {
-                updates.insert(id, update);
+            // Ignore frontier updates that go backwards.
+            if <_ as timely::order::PartialOrder>::less_equal(
+                &collection.implied_capability,
+                &frontier,
+            ) {
+                // Add new frontier, swap, subtract old frontier.
+                let mut update = ChangeBatch::new();
+                update.extend(frontier.iter().map(|time| (time.clone(), 1)));
+                std::mem::swap(&mut collection.implied_capability, &mut frontier);
+                update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                // Record updates if something of substance changed.
+                if !update.is_empty() {
+                    updates.insert(id, update);
+                }
+            } else {
+                tracing::error!("STORAGE::allow_compaction attempted frontier regression for id {:?}: {:?} to {:?}", id, collection.implied_capability, frontier);
             }
         }
 

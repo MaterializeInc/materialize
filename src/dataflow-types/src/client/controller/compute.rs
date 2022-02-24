@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A controller than provides an interface to a compute instance, and the storage layer below it.
+//! A controller that provides an interface to a compute instance, and the storage layer below it.
 //!
 //! The compute controller curates the creation of indexes and sinks, the progress of readers through
-//! these collectionts, and the eventual dropping and reclamation of these collections.
+//! these collections, and their eventual dropping and resource reclamation.
 //!
-//! The storage controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
+//! The compute controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
 //! use an identifier before it has been "created" with `create_dataflows()`. Once created, the controller holds
 //! a read capability for each output collection of a dataflow, which is manipulated with `allow_compaction()`.
 //! Eventually, a collecction is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
@@ -307,14 +307,22 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         for (id, mut frontier) in frontiers.into_iter() {
             // If-let to evade some identifiers incorrectly sent to us.
             if let Ok(collection) = self.collection_mut(id) {
-                // Add new frontier, swap, subtract old frontier.
-                let mut update = ChangeBatch::new();
-                update.extend(frontier.iter().map(|time| (time.clone(), 1)));
-                std::mem::swap(&mut collection.implied_capability, &mut frontier);
-                update.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                // Record updates if something of substance changed.
-                if !update.is_empty() {
-                    updates.insert(id, update);
+                // Ignore frontier updates that go backwards.
+                if <_ as timely::order::PartialOrder>::less_equal(
+                    &collection.implied_capability,
+                    &frontier,
+                ) {
+                    // Add new frontier, swap, subtract old frontier.
+                    let mut update = ChangeBatch::new();
+                    update.extend(frontier.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut frontier);
+                    update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                    // Record updates if something of substance changed.
+                    if !update.is_empty() {
+                        updates.insert(id, update);
+                    }
+                } else {
+                    tracing::error!("COMPUTE::allow_compaction attempted frontier regression for id {:?}: {:?} to {:?}", id, collection.implied_capability, frontier);
                 }
             }
         }
