@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]
+then
+    echo "usage: $0 <command>
+
+Generates shell completion for all available tools.
+
+Commands:
+    generate    generates and writes shell completion to ../misc/completions
+    check       checks whether all shell completion scripts are up-to-date"
+    exit 1
+fi
+
+cmd=$1 && shift
+
+directory="$(dirname "$0")"
+
+supported_shells=(bash zsh)
+python_autocompletions=(scratch)
+
+. misc/shlib/shlib.bash
+
+case "$cmd" in
+    generate)
+        for name in "${python_autocompletions[@]}"; do
+          for shell in "${supported_shells[@]}"; do
+            mkdir -p "$directory"/../misc/completions/"$shell"
+            "$directory"/pyactivate --dev -m materialize.cli."$name" completion "$shell" > "$directory"/../misc/completions/"$shell"/_"$name"
+          done
+        done
+        ;;
+    check)
+        shasum=sha1sum
+        if ! command_exists "$shasum"; then
+            shasum=shasum
+        fi
+
+        for name in "${python_autocompletions[@]}"; do
+          for shell in "${supported_shells[@]}"; do
+            if [ ! -f "$directory/../misc/completions/$shell/_$name" ]; then
+              printf "missing shell completion scripts. try running \`bin/completion generate\` and checking in the changes\n"
+              exit 1
+            fi
+
+            latest=$("$directory"/pyactivate --dev -m materialize.cli."$name" completion "$shell" | "$shasum")
+            existing=$("$shasum" < "$directory"/../misc/completions/"$shell"/_"$name")
+
+            if [[ "$latest" != "$existing" ]]; then
+              printf "shell completion scripts have uncommitted changes. try running \`bin/completion generate\` and checking in the changes\n"
+              exit 1
+            fi
+          done
+        done
+        ;;
+    *)
+        printf "unknown command %q\n" "$cmd"
+        exit 1
+        ;;
+esac

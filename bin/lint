@@ -63,6 +63,7 @@ copyright_files=$(grep -vE \
     -e 'test/coordtest/.*\.ct' \
     -e 'gen/.*\.rs' \
     -e 'misc/python/MANIFEST\.in' \
+    -e 'misc/completions/.*' \
     <<< "$files"
 )
 
@@ -90,6 +91,7 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     fi
     try bin/mzcompose lint
     try bin/lint-cargo
+    try bin/completion check
 fi
 
 try_finish
