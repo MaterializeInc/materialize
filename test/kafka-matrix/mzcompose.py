@@ -27,7 +27,7 @@ CONFLUENT_PLATFORM_VERSIONS = [
 
 SERVICES = [
     Materialized(),
-    Testdrive(),
+    Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"]),
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
@@ -47,7 +47,7 @@ def workflow_default(c: Composition) -> None:
                 services=["zookeeper", "kafka", "schema-registry", "materialized"]
             )
             c.wait_for_materialized()
-            c.run("testdrive-svc", "kafka-matrix.td")
+            c.run("testdrive-svc", "kafka-matrix.td", "testdrive/kafka-*.td")
             c.rm(
                 "zookeeper",
                 "kafka",
