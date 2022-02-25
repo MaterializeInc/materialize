@@ -258,6 +258,9 @@ impl ProducerContext for SinkProducerContext {
             Ok(_) => self.retry_manager.lock().unwrap().record_success(),
             Err((_e, msg)) => {
                 self.metrics.message_delivery_errors_counter.inc();
+                // TODO: figure out a good way to back these retries off.  Should be okay without
+                // because we seem to very rarely end up in a constant state where rdkafka::send
+                // works but everything is immediately rejected and hits this branch.
                 self.retry_manager
                     .lock()
                     .unwrap()
