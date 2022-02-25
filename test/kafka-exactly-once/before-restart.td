@@ -87,7 +87,7 @@ $ kafka-create-topic topic=input
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK output FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-byo-sink-${testdrive.seed}'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
@@ -120,5 +120,9 @@ $ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 # get correct results even with compaction, which re-timestamps earlier data
 # at later timestamps upon restarting.
 
-> SELECT mz_internal.mz_sleep(2);
+> SELECT mz_internal.mz_sleep(5);
 <null>
+
+# TODO: enable when possible
+# max-size=0 requires that we compact past the max timestamp when this is first invoked
+# $ verify-timestamp-compaction source=input max-size=0 permit-progress=true

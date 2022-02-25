@@ -74,7 +74,7 @@ impl Action for VerifyTimestampCompactionAction {
 
                         // We consider progress to be eventually compacting at least up to the original highest
                         // timestamp binding.
-                        let lo_binding= bindings.iter().map(|(_, ts, _)| *ts).min();
+                        let lo_binding = bindings.iter().map(|(_, ts, _)| *ts).min();
                         let progress = if retry_state.i == 0 {
                             initial_highest.store(
                                 bindings.iter().map(|(_, ts, _)| *ts).max().unwrap_or(u64::MIN),
@@ -95,7 +95,9 @@ impl Action for VerifyTimestampCompactionAction {
                             initial_highest.load(Ordering::SeqCst),
                         );
 
-                        if bindings.len() <= self.max_size || progress {
+                        if bindings.is_empty() {
+                            bail!("There are unexpectedly no bindings")
+                        } else if bindings.len() <= self.max_size || progress {
                             Ok(())
                         } else {
                             bail!(
