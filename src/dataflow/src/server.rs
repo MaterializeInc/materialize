@@ -370,8 +370,6 @@ impl PendingPeek {
         let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
-        // Σ_{(row, count) ∈ results} count
-        let mut total_count = 0;
 
         // When set, a bound on the number of records we need to return.
         // The requirements on the records are driven by the finishing's
@@ -426,7 +424,6 @@ impl PendingPeek {
                     // if copies > 0 ... otherwise skip
                     if let Some(copies) = NonZeroUsize::new(copies) {
                         results.push((result, copies));
-                        total_count += copies.get();
                     }
 
                     // If we hold many more than `max_results` records, we can thin down
@@ -435,7 +432,7 @@ impl PendingPeek {
                         // We use a threshold twice what we intend, to amortize the work
                         // across all of the insertions. We could tighten this, but it
                         // works for the moment.
-                        if total_count >= 2 * max_results {
+                        if results.len() >= 2 * max_results {
                             if self.finishing.order_by.is_empty() {
                                 results.truncate(max_results);
                                 return Ok(results);
