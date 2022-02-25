@@ -350,6 +350,43 @@ It is possible to view transitive dependencies of a select subset of roots by sp
 bin/crate-diagram --roots sql,dataflow
 ```
 
+## Developer tools
+
+The Materialize repo contains many useful scripts that can be included in your environment
+to improve your development experience.
+
+### Automatic style checks
+
+To ensure each code change passes all style nits before pushing to GitHub, symlink `pre-push`
+into your local git hooks:
+
+```sh
+ln -s ./misc/githooks/pre-push .git/hooks/pre-push
+```
+
+### Shell completion
+
+Some Materialize scripts have shell completion, and the latest versions of the completions files
+are checked in to `misc/completions`. The contents of this directory can be sourced into your shell,
+and will stay updated as any changes are made.
+
+To add the completions to bash, add the following to your `~/.bashrc`:
+
+```shell
+source /path/to/materialize/misc/completions/bash/*
+```
+
+For zsh, add the follow to your `~/.zshrc`:
+
+```shell
+source /path/to/materialize/misc/completions/zsh/*
+```
+
+### Editor add-ons
+
+A few editor-specific add-ons and configurations have been authored to improve the editing of
+Materialize-specific code. Check `misc/editor` for add-ons that may be relevant for your editor
+of choice.
 
 [Apache Kafka]: https://kafka.apache.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
