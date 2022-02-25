@@ -4,11 +4,11 @@
 
 _shtab_scratch_options_=(
   "(- :)"{-h,--help}"[show this help message and exit]"
-  {-c,--generate-completion}"[print shell completion script]:generate_completion:(bash zsh tcsh)"
 )
 
 _shtab_scratch_commands_() {
   local _commands=(
+    "completion:Generate shell completion script"
     "create:Create a new scratch instance"
     "destroy:Destroy a scratch instance"
     "login:Log in to AWS SSO"
@@ -20,6 +20,11 @@ _shtab_scratch_commands_() {
 
   _describe 'scratch commands' _commands
 }
+
+_shtab_scratch_completion=(
+  "(- :)"{-h,--help}"[show this help message and exit]"
+  ":print shell completion script:(bash zsh tcsh)"
+)
 
 _shtab_scratch_create=(
   "(- :)"{-h,--help}"[show this help message and exit]"
@@ -81,6 +86,7 @@ _arguments \
   '*::args:->args'
 
 case $words[1] in
+  completion) _arguments $_shtab_scratch_completion ;;
   create) _arguments $_shtab_scratch_create ;;
   destroy) _arguments $_shtab_scratch_destroy ;;
   login) _arguments $_shtab_scratch_login ;;

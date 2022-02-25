@@ -47,12 +47,16 @@ def main() -> None:
             push.run,
             "Push current HEAD (or a specific git commit) to scratch instance",
         ),
+        (
+            "completion",
+            lambda p: shtab.add_argument_to(p, "shell", parent=parser),
+            lambda: None,
+            "Generate shell completion script",
+        ),
     ]:
         s = subparsers.add_parser(name, description=description, help=description)
         configure(s)
         s.set_defaults(run=run)
-
-    shtab.add_argument_to(parser, ["-c", "--generate-completion"], parent=parser)  # type: ignore[no-untyped-call]
 
     args = parser.parse_args()
     args.run(args)
