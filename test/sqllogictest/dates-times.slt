@@ -82,6 +82,26 @@ SELECT INTERVAL '1' MINUTE
 ----
 00:01:00
 
+query T
+SELECT INTERVAL '1 MIN'
+----
+00:01:00
+
+query T
+SELECT INTERVAL '1 MINS'
+----
+00:01:00
+
+query T
+SELECT INTERVAL '1 SECS'
+----
+00:00:01
+
+query T
+SELECT INTERVAL '1 SEC'
+----
+00:00:01
+
 statement ok
 CREATE TABLE iv_ish (
     b interval
@@ -265,12 +285,27 @@ SELECT INTERVAL '7' DAY + DATE '2000-01-01'
 2000-01-08 00:00:00
 
 query T
+SELECT INTERVAL '2 YRS 5 DAYS'
+----
+2 years 5 days
+
+query T
+SELECT INTERVAL '2 YR 5 DAYS'
+----
+2 years 5 days
+
+query T
 SELECT DATE '2000-01-01' + INTERVAL '7 5:4:3.2' DAY TO SECOND
 ----
 2000-01-08 05:04:03.2
 
 query T
 SELECT DATE '2000-01-01' + INTERVAL '4' HOUR
+----
+2000-01-01 04:00:00
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '4 HR'
 ----
 2000-01-01 04:00:00
 
