@@ -8,7 +8,7 @@ menu:
 
 `justify_interval` returns a new [`interval`](../../types/interval) such that 30-day time periods are
 converted to months, 24-hour time periods are represented as days, and all fields have the same sign. It is a
-combination of ['justify_days'](../justify_days) and ['justify_hours'](../justify_hours) with additional sign
+combination of ['justify_days'](../justify-days) and ['justify_hours'](../justify-hours) with additional sign
 adjustment.
 
 ## Signatures

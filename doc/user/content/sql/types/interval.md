@@ -10,8 +10,8 @@ menu:
 
 `interval` data keeps months, days, and microseconds completely separate and will not try to convert between any of
 those fields when comparing `interval`s. This may lead to some unexpected behavior. For example `1 month` is considered
-greater than `100 days`. See ['justify_days'](../justify_days), ['justify_hours'](../justify_hours), and
-['justify_interval'](../justify_interval) to explicitly convert between these fields.
+greater than `100 days`. See ['justify_days'](../../functions/justify-days), ['justify_hours'](../../functions/justify-hours), and
+['justify_interval'](../../functions/justify-interval) to explicitly convert between these fields.
 
 Detail | Info
 -------|-----
