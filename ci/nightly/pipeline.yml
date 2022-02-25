@@ -124,6 +124,14 @@ steps:
           run: nightly
     timeout_in_minutes: 30
 
+  - id: cluster-compute-storage-testdrive
+    label: "Full testdrive against Cluster with segragated compute/storage"
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: nightly-compute-storage
+    timeout_in_minutes: 30
+
   - id: proxy
     label: ":squid: proxy"
     plugins:
