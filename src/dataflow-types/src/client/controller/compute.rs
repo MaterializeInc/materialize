@@ -7,11 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! A controller that provides an interface to a compute instance, and the storage layer below it.
+//!
+//! The compute controller curates the creation of indexes and sinks, the progress of readers through
+//! these collections, and their eventual dropping and resource reclamation.
+//!
+//! The compute controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
+//! use an identifier before it has been "created" with `create_dataflows()`. Once created, the controller holds
+//! a read capability for each output collection of a dataflow, which is manipulated with `allow_compaction()`.
+//! Eventually, a collecction is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
+//!
+//! Created dataflows will prevent the compaction of their inputs, including other compute collections but also
+//! collections managed by the storage layer. Each dataflow input is prevented from compacting beyond the allowed
+//! compaction of each of its outputs, ensuring that we can recover each dataflow to its current state in case of
+//! failure or other reconfiguration.
+
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
 
 use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId, StorageCommand};
 use crate::logging::LoggingConfig;
@@ -54,7 +69,14 @@ impl<T: Timestamp + Lattice> ComputeControllerState<T> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
-                collections.insert(id, CollectionState::new(Antichain::from_elem(T::minimum())));
+                collections.insert(
+                    id,
+                    CollectionState::new(
+                        Antichain::from_elem(T::minimum()),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                );
             }
         }
         Self { collections }
@@ -63,13 +85,28 @@ impl<T: Timestamp + Lattice> ComputeControllerState<T> {
 
 // Public interface
 impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
+    /// Acquires a handle to a controller for the storage instance.
+    #[inline]
+    pub fn storage(&mut self) -> crate::client::controller::StorageController<C, T> {
+        crate::client::controller::StorageController {
+            storage: &mut self.storage,
+            client: &mut self.client,
+        }
+    }
+    /// Acquire a handle to the collection state associated with `id`.
     pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
         self.compute
             .collections
             .get(&id)
             .ok_or(ComputeError::IdentifierMissing(id))
     }
-
+    /// Creates and maintains the described dataflows, and initializes state for their output.
+    ///
+    /// This method creates dataflows whose inputs are still readable at the dataflow `as_of`
+    /// frontier, and initializes the outputs as readable from that frontier onward.
+    /// It installs read dependencies from the outputs to the inputs, so that the input read
+    /// capabilities will be held back to the output read capabilities, ensuring that we are
+    /// always able to return to a state that can serve the output read capabilities.
     pub async fn create_dataflows(
         &mut self,
         dataflows: Vec<DataflowDescription<crate::plan::Plan, T>>,
@@ -82,6 +119,10 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                 .as_ref()
                 .ok_or(ComputeError::DataflowMalformed)?;
 
+            // Record all transitive dependencies of the outputs.
+            let mut storage_dependencies = Vec::new();
+            let mut compute_dependencies = Vec::new();
+
             // Validate sources have `since.less_equal(as_of)`.
             for (source_id, _) in dataflow.source_imports.iter() {
                 let since = &self
@@ -89,33 +130,76 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                     .collections
                     .get(source_id)
                     .ok_or(ComputeError::IdentifierMissing(*source_id))?
-                    .since;
-                if !(<_ as timely::order::PartialOrder>::less_equal(
-                    &since.frontier(),
-                    &as_of.borrow(),
-                )) {
+                    .read_capabilities
+                    .frontier();
+                if !(<_ as timely::order::PartialOrder>::less_equal(since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*source_id))?;
                 }
+
+                storage_dependencies.push(*source_id);
             }
 
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
             for (index_id, _) in dataflow.index_imports.iter() {
-                let since = self.collection(*index_id)?.since.frontier();
+                let collection = self.collection(*index_id)?;
+                let since = collection.read_capabilities.frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*index_id))?;
+                } else {
+                    compute_dependencies.push(*index_id);
                 }
             }
 
+            // Canonicalize depedencies.
+            // Probably redundant based on key structure, but doing for sanity.
+            storage_dependencies.sort();
+            storage_dependencies.dedup();
+            compute_dependencies.sort();
+            compute_dependencies.dedup();
+
+            // We will bump the internals of each input by the number of dependents (outputs).
+            let outputs = dataflow.sink_exports.len() + dataflow.index_exports.len();
+            let mut changes = ChangeBatch::new();
+            for time in as_of.iter() {
+                changes.update(time.clone(), outputs as i64);
+            }
+            // Update storage read capabilities for inputs.
+            let mut storage_read_updates = storage_dependencies
+                .iter()
+                .map(|id| (*id, changes.clone()))
+                .collect();
+            self.storage()
+                .update_read_capabilities(&mut storage_read_updates)
+                .await;
+            // Update compute read capabilities for inputs.
+            let mut compute_read_updates = compute_dependencies
+                .iter()
+                .map(|id| (*id, changes.clone()))
+                .collect();
+            self.update_read_capabilities(&mut compute_read_updates)
+                .await;
+
+            // Install collection state for each of the exports.
             for (sink_id, _) in dataflow.sink_exports.iter() {
-                self.compute
-                    .collections
-                    .insert(*sink_id, CollectionState::new(as_of.clone()));
+                self.compute.collections.insert(
+                    *sink_id,
+                    CollectionState::new(
+                        as_of.clone(),
+                        storage_dependencies.clone(),
+                        compute_dependencies.clone(),
+                    ),
+                );
             }
             for (index_id, _, _) in dataflow.index_exports.iter() {
-                self.compute
-                    .collections
-                    .insert(*index_id, CollectionState::new(as_of.clone()));
+                self.compute.collections.insert(
+                    *index_id,
+                    CollectionState::new(
+                        as_of.clone(),
+                        storage_dependencies.clone(),
+                        compute_dependencies.clone(),
+                    ),
+                );
             }
         }
 
@@ -143,6 +227,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         Ok(())
     }
+    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     pub async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
         self.validate_ids(identifiers.iter().cloned())?;
@@ -151,9 +236,10 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .into_iter()
             .map(|id| (id, Antichain::new()))
             .collect();
-        self.allow_index_compaction(compaction_commands).await;
+        self.allow_compaction(compaction_commands).await;
         Ok(())
     }
+    /// Drops the read capability for the indexes and allows their resources to be reclaimed.
     pub async fn drop_indexes(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
         self.validate_ids(identifiers.iter().cloned())?;
@@ -162,9 +248,10 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .into_iter()
             .map(|id| (id, Antichain::new()))
             .collect();
-        self.allow_index_compaction(compaction_commands).await;
+        self.allow_compaction(compaction_commands).await;
         Ok(())
     }
+    /// Initiate a peek request for the contents of `id` at `timestamp`.
     pub async fn peek(
         &mut self,
         id: GlobalId,
@@ -174,7 +261,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
     ) -> Result<(), ComputeError> {
-        let since = self.collection(id)?.since.frontier();
+        let since = self.collection(id)?.read_capabilities.frontier();
 
         if !since.less_equal(&timestamp) {
             Err(ComputeError::PeekSinceViolation(id))?;
@@ -196,6 +283,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         Ok(())
     }
+    /// Cancels an existing peek request.
     pub async fn cancel_peek(&mut self, conn_id: u32) {
         self.client
             .send(Command::Compute(
@@ -205,35 +293,48 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .await;
     }
 
-    pub async fn allow_index_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<T>)>) {
+    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
+    ///
+    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
+    pub async fn allow_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<T>)>) {
         // The coordinator currently sends compaction commands for identifiers that do not exist.
         // Until that changes, we need to be oblivious to errors, or risk not compacting anything.
 
         // // Validate that the ids exist.
         // self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
-        //
-        // // Downgrade the implicit capability for each referenced id.
-        // for (id, frontier) in frontiers.iter() {
-        //     // Apply the updates but ignore the results for now.
-        //     // TODO(mcsherry): observe the results and allow compaction.
-        //     let _ = self
-        //         .collection_mut(*id)?
-        //         .capability_downgrade(frontier.clone());
-        // }
-        // // TODO(mcsherry): Delay compation subject to read capability constraints.
 
-        self.client
-            .send(Command::Compute(
-                ComputeCommand::AllowCompaction(frontiers),
-                self.instance,
-            ))
-            .await;
+        let mut updates = BTreeMap::new();
+        for (id, mut frontier) in frontiers.into_iter() {
+            // If-let to evade some identifiers incorrectly sent to us.
+            if let Ok(collection) = self.collection_mut(id) {
+                // Ignore frontier updates that go backwards.
+                if <_ as timely::order::PartialOrder>::less_equal(
+                    &collection.implied_capability,
+                    &frontier,
+                ) {
+                    // Add new frontier, swap, subtract old frontier.
+                    let mut update = ChangeBatch::new();
+                    update.extend(frontier.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut frontier);
+                    update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                    // Record updates if something of substance changed.
+                    if !update.is_empty() {
+                        updates.insert(id, update);
+                    }
+                } else {
+                    tracing::error!("COMPUTE::allow_compaction attempted frontier regression for id {:?}: {:?} to {:?}", id, collection.implied_capability, frontier);
+                }
+            }
+        }
+
+        self.update_read_capabilities(&mut updates).await;
     }
 }
 
 // Internal interface
 impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
-    pub fn collection_mut(
+    /// Acquire a mutable reference to the collection state, should it exist.
+    pub(super) fn collection_mut(
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<T>, ComputeError> {
@@ -242,43 +343,118 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .get_mut(&id)
             .ok_or(ComputeError::IdentifierMissing(id))
     }
+    /// Validate that a collection exists for all identifiers, and error if any do not.
     pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
         for id in ids {
             self.collection(id)?;
         }
         Ok(())
     }
+
+    /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
+    pub(super) async fn update_read_capabilities(
+        &mut self,
+        updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
+    ) {
+        // Locations to record consequences that we need to act on.
+        let mut storage_todo = BTreeMap::default();
+        let mut compute_net = Vec::default();
+        // Repeatedly extract the maximum id, and updates for it.
+        while let Some(key) = updates.keys().rev().next().cloned() {
+            let mut update = updates.remove(&key).unwrap();
+            if let Ok(collection) = self.collection_mut(key) {
+                let changes = collection.read_capabilities.update_iter(update.drain());
+                update.extend(changes);
+                for id in collection.storage_dependencies.iter() {
+                    storage_todo
+                        .entry(*id)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.iter().cloned());
+                }
+                for id in collection.compute_dependencies.iter() {
+                    updates
+                        .entry(*id)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.iter().cloned());
+                }
+                compute_net.push((key, update));
+            } else {
+                // Storage presumably, but verify.
+                storage_todo
+                    .entry(key)
+                    .or_insert_with(ChangeBatch::new)
+                    .extend(update.drain())
+            }
+        }
+
+        // Translate our net compute actions into `AllowCompaction` commands.
+        let mut compaction_commands = Vec::new();
+        for (id, change) in compute_net.iter_mut() {
+            if !change.is_empty() {
+                let frontier = self
+                    .collection(*id)
+                    .unwrap()
+                    .read_capabilities
+                    .frontier()
+                    .to_owned();
+                compaction_commands.push((*id, frontier));
+            }
+        }
+        if !compaction_commands.is_empty() {
+            self.client
+                .send(Command::Compute(
+                    ComputeCommand::AllowCompaction(compaction_commands),
+                    self.instance,
+                ))
+                .await;
+        }
+
+        // We may have storage consequences to process.
+        if !storage_todo.is_empty() {
+            self.storage()
+                .update_read_capabilities(&mut storage_todo)
+                .await;
+        }
+    }
 }
 
 /// State maintained about individual collections.
 pub struct CollectionState<T> {
     /// Accumulation of read capabilities for the collection.
-    pub(super) since: MutableAntichain<T>,
+    ///
+    /// This accumulation will always contain `self.implied_capability`, but may also contain
+    /// capabilities held by others who have read dependencies on this collection.
+    pub(super) read_capabilities: MutableAntichain<T>,
+    /// The implicit capability associated with collection creation.
+    pub(super) implied_capability: Antichain<T>,
+
+    /// Storage identifiers on which this collection depends.
+    pub(super) storage_dependencies: Vec<GlobalId>,
+    /// Compute identifiers on which this collection depends.
+    pub(super) compute_dependencies: Vec<GlobalId>,
+
     /// Reported progress in the write capabilities.
-    pub(super) upper_frontier: MutableAntichain<T>,
-    /// The implicit capability associated with source creation.
-    // TODO(mcsherry): make these capabilities explicit.
-    pub(super) capability: Antichain<T>,
+    ///
+    /// Importantly, this is not a write capability, but what we have heard about the
+    /// write capabilities of others. All future writes will have times greater than or
+    /// equal to `upper_frontier.frontier()`.
+    pub(super) write_frontier: MutableAntichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
-    pub fn new(since: Antichain<T>) -> Self {
+    pub fn new(
+        since: Antichain<T>,
+        storage_dependencies: Vec<GlobalId>,
+        compute_dependencies: Vec<GlobalId>,
+    ) -> Self {
+        let mut read_capabilities = MutableAntichain::new();
+        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {
-            since: since.borrow().into(),
-            upper_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
-            capability: since,
+            read_capabilities,
+            implied_capability: since,
+            storage_dependencies,
+            compute_dependencies,
+            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
         }
-    }
-
-    pub fn capability_downgrade(
-        &mut self,
-        mut frontier: Antichain<T>,
-    ) -> impl Iterator<Item = (T, i64)> + '_ {
-        std::mem::swap(&mut self.capability, &mut frontier);
-        let changes = frontier
-            .into_iter()
-            .map(|time| (time, -1))
-            .chain(self.capability.iter().map(|time| (time.clone(), 1)));
-        self.since.update_iter(changes)
     }
 }
