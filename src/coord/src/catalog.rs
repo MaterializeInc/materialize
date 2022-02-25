@@ -733,6 +733,13 @@ impl CatalogItem {
             false
         }
     }
+
+    pub fn cluster_id(&self) -> usize {
+        match self {
+            CatalogItem::Index(index) => index.cluster_id,
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl CatalogEntry {

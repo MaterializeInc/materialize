@@ -328,8 +328,8 @@ pub struct Coordinator {
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 
     /// A map from pending peeks to the queue into which responses are sent, and
-    /// the IDs of workers who have responded.
-    pending_peeks: HashMap<u32, mpsc::UnboundedSender<PeekResponse>>,
+    /// the IDs of workers who have responded. Now includes cluster ID servicing peek.
+    pending_peeks: HashMap<u32, (usize, mpsc::UnboundedSender<PeekResponse>)>,
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
@@ -861,11 +861,18 @@ impl Coordinator {
                 ComputeResponse::PeekResponse(conn_id, response),
                 instance,
             ) => {
-                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We expect exactly one peek response, which we forward.
-                self.pending_peeks
+                let (servicing_instance, peek_response) = self
+                    .pending_peeks
                     .remove(&conn_id)
-                    .expect("no more PeekResponses after closing peek channel")
+                    .expect("no more PeekResponses after closing peek channel");
+
+                assert_eq!(
+                    instance, servicing_instance,
+                    "peek response came from instance we sent it to"
+                );
+
+                peek_response
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
@@ -1736,7 +1743,6 @@ impl Coordinator {
 
             // Allow dataflow to cancel any pending peeks.
             self.dataflow_client
-                // TODO: Get default cluster ID
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .cancel_peek(conn_id)
@@ -2194,6 +2200,17 @@ impl Coordinator {
             .catalog
             .for_session(session)
             .find_available_name(index_name);
+
+        // Index gets created on default cluster.
+        let cluster_name = session.vars().get("cluster")?.value();
+        let instance_id = self
+            .catalog
+            .get_cluster_by_name(&cluster_name)
+            .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
+                cluster_name,
+            )))?
+            .id;
+
         let index = auto_generate_primary_idx(
             index_name.item.clone(),
             name.clone(),
@@ -2202,8 +2219,7 @@ impl Coordinator {
             conn_id,
             index_depends_on,
             self.catalog.index_enabled_by_default(&index_id),
-            // TODO: where do table indexes get created?
-            DEFAULT_COMPUTE_INSTANCE_ID,
+            instance_id,
         );
 
         let table_oid = self.catalog.allocate_oid()?;
@@ -3255,13 +3271,20 @@ impl Coordinator {
         // TODO: reclaim transient identifiers in fast path cases.
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
+
+        // Index gets created on default cluster.
+        let cluster_name = session.vars().get("cluster")?.value();
+        let instance_id = self
+            .catalog
+            .get_cluster_by_name(&cluster_name)
+            .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
+                cluster_name,
+            )))?
+            .id;
+
         // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(
-            format!("temp-view-{}", view_id),
-            view_id,
-            // TODO: Get default instance
-            DEFAULT_COMPUTE_INSTANCE_ID,
-        );
+        let mut dataflow =
+            DataflowDesc::new(format!("temp-view-{}", view_id), view_id, instance_id);
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         let mut builder = self.dataflow_builder();
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
@@ -3279,8 +3302,7 @@ impl Coordinator {
             IndexDesc {
                 on_id: view_id,
                 key: key.clone(),
-                // TODO: Get default instance
-                cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                cluster_id: instance_id,
             },
             typ,
         );
@@ -3679,6 +3701,15 @@ impl Coordinator {
             decorrelated_plan
         };
 
+        let cluster_name = session.vars().get("cluster")?.value();
+        let instance_id = self
+            .catalog
+            .get_cluster_by_name(&cluster_name)
+            .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
+                cluster_name,
+            )))?
+            .id;
+
         let optimize =
             |timings: &mut Timings,
              coord: &mut Self,
@@ -3686,12 +3717,8 @@ impl Coordinator {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                // TODO: Get default cluster from session.
-                let mut dataflow = DataflowDesc::new(
-                    format!("explanation"),
-                    GlobalId::Explain,
-                    DEFAULT_COMPUTE_INSTANCE_ID,
-                );
+                let mut dataflow =
+                    DataflowDesc::new(format!("explanation"), GlobalId::Explain, instance_id);
                 coord.dataflow_builder().import_view_into_dataflow(
                     // TODO: If explaining a view, pipe the actual id of the view.
                     &GlobalId::Explain,
@@ -4393,17 +4420,23 @@ impl Coordinator {
         }
     }
 
-    // TODO: get cluster ID
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
-        let mut trace_keys = Vec::new();
+        let mut cluster_key_map = HashMap::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
-                trace_keys.push(id);
+                // Find cluster ID of all indexes to drop.
+                let instance_id = self.catalog.get_by_id(&id).item().cluster_id();
+                // Aggregate them by cluster/instance ID.
+                cluster_key_map
+                    .entry(instance_id)
+                    .or_insert(vec![])
+                    .push(id);
             }
         }
-        if !trace_keys.is_empty() {
+
+        for (instance_id, trace_keys) in cluster_key_map {
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
                 .drop_indexes(trace_keys)
                 .await
@@ -4780,7 +4813,7 @@ pub async fn serve(
             handle.block_on(
                 coord
                     .dataflow_client
-                    // TODO: get default instance
+                    // TODO(clusters): Where does logging happen?
                     .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
             );
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
@@ -4979,7 +5012,6 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use mz_dataflow_types::PeekResponseUnary;
     use std::{collections::HashMap, num::NonZeroUsize};
 
@@ -5155,9 +5187,8 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    // TODO: Get default instance
                     self.dataflow_client
-                        .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                        .compute(dataflow.cluster_id)
                         .unwrap()
                         .create_dataflows(vec![dataflow])
                         .await
@@ -5195,13 +5226,16 @@ pub mod fast_path_peek {
             // Endpoints for sending and receiving peek responses.
             let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
 
+            let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
+
+            let instance_id = self.catalog.get_by_id(&id).item().cluster_id();
+
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
-            self.pending_peeks.insert(conn_id, rows_tx);
-            let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
-            // TODO: Get default instance
+            self.pending_peeks.insert(conn_id, (instance_id, rows_tx));
+
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
                 .peek(
                     id,
