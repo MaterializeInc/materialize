@@ -327,9 +327,9 @@ pub struct Coordinator {
     /// Tracks write frontiers for active exactly-once sinks.
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 
-    /// A map from pending peeks to the queue into which responses are sent, and
-    /// the IDs of workers who have responded.
-    pending_peeks: HashMap<u32, mpsc::UnboundedSender<PeekResponse>>,
+    /// A map from pending peeks to a tuple of instance ID serving the requests and the queue
+    /// into which responses are sent.
+    pending_peeks: HashMap<u32, (usize, mpsc::UnboundedSender<PeekResponse>)>,
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
@@ -862,11 +862,18 @@ impl Coordinator {
                 ComputeResponse::PeekResponse(conn_id, response),
                 instance,
             ) => {
-                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We expect exactly one peek response, which we forward.
-                self.pending_peeks
+                let (servicing_instance, peek_response) = self
+                    .pending_peeks
                     .remove(&conn_id)
-                    .expect("no more PeekResponses after closing peek channel")
+                    .expect("no more PeekResponses after closing peek channel");
+
+                assert_eq!(
+                    instance, servicing_instance,
+                    "peek response came from instance we sent it to"
+                );
+
+                peek_response
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
@@ -1718,14 +1725,15 @@ impl Coordinator {
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
-            // Allow dataflow to cancel any pending peeks.
-            self.dataflow_client
-                // TODO: Get default instance ID
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
-                .unwrap()
-                .cancel_peek(conn_id)
-                .await
-                .unwrap();
+            if let Some((instance_id, _rows_tx)) = self.pending_peeks.get(&conn_id) {
+                // Allow dataflow to cancel any pending peeks.
+                self.dataflow_client
+                    .compute(*instance_id)
+                    .unwrap()
+                    .cancel_peek(conn_id)
+                    .await
+                    .unwrap();
+            }
         }
     }
 
@@ -2182,6 +2190,13 @@ impl Coordinator {
             .catalog
             .for_session(session)
             .find_available_name(index_name);
+
+        let instance_name = self.catalog.get_default_compute_instance()?;
+        let instance_id = self
+            .catalog
+            .get_compute_instance_by_name(&instance_name)?
+            .id;
+
         let index = auto_generate_primary_idx(
             index_name.item.clone(),
             name.clone(),
@@ -2190,8 +2205,7 @@ impl Coordinator {
             conn_id,
             index_depends_on,
             self.catalog.index_enabled_by_default(&index_id),
-            // TODO: where do table indexes get created?
-            DEFAULT_COMPUTE_INSTANCE_ID,
+            instance_id,
         );
 
         let table_oid = self.catalog.allocate_oid()?;
@@ -2408,6 +2422,14 @@ impl Coordinator {
                     .catalog
                     .for_session(session)
                     .find_available_name(index_name);
+
+                // TODO: Use materialized Option<String> for instance name
+                let instance_name = self.catalog.get_default_compute_instance()?;
+                let instance_id = self
+                    .catalog
+                    .get_compute_instance_by_name(&instance_name)?
+                    .id;
+
                 let index_id = self.catalog.allocate_id()?;
                 let index = auto_generate_primary_idx(
                     index_name.item.clone(),
@@ -2417,8 +2439,7 @@ impl Coordinator {
                     None,
                     vec![source_id],
                     self.catalog.index_enabled_by_default(&index_id),
-                    // TODO: Use new materialized Option<String> for instance name
-                    DEFAULT_COMPUTE_INSTANCE_ID,
+                    instance_id,
                 );
                 let index_oid = self.catalog.allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
@@ -2591,6 +2612,14 @@ impl Coordinator {
                 .for_session(session)
                 .find_available_name(index_name);
             let index_id = self.catalog.allocate_id()?;
+
+            // TODO: Use materialized Option<String> for instance name
+            let instance_name = self.catalog.get_default_compute_instance()?;
+            let instance_id = self
+                .catalog
+                .get_compute_instance_by_name(&instance_name)?
+                .id;
+
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 name,
@@ -2599,8 +2628,7 @@ impl Coordinator {
                 view.conn_id,
                 vec![view_id],
                 self.catalog.index_enabled_by_default(&index_id),
-                // TODO: Use new materialized Option<String> for instance name
-                DEFAULT_COMPUTE_INSTANCE_ID,
+                instance_id,
             );
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -3219,12 +3247,18 @@ impl Coordinator {
         // TODO: reclaim transient identifiers in fast path cases.
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
+
+        let instance_name = self.catalog.get_default_compute_instance()?;
+        let compute_instance_id = self
+            .catalog
+            .get_compute_instance_by_name(&instance_name)?
+            .id;
+
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(
             format!("temp-view-{}", view_id),
             view_id,
-            // TODO: Get default instance
-            DEFAULT_COMPUTE_INSTANCE_ID,
+            compute_instance_id,
         );
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         let mut builder = self.dataflow_builder();
@@ -3243,7 +3277,7 @@ impl Coordinator {
             IndexDesc {
                 on_id: view_id,
                 key: key.clone(),
-                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                compute_instance_id,
             },
             typ,
         );
@@ -3642,6 +3676,12 @@ impl Coordinator {
             decorrelated_plan
         };
 
+        let instance_name = self.catalog.get_default_compute_instance()?;
+        let instance_id = self
+            .catalog
+            .get_compute_instance_by_name(&instance_name)?
+            .id;
+
         let optimize =
             |timings: &mut Timings,
              coord: &mut Self,
@@ -3649,12 +3689,8 @@ impl Coordinator {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                // TODO: Get default instace.
-                let mut dataflow = DataflowDesc::new(
-                    format!("explanation"),
-                    GlobalId::Explain,
-                    DEFAULT_COMPUTE_INSTANCE_ID,
-                );
+                let mut dataflow =
+                    DataflowDesc::new(format!("explanation"), GlobalId::Explain, instance_id);
                 coord.dataflow_builder().import_view_into_dataflow(
                     // TODO: If explaining a view, pipe the actual id of the view.
                     &GlobalId::Explain,
@@ -4713,6 +4749,11 @@ pub async fn serve(
 
     let metric_scraper = Scraper::new(logging.as_ref(), metrics_registry.clone())?;
 
+    let default_instance_name = catalog.get_default_compute_instance()?;
+    let default_instance_id = catalog
+        .get_compute_instance_by_name(&default_instance_name)?
+        .id;
+
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
@@ -4760,7 +4801,7 @@ pub async fn serve(
                 .block_on(
                     coord
                         .dataflow_client
-                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
+                        .create_instance(default_instance_id, logging),
                 )
                 .unwrap();
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
@@ -4959,7 +5000,6 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use mz_dataflow_types::PeekResponseUnary;
     use std::{collections::HashMap, num::NonZeroUsize};
 
@@ -5135,9 +5175,8 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    // TODO: Get default instance
                     self.dataflow_client
-                        .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                        .compute(dataflow.compute_instance_id)
                         .unwrap()
                         .create_dataflows(vec![dataflow])
                         .await
@@ -5175,13 +5214,14 @@ pub mod fast_path_peek {
             // Endpoints for sending and receiving peek responses.
             let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
 
+            let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
+            let instance_id = self.catalog.find_index_among_instances(&id);
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
-            self.pending_peeks.insert(conn_id, rows_tx);
-            let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
-            // TODO: Get default instance
+            self.pending_peeks.insert(conn_id, (instance_id, rows_tx));
+
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute(instance_id)
                 .unwrap()
                 .peek(
                     id,

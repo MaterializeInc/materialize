@@ -34,7 +34,6 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::{
-    client::DEFAULT_COMPUTE_INSTANCE_ID,
     sinks::{SinkConnector, SinkConnectorBuilder},
     sources::{AwsExternalId, SourceConnector, Timeline},
 };
@@ -960,6 +959,12 @@ impl Catalog {
                 .insert(name.clone(), id);
         }
 
+        // TODO(CREATE+DROP CLUSTER): anything that depends on the default instance must be spun up per-cluster.
+        let default_instance_id = catalog
+            .get_compute_instance_by_name(&catalog.storage().get_default_compute_instance()?)
+            .expect("default cluster exists")
+            .id;
+
         for builtin in BUILTINS.values() {
             let name = FullName {
                 database: DatabaseSpecifier::Ambient,
@@ -1010,7 +1015,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![log.id],
                             enabled: catalog.index_enabled_by_default(&log.index_id),
-                            compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                            compute_instance_id: default_instance_id,
                         }),
                     );
                 }
@@ -1064,7 +1069,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![table.id],
                             enabled: catalog.index_enabled_by_default(&table.index_id),
-                            compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                            compute_instance_id: default_instance_id,
                         }),
                     );
                 }
@@ -2502,6 +2507,10 @@ impl Catalog {
             }
         }
         relations.into_iter().collect()
+    }
+
+    pub fn get_default_compute_instance(&self) -> Result<String, Error> {
+        self.storage().get_default_compute_instance()
     }
 
     pub fn add_index_to_instance(&mut self, instance_id: usize, index_id: GlobalId) {

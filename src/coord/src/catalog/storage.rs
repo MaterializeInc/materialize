@@ -140,6 +140,10 @@ const MIGRATIONS: &[&str] = &[
         name text NOT NULL UNIQUE
     );
     INSERT INTO compute_instances VALUES (0, 'default');",
+    // Adds default_compute_instance setting as server configuration parameter.
+    //
+    // Introduced in v0.22.0.
+    "INSERT INTO settings VALUES ('default_compute_instance', 'default');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -327,6 +331,15 @@ impl Connection {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn get_default_compute_instance(&mut self) -> Result<String, Error> {
+        let tx = self.inner.transaction()?;
+        Ok(tx.query_row(
+            "SELECT value FROM settings WHERE name = 'default_compute_instance';",
+            params![],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {
