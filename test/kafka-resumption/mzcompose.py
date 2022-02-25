@@ -45,9 +45,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, failure_mode in enumerate(
         [
             "toxiproxy-close-connection.td",
-            "toxiproxy-limit-connection.td",
             "toxiproxy-timeout.td",
-            "toxiproxy-timeout-hold.td",
         ]
     ):
         c.run(
