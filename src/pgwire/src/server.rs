@@ -38,8 +38,12 @@ pub struct Config<'a> {
     /// If not present, then TLS is not enabled, and clients requests to
     /// negotiate TLS will be rejected.
     pub tls: Option<TlsConfig>,
+    /// The Frontegg authentication configuration.
+    ///
+    /// If present, Frontegg authentication is enabled, and users may present
+    /// a valid Frontegg API token as a password to authenticate. Otherwise,
+    /// password authentication is disabled.
     pub frontegg: Option<FronteggAuthentication>,
-
     /// The registry that the pg wire server uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
 }
