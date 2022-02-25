@@ -221,6 +221,10 @@ impl SessionCatalog for TestCatalog {
         Err(CatalogError::UnknownFunction(partial_name.item.clone()))
     }
 
+    fn resolve_compute_instance(&self, _item_name: &PartialName) -> Result<String, CatalogError> {
+        Ok("default".to_owned())
+    }
+
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
         &self.tables[&self.id_to_name[id]]
     }

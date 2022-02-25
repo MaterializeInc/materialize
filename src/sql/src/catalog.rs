@@ -374,6 +374,8 @@ pub enum CatalogError {
     UnknownFunction(String),
     /// Unknown source.
     UnknownSource(String),
+    /// Unknown compute instance.
+    UnknownComputeInstance(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -392,6 +394,8 @@ impl fmt::Display for CatalogError {
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            // n.b. compute instances are referred to as clusters to users
+            Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
             Self::InvalidDependency { name, typ } => write!(
                 f,
                 "catalog item '{}' is {} {} and so cannot be depended upon",

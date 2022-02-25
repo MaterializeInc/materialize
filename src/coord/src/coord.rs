@@ -270,6 +270,7 @@ pub struct Config {
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
+    compute_instance_id: ComputeInstanceId,
 }
 
 /// Glues the external world to the Timely workers.
@@ -890,10 +891,16 @@ impl Coordinator {
                 let PendingPeek {
                     sender: rows_tx,
                     conn_id,
+                    compute_instance_id,
                 } = self
                     .pending_peeks
                     .remove(&uuid)
                     .expect("no more PeekResponses after closing peek channel");
+                assert_eq!(
+                    instance, compute_instance_id,
+                    "peek response came from instance we sent it to"
+                );
+
                 rows_tx
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
@@ -1761,8 +1768,19 @@ impl Coordinator {
 
             // Allow dataflow to cancel any pending peeks.
             if let Some(uuids) = self.client_pending_peeks.get(&conn_id) {
+                let mut compute_instance_id = None;
+                for uuid in uuids {
+                    let id = self.pending_peeks[uuid].compute_instance_id;
+                    match compute_instance_id {
+                        None => compute_instance_id = Some(id),
+                        Some(compute_instance_id) => assert_eq!(
+                            id, compute_instance_id,
+                            "client must only wait on peeks from one instance"
+                        ),
+                    }
+                }
                 self.dataflow_client
-                    .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                    .compute(compute_instance_id.expect("must have at least one pending peek"))
                     .unwrap()
                     .cancel_peeks(uuids)
                     .await
@@ -1912,7 +1930,10 @@ impl Coordinator {
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan).await, session);
+                tx.send(
+                    self.sequence_create_index(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateType(plan) => {
                 tx.send(self.sequence_create_type(plan).await, session);
@@ -2225,6 +2246,10 @@ impl Coordinator {
             .catalog
             .for_session(session)
             .find_available_name(index_name);
+
+        let instance_name = session.vars().cluster();
+        let instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+
         let index = auto_generate_primary_idx(
             index_name.item.clone(),
             name.clone(),
@@ -2233,6 +2258,7 @@ impl Coordinator {
             conn_id,
             index_depends_on,
             self.catalog.index_enabled_by_default(&index_id),
+            instance_id,
         );
 
         let table_oid = self.catalog.allocate_oid()?;
@@ -2473,6 +2499,11 @@ impl Coordinator {
                     .catalog
                     .for_session(session)
                     .find_available_name(index_name);
+
+                // TODO: Use materialized Option<String> for instance name
+                let instance_name = session.vars().cluster();
+                let instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+
                 let index_id = self.catalog.allocate_id()?;
                 let index = auto_generate_primary_idx(
                     index_name.item.clone(),
@@ -2482,6 +2513,7 @@ impl Coordinator {
                     None,
                     vec![source_id],
                     self.catalog.index_enabled_by_default(&index_id),
+                    instance_id,
                 );
                 let index_oid = self.catalog.allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
@@ -2528,6 +2560,13 @@ impl Coordinator {
             }
         };
 
+        let instance_name = session.vars().cluster();
+        let compute_instance_id = self
+            .catalog
+            .resolve_compute_instance(&instance_name)
+            .unwrap()
+            .id;
+
         // Then try to create a placeholder catalog item with an unknown
         // connector. If that fails, we're done, though if the client specified
         // `if_not_exists` we'll tell the client we succeeded.
@@ -2545,7 +2584,7 @@ impl Coordinator {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
-                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                compute_instance_id,
             }),
         };
 
@@ -2655,6 +2694,11 @@ impl Coordinator {
                 .for_session(session)
                 .find_available_name(index_name);
             let index_id = self.catalog.allocate_id()?;
+
+            // TODO: Use materialized Option<String> for instance name
+            let instance_name = session.vars().cluster();
+            let instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 name,
@@ -2663,6 +2707,7 @@ impl Coordinator {
                 view.conn_id,
                 vec![view_id],
                 self.catalog.index_enabled_by_default(&index_id),
+                instance_id,
             );
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -2779,6 +2824,7 @@ impl Coordinator {
 
     async fn sequence_create_index(
         &mut self,
+        session: &mut Session,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
@@ -2788,6 +2834,9 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
+        let instance_name = session.vars().cluster();
+        let compute_instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+
         let id = self.catalog.allocate_id()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
@@ -2796,7 +2845,7 @@ impl Coordinator {
             conn_id: None,
             depends_on: index.depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
-            compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+            compute_instance_id,
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -3295,6 +3344,7 @@ impl Coordinator {
         // TODO: reclaim transient identifiers in fast path cases.
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
+
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
         dataflow.set_as_of(Antichain::from_elem(timestamp));
@@ -3338,7 +3388,14 @@ impl Coordinator {
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_fast_path_peek(fast_path, timestamp, finishing, conn_id, source.arity())
+            .implement_fast_path_peek(
+                session,
+                fast_path,
+                timestamp,
+                finishing,
+                conn_id,
+                source.arity(),
+            )
             .await?;
 
         match copy_to {
@@ -3429,7 +3486,10 @@ impl Coordinator {
 
         let instance_id = match self.catalog.try_get_by_id(*sink_id) {
             Some(entry) => entry.sink().unwrap().compute_instance_id,
-            None => DEFAULT_COMPUTE_INSTANCE_ID,
+            None => {
+                let instance_name = session.vars().cluster();
+                self.catalog.resolve_compute_instance(&instance_name)?.id
+            }
         };
 
         self.ship_dataflow(instance_id, dataflow).await;
@@ -4321,17 +4381,7 @@ impl Coordinator {
                     .unwrap();
             }
             if !sinks_to_drop.is_empty() {
-                for id in sinks_to_drop.iter() {
-                    self.sink_writes.remove(id);
-                }
-
-                // TODO: Get instance from sink.
-                self.dataflow_client
-                    .compute(DEFAULT_COMPUTE_INSTANCE_ID)
-                    .unwrap()
-                    .drop_sinks(sinks_to_drop)
-                    .await
-                    .unwrap();
+                self.drop_sinks(sinks_to_drop).await;
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
@@ -4421,6 +4471,7 @@ impl Coordinator {
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         let mut instance_key_map = HashMap::new();
         for id in dataflow_names {
+            self.sink_writes.remove(&id);
             // Find the instances for each index to remove.
             let instance_id = self.arrangement_instance_map.remove(&id).unwrap();
             // Aggregate them by instance ID.
@@ -4858,6 +4909,7 @@ fn auto_generate_primary_idx(
     conn_id: Option<u32>,
     depends_on: Vec<GlobalId>,
     enabled: bool,
+    compute_instance_id: ComputeInstanceId,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
@@ -4870,7 +4922,7 @@ fn auto_generate_primary_idx(
         conn_id,
         depends_on,
         enabled,
-        compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+        compute_instance_id,
     }
 }
 
@@ -5015,13 +5067,13 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use mz_dataflow_types::PeekResponseUnary;
     use std::collections::BTreeSet;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
     use crate::coord::PendingPeek;
+    use crate::session::Session;
     use crate::CoordError;
     use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
     use mz_repr::{Diff, Row};
@@ -5128,6 +5180,7 @@ pub mod fast_path_peek {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
             &mut self,
+            session: &Session,
             fast_path: Plan,
             timestamp: mz_repr::Timestamp,
             finishing: mz_expr::RowSetFinishing,
@@ -5200,12 +5253,16 @@ pub mod fast_path_peek {
                 }) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
 
+                    let instance_name = session.vars().cluster();
+                    let compute_instance_id =
+                        self.catalog.resolve_compute_instance(&instance_name)?.id;
+
                     // TODO: Get default instance
                     self.arrangement_instance_map
-                        .insert(index_id, DEFAULT_COMPUTE_INSTANCE_ID);
+                        .insert(index_id, compute_instance_id);
 
                     self.dataflow_client
-                        .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                        .compute(compute_instance_id)
                         .unwrap()
                         .create_dataflows(vec![dataflow])
                         .await
@@ -5231,7 +5288,7 @@ pub mod fast_path_peek {
                             timestamp,
                             finishing.clone(),
                             map_filter_project,
-                            DEFAULT_COMPUTE_INSTANCE_ID,
+                            compute_instance_id,
                         ),
                         Some(index_id),
                     )
@@ -5243,6 +5300,8 @@ pub mod fast_path_peek {
 
             // Endpoints for sending and receiving peek responses.
             let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            let (id, key, timestamp, _finishing, map_filter_project, instance_id) = peek_command;
 
             // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
             // small but unlikely chance that it's not unique to completed peeks.
@@ -5258,13 +5317,13 @@ pub mod fast_path_peek {
                 PendingPeek {
                     sender: rows_tx,
                     conn_id,
+                    compute_instance_id: instance_id,
                 },
             );
             self.client_pending_peeks
                 .entry(conn_id)
                 .or_insert_with(BTreeSet::new)
                 .insert(uuid);
-            let (id, key, timestamp, _finishing, map_filter_project, instance_id) = peek_command;
             self.dataflow_client
                 .compute(instance_id)
                 .unwrap()

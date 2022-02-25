@@ -906,12 +906,14 @@ impl Catalog {
             );
         }
 
-        let compute_instances = catalog.storage().load_compute_instances()?;
+        let compute_instances = dbg!(catalog.storage().load_compute_instances()?);
         assert_eq!(
             compute_instances.len(),
             1,
             "dataflows only shipped to 1 instance currently"
         );
+
+        // TODO(CREATE+DROP CLUSTER): anything that depends on the default instance must be spun up per-cluster.
         for (id, name) in compute_instances.into_iter() {
             let id = id.try_into().expect("no negative compute_instance IDs");
 
@@ -928,6 +930,16 @@ impl Catalog {
                 .compute_instance_names
                 .insert(name.clone(), id);
         }
+
+        println!(
+            "catalog.state.compute_instances_by_id {:?}",
+            catalog.state.compute_instances_by_id
+        );
+
+        assert!(
+            catalog.state.compute_instances_by_id[&DEFAULT_COMPUTE_INSTANCE_ID].id
+                == DEFAULT_COMPUTE_INSTANCE_ID
+        );
 
         for builtin in BUILTINS.values() {
             let name = FullName {
@@ -1340,6 +1352,18 @@ impl Catalog {
             name,
             conn_id,
         )
+    }
+
+    pub fn resolve_compute_instance(
+        &self,
+        name: &str,
+    ) -> Result<&ComputeInstance, SqlCatalogError> {
+        let id = self
+            .state
+            .compute_instance_names
+            .get(name)
+            .ok_or(SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
+        Ok(&self.state.compute_instances_by_id[id])
     }
 
     /// Resolves [`PartialName`] into a [`FullName`].
@@ -2272,6 +2296,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
+                // TODO: Get instance from plan
                 compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateSink(CreateSinkPlan {
@@ -2285,6 +2310,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
+                // TODO: Get instance from plan
                 compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
@@ -2456,6 +2482,10 @@ impl Catalog {
             }
         }
         relations.into_iter().collect()
+    }
+
+    pub fn get_default_compute_instance(&self) -> Result<String, Error> {
+        self.storage().get_default_compute_instance()
     }
 }
 

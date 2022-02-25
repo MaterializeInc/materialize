@@ -329,6 +329,15 @@ impl Connection {
         Ok(())
     }
 
+    pub fn get_default_compute_instance(&mut self) -> Result<String, Error> {
+        let tx = self.inner.transaction()?;
+        Ok(tx.query_row(
+            "SELECT value FROM settings WHERE name = 'default_compute_instance';",
+            params![],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {
         self.inner
             .prepare("SELECT id, name FROM databases")?
