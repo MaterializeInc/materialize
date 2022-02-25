@@ -34,6 +34,7 @@ where
 {
     let clap = O::command()
         .disable_version_flag(true)
+        .args_override_self(true)
         .help_template(NO_VERSION_HELP_TEMPLATE);
     O::from_arg_matches(&clap.get_matches()).unwrap()
 }

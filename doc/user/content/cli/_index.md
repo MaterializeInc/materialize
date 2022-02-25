@@ -47,8 +47,8 @@ follows:
 For example, the `--data-directory` command line flag corresponds to the
 `MZ_DATA_DIRECTORY` environment variable.
 
-Note that command line flags that do not take arguments, like `--experimental`
-and `--disable-telemetry`, do not yet have corresponding environment variables.
+If the same command line flag is specified multiple times, the last
+specification takes precedence.
 
 ### Data directory
 
