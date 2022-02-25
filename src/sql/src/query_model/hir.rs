@@ -88,7 +88,7 @@ impl FromHir {
                     Ok(result)
                 } else {
                     // Other id variants should not be present in the HirRelationExpr.
-                    // Tn theory, this should be `unreachable!(...)`, but we return an
+                    // In theory, this should be `unreachable!(...)`, but we return an
                     // Error just to be safe here.
                     let expr = HirRelationExpr::Get { id, typ };
                     let msg = String::from("Unexpected Id variant in Get");
