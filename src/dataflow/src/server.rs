@@ -9,8 +9,10 @@
 
 //! An interactive dataflow server.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -50,6 +52,7 @@ mod compute_state;
 mod metrics;
 mod storage_state;
 
+use crate::server::boundary::EventLinkBoundary;
 use boundary::{ComputeReplay, StorageCapture};
 use compute_state::ActiveComputeState;
 pub(crate) use compute_state::ComputeState;
@@ -82,7 +85,26 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
+///
+/// It uses the default [EventLinkBoundary] to host both compute and storage dataflows.
 pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
+    serve_boundary(config, |_| {
+        let boundary = Rc::new(RefCell::new(EventLinkBoundary::new()));
+        (Rc::clone(&boundary), boundary)
+    })
+}
+
+/// Initiates a timely dataflow computation, processing materialized commands.
+///
+/// * `create_boundary`: A function to obtain the worker-local boundary components.
+pub fn serve_boundary<
+    SC: StorageCapture,
+    CR: ComputeReplay,
+    B: Fn(usize) -> (SC, CR) + Send + Sync + 'static,
+>(
+    config: Config,
+    create_boundary: B,
+) -> Result<(Server, LocalClient), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -125,16 +147,17 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let aws_external_id = config.aws_external_id.clone();
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
+        let timely_worker_index = timely_worker.index();
+        let timely_worker_peers = timely_worker.peers();
+        let (storage_boundary, compute_boundary) = create_boundary(timely_worker_index);
         let _tokio_guard = tokio_executor.enter();
         let (response_tx, command_rx) = channels.lock().unwrap()
-            [timely_worker.index() % config.workers]
+            [timely_worker_index % config.workers]
             .take()
             .unwrap();
         let worker_idx = timely_worker.index();
         let (source_metrics, _sink_metrics, unspecified_metrics, _trace_metrics) =
             metrics_bundle.clone();
-        let timely_worker_index = timely_worker.index();
-        let timely_worker_peers = timely_worker.peers();
         Worker {
             timely_worker,
             compute_state: BTreeMap::default(),
@@ -155,7 +178,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 timely_worker_index,
                 timely_worker_peers,
             },
-            boundary: boundary::EventLinkBoundary::new(),
+            storage_boundary,
+            compute_boundary,
             command_rx,
             response_tx,
             metrics_bundle: (
@@ -185,10 +209,11 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A, B>
+struct Worker<'w, A, SC, CR>
 where
     A: Allocate,
-    B: StorageCapture + ComputeReplay,
+    SC: StorageCapture,
+    CR: ComputeReplay,
 {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
@@ -196,8 +221,10 @@ where
     compute_state: BTreeMap<ComputeInstanceId, ComputeState>,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
-    /// The boundary between storage and compute layers.
-    boundary: B,
+    /// The boundary between storage and compute layers, storage side.
+    storage_boundary: SC,
+    /// The boundary between storage and compute layers, compute side.
+    compute_boundary: CR,
     /// The channel from which commands are drawn.
     command_rx: crossbeam_channel::Receiver<Command>,
     /// The channel over which frontier information is reported.
@@ -209,10 +236,11 @@ where
     ),
 }
 
-impl<'w, A, B> Worker<'w, A, B>
+impl<'w, A, SC, CR> Worker<'w, A, SC, CR>
 where
     A: Allocate + 'w,
-    B: StorageCapture + ComputeReplay,
+    SC: StorageCapture,
+    CR: ComputeReplay,
 {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
@@ -303,21 +331,21 @@ where
         }
     }
 
-    fn activate_compute(&mut self, instance_id: ComputeInstanceId) -> ActiveComputeState<A, B> {
+    fn activate_compute(&mut self, instance_id: ComputeInstanceId) -> ActiveComputeState<A, CR> {
         ActiveComputeState {
             timely_worker: &mut *self.timely_worker,
             compute_state: self.compute_state.get_mut(&instance_id).unwrap(),
             instance_id,
             response_tx: &mut self.response_tx,
-            boundary: &mut self.boundary,
+            boundary: &mut self.compute_boundary,
         }
     }
-    fn activate_storage(&mut self) -> ActiveStorageState<A, B> {
+    fn activate_storage(&mut self) -> ActiveStorageState<A, SC> {
         ActiveStorageState {
             timely_worker: &mut *self.timely_worker,
             storage_state: &mut self.storage_state,
             response_tx: &mut self.response_tx,
-            boundary: &mut self.boundary,
+            boundary: &mut self.storage_boundary,
         }
     }
 
