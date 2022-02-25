@@ -506,6 +506,71 @@ impl Desugarer {
             *expr = Expr::Subquery(Box::new(Query::select(select)));
         }
 
+        // Expands row comparisons.
+        //
+        // ROW($l1, $l2, ..., $ln) = ROW($r1, $r2, ..., $rn)
+        // =>
+        // $l1 = $r1 AND $l2 = $r2 AND ... AND $ln = $rn
+        //
+        // ROW($l1, $l2, ..., $ln) < ROW($r1, $r2, ..., $rn)
+        // =>
+        // $l1 < $r1 OR ($l1 = $r1 AND ($l2 < $r2 OR ($l2 = $r2 AND ... ($ln < $rn))))
+        //
+        // ROW($l1, $l2, ..., $ln) <= ROW($r1, $r2, ..., $rn)
+        // =>
+        // $l1 < $r1 OR ($l1 = $r1 AND ($l2 < $r2 OR ($l2 = $r2 AND ... ($ln <= $rn))))
+        //
+        // and analogously for the inverse operations !=, >, and >=.
+        if let Expr::Op {
+            op,
+            expr1: left,
+            expr2: Some(right),
+        } = expr
+        {
+            if let (Expr::Row { exprs: left }, Expr::Row { exprs: right }) =
+                (&mut **left, &mut **right)
+            {
+                if matches!(normalize::op(op)?, "=" | "<>" | "<" | "<=" | ">" | ">=") {
+                    if left.len() != right.len() {
+                        sql_bail!("unequal number of entries in row expressions");
+                    }
+                    if left.is_empty() {
+                        assert!(right.is_empty());
+                        sql_bail!("cannot compare rows of zero length");
+                    }
+                }
+                match normalize::op(op)? {
+                    "=" | "<>" => {
+                        let mut new = Expr::Value(Value::Boolean(true));
+                        for (l, r) in left.iter_mut().zip(right) {
+                            new = l.take().equals(r.take()).and(new);
+                        }
+                        if normalize::op(op)? == "<>" {
+                            new = new.negate();
+                        }
+                        *expr = new;
+                    }
+                    "<" | "<=" | ">" | ">=" => {
+                        let strict_op = match normalize::op(op)? {
+                            "<" | "<=" => "<",
+                            ">" | ">=" => ">",
+                            _ => unreachable!(),
+                        };
+                        let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
+                        let mut new = l.take().binop(op.clone(), r.take());
+                        for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
+                            new = l
+                                .clone()
+                                .binop(Op::bare(strict_op), r.clone())
+                                .or(l.take().equals(r.take()).and(new));
+                        }
+                        *expr = new;
+                    }
+                    _ => (),
+                }
+            }
+        }
+
         visit_mut::visit_expr_mut(self, expr);
         Ok(())
     }
