@@ -50,6 +50,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "toxiproxy-timeout-hold.td",
         ]
     ):
+        c.start_and_wait_for_tcp(["toxiproxy"])
         c.run(
             "testdrive-svc",
             "--no-reset",
@@ -64,3 +65,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "verify-success.td",
             "cleanup.td",
         )
+        c.kill("toxiproxy")
