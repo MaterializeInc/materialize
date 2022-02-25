@@ -17,7 +17,7 @@ use std::fmt;
 use std::mem;
 
 use anyhow::bail;
-use itertools::{enumerate, Itertools};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::DummyHumanizer;
@@ -403,7 +403,7 @@ impl AbstractExpr for CoercibleScalarExpr {
             CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
             CoercibleScalarExpr::LiteralRecord(scalars) => {
                 let mut fields = vec![];
-                for (i, scalar) in enumerate(scalars) {
+                for (i, scalar) in scalars.iter().enumerate() {
                     fields.push((
                         format!("f{}", i + 1).into(),
                         scalar.typ(outers, inner, params)?,

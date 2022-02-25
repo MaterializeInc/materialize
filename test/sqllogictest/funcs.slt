@@ -445,6 +445,16 @@ SELECT coalesce(row(4, 3), row(2, 1))
 ----
 (4,3)
 
+# TODO(#11469)
+query error coalesce could not convert type record to record
+SELECT coalesce(row(1, 2), row(3), row(4, 5));
+
+statement ok
+CREATE TYPE custom_composite AS (i int);
+
+query error coalesce types record and custom_composite cannot be matched
+SELECT coalesce(row(1), row(1)::custom_composite)
+
 statement ok
 CREATE VIEW v AS SELECT 1 AS a
 
@@ -500,8 +510,12 @@ SELECT greatest(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 ----
 ("(4,3)",4)
 
+# TODO(#11469)
 query error greatest could not convert type record to record
 SELECT greatest(row(1, 2), row(3), row(4, 5));
+
+query error greatest types record and custom_composite cannot be matched
+SELECT greatest(row(1), row(1)::custom_composite)
 
 query error greatest does not support casting from text to record
 SELECT greatest(row(1, 2), 'hello');
@@ -555,11 +569,15 @@ SELECT least(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 ----
 ("(0,10)",10)
 
+# TODO(#11469)
 query error least could not convert type record to record
 SELECT least(row(1, 2), row(3), row(4, 5));
 
 query error least does not support casting from text to record
 SELECT least(row(1, 2), 'hello');
+
+query error least types record and custom_composite cannot be matched
+SELECT least(row(1), row(1)::custom_composite)
 
 query error least types integer and text cannot be matched
 SELECT least(1::int, 2::text)
@@ -654,12 +672,12 @@ CREATE TABLE t (
 query T multiline
 EXPLAIN PLAN FOR SELECT a IS NULL FROM t
 ----
-Source materialize.public.t (u6):
+Source materialize.public.t (u7):
 | Project (#0)
 
 Query:
 %0 =
-| Get materialize.public.t (u6)
+| Get materialize.public.t (u7)
 | Map isnull(#0)
 | Project (#2)
 
@@ -668,12 +686,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
 ----
-Source materialize.public.t (u6):
+Source materialize.public.t (u7):
 | Project (#0)
 
 Query:
 %0 =
-| Get materialize.public.t (u6)
+| Get materialize.public.t (u7)
 | Map isnull(#0)
 | Project (#2)
 
@@ -682,12 +700,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
 ----
-Source materialize.public.t (u6):
+Source materialize.public.t (u7):
 | Project (#0)
 
 Query:
 %0 =
-| Get materialize.public.t (u6)
+| Get materialize.public.t (u7)
 | Map isnull(#0)
 | Project (#2)
 
@@ -700,12 +718,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
-Source materialize.public.t (u6):
+Source materialize.public.t (u7):
 | Project (#0, #1)
 
 Query:
 %0 =
-| Get materialize.public.t (u6)
+| Get materialize.public.t (u7)
 | Map isnull((i32tobool(#0) && i32tobool(#1)))
 | Project (#2)
 
