@@ -147,6 +147,15 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
 
+  - id: cluster-storage-compute-smoke
+    label: Cluster with segregated storaged smoke test
+    depends_on: build-x86_64
+    inputs: [test/cluster]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: compute-storage-smoke
+
   - id: kafka-ssl
     label: Kafka SSL smoke test
     depends_on: build-x86_64
