@@ -17,7 +17,6 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=applic
 $ file-append path=dynamic.csv
 city,state,zip
 Rochester,NY,14618
-New York,NY,10004
 
 > CREATE SOURCE input
   FROM FILE '${testdrive.temp-dir}/dynamic.csv'
@@ -30,4 +29,4 @@ New York,NY,10004
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ file-append path=dynamic.csv
-San Francisco,CA,94114
+New York,NY,10004
