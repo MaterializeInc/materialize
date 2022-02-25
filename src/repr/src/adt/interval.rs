@@ -12,7 +12,7 @@
 use std::fmt::{self, Write};
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use lazy_static::lazy_static;
 use num_traits::CheckedMul;
 use serde::{Deserialize, Serialize};
@@ -588,10 +588,9 @@ impl Interval {
         let whole_month = days / days_per_month;
         let days = days - whole_month * days_per_month;
 
-        let months = match months.checked_add(whole_month) {
-            Some(m) => m,
-            None => bail!(&*MONTH_OVERFLOW_ERROR),
-        };
+        let months = months
+            .checked_add(whole_month)
+            .ok_or(anyhow!(&*MONTH_OVERFLOW_ERROR))?;
 
         Ok((months, days))
     }
@@ -611,13 +610,10 @@ impl Interval {
     }
 
     fn justify_hours_inner(days: i32, micros: i64) -> Result<(i32, i64), anyhow::Error> {
-        let days = match i32::try_from(micros / &*USECS_PER_DAY)
+        let days = i32::try_from(micros / &*USECS_PER_DAY)
             .ok()
             .and_then(|d| days.checked_add(d))
-        {
-            Some(d) => d,
-            None => bail!(&*DAY_OVERFLOW_ERROR),
-        };
+            .ok_or(anyhow!(&*DAY_OVERFLOW_ERROR))?;
         let micros = micros % &*USECS_PER_DAY;
 
         Ok((days, micros))
@@ -631,8 +627,8 @@ impl Interval {
         let mut months = self.months;
         let mut days = self.days;
         let micros = self.micros;
-        // We justify days twice to avoid try an intermediate overflow of days if it would be able
-        // to fit in months.
+        // We justify days twice to try to avoid an intermediate overflow of days if it would be
+        // able to fit in months.
         if (days > 0 && micros > 0) || (days < 0 && micros < 0) {
             let (m, d) = Self::justify_days_inner(self.months, self.days)?;
             months = m;

@@ -1837,13 +1837,13 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbTypeof, 3210;
             },
             "justify_days" => Scalar {
-                params!(Interval) => UnaryFunc::JustifyDays, 1295;
+                params!(Interval) => UnaryFunc::JustifyDays(func::JustifyDays), 1295;
             },
             "justify_hours" => Scalar {
-                params!(Interval) => UnaryFunc::JustifyHours, 1175;
+                params!(Interval) => UnaryFunc::JustifyHours(func::JustifyHours), 1175;
             },
             "justify_interval" => Scalar {
-                params!(Interval) => UnaryFunc::JustifyInterval, 2711;
+                params!(Interval) => UnaryFunc::JustifyInterval(func::JustifyInterval), 2711;
             },
             "left" => Scalar {
                 params!(String, Int32) => BinaryFunc::Left, 3060;
