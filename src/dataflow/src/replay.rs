@@ -12,7 +12,7 @@
 //! This is roughly based on [timely::dataflow::operators::capture::Replay], which
 //! provides the protocol and semantics of the [MzReplay] operator.
 
-use crate::activator::RcActivator;
+use crate::activator::ActivatorTrait;
 use std::time::{Duration, Instant};
 use timely::dataflow::channels::pushers::buffer::Buffer as PushBuffer;
 use timely::dataflow::channels::pushers::Counter as PushCounter;
@@ -24,7 +24,7 @@ use timely::progress::Timestamp;
 use timely::Data;
 
 /// Replay a capture stream into a scope with the same timestamp.
-pub trait MzReplay<T: Timestamp, D: Data>: Sized {
+pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {
     /// Replays `self` into the provided scope, as a `Stream<S, D>'.
     ///
     /// The `period` argument allows the specification of a re-activation period, where the operator
@@ -34,11 +34,11 @@ pub trait MzReplay<T: Timestamp, D: Data>: Sized {
         scope: &mut S,
         name: &str,
         perid: Duration,
-        rc_activator: RcActivator,
+        activator: A,
     ) -> Stream<S, D>;
 }
 
-impl<T: Timestamp, D: Data, I> MzReplay<T, D> for I
+impl<T: Timestamp, D: Data, I, A: ActivatorTrait + 'static> MzReplay<T, D, A> for I
 where
     I: IntoIterator,
     <I as IntoIterator>::Item: EventIterator<T, D> + 'static,
@@ -49,19 +49,19 @@ where
     /// * `name`: Human-readable debug name of the Timely operator.
     /// * `period`: Reschedule the operator once the period has elapsed.
     ///    Provide [Duration::MAX] to disable periodic scheduling.
-    /// * `rc_activator`: An activator to trigger the operator.
+    /// * `activator`: An activator to trigger the operator.
     fn mz_replay<S: Scope<Timestamp = T>>(
         self,
         scope: &mut S,
         name: &str,
         period: Duration,
-        rc_activator: RcActivator,
+        activator: A,
     ) -> Stream<S, D> {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
         let address = builder.operator_info().address;
-        let activator = scope.activator_for(&address[..]);
+        let periodic_activator = scope.activator_for(&address[..]);
 
         let (targets, stream) = builder.new_output();
 
@@ -71,10 +71,10 @@ where
 
         let mut last_active = Instant::now();
 
-        rc_activator.register(scope.activator_for(&address[..]));
+        activator.register(scope, &address[..]);
 
         builder.build(move |progress| {
-            rc_activator.ack();
+            activator.ack();
             if last_active
                 .checked_add(period)
                 .map_or(false, |next_active| next_active <= Instant::now())
@@ -82,7 +82,7 @@ where
             {
                 last_active = Instant::now();
                 if period < Duration::MAX {
-                    activator.activate_after(period);
+                    periodic_activator.activate_after(period);
                 }
             }
 
