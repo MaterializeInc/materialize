@@ -24,12 +24,7 @@ use std::collections::HashMap;
 
 impl From<Model> for mz_expr::MirRelationExpr {
     fn from(model: Model) -> mz_expr::MirRelationExpr {
-        let mut lowerer = Lowerer::new(&model);
-        let mut id_gen = IdGen::default();
-        mz_expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
-            .let_in(&mut id_gen, |id_gen, get_outer| {
-                lowerer.apply(model.top_box, get_outer, &ColumnMap::new(), id_gen)
-            })
+        Lowerer::new(&model).lower()
     }
 }
 
@@ -42,11 +37,67 @@ type ColumnMap = HashMap<ColumnReference, usize>;
 
 struct Lowerer<'a> {
     model: &'a Model,
+    /// Generates [`mz_expr::LocalId`] as an alias for common expressions.
+    id_gen: IdGen,
+    /// Stack of common expressions that have been given a [`mz_expr::LocalId`].
+    lets: Vec<(mz_expr::LocalId, mz_expr::MirRelationExpr)>,
+    /// Map of (BoxIds whose MIR representation has been given a
+    /// [`mz_expr::LocalId`]) -> (position of its MIR representation in `lets`)
+    common_boxes: HashMap<BoxId, usize>,
 }
 
 impl<'a> Lowerer<'a> {
     fn new(model: &'a Model) -> Self {
-        Self { model }
+        Self {
+            model,
+            id_gen: IdGen::default(),
+            lets: Vec::new(),
+            common_boxes: HashMap::new(),
+        }
+    }
+
+    /// Pushes a `rel`ation to the stack of common expressions.
+    ///
+    /// If `rel` is a `mz_expr::MirRelationExpr::Get`, it does not get added to
+    /// the stack.
+    ///
+    /// Returns
+    /// * the [`mz_expr::MirRelationExpr`] that will retrieve the common
+    ///   expression.
+    /// * the location of `rel`, if any, within `self.lets`.
+    fn push_let(
+        &mut self,
+        rel: mz_expr::MirRelationExpr,
+    ) -> (mz_expr::MirRelationExpr, Option<usize>) {
+        if matches!(rel, mz_expr::MirRelationExpr::Get { .. }) {
+            (rel, None)
+        } else {
+            let id = mz_expr::LocalId::new(self.id_gen.allocate_id());
+            let get = mz_expr::MirRelationExpr::Get {
+                id: mz_expr::Id::Local(id),
+                typ: rel.typ(),
+            };
+            let stack_pos = self.lets.len();
+            self.lets.push((id, rel));
+            (get, Some(stack_pos))
+        }
+    }
+
+    /// Converts `self.model` to a [`mz_expr::MirRelationExpr`].
+    fn lower(&mut self) -> mz_expr::MirRelationExpr {
+        let (initial_outer, _) = self.push_let(mz_expr::MirRelationExpr::constant(
+            vec![vec![]],
+            RelationType::new(vec![]),
+        ));
+        let mut result = self.apply(self.model.top_box, initial_outer, &ColumnMap::new());
+        while let Some((id, value)) = self.lets.pop() {
+            result = mz_expr::MirRelationExpr::Let {
+                id,
+                value: Box::new(value),
+                body: Box::new(result),
+            }
+        }
+        result
     }
 
     /// Applies the given box identified by its ID to the given outer relation.
@@ -55,8 +106,13 @@ impl<'a> Lowerer<'a> {
         box_id: BoxId,
         get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
-        id_gen: &mut IdGen,
     ) -> mz_expr::MirRelationExpr {
+        if let Some(let_pos) = self.common_boxes.get(&box_id) {
+            return mz_expr::MirRelationExpr::Get {
+                id: mz_expr::Id::Local(self.lets[*let_pos].0),
+                typ: self.lets[*let_pos].1.typ(),
+            };
+        }
         use mz_expr::MirRelationExpr as SR;
         let the_box = self.model.get_box(box_id);
 
@@ -110,7 +166,7 @@ impl<'a> Lowerer<'a> {
 
                 let outer_arity = get_outer.arity();
                 let (mut input, column_map) =
-                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers, id_gen);
+                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers);
                 let input_arity = input.arity();
 
                 // 2) Lower the filter component.
@@ -136,12 +192,8 @@ impl<'a> Lowerer<'a> {
 
                 // Note: a grouping box must only contain a single quantifier but we can still
                 // re-use `lower_join` for single quantifier joins
-                let (mut input, column_map) = self.lower_join(
-                    get_outer.clone(),
-                    outer_column_map,
-                    &the_box.quantifiers,
-                    id_gen,
-                );
+                let (mut input, column_map) =
+                    self.lower_join(get_outer.clone(), outer_column_map, &the_box.quantifiers);
 
                 // Build the reduction
                 let group_key = grouping
@@ -186,7 +238,7 @@ impl<'a> Lowerer<'a> {
                         expected_group_size: None,
                     };
 
-                    get_outer.lookup(id_gen, input, default)
+                    get_outer.lookup(&mut self.id_gen, input, default)
                 } else {
                     // Put the columns in the same order as projected by the Grouping box by
                     // adding an additional projection.
@@ -250,179 +302,175 @@ impl<'a> Lowerer<'a> {
                 let mut q_iter = the_box.quantifiers.iter();
                 let lhs_id = *q_iter.next().unwrap();
                 let rhs_id = *q_iter.next().unwrap();
-                let lhs =
-                    self.lower_quantifier(lhs_id, get_outer.clone(), outer_column_map, id_gen);
+                let lhs = self.lower_quantifier(lhs_id, get_outer.clone(), outer_column_map);
+                let (lhs, _) = self.push_let(lhs);
                 let lt = lhs.typ().column_types.into_iter().skip(oa).collect_vec();
                 let la = lt.len();
-                let rhs = self.lower_quantifier(rhs_id, get_outer, outer_column_map, id_gen);
+                let rhs = self.lower_quantifier(rhs_id, get_outer, outer_column_map);
+                let (rhs, _) = self.push_let(rhs);
                 let rt = rhs.typ().column_types.into_iter().skip(oa).collect_vec();
                 let ra = rt.len();
 
-                lhs.let_in(id_gen, |id_gen, get_lhs| {
-                    rhs.let_in(id_gen, |id_gen, get_rhs| {
-                        // 1) Lower the inner join
-                        let (mut inner_join, column_map) = self.lower_join_inner(
-                            outer_column_map,
-                            oa,
-                            vec![(lhs_id, get_lhs.clone()), (rhs_id, get_rhs.clone())],
+                // 1) Lower the inner join
+                let (mut inner_join, column_map) = self.lower_join_inner(
+                    outer_column_map,
+                    oa,
+                    vec![(lhs_id, lhs.clone()), (rhs_id, rhs.clone())],
+                );
+
+                // 2) Lower the predicates as a filter following the
+                //    join.
+                let lowered_predicates = box_struct
+                    .predicates
+                    .iter()
+                    .map(|p| Self::lower_expression(p, &column_map))
+                    .collect_vec();
+                let equijoin_keys = crate::plan::lowering::derive_equijoin_cols(
+                    oa,
+                    la,
+                    ra,
+                    lowered_predicates.clone(),
+                );
+                inner_join = inner_join.filter(lowered_predicates.into_iter());
+
+                let (inner_join, _) = self.push_let(inner_join);
+
+                // 3) Calculate preserved rows
+                let mut result = inner_join.clone();
+                let result = if let Some((l_keys, r_keys)) = equijoin_keys {
+                    // Equijoin case
+
+                    // A collection of keys present in both left and right collections.
+                    let (both_keys, _) = self.push_let(
+                        inner_join
+                            .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                            .distinct(),
+                    );
+                    if self.model.get_quantifier(lhs_id).quantifier_type
+                        == QuantifierType::PreservedForeach
+                    {
+                        // Rows in `left` that are matched in the inner equijoin.
+                        let left_present = mz_expr::MirRelationExpr::join(
+                            vec![lhs.clone(), both_keys.clone()],
+                            (0..oa)
+                                .chain(l_keys)
+                                .enumerate()
+                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                .collect::<Vec<_>>(),
+                        )
+                        .project((0..(oa + la)).collect());
+
+                        // Rows in `left` that are not matched in the inner equijoin.
+                        let left_absent = left_present.negate().union(lhs);
+
+                        // Determine the types of nulls to use as filler.
+                        let right_fill = rt
+                            .into_iter()
+                            .map(|typ| mz_expr::MirScalarExpr::literal_null(typ.scalar_type))
+                            .collect();
+
+                        // Right-fill all left-absent elements with nulls and add them to the result.
+                        result = left_absent.map(right_fill).union(result);
+                    }
+
+                    if self.model.get_quantifier(rhs_id).quantifier_type
+                        == QuantifierType::PreservedForeach
+                    {
+                        // Rows in `right` that are matched in the inner equijoin.
+                        let right_present = mz_expr::MirRelationExpr::join(
+                            vec![rhs.clone(), both_keys],
+                            (0..oa)
+                                .chain(r_keys)
+                                .enumerate()
+                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                .collect::<Vec<_>>(),
+                        )
+                        .project((0..(oa + ra)).collect());
+
+                        // Rows in `left` that are not matched in the inner equijoin.
+                        let right_absent = right_present.negate().union(rhs);
+
+                        // Determine the types of nulls to use as filler.
+                        let left_fill = lt
+                            .into_iter()
+                            .map(|typ| mz_expr::MirScalarExpr::literal_null(typ.scalar_type))
+                            .collect();
+
+                        // Left-fill all right-absent elements with nulls and add them to the result.
+                        result = right_absent
+                            .map(left_fill)
+                            // Permute left fill before right values.
+                            .project(
+                                (0..oa)
+                                    .chain(oa + ra..oa + ra + la)
+                                    .chain(oa..oa + ra)
+                                    .collect(),
+                            )
+                            .union(result)
+                    }
+
+                    result
+                } else {
+                    // General join case
+                    if self.model.get_quantifier(lhs_id).quantifier_type
+                        == QuantifierType::PreservedForeach
+                    {
+                        let left_outer = lhs.anti_lookup(
+                            &mut self.id_gen,
+                            inner_join.clone(),
+                            rt.into_iter()
+                                .map(|typ| (Datum::Null, typ.scalar_type))
+                                .collect(),
                         );
-
-                        // 2) Lower the predicates as a filter following the
-                        //    join.
-                        let lowered_predicates = box_struct
-                            .predicates
-                            .iter()
-                            .map(|p| Self::lower_expression(p, &column_map))
-                            .collect_vec();
-                        let equijoin_keys = crate::plan::lowering::derive_equijoin_cols(
-                            oa,
-                            la,
-                            ra,
-                            lowered_predicates.clone(),
-                        );
-                        inner_join = inner_join.filter(lowered_predicates.into_iter());
-
-                        // 3) Calculate preserved rows
-                        let result = inner_join.let_in(id_gen, |id_gen, get_join| {
-                            let mut result = get_join.clone();
-                            if let Some((l_keys, r_keys)) = equijoin_keys {
-                                // Equijoin case
-
-                                // A collection of keys present in both left and right collections.
-                                let both_keys = get_join
-                                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
-                                    .distinct();
-                                both_keys.let_in(id_gen, |_id_gen, get_both| {
-                                    if self.model.get_quantifier(lhs_id).quantifier_type
-                                        == QuantifierType::PreservedForeach
-                                    {
-                                        // Rows in `left` that are matched in the inner equijoin.
-                                        let left_present = mz_expr::MirRelationExpr::join(
-                                            vec![get_lhs.clone(), get_both.clone()],
-                                            (0..oa)
-                                                .chain(l_keys.clone())
-                                                .enumerate()
-                                                .map(|(i, c)| vec![(0, c), (1, i)])
-                                                .collect::<Vec<_>>(),
-                                        )
-                                        .project((0..(oa + la)).collect());
-
-                                        // Rows in `left` that are not matched in the inner equijoin.
-                                        let left_absent =
-                                            left_present.negate().union(get_lhs.clone());
-
-                                        // Determine the types of nulls to use as filler.
-                                        let right_fill = rt
-                                            .into_iter()
-                                            .map(|typ| {
-                                                mz_expr::MirScalarExpr::literal_null(
-                                                    typ.scalar_type,
-                                                )
-                                            })
-                                            .collect();
-
-                                        // Right-fill all left-absent elements with nulls and add them to the result.
-                                        result = left_absent.map(right_fill).union(result);
-                                    }
-
-                                    if self.model.get_quantifier(rhs_id).quantifier_type
-                                        == QuantifierType::PreservedForeach
-                                    {
-                                        // Rows in `right` that are matched in the inner equijoin.
-                                        let right_present = mz_expr::MirRelationExpr::join(
-                                            vec![get_rhs.clone(), get_both],
-                                            (0..oa)
-                                                .chain(r_keys.clone())
-                                                .enumerate()
-                                                .map(|(i, c)| vec![(0, c), (1, i)])
-                                                .collect::<Vec<_>>(),
-                                        )
-                                        .project((0..(oa + ra)).collect());
-
-                                        // Rows in `left` that are not matched in the inner equijoin.
-                                        let right_absent =
-                                            right_present.negate().union(get_rhs.clone());
-
-                                        // Determine the types of nulls to use as filler.
-                                        let left_fill = lt
-                                            .into_iter()
-                                            .map(|typ| {
-                                                mz_expr::MirScalarExpr::literal_null(
-                                                    typ.scalar_type,
-                                                )
-                                            })
-                                            .collect();
-
-                                        // Left-fill all right-absent elements with nulls and add them to the result.
-                                        result = right_absent
-                                            .map(left_fill)
-                                            // Permute left fill before right values.
-                                            .project(
-                                                (0..oa)
-                                                    .chain(oa + ra..oa + ra + la)
-                                                    .chain(oa..oa + ra)
-                                                    .collect(),
-                                            )
-                                            .union(result)
-                                    }
-
-                                    result
-                                })
-                            } else {
-                                // General join case
-                                if self.model.get_quantifier(lhs_id).quantifier_type
-                                    == QuantifierType::PreservedForeach
-                                {
-                                    let left_outer = get_lhs.anti_lookup(
-                                        id_gen,
-                                        get_join.clone(),
-                                        rt.into_iter()
-                                            .map(|typ| (Datum::Null, typ.scalar_type))
+                        result = result.union(left_outer);
+                    }
+                    if self.model.get_quantifier(rhs_id).quantifier_type
+                        == QuantifierType::PreservedForeach
+                    {
+                        let right_outer = rhs
+                            .anti_lookup(
+                                &mut self.id_gen,
+                                inner_join
+                                    // need to swap left and right to make the anti_lookup work
+                                    .project(
+                                        (0..oa)
+                                            .chain((oa + la)..(oa + la + ra))
+                                            .chain((oa)..(oa + la))
                                             .collect(),
-                                    );
-                                    result = result.union(left_outer);
-                                }
-                                if self.model.get_quantifier(rhs_id).quantifier_type
-                                    == QuantifierType::PreservedForeach
-                                {
-                                    let right_outer = get_rhs
-                                        .anti_lookup(
-                                            id_gen,
-                                            get_join
-                                                // need to swap left and right to make the anti_lookup work
-                                                .project(
-                                                    (0..oa)
-                                                        .chain((oa + la)..(oa + la + ra))
-                                                        .chain((oa)..(oa + la))
-                                                        .collect(),
-                                                ),
-                                            lt.into_iter()
-                                                .map(|typ| (Datum::Null, typ.scalar_type))
-                                                .collect(),
-                                        )
-                                        // swap left and right back again
-                                        .project(
-                                            (0..oa)
-                                                .chain((oa + ra)..(oa + ra + la))
-                                                .chain((oa)..(oa + ra))
-                                                .collect(),
-                                        );
-                                    result = result.union(right_outer);
-                                }
-                                result
-                            }
-                        });
+                                    ),
+                                lt.into_iter()
+                                    .map(|typ| (Datum::Null, typ.scalar_type))
+                                    .collect(),
+                            )
+                            // swap left and right back again
+                            .project(
+                                (0..oa)
+                                    .chain((oa + ra)..(oa + ra + la))
+                                    .chain((oa)..(oa + ra))
+                                    .collect(),
+                            );
+                        result = result.union(right_outer);
+                    }
+                    result
+                };
 
-                        // 4) Lower the project component.
-                        Self::lower_box_columns(result, &the_box, &column_map, oa, oa + la + ra)
-                    })
-                })
+                // 4) Lower the project component.
+                Self::lower_box_columns(result, &the_box, &column_map, oa, oa + la + ra)
             }
             _ => panic!(),
         };
 
-        if the_box.distinct == DistinctOperation::Enforce {
+        let input = if the_box.distinct == DistinctOperation::Enforce {
             input.distinct()
+        } else {
+            input
+        };
+        if the_box.ranging_quantifiers.iter().count() > 1 {
+            let (result, let_stack_pos) = self.push_let(input);
+            if let Some(let_stack_pos) = let_stack_pos {
+                self.common_boxes.insert(box_id, let_stack_pos);
+            }
+            result
         } else {
             input
         }
@@ -442,7 +490,6 @@ impl<'a> Lowerer<'a> {
         get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
         quantifiers: &QuantifierSet,
-        id_gen: &mut IdGen,
     ) -> (mz_expr::MirRelationExpr, ColumnMap) {
         if let mz_expr::MirRelationExpr::Get { .. } = &get_outer {
         } else {
@@ -459,7 +506,7 @@ impl<'a> Lowerer<'a> {
             .map(|q_id| {
                 (
                     *q_id,
-                    self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map, id_gen),
+                    self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map),
                 )
             })
             .collect_vec();
@@ -510,11 +557,10 @@ impl<'a> Lowerer<'a> {
         quantifier_id: QuantifierId,
         get_outer: mz_expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
-        id_gen: &mut IdGen,
     ) -> mz_expr::MirRelationExpr {
         let quantifier = self.model.get_quantifier(quantifier_id);
         let input_box = quantifier.input_box;
-        let mut input = self.apply(input_box, get_outer.clone(), outer_column_map, id_gen);
+        let mut input = self.apply(input_box, get_outer.clone(), outer_column_map);
 
         match &quantifier.quantifier_type {
             QuantifierType::Foreach | QuantifierType::PreservedForeach => {
@@ -528,7 +574,7 @@ impl<'a> Lowerer<'a> {
                 let outer_arity = get_outer.arity();
                 // We must determine a count for each `get_outer` prefix,
                 // and report an error if that count exceeds one.
-                let guarded = input.let_in(id_gen, |_id_gen, get_select| {
+                let guarded = input.let_in(&mut self.id_gen, |_id_gen, get_select| {
                     // Count for each `get_outer` prefix.
                     let counts = get_select.clone().reduce(
                         (0..outer_arity).collect::<Vec<_>>(),
@@ -559,7 +605,7 @@ impl<'a> Lowerer<'a> {
                 });
                 // append Null to anything that didn't return any rows
                 let default = vec![(Datum::Null, col_type.scalar_type)];
-                input = get_outer.lookup(id_gen, guarded, default);
+                input = get_outer.lookup(&mut self.id_gen, guarded, default);
             }
             _ => panic!("Unsupported quantifier type"),
         }
