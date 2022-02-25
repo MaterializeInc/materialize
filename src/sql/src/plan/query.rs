@@ -4291,6 +4291,27 @@ fn scalar_type_from_catalog(
                     value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
                     custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
                 }),
+                CatalogType::Record { fields } => {
+                    let scalars: Vec<(ColumnName, ColumnType)> = fields
+                        .iter()
+                        .map(|(column, id)| {
+                            let scalar_type = scalar_type_from_catalog(scx, *id, &[])?;
+                            Ok((
+                                column.clone(),
+                                ColumnType {
+                                    scalar_type,
+                                    nullable: true,
+                                },
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, PlanError>>()?;
+                    let catalog_item = scx.catalog.get_item_by_id(&id);
+                    Ok(ScalarType::Record {
+                        fields: scalars,
+                        custom_name: None,
+                        custom_oid: Some(catalog_item.oid()),
+                    })
+                }
                 CatalogType::Bool => Ok(ScalarType::Bool),
                 CatalogType::Bytes => Ok(ScalarType::Bytes),
                 CatalogType::Char1 => Ok(ScalarType::Char {

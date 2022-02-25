@@ -22,7 +22,7 @@ use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{ColumnName, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
@@ -344,6 +344,9 @@ pub enum CatalogType {
     Numeric,
     Oid,
     Pseudo,
+    Record {
+        fields: Vec<(ColumnName, GlobalId)>,
+    },
     RegClass,
     RegProc,
     RegType,

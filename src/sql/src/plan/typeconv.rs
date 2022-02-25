@@ -10,6 +10,7 @@
 //! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
+use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -392,6 +393,18 @@ lazy_static! {
                 let ty = from_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastRecordToString { ty }))
             }),
+            (Record, Record) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+                if from_type.unwrap_record_element_type().len() != to_type.unwrap_record_element_type().len() {
+                    return None;
+                }
+                let cast_exprs = from_type.unwrap_record_element_type()
+                    .iter()
+                    .zip_eq(to_type.unwrap_record_element_type())
+                    .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
+                    .collect::<Option<Vec<_>>>()?;
+                let to = to_type.clone();
+                Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2{ return_ty: to, cast_exprs }))
+            }),
 
             // ARRAY
             (Array, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
@@ -497,6 +510,30 @@ fn get_cast(
                     custom_oid: oid_r,
                 },
             ) => oid_l == oid_r && embedded_value_equality(&ccx, &l, &r),
+            (
+                Record {
+                    fields: fields_l,
+                    custom_oid: oid_l,
+                    ..
+                },
+                Record {
+                    fields: fields_r,
+                    custom_oid: oid_r,
+                    ..
+                },
+            ) => {
+                oid_l == oid_r
+                    && fields_l.len() == fields_r.len()
+                    && fields_l
+                        .into_iter()
+                        .map(|(_, ColumnType { scalar_type: t, .. })| t)
+                        .zip(
+                            fields_r
+                                .into_iter()
+                                .map(|(_, ColumnType { scalar_type: t, .. })| t),
+                        )
+                        .all(|(l, r)| embedded_value_equality(&ccx, l, r))
+            }
             (l, r) if ccx == &Implicit => l.base_eq(r),
             (l, r) => l == r,
         }
@@ -520,6 +557,25 @@ fn get_cast(
                 },
             )
             | (Map { value_type: l, .. }, Map { value_type: r, .. }) => structural_equality(&l, &r),
+            (
+                Record {
+                    fields: fields_l, ..
+                },
+                Record {
+                    fields: fields_r, ..
+                },
+            ) => {
+                fields_l.len() == fields_r.len()
+                    && fields_l
+                        .into_iter()
+                        .map(|(_, ColumnType { scalar_type: t, .. })| t)
+                        .zip(
+                            fields_r
+                                .into_iter()
+                                .map(|(_, ColumnType { scalar_type: t, .. })| t),
+                        )
+                        .all(|(l, r)| structural_equality(l, r))
+            }
             (l, r) => l == r,
         }
     }

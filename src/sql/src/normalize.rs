@@ -25,9 +25,9 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, Op, Query, Raw, SqlOption, Statement, TableFactor, TableFunction,
-    UnresolvedObjectName, Value, ViewDefinition,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function,
+    FunctionArgs, Ident, IfExistsBehavior, Op, Query, Raw, SqlOption, Statement, TableFactor,
+    TableFunction, UnresolvedObjectName, Value, ViewDefinition,
 };
 
 use crate::names::{resolve_names_stmt, Aug, DatabaseSpecifier, FullName, PartialName};
@@ -372,23 +372,32 @@ pub fn create_statement(
             *if_not_exists = false;
         }
 
-        Statement::CreateType(CreateTypeStatement {
-            name, with_options, ..
-        }) => {
-            *name = allocate_name(name)?;
-            let mut normalizer = QueryNormalizer::new(scx);
-            for option in with_options {
-                match option {
-                    SqlOption::DataType { data_type, .. } => {
-                        normalizer.visit_data_type_mut(data_type);
+        Statement::CreateType(CreateTypeStatement { name, as_type, .. }) => match as_type {
+            CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
+                *name = allocate_name(name)?;
+                let mut normalizer = QueryNormalizer::new(scx);
+                for option in with_options {
+                    match option {
+                        SqlOption::DataType { data_type, .. } => {
+                            normalizer.visit_data_type_mut(data_type);
+                        }
+                        _ => unreachable!(),
                     }
-                    _ => unreachable!(),
+                }
+                if let Some(err) = normalizer.err {
+                    return Err(err.into());
                 }
             }
-            if let Some(err) = normalizer.err {
-                return Err(err.into());
+            CreateTypeAs::Record { column_defs } => {
+                let mut normalizer = QueryNormalizer::new(scx);
+                for c in column_defs {
+                    normalizer.visit_column_def_mut(c);
+                }
+                if let Some(err) = normalizer.err {
+                    return Err(err.into());
+                }
             }
-        }
+        },
 
         _ => unreachable!(),
     }

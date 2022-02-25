@@ -31,6 +31,7 @@ use mz_sql::ast::{
     UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use mz_sql::names::resolve_names_stmt;
+use mz_sql_parser::ast::CreateTypeAs;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
@@ -351,14 +352,19 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
             }
         }
 
-        Statement::CreateType(CreateTypeStatement {
-            name: _,
-            as_type: _,
-            with_options,
-        }) => {
-            for option in with_options {
-                TypeNormalizer.visit_sql_option_mut(option);
-            }
+        Statement::CreateType(CreateTypeStatement { name: _, as_type }) => {
+            match as_type {
+                CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
+                    for option in with_options {
+                        TypeNormalizer.visit_sql_option_mut(option);
+                    }
+                }
+                CreateTypeAs::Record { column_defs } => {
+                    for column in column_defs {
+                        TypeNormalizer.visit_column_def_mut(column);
+                    }
+                }
+            };
         }
 
         // At the time the migration was written, sinks and sources
@@ -617,15 +623,18 @@ fn ast_rewrite_type_references_0_6_1(
             }
         }
 
-        Statement::CreateType(CreateTypeStatement {
-            name: _,
-            as_type: _,
-            with_options,
-        }) => {
-            for option in with_options {
-                TypeNormalizer.visit_sql_option_mut(option);
+        Statement::CreateType(CreateTypeStatement { name: _, as_type }) => match as_type {
+            CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
+                for option in with_options {
+                    TypeNormalizer.visit_sql_option_mut(option);
+                }
             }
-        }
+            CreateTypeAs::Record { column_defs } => {
+                for column in column_defs {
+                    TypeNormalizer.visit_column_def_mut(column);
+                }
+            }
+        },
 
         // At the time the migration was written, sinks and sources
         // could not contain references to types.

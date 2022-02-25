@@ -911,6 +911,7 @@ pub enum ScalarType {
         /// The names and types of the fields of the record, in order from left
         /// to right.
         fields: Vec<(ColumnName, ColumnType)>,
+        // TODO: turn custom_oid and name into an enum. it should only be possible to set one at a time
         custom_oid: Option<u32>,
         custom_name: Option<String>,
     },
@@ -1403,7 +1404,24 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns number of layers (akin to array dimensions) on a
+    /// Returns vector of [`ScalarType`] elements in a [`ScalarType::Record`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Record`].
+    pub fn unwrap_record_element_type(&self) -> Vec<&ScalarType> {
+        match self {
+            ScalarType::Record { fields, .. } => {
+                fields.iter().map(|(_, t)| &t.scalar_type).collect_vec()
+            }
+            _ => panic!(
+                "ScalarType::unwrap_record_element_type called on {:?}",
+                self
+            ),
+        }
+    }
+
+    /// Returns number of dimensions/axes (also known as "rank") on a
     /// [`ScalarType::List`].
     ///
     /// # Panics
@@ -1441,6 +1459,29 @@ impl<'a> ScalarType {
                 value_type: Box::new(value_type.default_embedded_value()),
                 custom_oid: None,
             },
+            Record {
+                fields,
+                custom_oid: None,
+                custom_name: None,
+            } => {
+                let default_embedded_field_values = fields
+                    .iter()
+                    .map(|(column_name, column_type)| {
+                        (
+                            column_name.clone(),
+                            ColumnType {
+                                scalar_type: column_type.scalar_type.default_embedded_value(),
+                                nullable: column_type.nullable,
+                            },
+                        )
+                    })
+                    .collect_vec();
+                Record {
+                    fields: default_embedded_field_values,
+                    custom_name: None,
+                    custom_oid: None,
+                }
+            }
             Array(a) => Array(Box::new(a.default_embedded_value())),
             Numeric { .. } => Numeric { max_scale: None },
             // Char's default length should not be `Some(1)`, but instead `None`
@@ -1552,6 +1593,15 @@ impl<'a> ScalarType {
                 value_type: t,
                 custom_oid,
             } => custom_oid.is_some() || t.is_custom_type(),
+            Record {
+                fields, custom_oid, ..
+            } => {
+                custom_oid.is_some()
+                    || fields
+                        .iter()
+                        .map(|(_, t)| t)
+                        .any(|t| t.scalar_type.is_custom_type())
+            }
             _ => false,
         }
     }
@@ -1591,7 +1641,6 @@ impl<'a> ScalarType {
                     custom_oid: oid_r,
                 },
             ) => l.base_eq(r) && oid_l == oid_r,
-
             (Array(a), Array(b)) => a.base_eq(b),
             (
                 Record {
