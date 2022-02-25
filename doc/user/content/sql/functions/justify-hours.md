@@ -28,7 +28,7 @@ _interval_ | [`interval`](../../types/interval) | The interval value to justify.
 SELECT justify_hours(interval '27 hours');
 ```
 ```nofmt
- justify_hours  
+ justify_hours
 ----------------
  1 day 03:00:00
 ```

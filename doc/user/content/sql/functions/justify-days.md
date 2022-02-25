@@ -28,7 +28,7 @@ _interval_ | [`interval`](../../types/interval) | The interval value to justify.
 SELECT justify_days(interval '35 days');
 ```
 ```nofmt
-  justify_days  
+  justify_days
 ----------------
  1 month 5 days
 ```
