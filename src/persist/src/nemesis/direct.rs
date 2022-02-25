@@ -109,7 +109,6 @@ use crate::client::{
     DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
 use crate::error::Error;
-use crate::indexed::SnapshotExt;
 use crate::nemesis::progress::{DataflowProgress, DataflowProgressHandle};
 use crate::nemesis::{
     AllowCompactionReq, FutureRes, FutureStep, Input, ReadOutputEvent, ReadOutputReq,

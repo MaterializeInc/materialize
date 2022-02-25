@@ -18,7 +18,6 @@ use timely::{Data as TimelyData, PartialOrder};
 
 use crate::client::DecodedSnapshot;
 use crate::error::Error;
-use crate::indexed::Snapshot;
 use crate::operators::DEFAULT_OUTPUTS_PER_YIELD;
 
 /// Extension trait for [`Stream`].

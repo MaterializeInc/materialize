@@ -21,11 +21,11 @@ use timely::progress::Antichain;
 use tracing::error;
 
 use crate::error::Error;
-use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Cmd, CmdRead, ListenEvent, Snapshot, StreamDesc};
+use crate::indexed::snapshot::{ArrangementSnapshot, ArrangementSnapshotIter, Snapshot};
+use crate::indexed::{Cmd, CmdRead, ListenEvent, StreamDesc};
 use crate::pfuture::PFuture;
 use crate::runtime::{RuntimeCmd, RuntimeHandle, RuntimeId};
 use crate::storage::SeqNo;
@@ -724,28 +724,41 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     pub fn get_seal(&self) -> Antichain<u64> {
         self.snap.get_seal()
     }
-}
 
-impl<K: Codec, V: Codec> Snapshot<K, V> for DecodedSnapshot<K, V> {
-    type Iter = DecodedSnapshotIter<K, V>;
-
-    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
+    /// Returns a set of `num_iters` [Iterator]s that each output roughly
+    /// `1/num_iters` of the data represented by this snapshot.
+    pub fn into_iters(self, num_iters: NonZeroUsize) -> Vec<DecodedSnapshotIter<K, V>> {
         self.snap
             .into_iters(num_iters)
             .into_iter()
-            .map(|iter| DecodedSnapshotIter {
-                iter,
-                _phantom: PhantomData,
-            })
+            .map(|iter| DecodedSnapshotIter { iter })
             .collect()
+    }
+
+    /// Returns a single [Iterator] that outputs the data represented by this
+    /// snapshot.
+    pub fn into_iter(self) -> DecodedSnapshotIter<K, V> {
+        let mut iters = self.into_iters(NonZeroUsize::new(1).unwrap());
+        assert_eq!(iters.len(), 1);
+        iters.remove(0)
+    }
+}
+
+#[cfg(test)]
+impl<K: Codec + Ord, V: Codec + Ord> DecodedSnapshot<K, V> {
+    /// A full read of the data in the snapshot.
+    pub fn read_to_end(self) -> Result<Vec<((K, V), u64, i64)>, Error> {
+        let iter = self.into_iter();
+        let mut buf = iter.collect::<Result<Vec<_>, Error>>()?;
+        buf.sort();
+        Ok(buf)
     }
 }
 
 /// An [Iterator] representing one part of the data in a [DecodedSnapshot].
 #[derive(Debug)]
 pub struct DecodedSnapshotIter<K, V> {
-    iter: ArrangementSnapshotIter,
-    _phantom: PhantomData<(K, V)>,
+    iter: ArrangementSnapshotIter<Result<K, String>, Result<V, String>>,
 }
 
 impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
@@ -754,8 +767,8 @@ impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|x| {
             let ((k, v), ts, diff) = x?;
-            let k = K::decode(&k)?;
-            let v = V::decode(&v)?;
+            let k = k?;
+            let v = v?;
             Ok(((k, v), ts, diff))
         })
     }

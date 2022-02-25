@@ -20,7 +20,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_persist::client::{RuntimeClient, StreamReadHandle};
 use mz_persist::error::{Error, ErrorLog};
 use mz_persist::file::FileBlob;
-use mz_persist::indexed::Snapshot;
 use mz_persist::mem::MemRegistry;
 use mz_persist::runtime::{self, RuntimeConfig};
 use mz_persist::s3::{S3Blob, S3BlobConfig};

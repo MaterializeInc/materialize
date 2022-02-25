@@ -18,7 +18,6 @@ use tracing::{debug, error, info};
 
 use crate::client::RuntimeClient;
 use crate::error::{Error, ErrorLog};
-use crate::indexed::Snapshot;
 use crate::mem::{MemBlob, MemRegistry};
 use crate::nemesis::direct::{Direct, StartRuntime};
 use crate::nemesis::generator::{Generator, GeneratorConfig};

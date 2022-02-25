@@ -25,7 +25,6 @@ use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_persist::client::{MultiWriteHandle, RuntimeClient, StreamReadHandle};
 use mz_persist::error::Error as PersistError;
 use mz_persist::file::{FileBlob, FileLog};
-use mz_persist::indexed::Snapshot;
 use mz_persist::operators::stream::{AwaitFrontier, Seal};
 use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use mz_persist::runtime::{self, RuntimeConfig};
