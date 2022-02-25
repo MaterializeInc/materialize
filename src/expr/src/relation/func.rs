@@ -961,12 +961,13 @@ fn generate_series_ts(
     step: Interval,
     conv: fn(NaiveDateTime) -> Datum<'static>,
 ) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
-    if step.months == 0 && step.duration == 0 {
+    let normalized_step = step.as_microseconds();
+    if normalized_step == 0 {
         return Err(EvalError::InvalidParameterValue(
             "step size cannot equal zero".to_owned(),
         ));
     }
-    let rev = step.duration < 0;
+    let rev = normalized_step < 0;
 
     let tsri = TimestampRangeStepInclusive {
         state: start,

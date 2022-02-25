@@ -3507,7 +3507,6 @@ dependencies = [
  "mz-build-info",
  "mz-ore",
  "mz-persist-types",
- "mz-repr",
  "parquet2",
  "prost",
  "prost-build",

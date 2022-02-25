@@ -3727,7 +3727,8 @@ impl Coordinator {
                     "\nDecorrelation time: {}",
                     Interval {
                         months: 0,
-                        duration: decorrelation.as_nanos() as i128
+                        days: 0,
+                        micros: decorrelation.as_micros().try_into().unwrap(),
                     }
                 ));
             }
@@ -3736,7 +3737,8 @@ impl Coordinator {
                     "\nOptimization time: {}",
                     Interval {
                         months: 0,
-                        duration: optimization.as_nanos() as i128
+                        days: 0,
+                        micros: optimization.as_micros().try_into().unwrap(),
                     }
                 ));
             }

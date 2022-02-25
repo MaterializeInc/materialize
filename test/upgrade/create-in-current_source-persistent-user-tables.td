@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# If mz_persist::gen::ProtoMeta::ENCODING_VERSION is changed, the version of this file needs to change to "current_source"
+
 > CREATE TABLE persistent_user_table (f1 INTEGER, f2 STRING);
 
 > INSERT INTO persistent_user_table VALUES (1234, REPEAT('x', 1024 * 1024 * 10));

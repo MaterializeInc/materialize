@@ -42,22 +42,8 @@ impl ToSql for Interval {
         //
         // Postgres implementation: https://github.com/postgres/postgres/blob/517bf2d91/src/backend/utils/adt/timestamp.c#L1008
         // Diesel implementation: https://github.com/diesel-rs/diesel/blob/a8b52bd05/diesel/src/pg/types/date_and_time/mod.rs#L39
-        //
-        // Our intervals are guaranteed to fit within SQL's min/max intervals,
-        // so this is compression is guaranteed to be lossless. For details, see
-        // `repr::scalar::datetime::compute_interval`.
-        let days: i128 = std::cmp::max(
-            std::cmp::min(self.0.days().into(), i32::MAX.into()),
-            i32::MIN.into(),
-        );
-        let ns = self.0.duration - days * 24 * 60 * 60 * 1_000_000_000;
-        out.put_i64((ns / 1000).try_into().expect(
-            "bounds checking when creating Intervals should prevent this field from overflowing",
-        ));
-        out.put_i32(
-            days.try_into()
-                .expect("days is bound between i32::MAX and i32::MIN above"),
-        );
+        out.put_i64(self.0.micros);
+        out.put_i32(self.0.days);
         out.put_i32(self.0.months);
         Ok(IsNull::No)
     }
@@ -74,14 +60,7 @@ impl<'a> FromSql<'a> for Interval {
         let micros = raw.read_i64::<NetworkEndian>()?;
         let days = raw.read_i32::<NetworkEndian>()?;
         let months = raw.read_i32::<NetworkEndian>()?;
-        Ok(Interval(
-            ReprInterval::new(
-                months,
-                i64::from(days) * 24 * 60 * 60,
-                i128::from(micros) * 1000,
-            )
-            .unwrap(),
-        ))
+        Ok(Interval(ReprInterval::new(months, days, micros).unwrap()))
     }
 
     fn accepts(ty: &Type) -> bool {

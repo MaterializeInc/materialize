@@ -14,8 +14,8 @@ Detail | Info
 **Size** | 20 bytes
 **Catalog name** | `pg_catalog.interval`
 **OID** | 1186
-**Min value** | -178956970 years -8 months -2236962133 days -08:59:59.999999
-**Max value** | 178956970 years 7 months 2236962132 days 07:59:59.999999
+**Min value** | -178956970 years -8 months -2147483648 days -2147483648:59:59.999999
+**Max value** | 178956970 years 7 months 2147483647 days 2147483647:59:59.999999
 
 ## Syntax
 
@@ -155,7 +155,7 @@ SELECT INTERVAL '-1 day 2:3:4.5' AS interval_n;
 ```nofmt
  interval_n
 -------------
- -21:56:55.5
+ -1 days +02:03:04.5
 ```
 
 ### Truncating interval

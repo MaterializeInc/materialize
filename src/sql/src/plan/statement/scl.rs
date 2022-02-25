@@ -147,7 +147,7 @@ pub fn plan_fetch(
             // bumped. If we do bump it, ensure that the new upper limit is within the
             // bounds of a tokio time future, otherwise it'll panic.
             const SECS_PER_DAY: f64 = 60f64 * 60f64 * 24f64;
-            let timeout_secs = timeout.as_seconds::<f64>();
+            let timeout_secs = timeout.as_epoch_seconds::<f64>();
             if !timeout_secs.is_finite() || timeout_secs < 0f64 || timeout_secs > SECS_PER_DAY {
                 bail!("timeout out of range: {:#}", timeout);
             }

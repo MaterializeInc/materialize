@@ -40,14 +40,14 @@ impl ProtoMeta {
     /// The following is an EBNF-ish spec for the format:
     ///
     /// ```none
-    /// encoding = 9u8 v9_encoding
-    /// v9_encoding = proto_meta md5_checksum
+    /// encoding = 11u8 v11_encoding
+    /// v11_encoding = proto_meta md5_checksum
     /// proto_meta = u8* (the protobuf serialization of ProtoMeta)
     /// md5_checksum = u8 u8 u8 u8 (little endian, md5 of proto_meta)
     /// ```
     // TODO: Once this gets bumped to 8, we can clean up:
     // - The TODO in Blob::Cache.check_meta_build_version.
-    pub const ENCODING_VERSION: u8 = 10;
+    pub const ENCODING_VERSION: u8 = 11;
 
     /// The [Self::ENCODING_VERSION] of this previously encoded ProtoMeta.
     ///
