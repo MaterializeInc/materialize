@@ -2371,8 +2371,8 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
 
-        match self.expect_one_of_keywords(&[LIST, MAP]) {
-            Ok(as_type) => {
+        match self.parse_one_of_keywords(&[LIST, MAP]) {
+            Some(as_type) => {
                 self.expect_token(&Token::LParen)?;
                 let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
                 self.expect_token(&Token::RParen)?;
@@ -2385,7 +2385,7 @@ impl<'a> Parser<'a> {
 
                 Ok(Statement::CreateType(CreateTypeStatement { name, as_type }))
             }
-            _ => {
+            None => {
                 let column_defs = self.parse_composite_type_definition()?;
 
                 Ok(Statement::CreateType(CreateTypeStatement {
