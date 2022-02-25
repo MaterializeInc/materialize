@@ -101,22 +101,15 @@ mat_data  mat_data_primary_idx  1             a            <null>      false    
 
 # 🔬🔬 Tables
 
-! INSERT INTO t VALUES (1)
-contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
+> INSERT INTO t VALUES (1)
 
-! UPDATE t SET a = 1
-contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
-
-! DELETE FROM t;
-contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
-
-# Selects work but are always empty
+# Selects work.
 > SELECT * FROM t
+1
 
 > SHOW INDEXES FROM t;
 on_name   key_name      seq_in_index  column_name  expression  nullable enabled
 -----------------------------------------------------------------------------
-t         t_primary_idx 1             a            <null>      true     false
 t         t_drop_idx    1             a            <null>      true     false
 
 # 🔬🔬 Indexes
@@ -127,7 +120,6 @@ t         t_drop_idx    1             a            <null>      true     false
 > SHOW INDEXES FROM t;
 on_name   key_name        seq_in_index  column_name  expression  nullable enabled
 -----------------------------------------------------------------------------
-t         t_primary_idx   1             a            <null>      true     false
 t         t_drop_idx      1             a            <null>      true     false
 t         t_secondary_idx 1             <null>       "a + a"     true     false
 
@@ -136,7 +128,6 @@ t         t_secondary_idx 1             <null>       "a + a"     true     false
 > SHOW INDEXES FROM t;
 on_name   key_name        seq_in_index  column_name  expression  nullable enabled
 -----------------------------------------------------------------------------
-t         t_primary_idx   1             a            <null>      true     false
 t         t_secondary_idx 1             <null>       "a + a"     true     false
 
 # 🔬 Enabling indexes
@@ -211,27 +202,23 @@ $ kafka-verify format=avro sink=materialize.public.snk_indexes_disabled sort-mes
 # 🔬🔬 Tables
 
 # Tables still work with non-primary indexes enabled because all indexes are covering
-! ALTER INDEX t_secondary_idx SET ENABLED;
-contains:cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
-
-> ALTER INDEX t_primary_idx SET ENABLED
-
 > SHOW INDEXES FROM t;
 on_name   key_name        seq_in_index  column_name  expression  nullable enabled
 -----------------------------------------------------------------------------
-t         t_primary_idx   1             a            <null>      true     true
 t         t_secondary_idx 1             <null>       "a + a"     true     false
-
-> INSERT INTO t VALUES (1)
-
-> SELECT * FROM t
-1
-
-# Check idempotency
-> ALTER INDEX t_primary_idx SET ENABLED
 
 > INSERT INTO t VALUES (2)
 
 > SELECT * FROM t
 1
 2
+
+# Check idempotency
+> ALTER INDEX t_secondary_idx SET ENABLED
+
+> INSERT INTO t VALUES (3)
+
+> SELECT * FROM t
+1
+2
+3

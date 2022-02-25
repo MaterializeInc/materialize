@@ -290,10 +290,10 @@ SELECT * FROM other.t;
 ----
 db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
 DETAIL: The following relations in the query are outside the transaction's time domain:
-"materialize.other.t_primary_idx"
+"materialize.other.t"
 Only the following relations are available:
-"materialize.public.t5727_primary_idx"
-"materialize.public.t_primary_idx"
+"materialize.public.t"
+"materialize.public.t5727"
 
 # Verify that changed tables and views don't change during a transaction.
 
@@ -400,7 +400,7 @@ COMPLETE 0
 simple conn=t1
 COMMIT;
 ----
-db error: ERROR: unknown catalog item 'u21'
+db error: ERROR: unknown catalog item 'u17'
 
 # Test transaction syntax that we don't support.
 

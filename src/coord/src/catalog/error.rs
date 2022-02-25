@@ -29,10 +29,6 @@ pub enum ErrorKind {
     OidExhaustion,
     Sql(SqlCatalogError),
     DatabaseAlreadyExists(String),
-    DefaultIndexDisabled {
-        idx_on: String,
-        default_idx: String,
-    },
     SchemaAlreadyExists(String),
     RoleAlreadyExists(String),
     ItemAlreadyExists(String),
@@ -43,7 +39,6 @@ pub enum ErrorKind {
     SchemaNotEmpty(String),
     InvalidTemporaryDependency(String),
     InvalidTemporarySchema,
-    MandatoryTableIndex(String),
     UnsatisfiableLoggingDependency {
         depender_name: String,
     },
@@ -88,13 +83,7 @@ impl Error {
 
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
-        match &self.kind {
-            ErrorKind::DefaultIndexDisabled { default_idx, .. } => Some(format!(
-                "You can enable the default index using ALTER INDEX {} SET ENABLED",
-                default_idx
-            )),
-            _ => None,
-        }
+        None
     }
 }
 
@@ -133,14 +122,12 @@ impl std::error::Error for Error {
             | ErrorKind::SchemaNotEmpty(_)
             | ErrorKind::InvalidTemporaryDependency(_)
             | ErrorKind::InvalidTemporarySchema
-            | ErrorKind::MandatoryTableIndex(_)
             | ErrorKind::UnsatisfiableLoggingDependency { .. }
             | ErrorKind::AmbiguousRename { .. }
             | ErrorKind::TypeRename(_)
             | ErrorKind::ExperimentalModeRequired
             | ErrorKind::ExperimentalModeUnavailable
             | ErrorKind::FailedMigration { .. }
-            | ErrorKind::DefaultIndexDisabled { .. }
             | ErrorKind::FailpointReached(_) => None,
             ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
@@ -185,11 +172,6 @@ impl fmt::Display for Error {
             ErrorKind::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
-            ErrorKind::MandatoryTableIndex(index_name) => write!(
-                f,
-                "cannot drop '{}' as it is the default index for a table",
-                index_name
-            ),
             ErrorKind::UnsatisfiableLoggingDependency { depender_name } => write!(
                 f,
                 "catalog item '{}' depends on system logging, but logging is disabled",
@@ -234,17 +216,6 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
                     f,
                     "cannot migrate from catalog version {} to version {} (earlier versions might still work): {}",
                     last_seen_version, this_version, cause
-                )
-            }
-            ErrorKind::DefaultIndexDisabled {
-                idx_on,
-                default_idx,
-            } => {
-                write!(
-                    f,
-                    "cannot perform operation on {} while its default index ({}) is disabled",
-                    idx_on.quoted(),
-                    default_idx.quoted()
                 )
             }
             ErrorKind::FailpointReached(failpoint) => {

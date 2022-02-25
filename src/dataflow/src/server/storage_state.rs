@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
+use differential_dataflow::lattice::Lattice;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -25,7 +26,7 @@ use mz_dataflow_types::SourceInstanceDesc;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
-use mz_repr::Timestamp;
+use mz_repr::{Diff, Row, Timestamp};
 
 use crate::metrics::Metrics;
 use crate::render::sources::PersistedSourceManager;
@@ -41,8 +42,8 @@ const TS_BINDING_FEEDBACK_INTERVAL: Duration = Duration::from_millis(1_000);
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
-    /// Handles to local inputs, keyed by ID.
-    pub local_inputs: HashMap<GlobalId, LocalInput>,
+    /// State about each table, keyed by table ID.
+    pub table_state: HashMap<GlobalId, TableState>,
     /// Source descriptions that have been created and not yet dropped.
     ///
     /// For the moment we retain all source descriptions, even those that have been
@@ -83,6 +84,20 @@ pub struct StorageState {
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
     pub timely_worker_peers: usize,
+}
+
+/// State about a single table.
+pub struct TableState {
+    /// The since frontier for the table.
+    pub since: Antichain<Timestamp>,
+    /// The upper frontier for the table.
+    pub upper: u64,
+    /// The data in the table.
+    pub data: Vec<(Row, Timestamp, Diff)>,
+    /// The size of `data` after the last consolidation.
+    pub last_consolidated_size: usize,
+    /// Handles to the live local inputs for the table.
+    pub inputs: Vec<LocalInput>,
 }
 
 /// A wrapper around [StorageState] with a live timely worker and response channel.
@@ -168,9 +183,27 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     pub(crate) fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::CreateSources(sources) => {
-                // Nothing to do at the moment, but in the future prepare source ingestion.
                 for source in sources {
                     self.setup_timestamp_binding_state(&source);
+
+                    match &source.desc.connector {
+                        SourceConnector::Local { .. } => {
+                            self.storage_state.table_state.insert(
+                                source.id,
+                                TableState {
+                                    since: Antichain::from_elem(Timestamp::minimum()),
+                                    upper: Timestamp::minimum(),
+                                    data: vec![],
+                                    last_consolidated_size: 0,
+                                    inputs: vec![],
+                                },
+                            );
+                        }
+                        SourceConnector::External { .. } => {
+                            // Nothing to do at the moment, but in the future
+                            // prepare source ingestion.
+                        }
+                    }
 
                     self.storage_state
                         .source_descriptions
@@ -198,7 +231,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
 
                         // Drop table-related state.
-                        self.storage_state.local_inputs.remove(&id);
+                        self.storage_state.table_state.remove(&id);
                         // Clean up potentially left over persisted source state.
                         self.storage_state.persisted_sources.del_source(&id);
                         // Clean up per-source state.
@@ -212,6 +245,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             ts_history.set_compaction_frontier(frontier.borrow());
                         }
 
+                        if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
+                            table_state.since = frontier.clone();
+                        }
+
                         self.storage_state
                             .persisted_sources
                             .allow_compaction(id, frontier);
@@ -221,8 +258,13 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
 
             StorageCommand::AdvanceAllLocalInputs { advance_to } => {
                 let new_frontier = Antichain::from_elem(advance_to);
-                for (id, local_input) in self.storage_state.local_inputs.iter_mut() {
-                    local_input.capability.downgrade(&advance_to);
+                for (id, table_state) in &mut self.storage_state.table_state {
+                    for local_input in &mut table_state.inputs {
+                        local_input.capability.downgrade(&advance_to);
+                    }
+                    assert!(advance_to >= table_state.upper);
+                    table_state.upper = advance_to;
+
                     // Announce the table updates as durably recorded. This is not correct,
                     // but it also hasn't been correct afaict.
                     // TODO(petrosagg): correct this once STORAGE owns table durability.
@@ -230,7 +272,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     let mut joined_frontier = Antichain::new();
                     for time1 in borrow.iter() {
                         for time2 in new_frontier.iter() {
-                            use differential_dataflow::lattice::Lattice;
                             joined_frontier.insert(time1.join(time2));
                         }
                     }
@@ -239,18 +280,41 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
             }
 
             StorageCommand::Insert { id, updates } => {
-                let input = match self.storage_state.local_inputs.get_mut(&id) {
-                    Some(input) => input,
+                let table_state = match self.storage_state.table_state.get_mut(&id) {
+                    Some(table_state) => table_state,
                     None => panic!(
-                        "local input {} missing for insert at worker {}",
+                        "table state {} missing for insert at worker {}",
                         id,
                         self.timely_worker.index()
                     ),
                 };
-                let mut session = input.handle.session(input.capability.clone());
+
+                // Add the new updates to all existing renders of the table.
+                for input in &mut table_state.inputs {
+                    let mut session = input.handle.session(input.capability.clone());
+                    for update in &updates {
+                        assert!(update.timestamp >= *input.capability.time());
+                        session.give((update.row.clone(), update.timestamp, update.diff));
+                    }
+                }
+
+                // Stash the data for use by future renders of the table.
                 for update in updates {
-                    assert!(update.timestamp >= *input.capability.time());
-                    session.give((update.row, update.timestamp, update.diff));
+                    table_state
+                        .data
+                        .push((update.row, update.timestamp, update.diff));
+                }
+
+                // Consolidate the data in the table if it's doubled in size
+                // since the last consolidation.
+                if table_state.data.len() > table_state.last_consolidated_size * 2 {
+                    for (_data, time, _diff) in &mut table_state.data {
+                        time.advance_by(table_state.since.borrow());
+                    }
+                    differential_dataflow::consolidation::consolidate_updates(
+                        &mut table_state.data,
+                    );
+                    table_state.last_consolidated_size = table_state.data.len();
                 }
             }
 

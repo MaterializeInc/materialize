@@ -30,7 +30,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
   SELECT * FROM t NATURAL JOIN t a;
 ----
 %0 = Let t (l0) =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 | Filter (#0 < 3)
 
 %1 =
@@ -46,11 +46,11 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
   SELECT * FROM y WHERE (select a from t) < a;
 ----
 %0 = Let t (l0) =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 | Filter (#0 < 3)
 
 %1 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 | Filter (select(%2) < #0)
 | |
 | | %2 =
@@ -69,7 +69,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 | Constant ()
 
 %1 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %2 = Let l1 =
 | Join %0 %1
@@ -111,7 +111,7 @@ FROM x,
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %5 = Let l3 =
 | Join %3 %4
@@ -194,7 +194,7 @@ FROM x,
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %5 = Let l3 =
 | Join %3 %4
@@ -231,7 +231,7 @@ FROM x,
 | Union %5 %11
 
 %13 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %14 = Let l5 =
 | Join %3 %13
@@ -332,7 +332,7 @@ FROM x,
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %5 = Let l3 =
 | Join %3 %4
@@ -427,7 +427,7 @@ FROM x,
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %5 = Let l3 =
 | Join %3 %4
@@ -464,7 +464,7 @@ FROM x,
 | Union %5 %11
 
 %13 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %14 = Let l5 =
 | Join %3 %13
@@ -590,7 +590,7 @@ FROM x,
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %5 = Let l3 =
 | Join %3 %4
@@ -627,7 +627,7 @@ FROM x,
 | Union %5 %11
 
 %13 =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %14 = Let l5 =
 | Join %3 %13
@@ -734,10 +734,10 @@ FROM (WITH e(e) AS (SELECT b FROM b)
                              < (SELECT max(x) FROM x))
 ----
 %0 = Let a (l0) =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %1 = Let b (l1) =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %2 = Let x (l2) =
 | Get b (l1) (%1)
@@ -764,7 +764,7 @@ FROM (WITH e(e) AS (SELECT b FROM b)
 | Map select(%9)
 | |
 | | %8 = Let c (l3) =
-| | | Get materialize.public.y (u3)
+| | | Get materialize.public.y (u2)
 | |
 | | %9 =
 | | | Get c (l3) (%8)
@@ -788,7 +788,7 @@ EXPLAIN RAW PLAN FOR
 WITH a(a) AS (SELECT a FROM y) SELECT * FROM (WITH a(a) AS (SELECT a FROM a) SELECT a FROM a);
 ----
 %0 = Let a (l0) =
-| Get materialize.public.y (u3)
+| Get materialize.public.y (u2)
 
 %1 = Let a (l1) =
 | Get a (l0) (%0)

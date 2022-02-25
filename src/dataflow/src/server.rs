@@ -164,7 +164,7 @@ pub fn serve_boundary<
             timely_worker,
             compute_state: BTreeMap::default(),
             storage_state: StorageState {
-                local_inputs: HashMap::new(),
+                table_state: HashMap::new(),
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 ts_source_mapping: HashMap::new(),

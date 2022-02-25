@@ -24,6 +24,11 @@ CREATE VIEW foo3 as select b from foo2 where b = 6;
 query T multiline
 EXPLAIN PLAN FOR SELECT * from foo3
 ----
+Source materialize.public.foo (u1):
+| Filter (#0 = 5), (#1 = 6)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5), (#1 = 6)
@@ -34,6 +39,11 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR VIEW foo3
 ----
+Source materialize.public.foo (u1):
+| Filter (#0 = 5), (#1 = 6)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5), (#1 = 6)
@@ -48,7 +58,7 @@ query T multiline
 EXPLAIN PLAN FOR VIEW foo3
 ----
 %0 =
-| Get materialize.public.foo2 (u3)
+| Get materialize.public.foo2 (u2)
 | Filter (#0 = 6)
 
 EOF
@@ -57,7 +67,7 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * from foo3
 ----
 %0 =
-| Get materialize.public.foo2 (u3)
+| Get materialize.public.foo2 (u2)
 | Filter (#0 = 6)
 
 EOF

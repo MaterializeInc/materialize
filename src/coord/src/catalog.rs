@@ -194,12 +194,11 @@ impl CatalogState {
                         inner(catalog, *id, indexes, unmaterialized)
                     }
                 }
-                CatalogItem::Source(_) => {
-                    // Unmaterialized source. Record that we are missing at
-                    // least one index.
+                CatalogItem::Source(_) | CatalogItem::Table(_) => {
+                    // Unmaterialized source or table. Record that we are
+                    // missing at least one index.
                     unmaterialized.push(id);
                 }
-                CatalogItem::Table(_) => (),
                 _ => unreachable!(),
             }
         }
@@ -937,14 +936,6 @@ impl Catalog {
                 }
 
                 Builtin::Table(table) => {
-                    let index_name = format!("{}_primary_idx", table.name);
-                    let index_columns = table.desc.typ().default_key();
-                    let index_sql = super::coord::index_sql(
-                        index_name.clone(),
-                        name.clone(),
-                        &table.desc,
-                        &index_columns,
-                    );
                     let oid = catalog.allocate_oid()?;
                     let persist_name = if table.persistent {
                         config
@@ -964,27 +955,6 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![],
                             persist_name,
-                        }),
-                    );
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        table.index_id,
-                        oid,
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: MZ_CATALOG_SCHEMA.into(),
-                            item: index_name,
-                        },
-                        CatalogItem::Index(Index {
-                            on: table.id,
-                            keys: index_columns
-                                .iter()
-                                .map(|i| MirScalarExpr::Column(*i))
-                                .collect(),
-                            create_sql: index_sql,
-                            conn_id: None,
-                            depends_on: vec![table.id],
-                            enabled: catalog.index_enabled_by_default(&table.index_id),
                         }),
                     );
                 }
@@ -1502,15 +1472,6 @@ impl Catalog {
             // no-op
             CatalogItem::Index(index) if index.enabled => vec![],
             CatalogItem::Index(index) => {
-                if let CatalogItem::Table(_) = self.get_by_id(&index.on).item() {
-                    let default_idx_id = self
-                        .default_index_for(index.on)
-                        .expect("table must have default index");
-                    if id != default_idx_id {
-                        self.ensure_default_index_enabled(index.on)?;
-                    }
-                }
-
                 vec![Op::UpdateItem {
                     id,
                     to_item: CatalogItem::Index(Index {
@@ -1829,19 +1790,7 @@ impl Catalog {
                 }
                 Op::DropItem(id) => {
                     let entry = self.get_by_id(&id);
-                    // Prevent dropping a table's default index unless the table
-                    // is being dropped too.
                     match entry.item() {
-                        CatalogItem::Index(Index { on, .. }) => {
-                            if self.get_by_id(on).is_table()
-                                && self.default_index_for(*on) == Some(id)
-                                && !drop_ids.contains(on)
-                            {
-                                return Err(CoordError::Catalog(Error::new(
-                                    ErrorKind::MandatoryTableIndex(entry.name().to_string()),
-                                )));
-                            }
-                        }
                         CatalogItem::Source(_) => {
                             tx.delete_timestamp_bindings(id)?;
                         }
@@ -2298,25 +2247,6 @@ impl Catalog {
         // The default index is the index with the smallest ID, i.e. the one
         // created in closest temporal proximity to the object itself.
         self.get_indexes_on(id).iter().min().cloned()
-    }
-
-    /// Returns an error if the object's default index is disabled.
-    ///
-    /// Note that this function is really only meant to be used with tables.
-    ///
-    /// # Panics
-    /// Panics if the object identified with `id` does not have a default index.
-    pub fn ensure_default_index_enabled(&self, id: GlobalId) -> Result<(), Error> {
-        let default_idx_id = self
-            .default_index_for(id)
-            .expect("object must have default index");
-        if !self.is_index_enabled(&default_idx_id) {
-            return Err(Error::new(ErrorKind::DefaultIndexDisabled {
-                idx_on: self.get_by_id(&id).name().to_string(),
-                default_idx: self.get_by_id(&default_idx_id).name().to_string(),
-            }));
-        }
-        Ok(())
     }
 
     pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {

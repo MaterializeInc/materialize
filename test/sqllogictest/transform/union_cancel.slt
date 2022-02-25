@@ -30,6 +30,10 @@ INSERT INTO t3 VALUES (4, 5), (5, 5), (5, 5), (null, null)
 query T multiline
 EXPLAIN SELECT * FROM t1
 ----
+Source materialize.public.t1 (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 
@@ -45,6 +49,10 @@ SELECT * FROM t1
 query T multiline
 EXPLAIN SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 ----
+Source materialize.public.t1 (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 
@@ -60,6 +68,11 @@ SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 query T multiline
 EXPLAIN SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
 ----
+Source materialize.public.t1 (u1):
+| Filter (#1 = 1)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#1 = 1)
@@ -88,6 +101,10 @@ SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 query T multiline
 EXPLAIN SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
+Source materialize.public.t1 (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Threshold
@@ -104,6 +121,10 @@ SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 query T multiline
 EXPLAIN SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 ----
+Source materialize.public.t1 (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 
@@ -119,8 +140,12 @@ SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 query T multiline
 EXPLAIN SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 ----
+Source materialize.public.t2 (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Threshold
 
 EOF
@@ -134,8 +159,12 @@ SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 query T multiline
 EXPLAIN SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
+Source materialize.public.t2 (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Threshold
 
 EOF
@@ -149,8 +178,15 @@ SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 query T multiline
 EXPLAIN SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 ----
+Source materialize.public.t1 (u1):
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 
 %1 =
 | Get materialize.public.t1 (u1)
@@ -181,8 +217,12 @@ EXPLAIN
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3_with_key AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.key = a2.key)
 ----
+Source materialize.public.t3 (u3):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 | Reduce group=(#0)
 | | agg sum(#1)
 
@@ -201,12 +241,16 @@ EXPLAIN
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 ----
+Source materialize.public.t3 (u3):
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 | Filter !(isnull(#0))
 
 %1 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 
 %2 =
 | Get %0 (l0)
@@ -221,7 +265,7 @@ SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 | Negate
 
 %4 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 
 %5 =
 | Union %3 %4 %0
@@ -242,8 +286,12 @@ EXPLAIN
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key or (a1.f1 is null and a2.key is null));
 ----
+Source materialize.public.t3 (u3):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 
 EOF
 

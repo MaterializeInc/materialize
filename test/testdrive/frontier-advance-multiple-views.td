@@ -11,6 +11,7 @@
 # materialized views on some source.
 
 > CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+> CREATE DEFAULT INDEX on t1
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1;
 

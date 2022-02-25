@@ -30,6 +30,11 @@ INSERT INTO bar (a, d, e) VALUES (-45, 'our', 3.14), (5, 'still', -0.0), (-3, 'i
 query T multiline
 explain plan for select b, c from foo where a = 5
 ----
+Source materialize.public.foo (u1):
+| Filter (#0 = 5)
+| Project (#0..=#2)
+
+Query:
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5)
@@ -48,6 +53,11 @@ this
 query T multiline
 explain plan for select b, c from foo, (select 5 as a) const where foo.a = const.a
 ----
+Source materialize.public.foo (u1):
+| Filter (#0 = 5)
+| Project (#0..=#2)
+
+Query:
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5)
@@ -66,13 +76,22 @@ this
 query T multiline
 explain plan for select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 ----
+Source materialize.public.foo (u1):
+| Filter (#0 = 3)
+| Project (#0..=#2)
+
+Source materialize.public.bar (u2):
+| Filter (3 = abs(#0))
+| Project (#0..=#2)
+
+Query:
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 3)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.bar (u3)
+| Get materialize.public.bar (u2)
 | Filter (3 = abs(#0))
 
 %2 =

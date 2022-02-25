@@ -1981,54 +1981,15 @@ impl Coordinator {
                 .persister
                 .new_table_persist_name(table_id, &name.to_string()),
         };
-        let index_id = self.catalog.allocate_id()?;
-        let mut index_name = name.clone();
-        index_name.item += "_primary_idx";
-        index_name = self
-            .catalog
-            .for_session(session)
-            .find_available_name(index_name);
-        let index = auto_generate_primary_idx(
-            index_name.item.clone(),
-            name.clone(),
-            table_id,
-            &table.desc,
-            conn_id,
-            index_depends_on,
-            self.catalog.index_enabled_by_default(&index_id),
-        );
         let table_oid = self.catalog.allocate_oid()?;
-        let index_oid = self.catalog.allocate_oid()?;
-        let df = self
-            .catalog_transact(
-                vec![
-                    catalog::Op::CreateItem {
-                        id: table_id,
-                        oid: table_oid,
-                        name,
-                        item: CatalogItem::Table(table.clone()),
-                    },
-                    catalog::Op::CreateItem {
-                        id: index_id,
-                        oid: index_oid,
-                        name: index_name,
-                        item: CatalogItem::Index(index),
-                    },
-                ],
-                |mut builder| {
-                    if let Some((name, description)) =
-                        Self::prepare_index_build(builder.catalog, &index_id)
-                    {
-                        let df = builder.build_index_dataflow(name, index_id, description)?;
-                        Ok(Some(df))
-                    } else {
-                        Ok(None)
-                    }
-                },
-            )
-            .await;
-        match df {
-            Ok(df) => {
+        let ops = vec![catalog::Op::CreateItem {
+            id: table_id,
+            oid: table_oid,
+            name,
+            item: CatalogItem::Table(table.clone()),
+        }];
+        match self.catalog_transact(ops, |_builder| Ok(())).await {
+            Ok(()) => {
                 // Determine the initial validity for the table.
                 self.persister
                     .add_table(table_id, &table)
@@ -2061,11 +2022,6 @@ impl Coordinator {
                     self.logical_compaction_window_ms,
                 )
                 .await;
-
-                // Install the dataflow if so required.
-                if let Some(df) = df {
-                    self.ship_dataflow(df).await;
-                }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -3684,10 +3640,6 @@ impl Coordinator {
         session: &mut Session,
         mut plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        if self.catalog.config().disable_user_indexes {
-            self.catalog.ensure_default_index_enabled(plan.id)?;
-        }
-
         let affected_rows = {
             let mut affected_rows = Diff::from(0);
             let mut all_positive_diffs = true;
