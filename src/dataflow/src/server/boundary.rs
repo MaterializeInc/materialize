@@ -3,8 +3,9 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-/// Traits and types for capturing and replaying collections of data.
+//! Traits and types for capturing and replaying collections of data.
 use std::any::Any;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
@@ -27,6 +28,37 @@ pub trait StorageCapture {
         name: &str,
         dataflow_id: GlobalId,
     );
+}
+
+impl<SC: StorageCapture> StorageCapture for Rc<RefCell<SC>> {
+    fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        id: SourceInstanceKey,
+        ok: Collection<G, Row, Diff>,
+        err: Collection<G, DataflowError, Diff>,
+        token: Rc<dyn Any>,
+        name: &str,
+        dataflow_id: GlobalId,
+    ) {
+        self.borrow_mut()
+            .capture(id, ok, err, token, name, dataflow_id)
+    }
+}
+
+impl<CR: ComputeReplay> ComputeReplay for Rc<RefCell<CR>> {
+    fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        id: SourceInstanceKey,
+        scope: &mut G,
+        name: &str,
+        dataflow_id: GlobalId,
+    ) -> (
+        Collection<G, Row, Diff>,
+        Collection<G, DataflowError, Diff>,
+        Rc<dyn Any>,
+    ) {
+        self.borrow_mut().replay(id, scope, name, dataflow_id)
+    }
 }
 
 /// A type that can replay specific sources
@@ -82,6 +114,7 @@ mod event_link {
     }
 
     impl EventLinkBoundary {
+        /// Create a new boundary, initializing the state to be empty.
         pub fn new() -> Self {
             Self {
                 send: BTreeMap::new(),
