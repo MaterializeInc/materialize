@@ -210,7 +210,7 @@ impl Vars {
             &self.application_name as &dyn Var,
             &self.client_encoding,
             &self.client_min_messages,
-            // &self.cluster,
+            &self.cluster,
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
