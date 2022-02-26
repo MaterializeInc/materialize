@@ -353,14 +353,15 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<MirScalarExpr, CoordError> {
         let pack_1d_array = |datums: Vec<Datum>| {
             let mut row = Row::default();
-            row.push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: datums.len(),
-                }],
-                datums,
-            )
-            .expect("known to be a valid array");
+            row.packer()
+                .push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: datums.len(),
+                    }],
+                    datums,
+                )
+                .expect("known to be a valid array");
             Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
         };
         let pack = |datum| {
