@@ -21,7 +21,7 @@ pub struct CsvDecoderState {
     ends_cursor: usize,
     csv_reader: csv_core::Reader,
     demanded: Vec<bool>,
-    row_packer: Row,
+    row_buf: Row,
     events_error: usize,
     events_success: usize,
 }
@@ -56,7 +56,7 @@ impl CsvDecoderState {
             ends_cursor: 1,
             csv_reader: csv_core::ReaderBuilder::new().delimiter(delimiter).build(),
             demanded,
-            row_packer: Default::default(),
+            row_buf: Row::default(),
             events_error: 0,
             events_success: 0,
         }
@@ -108,7 +108,7 @@ impl CsvDecoderState {
                             match std::str::from_utf8(&self.output[0..self.output_cursor]) {
                                 Ok(output) => {
                                     self.events_success += 1;
-                                    let mut row_packer = std::mem::take(&mut self.row_packer);
+                                    let mut row_packer = self.row_buf.packer();
                                     row_packer.extend((0..self.n_cols).map(|i| {
                                         Datum::String(
                                             if self.next_row_is_header || self.demanded[i] {
@@ -118,10 +118,9 @@ impl CsvDecoderState {
                                             },
                                         )
                                     }));
-                                    self.row_packer = row_packer;
                                     self.output_cursor = 0;
                                     self.ends_cursor = 1;
-                                    Ok(Some(self.row_packer.finish_and_reuse()))
+                                    Ok(Some(self.row_buf.clone()))
                                 }
                                 Err(e) => {
                                     self.events_error += 1;

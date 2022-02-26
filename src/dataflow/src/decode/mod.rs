@@ -132,20 +132,20 @@ impl PreDelimitedFormat {
                     .map_err(|_| DecodeError::Text("Failed to decode UTF-8".to_string()))?;
                 Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
-            PreDelimitedFormat::Regex(regex, row_packer) => {
+            PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeError::Text("Failed to decode UTF-8".to_string()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
                     None => return Ok(None),
                 };
-                row_packer.extend(
+                row_buf.packer().extend(
                     captures
                         .iter()
                         .skip(1)
                         .map(|c| Datum::from(c.map(|c| c.as_str()))),
                 );
-                Ok(Some(row_packer.finish_and_reuse()))
+                Ok(Some(row_buf.clone()))
             }
             PreDelimitedFormat::Protobuf(pb) => pb.get_value(bytes).transpose(),
         }
@@ -616,13 +616,14 @@ fn to_metadata_row(
     upstream_time_millis: Option<i64>,
 ) -> Row {
     let mut row = Row::default();
+    let mut packer = row.packer();
     match partition {
         PartitionId::Kafka(partition) => {
             for item in metadata_items.iter() {
                 match item {
-                    IncludedColumnSource::Partition => row.push(Datum::from(partition)),
+                    IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
                     IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => {
-                        row.push(Datum::from(position))
+                        packer.push(Datum::from(position))
                     }
                     IncludedColumnSource::Timestamp => {
                         let ts =
@@ -632,7 +633,7 @@ fn to_metadata_row(
                             millis = 1000 - millis;
                         }
 
-                        row.push(Datum::from(NaiveDateTime::from_timestamp(
+                        packer.push(Datum::from(NaiveDateTime::from_timestamp(
                             secs,
                             millis * 1_000_000,
                         )))
@@ -644,7 +645,7 @@ fn to_metadata_row(
         PartitionId::None => {
             for item in metadata_items.iter() {
                 match item {
-                    IncludedColumnSource::DefaultPosition => row.push(Datum::from(position)),
+                    IncludedColumnSource::DefaultPosition => packer.push(Datum::from(position)),
                     _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
                 }
             }

@@ -42,7 +42,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex;
-use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
+use mz_repr::{
+    strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, RowPacker, ScalarType,
+};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
@@ -2178,7 +2180,7 @@ fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    fn strip_nulls(a: Datum, row: &mut Row) {
+    fn strip_nulls(a: Datum, row: &mut RowPacker) {
         match a {
             Datum::Map(dict) => row.push_dict_with(|row| {
                 for (k, v) in dict.iter() {
@@ -4899,14 +4901,15 @@ fn regexp_match_static<'a>(
     needle: &regex::Regex,
 ) -> Result<Datum<'a>, EvalError> {
     let mut row = Row::default();
+    let mut packer = row.packer();
     if needle.captures_len() > 1 {
         // The regex contains capture groups, so return an array containing the
         // matched text in each capture group, unless the entire match fails.
         // Individual capture groups may also be null if that group did not
         // participate in the match.
         match needle.captures(haystack.unwrap_str()) {
-            None => row.push(Datum::Null),
-            Some(captures) => row.push_array(
+            None => packer.push(Datum::Null),
+            Some(captures) => packer.push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: captures.len() - 1,
@@ -4922,8 +4925,8 @@ fn regexp_match_static<'a>(
         // The regex contains no capture groups, so return a one-element array
         // containing the match, or null if there is no match.
         match needle.find(haystack.unwrap_str()) {
-            None => row.push(Datum::Null),
-            Some(mtch) => row.push_array(
+            None => packer.push(Datum::Null),
+            Some(mtch) => packer.push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: 1,

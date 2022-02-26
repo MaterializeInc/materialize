@@ -174,7 +174,7 @@ where
             //
             // This also means that we cannot push MFPs into the upsert operatot, as that would
             // mean persisting EvalErrors, which, also icky.
-            let mut row_packer = mz_repr::Row::default();
+            let mut row_buf = Row::default();
             let stream = stream.flat_map(move |decode_result| {
                 if decode_result.key.is_none() {
                     // This is the same behaviour as regular upsert. It's not pretty, though.
@@ -185,17 +185,17 @@ where
 
                 // Fold metadata into the value if there is in fact a valid value.
                 let value = if let Some(Ok(value)) = decode_result.value {
-                    row_packer.clear();
+                    let mut row_packer = row_buf.packer();
                     row_packer.extend(value.iter());
                     row_packer.extend(decode_result.metadata.iter());
-                    Some(Ok(row_packer.finish_and_reuse()))
+                    Some(Ok(row_buf.clone()))
                 } else {
                     decode_result.value
                 };
                 Some((decode_result.key.unwrap(), value, offset))
             });
 
-            let mut row_packer = mz_repr::Row::default();
+            let mut row_buf = Row::default();
 
             let (upsert_output, upsert_persist_errs) =
                 stream.persistent_upsert(source_name, as_of_frontier, upsert_persist_config);
@@ -211,7 +211,7 @@ where
                                 let mut datums = Vec::with_capacity(source_arity);
                                 datums.extend(key.iter());
                                 datums.extend(value.iter());
-                                evaluate(&datums, &predicates, &position_or, &mut row_packer)
+                                evaluate(&datums, &predicates, &position_or, &mut row_buf)
                                     .map_err(DataflowError::from)
                             })
                             .transpose();
@@ -277,7 +277,7 @@ fn evaluate(
     datums: &[Datum],
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
-    row_packer: &mut mz_repr::Row,
+    row_buf: &mut Row,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
@@ -289,12 +289,12 @@ fn evaluate(
 
     // We pack dummy values in locations that do not reference
     // specific columns.
-    row_packer.clear();
+    let mut row_packer = row_buf.packer();
     row_packer.extend(position_or.iter().map(|x| match x {
         Some(column) => datums[*column],
         None => Datum::Dummy,
     }));
-    Ok(Some(row_packer.finish_and_reuse()))
+    Ok(Some(row_buf.clone()))
 }
 
 /// Internal core upsert logic.
@@ -519,8 +519,8 @@ where
 
 /// `thin` uses information from the source description to find which indexes in the row
 /// are keys and skip them.
-fn thin(key_indices: &[usize], value: &Row, row_packer: &mut Row) -> Row {
-    row_packer.clear();
+fn thin(key_indices: &[usize], value: &Row, row_buf: &mut Row) -> Row {
+    let mut row_packer = row_buf.packer();
     let values = &mut value.iter();
     let mut next_idx = 0;
     for &key_idx in key_indices {
@@ -533,13 +533,13 @@ fn thin(key_indices: &[usize], value: &Row, row_packer: &mut Row) -> Row {
     // Finally, push any columns after the last key index
     row_packer.extend(values);
 
-    row_packer.finish_and_reuse()
+    row_buf.clone()
 }
 
 /// `rehydrate` uses information from the source description to find which indexes in the row
 /// are keys and add them back in in the right places.
-fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_packer: &mut Row) -> Row {
-    row_packer.clear();
+fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_buf: &mut Row) -> Row {
+    let mut row_packer = row_buf.packer();
     let values = &mut thinned_value.iter();
     let mut next_idx = 0;
     for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
@@ -552,7 +552,7 @@ fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_packer: 
     // Finally, push any columns after the last key index
     row_packer.extend(values);
 
-    row_packer.finish_and_reuse()
+    row_buf.clone()
 }
 
 #[cfg(test)]

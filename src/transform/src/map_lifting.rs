@@ -26,7 +26,7 @@ use itertools::Itertools;
 
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::Row;
+use mz_repr::{Row, RowPacker};
 
 use crate::TransformArgs;
 
@@ -183,10 +183,11 @@ impl LiteralLifting {
 
                             let remove_extracted_literals = |row: &mut Row| {
                                 let mut new_row = Row::default();
+                                let mut packer = new_row.packer();
                                 let data = row.unpack();
                                 for i in 0..the_same.len() {
                                     if !the_same[i] {
-                                        new_row.push(data[i]);
+                                        packer.push(data[i]);
                                     }
                                 }
                                 *row = new_row;
@@ -209,9 +210,9 @@ impl LiteralLifting {
                             typ.keys.sort();
                             typ.keys.dedup();
 
-                            row.truncate_datums(typ.arity());
+                            RowPacker::for_existing_row(row).truncate_datums(typ.arity());
                             for (row, _cnt) in rows.iter_mut() {
-                                row.truncate_datums(typ.arity());
+                                RowPacker::for_existing_row(row).truncate_datums(typ.arity());
                             }
                         }
 

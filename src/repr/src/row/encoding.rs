@@ -27,7 +27,7 @@ use crate::gen::row::{
     ProtoArray, ProtoArrayDimension, ProtoDate, ProtoDatum, ProtoDatumOther, ProtoDict,
     ProtoDictElement, ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
 };
-use crate::{Datum, Row};
+use crate::{Datum, Row, RowPacker};
 
 impl Codec for Row {
     fn codec_name() -> String {
@@ -166,7 +166,7 @@ impl From<&Row> for ProtoRow {
     }
 }
 
-impl Row {
+impl RowPacker<'_> {
     fn try_push_proto(&mut self, x: &ProtoDatum) -> Result<(), String> {
         match &x.datum_type {
             Some(DatumType::Other(o)) => match ProtoDatumOther::from_i32(*o) {
@@ -278,8 +278,9 @@ impl TryFrom<&ProtoRow> for Row {
     fn try_from(x: &ProtoRow) -> Result<Self, Self::Error> {
         // TODO: Try to pre-size this.
         let mut row = Row::default();
+        let mut packer = row.packer();
         for d in x.datums.iter() {
-            row.try_push_proto(d)?;
+            packer.try_push_proto(d)?;
         }
         Ok(row)
     }
@@ -301,7 +302,9 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut row = Row::pack(vec![
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([
             Datum::False,
             Datum::True,
             Datum::Int16(1),
@@ -334,24 +337,25 @@ mod tests {
             Datum::Dummy,
             Datum::Null,
         ]);
-        row.push_array(
-            &[ArrayDimension {
-                lower_bound: 2,
-                length: 2,
-            }],
-            vec![Datum::Int32(31), Datum::Int32(32)],
-        )
-        .expect("valid array");
-        row.push_list_with(|row| {
-            row.push(Datum::String("33"));
-            row.push_list_with(|row| {
-                row.push(Datum::String("34"));
-                row.push(Datum::String("35"));
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 2,
+                    length: 2,
+                }],
+                vec![Datum::Int32(31), Datum::Int32(32)],
+            )
+            .expect("valid array");
+        packer.push_list_with(|packer| {
+            packer.push(Datum::String("33"));
+            packer.push_list_with(|packer| {
+                packer.push(Datum::String("34"));
+                packer.push(Datum::String("35"));
             });
-            row.push(Datum::String("36"));
-            row.push(Datum::String("37"));
+            packer.push(Datum::String("36"));
+            packer.push(Datum::String("37"));
         });
-        row.push_dict_with(|row| {
+        packer.push_dict_with(|row| {
             // Add a bunch of data to the hash to ensure we don't get a
             // HashMap's random iteration anywhere in the encode/decode path.
             let mut i = 38;

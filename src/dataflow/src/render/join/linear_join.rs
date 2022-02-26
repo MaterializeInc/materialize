@@ -181,21 +181,23 @@ where
     ) -> Collection<G, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let mut row_packer = Row::default();
+            let mut row_buf = Row::default();
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
-                    row_packer.try_extend(
+                    row_buf.packer().try_extend(
                         stream_key
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
-                    let key = row_packer.finish_and_reuse();
-                    row_packer.extend(stream_thinning.iter().map(|e| datums_local[*e]));
-                    let value = row_packer.finish_and_reuse();
+                    let key = row_buf.clone();
+                    row_buf
+                        .packer()
+                        .extend(stream_thinning.iter().map(|e| datums_local[*e]));
+                    let value = row_buf.clone();
                     Ok((key, value))
                 }
             });

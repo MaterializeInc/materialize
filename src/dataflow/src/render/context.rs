@@ -170,21 +170,21 @@ where
     /// `flat_map` methods which allows this and can reduce the work done.
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         let mut datum_vec = DatumVec::new();
-        let mut row_builder = Row::default();
+        let mut row_buf = Row::default();
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
                 oks.as_collection(move |k, v| {
                     let borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_builder.extend(&*borrow);
-                    row_builder.finish_and_reuse()
+                    row_buf.packer().extend(&*borrow);
+                    row_buf.clone()
                 }),
                 errs.as_collection(|k, &()| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
                 oks.as_collection(move |k, v| {
                     let borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_builder.extend(&*borrow);
-                    row_builder.finish_and_reuse()
+                    row_buf.packer().extend(&*borrow);
+                    row_buf.clone()
                 }),
                 errs.as_collection(|k, &()| k.clone()),
             ),
@@ -568,17 +568,19 @@ where
                     .clone()
                     .expect("Collection constructed above");
 
-                let mut row_packer = Row::default();
+                let mut row_buf = Row::default();
 
                 let mut datums = DatumVec::new();
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
                     // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
                     let datums = datums.borrow_with(&row);
                     let temp_storage = RowArena::new();
-                    row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    let key_row = row_packer.finish_and_reuse();
-                    row_packer.extend(thinning.iter().map(|c| datums[*c]));
-                    let val_row = row_packer.finish_and_reuse();
+                    row_buf
+                        .packer()
+                        .try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+                    let key_row = row_buf.clone();
+                    row_buf.packer().extend(thinning.iter().map(|c| datums[*c]));
+                    let val_row = row_buf.clone();
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
