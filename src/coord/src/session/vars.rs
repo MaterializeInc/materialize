@@ -41,11 +41,11 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
 };
 
-const CLUSTER: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("cluster"),
-    value: "default",
-    description: "Sets the current cluster.",
-};
+// const CLUSTER: ServerVar<str> = ServerVar {
+//     name: static_uncased_str!("cluster"),
+//     value: "default",
+//     description: "Sets the current cluster.",
+// };
 
 const DATABASE: ServerVar<str> = ServerVar {
     name: static_uncased_str!("database"),
@@ -460,10 +460,11 @@ impl Vars {
         self.date_style.value
     }
 
-    pub fn cluster(&self) -> String {
-        "default".to_string()
-        // self.cluster.value()
-    }
+    // /// Returns cluster name
+    // pub fn cluster(&self) -> String {
+    //     "default".to_string()
+    //     // self.cluster.value()
+    // }
 
     /// Returns the value of the `database` configuration parameter.
     pub fn database(&self) -> &str {

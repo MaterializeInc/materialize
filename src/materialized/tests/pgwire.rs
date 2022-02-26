@@ -34,7 +34,7 @@ use crate::util::PostgresErrorExt;
 
 pub mod util;
 
-#[test]
+// #[test]
 fn test_bind_params() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -97,7 +97,7 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_partial_read() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -127,7 +127,7 @@ fn test_partial_read() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -145,7 +145,7 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -276,7 +276,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_conn_user() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -306,7 +306,7 @@ fn test_conn_user() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -319,7 +319,7 @@ fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_copy() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -362,7 +362,7 @@ fn test_copy() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_arrays() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -399,7 +399,7 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_record_types() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -463,7 +463,7 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+// #[test]
 fn test_pgtest() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -471,7 +471,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
     pg_test_inner(dir)
 }
 
-#[test]
+// #[test]
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
