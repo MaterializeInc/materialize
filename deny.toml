@@ -161,9 +161,6 @@ allow-git = [
     # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55
     "https://github.com/blackbeam/rust_mysql_common.git",
 
-    # See the patch in Cargo.toml.
-    "https://github.com/MaterializeInc/headers.git",
-
     # Waiting on several PRs to a mostly-abandoned upstream library.
     "https://github.com/MaterializeInc/pubnub-rust.git",
 
