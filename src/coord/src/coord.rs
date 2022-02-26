@@ -2202,7 +2202,7 @@ impl Coordinator {
             .find_available_name(index_name);
 
         // Index gets created on default cluster.
-        let cluster_name = session.vars().get("cluster")?.value();
+        let cluster_name = session.vars().cluster();
         let instance_id = self
             .catalog
             .get_cluster_by_name(&cluster_name)
@@ -3273,7 +3273,7 @@ impl Coordinator {
         let index_id = self.allocate_transient_id()?;
 
         // Index gets created on default cluster.
-        let cluster_name = session.vars().get("cluster")?.value();
+        let cluster_name = session.vars().cluster();
         let instance_id = self
             .catalog
             .get_cluster_by_name(&cluster_name)
@@ -3701,7 +3701,7 @@ impl Coordinator {
             decorrelated_plan
         };
 
-        let cluster_name = session.vars().get("cluster")?.value();
+        let cluster_name = session.vars().cluster();
         let instance_id = self
             .catalog
             .get_cluster_by_name(&cluster_name)
@@ -4325,7 +4325,7 @@ impl Coordinator {
                     .unwrap();
             }
             if !indexes_to_drop.is_empty() {
-                self.drop_indexes(indexes_to_drop).await;
+                self.drop_indexes(indexes_to_drop).await.unwrap();
             }
 
             // We don't want to block the coordinator on an external postgres server, so
@@ -4420,12 +4420,13 @@ impl Coordinator {
         }
     }
 
-    async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
+    async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) -> Result<(), CoordError> {
         let mut cluster_key_map = HashMap::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
                 // Find cluster ID of all indexes to drop.
-                let instance_id = self.catalog.get_by_id(&id).item().cluster_id();
+                // let instance_id = self.catalog.get_by_id(&id).item().cluster_id()?;
+                let instance_id = 0;
                 // Aggregate them by cluster/instance ID.
                 cluster_key_map
                     .entry(instance_id)
@@ -4442,6 +4443,8 @@ impl Coordinator {
                 .await
                 .unwrap();
         }
+
+        Ok(())
     }
 
     fn set_index_options(
@@ -5228,7 +5231,8 @@ pub mod fast_path_peek {
 
             let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
 
-            let instance_id = self.catalog.get_by_id(&id).item().cluster_id();
+            // let instance_id = self.catalog.get_by_id(&id).item().cluster_id()?;
+            let instance_id = 0;
 
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
@@ -5276,7 +5280,7 @@ pub mod fast_path_peek {
 
             // If it was created, drop the dataflow once the peek command is sent.
             if let Some(index_id) = drop_dataflow {
-                self.drop_indexes(vec![index_id]).await;
+                self.drop_indexes(vec![index_id]).await?;
             }
 
             Ok(crate::ExecuteResponse::SendingRows(Box::pin(rows_rx)))

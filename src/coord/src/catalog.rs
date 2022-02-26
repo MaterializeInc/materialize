@@ -617,6 +617,13 @@ impl CatalogItem {
         }
     }
 
+    pub fn cluster_id(&self) -> Result<usize, SqlCatalogError> {
+        match &self {
+            CatalogItem::Index(index) => Ok(index.cluster_id),
+            _ => Err(SqlCatalogError::UnknownCluster("default".to_string())),
+        }
+    }
+
     pub fn source_connector(&self, name: &FullName) -> Result<&SourceConnector, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => Ok(&source.connector),
@@ -731,13 +738,6 @@ impl CatalogItem {
             connector.requires_single_materialization()
         } else {
             false
-        }
-    }
-
-    pub fn cluster_id(&self) -> usize {
-        match self {
-            CatalogItem::Index(index) => index.cluster_id,
-            _ => unreachable!(),
         }
     }
 }

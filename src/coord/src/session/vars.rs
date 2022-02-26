@@ -162,7 +162,7 @@ pub struct Vars {
     application_name: SessionVar<str>,
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
-    cluster: SessionVar<str>,
+    // cluster: ServerVar<str>,
     database: SessionVar<str>,
     date_style: ServerVar<str>,
     extra_float_digits: SessionVar<i32>,
@@ -184,7 +184,7 @@ impl Default for Vars {
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
-            cluster: SessionVar::new(&CLUSTER),
+            // cluster: CLUSTER,
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
@@ -210,7 +210,7 @@ impl Vars {
             &self.application_name as &dyn Var,
             &self.client_encoding,
             &self.client_min_messages,
-            &self.cluster,
+            // &self.cluster,
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
@@ -260,8 +260,8 @@ impl Vars {
             Ok(&self.client_encoding)
         } else if name == CLIENT_MIN_MESSAGES.name {
             Ok(&self.client_min_messages)
-        } else if name == CLUSTER.name {
-            Ok(&self.cluster)
+        // } else if name == CLUSTER.name {
+        //     Ok(&self.cluster)
         } else if name == DATABASE.name {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
@@ -326,8 +326,8 @@ impl Vars {
                     valid_values: Some(ClientSeverity::valid_values()),
                 });
             }
-        } else if name == CLUSTER.name {
-            self.cluster.set(value, local)
+        // } else if name == CLUSTER.name {
+        //     Err(CoordError::ReadOnlyParameter(&CLUSTER))
         } else if name == DATABASE.name {
             self.database.set(value, local)
         } else if name == DATE_STYLE.name {
@@ -416,7 +416,7 @@ impl Vars {
             application_name,
             client_encoding: _,
             client_min_messages,
-            cluster,
+            // cluster,
             database,
             date_style: _,
             extra_float_digits,
@@ -433,7 +433,7 @@ impl Vars {
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
-        cluster.end_transaction(action);
+        // cluster.end_transaction(action);
         database.end_transaction(action);
         qgm_optimizations.end_transaction(action);
         extra_float_digits.end_transaction(action);
@@ -460,8 +460,9 @@ impl Vars {
         self.date_style.value
     }
 
-    pub fn cluster(&self) -> &str {
-        self.cluster.value()
+    pub fn cluster(&self) -> String {
+        "default".to_string()
+        // self.cluster.value()
     }
 
     /// Returns the value of the `database` configuration parameter.

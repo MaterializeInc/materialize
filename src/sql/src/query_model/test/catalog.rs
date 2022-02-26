@@ -222,7 +222,7 @@ impl SessionCatalog for TestCatalog {
     }
 
     fn resolve_cluster(&self, _item_name: &PartialName) -> Result<String, CatalogError> {
-        Ok("cluster".to_owned())
+        Ok("default".to_owned())
     }
 
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
