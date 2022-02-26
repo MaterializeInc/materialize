@@ -380,7 +380,7 @@ where
                                 &envelope,
                                 metadata_columns,
                                 &mut linear_operators,
-                                storage_state.metrics.clone(),
+                                storage_state.unspecified_metrics.clone(),
                             ),
                             SourceType::ByteStream(source) => render_decode(
                                 &source,
@@ -388,7 +388,7 @@ where
                                 dataflow_debug_name,
                                 metadata_columns,
                                 &mut linear_operators,
-                                storage_state.metrics.clone(),
+                                storage_state.unspecified_metrics.clone(),
                             ),
                         };
                         if let Some(tok) = extra_token {

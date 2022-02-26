@@ -501,6 +501,7 @@ pub mod partitioned {
     use timely::progress::{Antichain, ChangeBatch};
     use tracing::debug;
 
+    use crate::client::ComputeInstanceId;
     use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
@@ -656,7 +657,9 @@ pub mod partitioned {
     /// workers in order to present as a single worker.
     pub struct PartitionedClientState {
         /// Upper frontiers for indexes, sources, and sinks.
-        uppers: HashMap<GlobalId, MutableAntichain<Timestamp>>,
+        ///
+        /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
+        uppers: HashMap<(GlobalId, Option<ComputeInstanceId>), MutableAntichain<Timestamp>>,
         /// Pending responses for a peek; returnable once all are available.
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
@@ -666,7 +669,9 @@ pub mod partitioned {
         ///
         /// `None` is a sentinel value indicating that the tail has been dropped and no
         /// further messages should be forwarded.
-        pending_tails: HashMap<GlobalId, Option<PendingTail>>,
+        ///
+        /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
+        pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail>>,
         /// The next responses to return immediately, if any
         stashed_responses: Fuse<Box<dyn Iterator<Item = Response> + Send>>,
     }
@@ -692,6 +697,11 @@ pub mod partitioned {
             // Temporary storage for identifiers to add to and remove from frontier tracking.
             let mut start = Vec::new();
             let mut cease = Vec::new();
+            let instance = if let Command::Compute(_, instance) = command {
+                Some(*instance)
+            } else {
+                None
+            };
             command.frontier_tracking(&mut start, &mut cease);
             // Apply the determined effects of the command to `self.uppers`.
             for id in start.into_iter() {
@@ -700,11 +710,11 @@ pub mod partitioned {
                     <Timestamp as timely::progress::Timestamp>::minimum(),
                     self.parts as i64,
                 )));
-                let previous = self.uppers.insert(id, frontier);
+                let previous = self.uppers.insert((id, instance), frontier);
                 assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
             }
             for id in cease.into_iter() {
-                let previous = self.uppers.remove(&id);
+                let previous = self.uppers.remove(&(id, instance));
                 if previous.is_none() {
                     debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
                 }
@@ -719,9 +729,8 @@ pub mod partitioned {
         ) -> Box<dyn Iterator<Item = Response> + Send> {
             match message {
                 Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
-                    assert_eq!(instance, super::DEFAULT_COMPUTE_INSTANCE_ID);
                     for (id, changes) in list.iter_mut() {
-                        if let Some(frontier) = self.uppers.get_mut(id) {
+                        if let Some(frontier) = self.uppers.get_mut(&(*id, Some(instance))) {
                             let iter = frontier.update_iter(changes.drain());
                             changes.extend(iter);
                         } else {
@@ -752,7 +761,7 @@ pub mod partitioned {
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
                     for (id, changes) in feedback.changes.iter_mut() {
-                        if let Some(frontier) = self.uppers.get_mut(id) {
+                        if let Some(frontier) = self.uppers.get_mut(&(*id, None)) {
                             let iter = frontier.update_iter(changes.drain());
                             changes.extend(iter);
                         } else {
@@ -805,15 +814,18 @@ pub mod partitioned {
                     }
                 }
                 Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
-                    let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
-                        Some(PendingTail {
-                            frontiers: HashMap::new(),
-                            change_batch: Default::default(),
-                            buffer: Vec::new(),
-                            parts: self.parts,
-                            reported_frontier: Antichain::from_elem(0),
-                        })
-                    });
+                    let maybe_entry = self
+                        .pending_tails
+                        .entry((id, Some(instance)))
+                        .or_insert_with(|| {
+                            Some(PendingTail {
+                                frontiers: HashMap::new(),
+                                change_batch: Default::default(),
+                                buffer: Vec::new(),
+                                parts: self.parts,
+                                reported_frontier: Antichain::from_elem(0),
+                            })
+                        });
 
                     let entry = match maybe_entry {
                         None => {

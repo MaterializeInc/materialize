@@ -58,7 +58,7 @@ pub struct StorageState {
     /// will contain a handle to it.
     pub persisted_sources: PersistedSourceManager,
     /// Metrics reported by all dataflows.
-    pub metrics: Metrics,
+    pub unspecified_metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
     /// Tracks the timestamp binding durability information that has been sent over `response_tx`.

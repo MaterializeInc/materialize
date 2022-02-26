@@ -9,7 +9,7 @@
 
 //! An interactive dataflow server.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -18,7 +18,6 @@ use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
-use mz_dataflow_types::sources::AwsExternalId;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
@@ -28,7 +27,9 @@ use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{Command, LocalClient, Response};
+use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::client::{Command, ComputeCommand, LocalClient, Response};
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::PeekResponse;
 use mz_expr::{GlobalId, RowSetFinishing};
 use mz_ore::metrics::MetricsRegistry;
@@ -84,9 +85,19 @@ pub struct Server {
 pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     assert!(config.workers > 0);
 
+    // Various metrics related things.
     let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
     let source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
     let sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
+    let unspecified_metrics = Metrics::register_with(&config.metrics_registry);
+    let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
+    // Bundle metrics to conceal complexity.
+    let metrics_bundle = (
+        source_metrics,
+        sink_metrics,
+        unspecified_metrics,
+        trace_metrics,
+    );
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream and send the responses to the coordinator.
@@ -111,9 +122,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
-    let metrics = Metrics::register_with(&config.metrics_registry);
-    let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let aws_external_id = config.aws_external_id.clone();
+
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let _tokio_guard = tokio_executor.enter();
         let (response_tx, command_rx) = channels.lock().unwrap()
@@ -121,31 +131,20 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
             .take()
             .unwrap();
         let worker_idx = timely_worker.index();
-        let metrics = metrics.clone();
-        let trace_metrics = trace_metrics.clone();
-        let source_metrics = source_metrics.clone();
-        let sink_metrics = sink_metrics.clone();
+        let (source_metrics, _sink_metrics, unspecified_metrics, _trace_metrics) =
+            metrics_bundle.clone();
         let timely_worker_index = timely_worker.index();
         let timely_worker_peers = timely_worker.peers();
         Worker {
             timely_worker,
-            compute_state: ComputeState {
-                traces: TraceManager::new(trace_metrics, worker_idx),
-                dataflow_tokens: HashMap::new(),
-                tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-                sink_write_frontiers: HashMap::new(),
-                pending_peeks: Vec::new(),
-                reported_frontiers: HashMap::new(),
-                sink_metrics,
-                materialized_logger: None,
-            },
+            compute_state: BTreeMap::default(),
             storage_state: StorageState {
                 local_inputs: HashMap::new(),
                 source_descriptions: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 persisted_sources: PersistedSourceManager::new(),
-                metrics,
+                unspecified_metrics,
                 persist: config.persister.clone(),
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
@@ -158,7 +157,10 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
             boundary: boundary::EventLinkBoundary::new(),
             command_rx,
             response_tx,
-            command_metrics: server_metrics.for_worker_id(worker_idx),
+            metrics_bundle: (
+                server_metrics.for_worker_id(worker_idx),
+                metrics_bundle.clone(),
+            ),
         }
         .run()
     })
@@ -190,7 +192,7 @@ where
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The state associated with rendering dataflows.
-    compute_state: ComputeState,
+    compute_state: BTreeMap<ComputeInstanceId, ComputeState>,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
     /// The boundary between storage and compute layers.
@@ -200,7 +202,10 @@ where
     /// The channel over which frontier information is reported.
     response_tx: mpsc::UnboundedSender<Response>,
     /// Metrics bundle.
-    command_metrics: WorkerMetrics,
+    metrics_bundle: (
+        WorkerMetrics,
+        (SourceBaseMetrics, SinkBaseMetrics, Metrics, TraceMetrics),
+    ),
 }
 
 impl<'w, A, B> Worker<'w, A, B>
@@ -210,10 +215,18 @@ where
 {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
+        let mut compute_instances = Vec::new();
+
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
-            self.compute_state.traces.maintenance();
+            for instance in compute_instances.iter() {
+                self.compute_state
+                    .get_mut(&instance)
+                    .unwrap()
+                    .traces
+                    .maintenance();
+            }
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -222,7 +235,10 @@ where
             self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
-            self.activate_compute().report_compute_frontiers();
+            for instance_id in compute_instances.iter() {
+                self.activate_compute(*instance_id)
+                    .report_compute_frontiers();
+            }
             self.activate_storage().update_rt_timestamps();
             self.activate_storage().report_timestamp_bindings();
 
@@ -239,26 +255,57 @@ where
                     }
                 }
             }
-            self.command_metrics.observe_command_queue(&cmds);
+            self.metrics_bundle.0.observe_command_queue(&cmds);
             for cmd in cmds {
-                self.command_metrics.observe_command(&cmd);
+                self.metrics_bundle.0.observe_command(&cmd);
+
+                if let Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) =
+                    &cmd
+                {
+                    let compute_instance = ComputeState {
+                        traces: TraceManager::new(
+                            (self.metrics_bundle.1).3.clone(),
+                            self.timely_worker.index(),
+                        ),
+                        dataflow_tokens: HashMap::new(),
+                        tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+                        sink_write_frontiers: HashMap::new(),
+                        pending_peeks: Vec::new(),
+                        reported_frontiers: HashMap::new(),
+                        sink_metrics: (self.metrics_bundle.1).1.clone(),
+                        materialized_logger: None,
+                    };
+                    self.compute_state.insert(*instance_id, compute_instance);
+                    compute_instances.push(*instance_id);
+                }
+
                 self.handle_command(cmd);
             }
 
-            self.command_metrics
-                .observe_pending_peeks(&self.compute_state.pending_peeks);
-            self.command_metrics.observe_command_finish();
-            self.activate_compute().process_peeks();
-            self.activate_compute().process_tails();
+            self.metrics_bundle.0.observe_command_finish();
+            for instance_id in compute_instances.iter() {
+                self.metrics_bundle
+                    .0
+                    .observe_pending_peeks(&self.compute_state[instance_id].pending_peeks);
+                self.activate_compute(*instance_id).process_peeks();
+                self.activate_compute(*instance_id).process_tails();
+            }
         }
-        self.compute_state.traces.del_all_traces();
-        self.activate_compute().shutdown_logging();
+        for instance_id in compute_instances.iter() {
+            self.compute_state
+                .get_mut(instance_id)
+                .unwrap()
+                .traces
+                .del_all_traces();
+            self.activate_compute(*instance_id).shutdown_logging();
+        }
     }
 
-    fn activate_compute(&mut self) -> ActiveComputeState<A, B> {
+    fn activate_compute(&mut self, instance_id: ComputeInstanceId) -> ActiveComputeState<A, B> {
         ActiveComputeState {
             timely_worker: &mut *self.timely_worker,
-            compute_state: &mut self.compute_state,
+            compute_state: self.compute_state.get_mut(&instance_id).unwrap(),
+            instance_id,
             response_tx: &mut self.response_tx,
             boundary: &mut self.boundary,
         }
@@ -274,7 +321,9 @@ where
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Compute(cmd, _instance) => self.activate_compute().handle_compute_command(cmd),
+            Command::Compute(cmd, instance) => {
+                self.activate_compute(instance).handle_compute_command(cmd)
+            }
             Command::Storage(cmd) => self.activate_storage().handle_storage_command(cmd),
         }
     }
