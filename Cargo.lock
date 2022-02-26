@@ -2029,8 +2029,9 @@ dependencies = [
 
 [[package]]
 name = "headers"
-version = "0.3.5"
-source = "git+https://github.com/MaterializeInc/headers.git#b968d50f79907ea74ad42c8cc83c950314f1ca31"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cff78e5788be1e0ab65b04d306b2ed5092c815ec97ec70f4ebd5aee158aa55d"
 dependencies = [
  "base64",
  "bitflags",
@@ -2045,7 +2046,8 @@ dependencies = [
 [[package]]
 name = "headers-core"
 version = "0.2.0"
-source = "git+https://github.com/MaterializeInc/headers.git#b968d50f79907ea74ad42c8cc83c950314f1ca31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7f66481bfee273957b1f20485a4ff3362987f85b2c236580d81b4eb7a326429"
 dependencies = [
  "http",
 ]
@@ -3215,7 +3217,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "md-5",
- "mz-expr_test_util",
+ "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
  "mz-pgrepr",
@@ -3238,7 +3240,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-expr_test_util"
+name = "mz-expr-test-util"
 version = "0.0.0"
 dependencies = [
  "datadriven",
@@ -3247,7 +3249,7 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-repr",
- "mz-repr_test_util",
+ "mz-repr-test-util",
  "proc-macro2",
  "serde",
  "serde_json",
@@ -3687,7 +3689,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-repr_test_util"
+name = "mz-repr-test-util"
 version = "0.0.0"
 dependencies = [
  "chrono",
@@ -3737,7 +3739,7 @@ dependencies = [
  "mz-ccsr",
  "mz-dataflow-types",
  "mz-expr",
- "mz-expr_test_util",
+ "mz-expr-test-util",
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",
@@ -3927,7 +3929,7 @@ dependencies = [
  "itertools",
  "mz-dataflow-types",
  "mz-expr",
- "mz-expr_test_util",
+ "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
  "mz-repr",

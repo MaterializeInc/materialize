@@ -25,7 +25,7 @@ members = [
     "src/lowertest",
     "src/materialized",
     "src/metabase",
-    "src/mz-process-collector",
+    "src/process-collector",
     "src/mzcloud-cli",
     "src/ore",
     "src/persist-types",
@@ -82,8 +82,6 @@ debug = 1
 [patch.crates-io]
 # Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into a release.
 autotools = { git = "https://github.com/lu-zero/autotools-rs.git" }
-# Waiting on https://github.com/hyperium/headers/pull/99.
-headers = { git = "https://github.com/MaterializeInc/headers.git" }
 # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55 to be released
 mysql_common = { git = "https://github.com/blackbeam/rust_mysql_common.git" }
 # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
