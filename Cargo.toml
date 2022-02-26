@@ -25,7 +25,7 @@ members = [
     "src/lowertest",
     "src/materialized",
     "src/metabase",
-    "src/mz-process-collector",
+    "src/process-collector",
     "src/mzcloud-cli",
     "src/ore",
     "src/persist-types",
