@@ -65,6 +65,7 @@ pub(crate) fn import_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     storage_state: &mut crate::server::StorageState,
     scope: &mut G,
+    id: SourceInstanceId,
     persisted_name: Option<String>,
 ) -> (
     LocalInput,
@@ -102,8 +103,7 @@ where
             let persist_err_collection = persist_err_stream
                 .concat(&decode_err_stream)
                 .map(move |(err, ts, diff)| {
-                    let err =
-                        SourceError::new(stream_name.clone(), SourceErrorDetails::Persistence(err));
+                    let err = SourceError::new(id, SourceErrorDetails::Persistence(err));
                     (err.into(), ts, diff)
                 })
                 .as_collection();
@@ -160,6 +160,12 @@ where
     // Tokens that we should return from the method.
     let mut needed_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
 
+    // This uid must be unique across all different instantiations of a source
+    let uid = SourceInstanceId {
+        source_id: src_id,
+        dataflow_id,
+    };
+
     // Before proceeding, we may need to remediate sources with non-trivial relational
     // expressions that post-process the bare source. If the expression is trivial, a
     // get of the bare source, we can present `src.operators` to the source directly.
@@ -172,7 +178,7 @@ where
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
             let (local_input, (ok, err)) =
-                import_table(as_of_frontier, storage_state, scope, persisted_name);
+                import_table(as_of_frontier, storage_state, scope, uid, persisted_name);
             storage_state.local_inputs.insert(src_id, local_input);
 
             // TODO(mcsherry): Local tables are a special non-source we should relocate.
@@ -188,12 +194,6 @@ where
             timeline: _,
         } => {
             // TODO(benesch): this match arm is hard to follow. Refactor.
-
-            // This uid must be unique across all different instantiations of a source
-            let uid = SourceInstanceId {
-                source_id: src_id,
-                dataflow_id,
-            };
 
             // All sources should push their various error streams into this vector,
             // whose contents will be concatenated and inserted along the collection.
@@ -230,7 +230,6 @@ where
             let source_name = format!("{}-{}", connector.name(), uid);
             let source_config = SourceConfig {
                 name: source_name.clone(),
-                sql_name: src.name.clone(),
                 upstream_name: connector.upstream_name().map(ToOwned::to_owned),
                 id: uid,
                 scope,
@@ -251,7 +250,7 @@ where
                 pubnub_connector,
             ) = connector
             {
-                let source = PubNubSourceReader::new(src.name.clone(), pubnub_connector);
+                let source = PubNubSourceReader::new(uid, pubnub_connector);
                 let ((ok_stream, err_stream), capability) =
                     source::create_source_simple(source_config, source);
 
@@ -264,11 +263,8 @@ where
 
                 (ok_stream.as_collection(), capability)
             } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
-                let source = PostgresSourceReader::new(
-                    src.name.clone(),
-                    pg_connector,
-                    source_config.base_metrics,
-                );
+                let source =
+                    PostgresSourceReader::new(uid, pg_connector, source_config.base_metrics);
 
                 let ((ok_stream, err_stream), capability) =
                     source::create_source_simple(source_config, source);
@@ -431,6 +427,7 @@ where
 
                                 let (upsert_ok, upsert_err) = super::upsert::upsert(
                                     &upsert_operator_name,
+                                    uid,
                                     &transformed_results,
                                     as_of_frontier,
                                     &mut linear_operators,
@@ -507,6 +504,7 @@ where
                                         let (flattened_stream, persist_errs) =
                                             envelope_none::persist_and_replay(
                                                 &source_name,
+                                                uid,
                                                 &flattened_stream,
                                                 as_of_frontier,
                                                 envelope_config.clone(),

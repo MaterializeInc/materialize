@@ -28,6 +28,7 @@ use tracing::{info, warn};
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
+use mz_expr::SourceInstanceId;
 use mz_repr::{Datum, Row};
 
 use self::metrics::PgSourceMetrics;
@@ -42,8 +43,7 @@ lazy_static! {
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    /// Used to produce useful error messages
-    source_name: String,
+    source_id: SourceInstanceId,
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
@@ -124,15 +124,15 @@ macro_rules! try_recoverable {
 impl PostgresSourceReader {
     /// Constructs a new instance
     pub fn new(
-        source_name: String,
+        source_id: SourceInstanceId,
         connector: PostgresSourceConnector,
         metrics: &SourceBaseMetrics,
     ) -> Self {
         Self {
-            source_name: source_name.clone(),
+            source_id,
             connector,
             lsn: 0.into(),
-            metrics: PgSourceMetrics::new(metrics, source_name),
+            metrics: PgSourceMetrics::new(metrics, source_id),
         }
     }
 
@@ -440,7 +440,7 @@ impl SimpleSource for PostgresSourceReader {
             loop {
                 let file =
                     tokio::fs::File::from_std(tempfile::tempfile().map_err(|e| SourceError {
-                        source_name: self.source_name.clone(),
+                        source_id: self.source_id,
                         error: SourceErrorDetails::FileIO(e.to_string()),
                     })?);
                 let mut writer = tokio::io::BufWriter::new(file);
@@ -448,30 +448,30 @@ impl SimpleSource for PostgresSourceReader {
                     Ok(_) => {
                         info!(
                             "replication snapshot for source {} succeeded",
-                            &self.source_name
+                            &self.source_id
                         );
                         break;
                     }
                     Err(ReplicationError::Recoverable(e)) => {
                         writer.flush().await.map_err(|e| SourceError {
-                            source_name: self.source_name.clone(),
+                            source_id: self.source_id,
                             error: SourceErrorDetails::Initialization(e.to_string()),
                         })?;
                         warn!(
                             "replication snapshot for source {} failed, retrying: {}",
-                            &self.source_name, e
+                            &self.source_id, e
                         );
                         let reader = BufReader::new(writer.into_inner().into_std().await);
                         self.revert_snapshot(&mut snapshot_tx, reader)
                             .await
                             .map_err(|e| SourceError {
-                                source_name: self.source_name.clone(),
+                                source_id: self.source_id,
                                 error: SourceErrorDetails::FileIO(e.to_string()),
                             })?;
                     }
                     Err(ReplicationError::Fatal(e)) => {
                         return Err(SourceError {
-                            source_name: self.source_name,
+                            source_id: self.source_id,
                             error: SourceErrorDetails::Initialization(e.to_string()),
                         })
                     }
@@ -487,12 +487,12 @@ impl SimpleSource for PostgresSourceReader {
                 Err(ReplicationError::Recoverable(e)) => {
                     warn!(
                         "replication for source {} interrupted, retrying: {}",
-                        &self.source_name, e
+                        self.source_id, e
                     )
                 }
                 Err(ReplicationError::Fatal(e)) => {
                     return Err(SourceError {
-                        source_name: self.source_name,
+                        source_id: self.source_id,
                         error: SourceErrorDetails::FileIO(e.to_string()),
                     })
                 }
@@ -501,7 +501,7 @@ impl SimpleSource for PostgresSourceReader {
 
             // TODO(petrosagg): implement exponential back-off
             tokio::time::sleep(Duration::from_secs(3)).await;
-            info!("resuming replication for source {}", &self.source_name);
+            info!("resuming replication for source {}", self.source_id);
         }
     }
 }

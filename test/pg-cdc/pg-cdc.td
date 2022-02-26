@@ -419,7 +419,7 @@ INSERT INTO pk_table VALUES (99999);
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
 ! SELECT COUNT(*) = 0 FROM pk_table;
-contains:Source error: materialize.public.mz_source: file IO: db error: ERROR: publication "mz_source" does not exist
+regex:Source error: .*: file IO: db error: ERROR: publication "mz_source" does not exist
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA conflict_schema CASCADE;

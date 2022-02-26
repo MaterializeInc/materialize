@@ -55,6 +55,12 @@ name
 materialize.public.mz_data
 materialize.public.mz_data_primary_idx
 
+# Test that data can be selected from the source before renaming.
+> SELECT * FROM mz_data
+a  b    mz_obj_no
+-----------------
+1  dog  1
+
 > ALTER SOURCE mz_data RENAME TO renamed_mz_data;
 
 > SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_data%';
@@ -66,6 +72,23 @@ materialize.public.mz_data_primary_idx
 name
 -----
 materialize.public.renamed_mz_data
+
+# Test that data can be selected from the source after renaming.
+> SELECT * FROM renamed_mz_data
+a  b    mz_obj_no
+-----------------
+1  dog  1
+
+# Test that data can be selected from the source if it is rematerialized with
+# the new name. This previously tripped an assertion that asserted that a source
+# descriptor never changed; it is in fact okay for the name of a source to
+# change.
+> DROP INDEX mz_data_primary_idx
+> CREATE DEFAULT INDEX ON renamed_mz_data
+> SELECT * FROM renamed_mz_data
+a  b    mz_obj_no
+-----------------
+1  dog  1
 
 > SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
 name

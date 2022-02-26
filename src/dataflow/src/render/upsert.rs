@@ -23,7 +23,7 @@ use mz_dataflow_types::{
     sources::{UpsertEnvelope, UpsertStyle},
     DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails,
 };
-use mz_expr::{EvalError, MirScalarExpr};
+use mz_expr::{EvalError, MirScalarExpr, SourceInstanceId};
 use mz_ore::result::ResultExt;
 use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
@@ -57,6 +57,7 @@ struct UpsertSourceData {
 /// is the responsibility of the caller to ensure that the collection is sealed up.
 pub(crate) fn upsert<G>(
     source_name: &str,
+    source_id: SourceInstanceId,
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
@@ -230,10 +231,9 @@ where
             // should be treating differently. We do not, however, at the current time have to
             // infrastructure for treating these errors differently, so we're adding them to the
             // same error collections.
-            let source_name = source_name.to_owned();
             let upsert_persist_errs = upsert_persist_errs.map(move |(err, ts, diff)| {
                 let source_error =
-                    SourceError::new(source_name.clone(), SourceErrorDetails::Persistence(err));
+                    SourceError::new(source_id, SourceErrorDetails::Persistence(err));
                 (source_error.into(), ts, diff)
             });
 

@@ -7,9 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::source::metrics::SourceBaseMetrics;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use prometheus::core::AtomicU64;
+
+use mz_expr::SourceInstanceId;
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+
+use crate::source::metrics::SourceBaseMetrics;
 
 pub(super) struct PgSourceMetrics {
     pub inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
@@ -23,8 +26,8 @@ pub(super) struct PgSourceMetrics {
 }
 
 impl PgSourceMetrics {
-    pub(super) fn new(base_metrics: &SourceBaseMetrics, source_id: String) -> Self {
-        let labels = &[source_id];
+    pub(super) fn new(base_metrics: &SourceBaseMetrics, source_id: SourceInstanceId) -> Self {
+        let labels = &[source_id.to_string()];
         let pg_metrics = &base_metrics.postgres_source_specific;
         Self {
             inserts: pg_metrics
