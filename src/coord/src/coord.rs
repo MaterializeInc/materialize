@@ -4487,6 +4487,9 @@ impl Coordinator {
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
     async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+        if dataflows.is_empty() {
+            return;
+        }
         let mut in_instance = None;
 
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
