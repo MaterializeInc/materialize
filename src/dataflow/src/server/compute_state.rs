@@ -21,7 +21,7 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, Response};
+use mz_dataflow_types::client::{ComputeCommand, ComputeInstanceId, ComputeResponse, Response};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_expr::GlobalId;
@@ -70,6 +70,8 @@ pub struct ActiveComputeState<'a, A: Allocate, B: ComputeReplay> {
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
+    /// The identifier of the compute instance, for forming responses.
+    pub instance_id: ComputeInstanceId,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<Response>,
     /// The boundary with the Storage layer
@@ -588,9 +590,8 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
     fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(Response::Compute(
-            response,
-            mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID,
-        ));
+        let _ = self
+            .response_tx
+            .send(Response::Compute(response, self.instance_id));
     }
 }
