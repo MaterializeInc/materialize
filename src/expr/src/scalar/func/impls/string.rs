@@ -21,6 +21,7 @@ use mz_ore::result::ResultExt;
 use mz_repr::adt::char::{format_str_trim, Char, CharLength};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
@@ -74,6 +75,13 @@ sqlfunc!(
     #[sqlname = "strtof64"]
     fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
         strconv::parse_float64(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtooid"]
+    fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
+        Ok(Oid(strconv::parse_oid(a)?))
     }
 );
 

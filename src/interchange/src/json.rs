@@ -136,14 +136,14 @@ impl<'a> ToJson for TypedDatum<'_> {
             match &typ.scalar_type {
                 ScalarType::Bool => json!(datum.unwrap_bool()),
                 ScalarType::Int16 => json!(datum.unwrap_int16()),
-                ScalarType::Int32
-                | ScalarType::Oid
+                ScalarType::Int32 => json!(datum.unwrap_int32()),
+                ScalarType::Int64 => json!(datum.unwrap_int64()),
+                ScalarType::Oid
                 | ScalarType::RegClass
                 | ScalarType::RegProc
                 | ScalarType::RegType => {
-                    json!(datum.unwrap_int32())
+                    json!(datum.unwrap_uint32())
                 }
-                ScalarType::Int64 => json!(datum.unwrap_int64()),
                 ScalarType::Float32 => json!(datum.unwrap_float32()),
                 ScalarType::Float64 => json!(datum.unwrap_float64()),
                 ScalarType::Numeric { .. } => {
@@ -251,15 +251,16 @@ fn build_row_schema_field<F: FnMut() -> String>(
 ) -> serde_json::value::Value {
     let mut field_type = match &typ.scalar_type {
         ScalarType::Bool => json!("boolean"),
-        ScalarType::Int16
-        | ScalarType::Int32
-        | ScalarType::Oid
-        | ScalarType::RegClass
-        | ScalarType::RegProc
-        | ScalarType::RegType => {
+        ScalarType::Int16 | ScalarType::Int32 => {
             json!("int")
         }
         ScalarType::Int64 => json!("long"),
+        ScalarType::Oid | ScalarType::RegClass | ScalarType::RegProc | ScalarType::RegType => {
+            json!({
+                "type": "fixed",
+                "size": 4,
+            })
+        }
         ScalarType::Float32 => json!("float"),
         ScalarType::Float64 => json!("double"),
         ScalarType::Date => json!({

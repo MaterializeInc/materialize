@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
+use mz_repr::adt::system::Oid;
 use mz_repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -121,31 +121,14 @@ sqlfunc!(
     #[sqlname = "i32tooid"]
     #[preserves_uniqueness = true]
     fn cast_int32_to_oid(a: i32) -> Oid {
-        Oid(a)
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "i32toregclass"]
-    #[preserves_uniqueness = true]
-    fn cast_int32_to_reg_class(a: i32) -> RegClass {
-        RegClass(a)
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "i32toregproc"]
-    #[preserves_uniqueness = true]
-    fn cast_int32_to_reg_proc(a: i32) -> RegProc {
-        RegProc(a)
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "i32toregtype"]
-    #[preserves_uniqueness = true]
-    fn cast_int32_to_reg_type(a: i32) -> RegType {
-        RegType(a)
+        // For historical reasons in PostgreSQL, the bytes of the `i32` are
+        // reinterpreted as a `u32` without bounds checks, so negative `i32`s
+        // become very large positive OIDs.
+        //
+        // Do not use this as a model for behavior in other contexts. OIDs
+        // should not in general be thought of as freely convertible from
+        // `i32`s.
+        Oid(u32::from_ne_bytes(a.to_ne_bytes()))
     }
 );
 

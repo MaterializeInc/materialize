@@ -66,6 +66,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::True => DatumType::Other(ProtoDatumOther::True.into()),
             Datum::Int16(x) => DatumType::Int16(x.into()),
             Datum::Int32(x) => DatumType::Int32(x),
+            Datum::UInt32(x) => DatumType::Uint32(x),
             Datum::Int64(x) => DatumType::Int64(x),
             Datum::Float32(x) => DatumType::Float32(x.into_inner()),
             Datum::Float64(x) => DatumType::Float64(x.into_inner()),
@@ -190,6 +191,7 @@ impl RowPacker<'_> {
             }
             Some(DatumType::Int32(x)) => self.push(Datum::Int32(*x)),
             Some(DatumType::Int64(x)) => self.push(Datum::Int64(*x)),
+            Some(DatumType::Uint32(x)) => self.push(Datum::UInt32(*x)),
             Some(DatumType::Float32(x)) => self.push(Datum::Float32((*x).into())),
             Some(DatumType::Float64(x)) => self.push(Datum::Float64((*x).into())),
             Some(DatumType::Bytes(x)) => self.push(Datum::Bytes(x)),

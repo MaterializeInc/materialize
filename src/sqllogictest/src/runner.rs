@@ -314,10 +314,10 @@ impl<'a> FromSql<'a> for Slt {
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
-            PgType::OID => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
-            PgType::REGCLASS => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
-            PgType::REGPROC => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
-            PgType::REGTYPE => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
+            PgType::OID => Self(Value::Oid(types::oid_from_sql(raw)?)),
+            PgType::REGCLASS => Self(Value::Oid(types::oid_from_sql(raw)?)),
+            PgType::REGPROC => Self(Value::Oid(types::oid_from_sql(raw)?)),
+            PgType::REGTYPE => Self(Value::Oid(types::oid_from_sql(raw)?)),
             PgType::TEXT | PgType::BPCHAR | PgType::VARCHAR => {
                 Self(Value::Text(types::text_from_sql(raw)?.to_string()))
             }
@@ -442,6 +442,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
+        (Type::Integer, Value::Oid(i)) => i.to_string(),
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
@@ -506,7 +507,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             buf
         }
 
-        (Type::Oid, Value::Int4(o)) => o.to_string(),
+        (Type::Oid, Value::Oid(o)) => o.to_string(),
 
         (_, d) => panic!(
             "Don't know how to format {:?} as {:?} in column {}",

@@ -46,6 +46,8 @@ pub enum Datum<'a> {
     Int32(i32),
     /// A 64-bit signed integer.
     Int64(i64),
+    /// A 32-bit unsigned integer.
+    UInt32(u32),
     /// A 32-bit floating point number.
     Float32(OrderedFloat<f32>),
     /// A 64-bit floating point number.
@@ -314,6 +316,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the 64-bit integer value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Int64`].
+    #[track_caller]
+    pub fn unwrap_uint32(&self) -> u32 {
+        match self {
+            Datum::UInt32(u) => *u,
+            _ => panic!("Datum::unwrap_uint32 called on {:?}", self),
+        }
+    }
+
     #[track_caller]
     pub fn unwrap_ordered_float32(&self) -> OrderedFloat<f32> {
         match self {
@@ -543,13 +558,14 @@ impl<'a> Datum<'a> {
                     (Datum::Int16(_), ScalarType::Int16) => true,
                     (Datum::Int16(_), _) => false,
                     (Datum::Int32(_), ScalarType::Int32) => true,
-                    (Datum::Int32(_), ScalarType::Oid) => true,
-                    (Datum::Int32(_), ScalarType::RegClass) => true,
-                    (Datum::Int32(_), ScalarType::RegProc) => true,
-                    (Datum::Int32(_), ScalarType::RegType) => true,
                     (Datum::Int32(_), _) => false,
                     (Datum::Int64(_), ScalarType::Int64) => true,
                     (Datum::Int64(_), _) => false,
+                    (Datum::UInt32(_), ScalarType::Oid) => true,
+                    (Datum::UInt32(_), ScalarType::RegClass) => true,
+                    (Datum::UInt32(_), ScalarType::RegProc) => true,
+                    (Datum::UInt32(_), ScalarType::RegType) => true,
+                    (Datum::UInt32(_), _) => false,
                     (Datum::Float32(_), ScalarType::Float32) => true,
                     (Datum::Float32(_), _) => false,
                     (Datum::Float64(_), ScalarType::Float64) => true,
@@ -774,6 +790,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Int16(num) => write!(f, "{}", num),
             Datum::Int32(num) => write!(f, "{}", num),
             Datum::Int64(num) => write!(f, "{}", num),
+            Datum::UInt32(num) => write!(f, "{}", num),
             Datum::Float32(num) => write!(f, "{}", num),
             Datum::Float64(num) => write!(f, "{}", num),
             Datum::Date(d) => write!(f, "{}", d),
@@ -1205,13 +1222,13 @@ impl<'a, E> DatumType<'a, E> for Oid {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::Int32(a)) => Ok(Oid(a)),
+            Ok(Datum::UInt32(a)) => Ok(Oid(a)),
             _ => Err(res),
         }
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Int32(self.0))
+        Ok(Datum::UInt32(self.0))
     }
 }
 
@@ -1228,13 +1245,13 @@ impl<'a, E> DatumType<'a, E> for RegClass {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::Int32(a)) => Ok(RegClass(a)),
+            Ok(Datum::UInt32(a)) => Ok(RegClass(a)),
             _ => Err(res),
         }
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Int32(self.0))
+        Ok(Datum::UInt32(self.0))
     }
 }
 
@@ -1251,13 +1268,13 @@ impl<'a, E> DatumType<'a, E> for RegProc {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::Int32(a)) => Ok(RegProc(a)),
+            Ok(Datum::UInt32(a)) => Ok(RegProc(a)),
             _ => Err(res),
         }
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Int32(self.0))
+        Ok(Datum::UInt32(self.0))
     }
 }
 
@@ -1274,13 +1291,13 @@ impl<'a, E> DatumType<'a, E> for RegType {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::Int32(a)) => Ok(RegType(a)),
+            Ok(Datum::UInt32(a)) => Ok(RegType(a)),
             _ => Err(res),
         }
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Int32(self.0))
+        Ok(Datum::UInt32(self.0))
     }
 }
 
@@ -1678,11 +1695,11 @@ impl<'a> ScalarType {
 lazy_static! {
     static ref EMPTY_ARRAY_ROW: Row = unsafe {
         Row::from_bytes_unchecked(vec![
-            22, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            23, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ])
     };
     static ref EMPTY_LIST_ROW: Row =
-        unsafe { Row::from_bytes_unchecked(vec![23, 0, 0, 0, 0, 0, 0, 0, 0]) };
+        unsafe { Row::from_bytes_unchecked(vec![24, 0, 0, 0, 0, 0, 0, 0, 0]) };
 }
 
 impl Datum<'static> {

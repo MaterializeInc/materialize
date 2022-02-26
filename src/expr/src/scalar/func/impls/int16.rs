@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::adt::system::Oid;
 use mz_repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -69,14 +68,6 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     fn cast_int16_to_int64(a: i16) -> i64 {
         i64::from(a)
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "i16tooid"]
-    #[preserves_uniqueness = true]
-    fn cast_int16_to_oid(a: i16) -> Oid {
-        Oid(i32::from(a))
     }
 );
 

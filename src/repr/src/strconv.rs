@@ -154,6 +154,29 @@ where
     Nestable::Yes
 }
 
+/// Writes an OID to `buf`.
+pub fn format_oid<F>(buf: &mut F, oid: u32) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", oid);
+    Nestable::Yes
+}
+
+/// Parses an OID from `s`.
+pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
+    // For historical reasons in PostgreSQL, OIDs are parsed as `i32`s and then
+    // reinterpreted as `u32`s.
+    //
+    // Do not use this as a model for behavior in other contexts. OIDs should
+    // not in general be thought of as freely convertible from `i32`s.
+    let oid: i32 = s
+        .trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("oid", s).with_details(e))?;
+    Ok(u32::from_ne_bytes(oid.to_ne_bytes()))
+}
+
 fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
 where
     Fl: NumFloat + FastFloat,
