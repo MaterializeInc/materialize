@@ -1,5 +1,5 @@
 [package]
-name = "mz-expr_test_util"
+name = "mz-expr-test-util"
 description = "Utilities for creating objects in the expr crate for testing"
 version = "0.0.0"
 edition = "2021"
@@ -12,7 +12,7 @@ mz-expr = { path = "../expr" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-mz-repr_test_util = { path = "../repr-test-util" }
+mz-repr-test-util = { path = "../repr-test-util" }
 proc-macro2 = "1.0.36"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"

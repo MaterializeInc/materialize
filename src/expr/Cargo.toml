@@ -47,6 +47,6 @@ uuid = "0.8.2"
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 datadriven = "0.6.0"
-mz-expr_test_util = { path = "../expr-test-util" }
+mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.36"

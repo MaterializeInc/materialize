@@ -3215,7 +3215,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "md-5",
- "mz-expr_test_util",
+ "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
  "mz-pgrepr",
@@ -3238,7 +3238,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-expr_test_util"
+name = "mz-expr-test-util"
 version = "0.0.0"
 dependencies = [
  "datadriven",
@@ -3247,7 +3247,7 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-repr",
- "mz-repr_test_util",
+ "mz-repr-test-util",
  "proc-macro2",
  "serde",
  "serde_json",
@@ -3687,7 +3687,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-repr_test_util"
+name = "mz-repr-test-util"
 version = "0.0.0"
 dependencies = [
  "chrono",
@@ -3737,7 +3737,7 @@ dependencies = [
  "mz-ccsr",
  "mz-dataflow-types",
  "mz-expr",
- "mz-expr_test_util",
+ "mz-expr-test-util",
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",
@@ -3927,7 +3927,7 @@ dependencies = [
  "itertools",
  "mz-dataflow-types",
  "mz-expr",
- "mz-expr_test_util",
+ "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
  "mz-repr",

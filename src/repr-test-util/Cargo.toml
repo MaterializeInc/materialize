@@ -1,5 +1,5 @@
 [package]
-name = "mz-repr_test_util"
+name = "mz-repr-test-util"
 description = "Utilities for creating objects in the repr crate for testing"
 version = "0.0.0"
 edition = "2021"

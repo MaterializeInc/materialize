@@ -17,7 +17,7 @@ mz-repr = { path = "../repr" }
 [dev-dependencies]
 anyhow = "1.0.55"
 datadriven = "0.6.0"
-mz-expr_test_util = { path = "../expr-test-util" }
+mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.36"
