@@ -118,7 +118,7 @@ where
     let local_input = LocalInput { handle, capability };
     let as_of_frontier = as_of_frontier.clone();
     let ok_collection = ok_stream
-        .map_in_place(move |(_, mut time, _)| {
+        .map_in_place(move |(_, time, _)| {
             time.advance_by(as_of_frontier.borrow());
         })
         .as_collection();
