@@ -137,7 +137,6 @@ impl CatalogState {
                     persisted_name: table.persist_name.clone(),
                 };
                 Some(mz_dataflow_types::sources::SourceDesc {
-                    name: entry.name().to_string(),
                     connector,
                     desc: table.desc.clone(),
                 })
@@ -145,7 +144,6 @@ impl CatalogState {
             CatalogItem::Source(source) => {
                 let connector = source.connector.clone();
                 Some(mz_dataflow_types::sources::SourceDesc {
-                    name: entry.name().to_string(),
                     connector,
                     desc: source.desc.clone(),
                 })

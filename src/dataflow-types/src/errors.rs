@@ -10,7 +10,7 @@
 use std::fmt::Display;
 
 use bytes::BufMut;
-use mz_expr::EvalError;
+use mz_expr::{EvalError, SourceInstanceId};
 use mz_persist_types::Codec;
 
 use serde::{Deserialize, Serialize};
@@ -53,19 +53,19 @@ impl Display for DecodeError {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct SourceError {
-    pub source_name: String,
+    pub source_id: SourceInstanceId,
     pub error: SourceErrorDetails,
 }
 
 impl SourceError {
-    pub fn new(source_name: String, error: SourceErrorDetails) -> SourceError {
-        SourceError { source_name, error }
+    pub fn new(source_id: SourceInstanceId, error: SourceErrorDetails) -> SourceError {
+        SourceError { source_id, error }
     }
 }
 
 impl Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: ", self.source_name)?;
+        write!(f, "{}: ", self.source_id)?;
         self.error.fmt(f)
     }
 }

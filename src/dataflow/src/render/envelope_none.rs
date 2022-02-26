@@ -13,6 +13,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
+use mz_expr::SourceInstanceId;
 use mz_persist::operators::replay::Replay;
 use mz_persist::operators::stream::{Persist, RetractUnsealed};
 use mz_persist_types::Codec;
@@ -54,6 +55,7 @@ impl<V: Codec> PersistentEnvelopeNoneConfig<V> {
 ///
 pub(crate) fn persist_and_replay<G>(
     source_name: &str,
+    source_id: SourceInstanceId,
     stream: &Stream<G, (Result<Row, DecodeError>, Timestamp, Diff)>,
     as_of_frontier: &Antichain<Timestamp>,
     persist_config: PersistentEnvelopeNoneConfig<Result<Row, DecodeError>>,
@@ -91,10 +93,8 @@ where
 
     let persist_errs = persist_errs.concat(&restored_errs);
 
-    let source_name = source_name.to_string();
     let persist_errs = persist_errs.map(move |(err, ts, diff)| {
-        let source_error =
-            SourceError::new(source_name.clone(), SourceErrorDetails::Persistence(err));
+        let source_error = SourceError::new(source_id, SourceErrorDetails::Persistence(err));
         (source_error.into(), ts, diff)
     });
 

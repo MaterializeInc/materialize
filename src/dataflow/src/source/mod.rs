@@ -93,8 +93,6 @@ const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 pub struct SourceConfig<'a, G> {
     /// The name to attach to the underlying timely operator.
     pub name: String,
-    /// The name of the SQL object this source corresponds to
-    pub sql_name: String,
     /// The name of the upstream resource this source corresponds to
     /// (For example, a Kafka topic)
     pub upstream_name: Option<String>,
@@ -904,7 +902,6 @@ where
 {
     let SourceConfig {
         name,
-        sql_name,
         upstream_name,
         id,
         scope,
@@ -943,7 +940,7 @@ where
 
                 let timestamp_histories = timestamp_histories.as_mut().ok_or_else(|| {
                     SourceError::new(
-                        sql_name.clone(),
+                        id,
                         SourceErrorDetails::Persistence("missing timestamp histories".to_owned()),
                     )
                 });
@@ -951,7 +948,7 @@ where
                 let result = timestamp_histories.and_then(|timestamp_histories| {
                 let (mut valid_bindings, mut retractions) = source_persist.restore().map_err(|e| {
                     SourceError::new(
-                        sql_name.clone(),
+                        id,
                         SourceErrorDetails::Persistence(format!(
                             "restoring timestamp bindings: {}",
                             e
@@ -1253,14 +1250,13 @@ where
         }
     });
 
-    let sql_name_for_error = sql_name.clone();
     let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", move |r| {
-        r.map_err(|e| SourceError::new(sql_name_for_error.clone(), SourceErrorDetails::FileIO(e)))
+        r.map_err(|e| SourceError::new(id, SourceErrorDetails::FileIO(e)))
     });
 
     let (ts_bindings_stream, ts_bindings_err_stream) = if let Some(source_persist) = source_persist
     {
-        source_persist.render_persistence_operators(sql_name, ts_bindings_stream)
+        source_persist.render_persistence_operators(id, ts_bindings_stream)
     } else {
         (ts_bindings_stream, operator::empty(scope))
     };
@@ -1412,7 +1408,7 @@ impl SourceReaderPersistence {
     /// eventually.
     fn render_persistence_operators<G>(
         &self,
-        source_name: String,
+        source_id: SourceInstanceId,
         ts_bindings_stream: Stream<G, ((SourceTimestamp, AssignedTimestamp), Timestamp, Diff)>,
     ) -> (
         Stream<G, ((SourceTimestamp, AssignedTimestamp), Timestamp, Diff)>,
@@ -1430,7 +1426,7 @@ impl SourceReaderPersistence {
         // `persist()`. We have to do this because sources currently only emit a `Stream<_,
         // SourceError>`. In practice, persist errors are non-retractable, currently.
         let ts_bindings_persist_err = ts_bindings_persist_err.map(move |(error, _ts, _diff)| {
-            SourceError::new(source_name.clone(), SourceErrorDetails::Persistence(error))
+            SourceError::new(source_id, SourceErrorDetails::Persistence(error))
         });
 
         (ts_bindings_stream, ts_bindings_persist_err)

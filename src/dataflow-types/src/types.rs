@@ -1123,7 +1123,6 @@ pub mod sources {
     /// of the collection.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SourceDesc {
-        pub name: String,
         pub connector: SourceConnector,
         pub desc: RelationDesc,
     }
