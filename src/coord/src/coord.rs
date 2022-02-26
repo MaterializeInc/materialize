@@ -2202,29 +2202,13 @@ impl Coordinator {
             .for_session(session)
             .find_available_name(index_name);
 
-        // Index gets created on default cluster.
-        // let cluster_name = dbg!(session.vars().cluster());
-        let cluster_name = "default";
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open("log")
-            .unwrap();
-
-        writeln!(file, "2213 {}", cluster_name).unwrap();
-        // let instance_id = self
-        //     .catalog
-        //     .get_cluster_by_name(&cluster_name)
-        //     .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
-        //         cluster_name,
-        //     )))?
-        //     .id;
-
+        // OK
+        let cluster_name = session.vars().cluster();
         let instance_id = self
             .catalog
-            .get_cluster_by_name("default")
+            .get_cluster_by_name(cluster_name)
             .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
-                "default".to_string(),
+                cluster_name.to_string(),
             )))?
             .id;
 
@@ -3289,27 +3273,11 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-        // // Index gets created on default cluster.
-        // let cluster_name = dbg!(session.vars().cluster());
-        // let cluster_name = "default";
-
-        // let mut file = std::fs::OpenOptions::new()
-        //     .write(true)
-        //     .append(true)
-        //     .open("log")
-        //     .unwrap();
-
-        // writeln!(file, "3299 {}", cluster_name).unwrap();
-        // let instance_id = self
-        //     .catalog
-        //     .get_cluster_by_name(&cluster_name)
-        //     .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
-        //         cluster_name,
-        //     )))?
-        //     .id;
+        // Index gets created on default cluster.
+        let cluster_name = session.vars().cluster();
         let instance_id = self
             .catalog
-            .get_cluster_by_name("default")
+            .get_cluster_by_name(cluster_name)
             .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
                 "default".to_string(),
             )))?
@@ -3734,26 +3702,12 @@ impl Coordinator {
             decorrelated_plan
         };
 
-        // let cluster_name = dbg!(session.vars().cluster());
-        let cluster_name = "default";
+        // OK
+        let cluster_name = session.vars().cluster();
 
-        // let instance_id = self
-        //     .catalog
-        //     .get_cluster_by_name(&cluster_name)
-        //     .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
-        //         cluster_name,
-        //     )))?
-        //     .id;
-        // let mut file = std::fs::OpenOptions::new()
-        //     .write(true)
-        //     .append(true)
-        //     .open("log")
-        //     .unwrap();
-
-        // writeln!(file, "3748 {}", cluster_name).unwrap();
         let instance_id = self
             .catalog
-            .get_cluster_by_name("default")
+            .get_cluster_by_name(cluster_name)
             .ok_or(CoordError::SqlCatalog(CatalogError::UnknownCluster(
                 "default".to_string(),
             )))?

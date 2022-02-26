@@ -463,7 +463,7 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// #[test]
+#[test]
 fn test_pgtest() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
