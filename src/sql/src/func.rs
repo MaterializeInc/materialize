@@ -882,7 +882,7 @@ impl ParamType {
             Any | ArrayElementAny | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
-            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t.clone(), to.clone()),
+            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
             RecordAny => matches!(t, Record { .. }),
         }
     }

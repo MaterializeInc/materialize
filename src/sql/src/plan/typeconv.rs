@@ -953,17 +953,17 @@ pub fn plan_cast(
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    cast_from: ScalarType,
-    cast_to: ScalarType,
+    cast_from: &ScalarType,
+    cast_to: &ScalarType,
 ) -> bool {
     // All char values are cast to strings during casts, so this transformation
     // is equivalent.
     let cast_from = match cast_from {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
         from => from,
     };
     let cast_to = match cast_to {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
         to => to,
     };
     get_cast(ecx, ccx, &cast_from, &cast_to).is_some()
