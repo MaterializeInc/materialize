@@ -70,7 +70,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Subsequent commands may arbitrarily compact the arrangements;
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
-    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan, T>>),
+    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, T>>),
     /// Enable compaction in compute-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
