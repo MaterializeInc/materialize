@@ -132,7 +132,7 @@ pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: Vec<(GlobalId, crate::types::sinks::SinkDesc)>,
+    pub sink_exports: Vec<(GlobalId, crate::types::sinks::SinkDesc<T>)>,
     /// Maps views to views + indexes needed to generate that view
     pub dependent_objects: BTreeMap<GlobalId, Vec<GlobalId>>,
     /// An optional frontier to which inputs should be advanced.
@@ -230,7 +230,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     }
 
     /// Exports as `id` a sink described by `description`.
-    pub fn export_sink(&mut self, id: GlobalId, description: crate::types::sinks::SinkDesc) {
+    pub fn export_sink(&mut self, id: GlobalId, description: crate::types::sinks::SinkDesc<T>) {
         self.sink_exports.push((id, description));
     }
 
@@ -1607,16 +1607,16 @@ pub mod sinks {
 
     use mz_expr::GlobalId;
     use mz_kafka_util::KafkaAddrs;
-    use mz_repr::{RelationDesc, Timestamp};
+    use mz_repr::RelationDesc;
 
     /// A sink for updates to a relational collection.
     #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct SinkDesc {
+    pub struct SinkDesc<T = mz_repr::Timestamp> {
         pub from: GlobalId,
         pub from_desc: RelationDesc,
         pub connector: SinkConnector,
         pub envelope: Option<SinkEnvelope>,
-        pub as_of: SinkAsOf,
+        pub as_of: SinkAsOf<T>,
     }
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1626,8 +1626,8 @@ pub mod sinks {
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct SinkAsOf {
-        pub frontier: Antichain<Timestamp>,
+    pub struct SinkAsOf<T = mz_repr::Timestamp> {
+        pub frontier: Antichain<T>,
         pub strict: bool,
     }
 
