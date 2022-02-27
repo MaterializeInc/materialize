@@ -67,6 +67,8 @@ pub enum Value {
     Map(BTreeMap<String, Option<Value>>),
     /// An arbitrary precision number.
     Numeric(Numeric),
+    /// An object identifier.
+    Oid(u32),
     /// A sequence of heterogeneous values.
     Record(Vec<Option<Value>>),
     /// A time.
@@ -102,11 +104,11 @@ impl Value {
             (Datum::False, ScalarType::Bool) => Some(Value::Bool(false)),
             (Datum::Int16(i), ScalarType::Int16) => Some(Value::Int2(i)),
             (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
-            (Datum::Int32(i), ScalarType::Oid) => Some(Value::Int4(i)),
-            (Datum::Int32(i), ScalarType::RegClass) => Some(Value::Int4(i)),
-            (Datum::Int32(i), ScalarType::RegProc) => Some(Value::Int4(i)),
-            (Datum::Int32(i), ScalarType::RegType) => Some(Value::Int4(i)),
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
+            (Datum::UInt32(oid), ScalarType::Oid) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), ScalarType::RegClass) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), ScalarType::RegProc) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), ScalarType::RegType) => Some(Value::Oid(oid)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
@@ -222,6 +224,7 @@ impl Value {
                     });
                 })
             }
+            Value::Oid(oid) => Datum::UInt32(oid),
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
@@ -288,6 +291,7 @@ impl Value {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
             }),
+            Value::Oid(oid) => strconv::format_oid(buf, *oid),
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
@@ -377,6 +381,7 @@ impl Value {
                 // value OIDs to deal with rather than an element OID.
                 Err("binary encoding of map types is not implemented".into())
             }
+            Value::Oid(i) => i.to_sql(&PgType::OID, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
                 buf.put_i32(nfields);
@@ -434,9 +439,7 @@ impl Value {
             Type::Float4 => Value::Float4(strconv::parse_float32(raw)?),
             Type::Float8 => Value::Float8(strconv::parse_float64(raw)?),
             Type::Int2 => Value::Int2(strconv::parse_int16(raw)?),
-            Type::Int4 | Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
-                Value::Int4(strconv::parse_int32(raw)?)
-            }
+            Type::Int4 => Value::Int4(strconv::parse_int32(raw)?),
             Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
             Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
             Type::Json => return Err("input of json types is not implemented".into()),
@@ -453,6 +456,9 @@ impl Value {
                 |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
             )?),
             Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(raw)?)),
+            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
+                Value::Oid(strconv::parse_oid(raw)?)
+            }
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into())
             }
@@ -479,9 +485,7 @@ impl Value {
             Type::Float4 => f32::from_sql(ty.inner(), raw).map(Value::Float4),
             Type::Float8 => f64::from_sql(ty.inner(), raw).map(Value::Float8),
             Type::Int2 => i16::from_sql(ty.inner(), raw).map(Value::Int2),
-            Type::Int4 | Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
-                i32::from_sql(ty.inner(), raw).map(Value::Int4)
-            }
+            Type::Int4 => i32::from_sql(ty.inner(), raw).map(Value::Int4),
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
             Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
             Type::Json => return Err("input of json types is not implemented".into()),
@@ -489,6 +493,9 @@ impl Value {
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
             Type::Numeric { .. } => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
+            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
+                u32::from_sql(ty.inner(), raw).map(Value::Oid)
+            }
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
             Type::Char { .. } => String::from_sql(ty.inner(), raw).map(Value::Char),

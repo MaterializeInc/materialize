@@ -52,6 +52,7 @@ message ProtoDatum {
         ProtoDict dict = 22;
         ProtoNumeric numeric = 23;
         bytes uuid = 24;
+        uint32 uint32 = 25;
     }
 }
 

@@ -1810,7 +1810,7 @@ lazy_static! {
                 params!(Oid, Int32) => sql_impl_func(
                     "CASE
                         WHEN $1 IS NULL THEN NULL
-                        ELSE coalesce((SELECT concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typemod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
+                        ELSE coalesce((SELECT concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typmod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
                     END"
                 ) => String, 1081;
             },
@@ -2708,8 +2708,8 @@ lazy_static! {
                 params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1 AND enabled)") => Bool,
                     oid::FUNC_MZ_IS_MATERIALIZED_OID;
             },
-            "mz_render_typemod" => Scalar {
-                params!(Oid, Int32) => BinaryFunc::MzRenderTypemod, oid::FUNC_MZ_RENDER_TYPEMOD_OID;
+            "mz_render_typmod" => Scalar {
+                params!(Oid, Int32) => BinaryFunc::MzRenderTypmod, oid::FUNC_MZ_RENDER_TYPMOD_OID;
             },
             // This ought to be exposed in `mz_catalog`, but its name is rather
             // confusing. It does not identify the SQL session, but the

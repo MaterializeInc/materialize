@@ -9,14 +9,31 @@
 
 use mz_pgrepr::Type;
 use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
+use mz_repr::strconv;
 
 use crate::EvalError;
+
+sqlfunc!(
+    #[sqlname = "oidtostring"]
+    #[preserves_uniqueness = true]
+    fn cast_oid_to_string(a: Oid) -> String {
+        let mut buf = String::new();
+        strconv::format_oid(&mut buf, a.0);
+        buf
+    }
+);
 
 sqlfunc!(
     #[sqlname = "oidtoi32"]
     #[preserves_uniqueness = true]
     fn cast_oid_to_int32(a: Oid) -> i32 {
-        a.0
+        // For historical reasons in PostgreSQL, the bytes of the `u32` are
+        // reinterpreted as an `i32` without bounds checks, so very large
+        // positive OIDs become negative `i32`s.
+        //
+        // Do not use this as a model for behavior in other contexts. OIDs
+        // should not in general be thought of as freely convertible to `i32`s.
+        i32::from_ne_bytes(a.0.to_ne_bytes())
     }
 );
 
@@ -63,7 +80,7 @@ sqlfunc!(
 
 sqlfunc!(
     fn mz_type_name<'a>(oid: Oid) -> Option<String> {
-        if let Some(t) = Type::from_oid(oid.0 as u32) {
+        if let Some(t) = Type::from_oid(oid.0) {
             Some(t.name().to_string())
         } else {
             None

@@ -34,6 +34,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
+use mz_ore::option::OptionExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_repr::adt::array::ArrayDimension;
@@ -2344,7 +2345,7 @@ pub enum BinaryFunc {
     ListRemove,
     DigestString,
     DigestBytes,
-    MzRenderTypemod,
+    MzRenderTypmod,
     Encode,
     Decode,
     LogNumeric,
@@ -2588,7 +2589,7 @@ impl BinaryFunc {
             BinaryFunc::ListRemove => Ok(eager!(list_remove, temp_storage)),
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
-            BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
+            BinaryFunc::MzRenderTypmod => eager!(mz_render_typmod, temp_storage),
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
@@ -2697,7 +2698,7 @@ impl BinaryFunc {
 
             SubTime => ScalarType::Interval.nullable(true),
 
-            MzRenderTypemod | TextConcat => ScalarType::String.nullable(in_nullable),
+            MzRenderTypmod | TextConcat => ScalarType::String.nullable(in_nullable),
 
             JsonbGetInt64 { stringify: true }
             | JsonbGetString { stringify: true }
@@ -2983,7 +2984,7 @@ impl BinaryFunc {
             | ListLengthMax { .. }
             | DigestString
             | DigestBytes
-            | MzRenderTypemod
+            | MzRenderTypmod
             | Encode
             | Decode
             | LogNumeric
@@ -3154,7 +3155,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::ListRemove => f.write_str("list_remove"),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
-            BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
+            BinaryFunc::MzRenderTypmod => f.write_str("mz_render_typmod"),
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
             BinaryFunc::LogNumeric => f.write_str("log"),
@@ -3283,21 +3284,18 @@ pub enum UnaryFunc {
     CastInt16ToFloat64(CastInt16ToFloat64),
     CastInt16ToInt32(CastInt16ToInt32),
     CastInt16ToInt64(CastInt16ToInt64),
-    CastInt16ToOid(CastInt16ToOid),
     CastInt16ToString(CastInt16ToString),
     CastInt2VectorToArray(CastInt2VectorToArray),
     CastInt32ToBool(CastInt32ToBool),
     CastInt32ToFloat32(CastInt32ToFloat32),
     CastInt32ToFloat64(CastInt32ToFloat64),
     CastInt32ToOid(CastInt32ToOid),
-    CastInt32ToRegClass(CastInt32ToRegClass),
-    CastInt32ToRegProc(CastInt32ToRegProc),
-    CastInt32ToRegType(CastInt32ToRegType),
     CastInt32ToInt16(CastInt32ToInt16),
     CastInt32ToInt64(CastInt32ToInt64),
     CastInt32ToString(CastInt32ToString),
     CastOidToInt32(CastOidToInt32),
     CastOidToInt64(CastOidToInt64),
+    CastOidToString(CastOidToString),
     CastOidToRegClass(CastOidToRegClass),
     CastRegClassToOid(CastRegClassToOid),
     CastOidToRegProc(CastOidToRegProc),
@@ -3338,6 +3336,7 @@ pub enum UnaryFunc {
     CastStringToInt32(CastStringToInt32),
     CastStringToInt64(CastStringToInt64),
     CastStringToInt2Vector(CastStringToInt2Vector),
+    CastStringToOid(CastStringToOid),
     CastStringToFloat32(CastStringToFloat32),
     CastStringToFloat64(CastStringToFloat64),
     CastStringToDate(CastStringToDate),
@@ -3522,7 +3521,6 @@ derive_unary!(
     CastInt16ToFloat64,
     CastInt16ToInt32,
     CastInt16ToInt64,
-    CastInt16ToOid,
     CastInt16ToString,
     CastInt16ToNumeric,
     CastInt2VectorToArray,
@@ -3533,9 +3531,6 @@ derive_unary!(
     CastInt32ToInt64,
     CastInt32ToString,
     CastInt32ToOid,
-    CastInt32ToRegClass,
-    CastInt32ToRegProc,
-    CastInt32ToRegType,
     CastInt64ToInt16,
     CastInt64ToInt32,
     CastInt64ToBool,
@@ -3549,6 +3544,7 @@ derive_unary!(
     CastInt32ToNumeric,
     CastOidToInt32,
     CastOidToInt64,
+    CastOidToString,
     CastOidToRegClass,
     CastRegClassToOid,
     CastOidToRegProc,
@@ -3592,6 +3588,7 @@ derive_unary!(
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToNumeric,
+    CastStringToOid,
     CastStringToDate,
     CastStringToTime,
     CastStringToTimestamp,
@@ -3723,7 +3720,6 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
-            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
@@ -3733,11 +3729,9 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
-            | CastInt32ToRegClass(_)
-            | CastInt32ToRegProc(_)
-            | CastInt32ToRegType(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
+            | CastOidToString(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -3781,6 +3775,7 @@ impl UnaryFunc {
             | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
+            | CastStringToOid(_)
             | CastStringToNumeric(_)
             | CastStringToDate(_)
             | CastStringToTime(_)
@@ -3960,7 +3955,6 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
-            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
@@ -3970,11 +3964,9 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
-            | CastInt32ToRegClass(_)
-            | CastInt32ToRegProc(_)
-            | CastInt32ToRegType(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
+            | CastOidToString(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -4018,6 +4010,7 @@ impl UnaryFunc {
             | CastStringToInt64(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
+            | CastStringToOid(_)
             | CastStringToNumeric(_)
             | CastStringToDate(_)
             | CastStringToTime(_)
@@ -4221,7 +4214,6 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
-            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
@@ -4231,11 +4223,9 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
-            | CastInt32ToRegClass(_)
-            | CastInt32ToRegProc(_)
-            | CastInt32ToRegType(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
+            | CastOidToString(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -4279,6 +4269,7 @@ impl UnaryFunc {
             | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
+            | CastStringToOid(_)
             | CastStringToNumeric(_)
             | CastStringToDate(_)
             | CastStringToTime(_)
@@ -4499,7 +4490,6 @@ impl UnaryFunc {
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
             | CastInt2VectorToArray(_)
-            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
@@ -4508,11 +4498,9 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
-            | CastInt32ToRegClass(_)
-            | CastInt32ToRegProc(_)
-            | CastInt32ToRegType(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
+            | CastOidToString(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -4557,6 +4545,7 @@ impl UnaryFunc {
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
             | CastStringToNumeric(_)
+            | CastStringToOid(_)
             | CastStringToDate(_)
             | CastStringToTime(_)
             | CastStringToTimestamp(_)
@@ -5180,8 +5169,9 @@ where
     match &ty {
         Bool => strconv::format_bool(buf, d.unwrap_bool()),
         Int16 => strconv::format_int16(buf, d.unwrap_int16()),
-        Int32 | Oid | RegClass | RegProc | RegType => strconv::format_int32(buf, d.unwrap_int32()),
+        Int32 => strconv::format_int32(buf, d.unwrap_int32()),
         Int64 => strconv::format_int64(buf, d.unwrap_int64()),
+        Oid | RegClass | RegProc | RegType => strconv::format_oid(buf, d.unwrap_uint32()),
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),
         Numeric { .. } => strconv::format_numeric(buf, &d.unwrap_numeric()),
@@ -5806,31 +5796,18 @@ fn digest_inner<'a>(
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
-fn mz_render_typemod<'a>(
+fn mz_render_typmod<'a>(
     oid: Datum<'a>,
     typmod: Datum<'a>,
     temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    let oid = oid.unwrap_int32();
-    let mut typmod = typmod.unwrap_int32();
-    let typmod_base = 65_536;
-
-    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric { .. })) && typmod >= 0 {
-        typmod -= 4;
-        if typmod < 0 {
-            temp_storage.push_string(format!("({},{})", 65_535, typmod_base + typmod))
-        } else {
-            temp_storage.push_string(format!(
-                "({},{})",
-                typmod / typmod_base,
-                typmod % typmod_base
-            ))
-        }
-    } else {
-        ""
-    };
-
-    Datum::String(inner)
+) -> Result<Datum<'a>, EvalError> {
+    let oid = oid.unwrap_uint32();
+    let typmod = typmod.unwrap_int32();
+    let typ = Type::from_oid_and_typmod(oid, typmod);
+    let constraint = typ.as_ref().and_then(|typ| typ.constraint());
+    Ok(Datum::String(
+        temp_storage.push_string(constraint.display_or("").to_string()),
+    ))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]

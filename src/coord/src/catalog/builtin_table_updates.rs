@@ -47,7 +47,7 @@ impl CatalogState {
             id: MZ_DATABASES.id,
             row: Row::pack_slice(&[
                 Datum::Int64(database.id),
-                Datum::Int32(database.oid as i32),
+                Datum::UInt32(database.oid),
                 Datum::String(&name),
             ]),
             diff,
@@ -71,7 +71,7 @@ impl CatalogState {
             id: MZ_SCHEMAS.id,
             row: Row::pack_slice(&[
                 Datum::Int64(schema.id),
-                Datum::Int32(schema.oid as i32),
+                Datum::UInt32(schema.oid),
                 Datum::from(database_id),
                 Datum::String(schema_name),
             ]),
@@ -85,7 +85,7 @@ impl CatalogState {
             id: MZ_ROLES.id,
             row: Row::pack_slice(&[
                 Datum::Int64(role.id),
-                Datum::Int32(role.oid as i32),
+                Datum::UInt32(role.oid),
                 Datum::String(&name),
             ]),
             diff,
@@ -137,7 +137,7 @@ impl CatalogState {
                         Datum::from(column_type.nullable),
                         Datum::String(pgtype.name()),
                         default,
-                        Datum::Int32(pgtype.oid() as i32),
+                        Datum::UInt32(pgtype.oid()),
                     ]),
                     diff,
                 });
@@ -160,7 +160,7 @@ impl CatalogState {
             id: MZ_TABLES.id,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::Int32(oid as i32),
+                Datum::UInt32(oid),
                 Datum::Int64(schema_id),
                 Datum::String(name),
                 Datum::from(table.persist_name.as_deref()),
@@ -186,7 +186,7 @@ impl CatalogState {
             id: MZ_SOURCES.id,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::Int32(oid as i32),
+                Datum::UInt32(oid),
                 Datum::Int64(schema_id),
                 Datum::String(name),
                 Datum::String(source.connector.name()),
@@ -209,7 +209,7 @@ impl CatalogState {
             id: MZ_VIEWS.id,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::Int32(oid as i32),
+                Datum::UInt32(oid),
                 Datum::Int64(schema_id),
                 Datum::String(name),
                 Datum::String(self.is_volatile(id).as_str()),
@@ -268,7 +268,7 @@ impl CatalogState {
                 id: MZ_SINKS.id,
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::Int32(oid as i32),
+                    Datum::UInt32(oid),
                     Datum::Int64(schema_id),
                     Datum::String(name),
                     Datum::String(connector.name()),
@@ -302,7 +302,7 @@ impl CatalogState {
             id: MZ_INDEXES.id,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::Int32(oid as i32),
+                Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
@@ -356,7 +356,7 @@ impl CatalogState {
             id: MZ_TYPES.id,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::Int32(oid as i32),
+                Datum::UInt32(oid),
                 Datum::Int64(schema_id),
                 Datum::String(name),
             ]),
@@ -427,7 +427,7 @@ impl CatalogState {
                 id: MZ_FUNCTIONS.id,
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::Int32(func_impl_details.oid as i32),
+                    Datum::UInt32(func_impl_details.oid),
                     Datum::Int64(schema_id),
                     Datum::String(name),
                     arg_ids,

@@ -162,7 +162,10 @@ pub async fn publication_info(
                 let name: String = row.get("name");
                 let oid = row.get("oid");
                 let typmod: i32 = row.get("typmod");
-                let ty = PgType::from_oid_and_typmod(oid, typmod)?;
+                let ty = match PgType::from_oid_and_typmod(oid, typmod) {
+                    Some(ty) => ty,
+                    None => bail!("unknown type with OID {}", oid),
+                };
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PgColumn {

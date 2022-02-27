@@ -7,7 +7,6 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }

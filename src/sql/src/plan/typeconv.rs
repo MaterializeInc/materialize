@@ -78,6 +78,20 @@ impl From<UnaryFunc> for CastTemplate {
     }
 }
 
+impl<const N: usize> From<[UnaryFunc; N]> for CastTemplate {
+    fn from(funcs: [UnaryFunc; N]) -> CastTemplate {
+        CastTemplate::new(move |_ecx, _ccx, _from, _to| {
+            let funcs = funcs.clone();
+            Some(move |mut expr: HirScalarExpr| {
+                for func in funcs {
+                    expr = expr.call_unary(func.clone());
+                }
+                expr
+            })
+        })
+    }
+}
+
 /// Describes the context of a cast.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CastContext {
@@ -137,15 +151,42 @@ lazy_static! {
                 let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(func::CastInt16ToNumeric(s))))
             }),
-            (Int16, Oid) => Implicit: CastInt16ToOid(func::CastInt16ToOid),
+            (Int16, Oid) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+            ],
+            (Int16, RegClass) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegClass(func::CastOidToRegClass),
+            ],
+            (Int16, RegProc) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegProc(func::CastOidToRegProc),
+            ],
+            (Int16, RegType) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegType(func::CastOidToRegType),
+            ],
             (Int16, String) => Assignment: CastInt16ToString(func::CastInt16ToString),
 
             //INT32
             (Int32, Bool) => Explicit: CastInt32ToBool(func::CastInt32ToBool),
             (Int32, Oid) => Implicit: CastInt32ToOid(func::CastInt32ToOid),
-            (Int32, RegClass) => Implicit: CastInt32ToRegClass(func::CastInt32ToRegClass),
-            (Int32, RegProc) => Implicit: CastInt32ToRegProc(func::CastInt32ToRegProc),
-            (Int32, RegType) => Implicit: CastInt32ToRegType(func::CastInt32ToRegType),
+            (Int32, RegClass) => Implicit: [
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegClass(func::CastOidToRegClass),
+            ],
+            (Int32, RegProc) => Implicit: [
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegProc(func::CastOidToRegProc),
+            ],
+            (Int32, RegType) => Implicit: [
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegType(func::CastOidToRegType),
+            ],
             (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
             (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
             (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
@@ -167,12 +208,24 @@ lazy_static! {
             (Int64, Float32) => Implicit: CastInt64ToFloat32(func::CastInt64ToFloat32),
             (Int64, Float64) => Implicit: CastInt64ToFloat64(func::CastInt64ToFloat64),
             (Int64, Oid) => Implicit: CastInt64ToOid(func::CastInt64ToOid),
+            (Int64, RegClass) => Implicit: [
+                CastInt64ToOid(func::CastInt64ToOid),
+                CastOidToRegClass(func::CastOidToRegClass),
+            ],
+            (Int64, RegProc) => Implicit: [
+                CastInt64ToOid(func::CastInt64ToOid),
+                CastOidToRegProc(func::CastOidToRegProc),
+            ],
+            (Int64, RegType) => Implicit: [
+                CastInt64ToOid(func::CastInt64ToOid),
+                CastOidToRegType(func::CastOidToRegType),
+            ],
             (Int64, String) => Assignment: CastInt64ToString(func::CastInt64ToString),
 
             // OID
             (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
             (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
-            (Oid, String) => Explicit: CastInt32ToString(func::CastInt32ToString),
+            (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
             (Oid, RegClass) => Assignment: CastOidToRegClass(func::CastOidToRegClass),
             (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
             (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
@@ -262,7 +315,7 @@ lazy_static! {
             (String, Int16) => Explicit: CastStringToInt16(func::CastStringToInt16),
             (String, Int32) => Explicit: CastStringToInt32(func::CastStringToInt32),
             (String, Int64) => Explicit: CastStringToInt64(func::CastStringToInt64),
-            (String, Oid) => Explicit: CastStringToInt32(func::CastStringToInt32),
+            (String, Oid) => Explicit: CastStringToOid(func::CastStringToOid),
 
             // STRING to REG*
             // A reg* type represents a specific type of object by oid.

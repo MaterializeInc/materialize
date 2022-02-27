@@ -9,18 +9,18 @@
 
 //! System data types.
 
-/// A rust type representing a PostgreSQL object identifier.
+/// A Rust type representing a PostgreSQL object identifier (OID).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Oid(pub i32);
+pub struct Oid(pub u32);
 
-/// A rust type representing a PostgreSQL class type
+/// A Rust type representing the OID of a PostgreSQL class.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct RegClass(pub i32);
+pub struct RegClass(pub u32);
 
-/// A rust type representing a PostgreSQL function name
+/// A Rust type representing the OID of a PostgreSQL function name.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct RegProc(pub i32);
+pub struct RegProc(pub u32);
 
-/// A rust type representing a PostgreSQL type of object
+/// A Rust type representing the OID of a PostgreSQL type.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct RegType(pub i32);
+pub struct RegType(pub u32);
