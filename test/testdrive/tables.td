@@ -170,6 +170,8 @@ contains:column "a" is of type integer but expression is of type text
 # ...but not when impossible.
 ! INSERT INTO t VALUES (DATE '2020-01-01', 'bad')
 contains:column "a" is of type integer but expression is of type date
+! INSERT INTO t (b, a) VALUES ('bad', DATE '2020-01-01')
+contains:column "a" is of type integer but expression is of type date
 
 # Attempting to insert JSON into an int column is particularly interesting.
 # While there is an "explicit" cast from `jsonb` to `int`, there is no

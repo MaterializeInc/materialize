@@ -189,7 +189,7 @@ query I
 query error pgcode 42601 multiple ORDER BY clauses not allowed
 ((SELECT a FROM t ORDER BY a)) ORDER BY a
 
-query error CASE cannot be cast to uniform type: integer vs boolean
+query error CASE types integer and boolean cannot be matched
 SELECT CASE a WHEN 1 THEN b ELSE c END as val FROM t ORDER BY val
 
 query error pgcode 42P10 column reference 0 in ORDER BY clause is out of range \(1 - 3\)

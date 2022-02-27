@@ -85,7 +85,7 @@ impl TypeCategory {
     /// GROUP BY typcategory
     /// ORDER BY typcategory;
     /// ```
-    fn from_type(typ: &ScalarType) -> Self {
+    pub fn from_type(typ: &ScalarType) -> Self {
         match typ {
             ScalarType::Array(..) | ScalarType::Int2Vector => Self::Array,
             ScalarType::Bool => Self::Bool,
@@ -114,7 +114,7 @@ impl TypeCategory {
         }
     }
 
-    fn from_param(param: &ParamType) -> Self {
+    pub fn from_param(param: &ParamType) -> Self {
         match param {
             ParamType::Any
             | ParamType::ArrayAny
@@ -135,7 +135,7 @@ impl TypeCategory {
     /// WHERE typispreferred = true
     /// ORDER BY typcategory;
     /// ```
-    fn preferred_type(&self) -> Option<ScalarType> {
+    pub fn preferred_type(&self) -> Option<ScalarType> {
         match self {
             Self::Array | Self::List | Self::Pseudo | Self::UserDefined => None,
             Self::Bool => Some(ScalarType::Bool),

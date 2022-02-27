@@ -224,18 +224,16 @@ pub fn plan_insert_query(
             let query = resolve_names(&mut qcx, query)?;
 
             match query {
-                // Special-case simple VALUES clauses, as PostgreSQL does, so
-                // we can pass in a type hint for literal coercions.
-                // See: https://github.com/postgres/postgres/blob/ad77039fa/src/backend/parser/analyze.c#L504-L518
+                // Special-case simple VALUES clauses as PostgreSQL does.
                 Query {
-                    body: SetExpr::Values(values),
+                    body: SetExpr::Values(Values(values)),
                     ctes,
                     order_by,
                     limit: None,
                     offset: None,
                 } if ctes.is_empty() && order_by.is_empty() => {
-                    let (expr, _scope) = plan_values(&qcx, &values.0, Some(source_types.clone()))?;
-                    expr
+                    let names: Vec<_> = ordering.iter().map(|i| desc.get_name(*i)).collect();
+                    plan_values_insert(&qcx, &names, &source_types, &values)?
                 }
                 _ => {
                     let (expr, _scope) = plan_nested_query(&mut qcx, &query)?;
@@ -274,9 +272,9 @@ pub fn plan_insert_query(
     let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
         PlanError::Unstructured(format!(
             "column {} is of type {} but expression is of type {}",
-            desc.get_name(e.column).as_str().quoted(),
-            mz_pgrepr::Type::from(&e.target_type).name(),
-            mz_pgrepr::Type::from(&e.source_type).name(),
+            desc.get_name(ordering[e.column]).as_str().quoted(),
+            qcx.humanize_scalar_type(&e.target_type),
+            qcx.humanize_scalar_type(&e.source_type),
         ))
     })?;
 
@@ -1097,20 +1095,12 @@ fn plan_set_expr(
                 .zip(right_type.column_types.iter())
                 .enumerate()
             {
-                let type_hint = None;
                 let types = &[
                     Some(left_type.scalar_type.clone()),
                     Some(right_type.scalar_type.clone()),
                 ];
-                let target = match typeconv::guess_best_common_type(types, type_hint) {
-                    Some(t) => t,
-                    None => sql_bail!(
-                        "{} types {} and {} cannot be matched",
-                        op,
-                        qcx.humanize_scalar_type(&left_type.scalar_type),
-                        qcx.humanize_scalar_type(&right_type.scalar_type)
-                    ),
-                };
+                let target =
+                    typeconv::guess_best_common_type(&left_ecx.with_name(&op.to_string()), types)?;
                 match typeconv::plan_cast(
                     left_ecx,
                     CastContext::Implicit,
@@ -1186,7 +1176,7 @@ fn plan_set_expr(
 
             Ok((relation_expr, scope))
         }
-        SetExpr::Values(Values(values)) => plan_values(qcx, values, None),
+        SetExpr::Values(Values(values)) => plan_values(qcx, values),
         SetExpr::Query(query) => {
             let (expr, scope) = plan_nested_query(qcx, query)?;
             Ok((expr, scope))
@@ -1194,17 +1184,16 @@ fn plan_set_expr(
     }
 }
 
+/// Plans a `VALUES` clause that appears in a `SELECT` statement.
 fn plan_values(
     qcx: &QueryContext,
     values: &[Vec<Expr<Aug>>],
-    type_hints: Option<Vec<&ScalarType>>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    if values.is_empty() {
-        sql_bail!("Can't infer a type for empty VALUES expression");
-    }
+    assert!(!values.is_empty());
+
     let ecx = &ExprContext {
         qcx,
-        name: "values",
+        name: "VALUES",
         scope: &Scope::empty(),
         relation_type: &RelationType::empty(),
         allow_aggregates: false,
@@ -1234,11 +1223,8 @@ fn plan_values(
     // Plan each column.
     let mut col_iters = Vec::with_capacity(ncols);
     let mut col_types = Vec::with_capacity(ncols);
-    for (index, col) in cols.iter().enumerate() {
-        let type_hint = type_hints
-            .as_ref()
-            .and_then(|type_hints| type_hints.get(index).copied());
-        let col = coerce_homogeneous_exprs("VALUES", ecx, plan_exprs(ecx, col)?, type_hint)?;
+    for col in &cols {
+        let col = coerce_homogeneous_exprs(ecx, plan_exprs(ecx, col)?, None)?;
         let mut col_type = ecx.column_type(&col[0]);
         for val in &col[1..] {
             col_type = col_type.union(&ecx.column_type(val))?;
@@ -1270,6 +1256,75 @@ fn plan_values(
     }
 
     Ok((out, scope))
+}
+
+/// Plans a `VALUES` clause that appears at the top level of an `INSERT`
+/// statement.
+///
+/// This is special-cased in PostgreSQL and different enough from `plan_values`
+/// that it is easier to use a separate function entirely. Unlike a normal
+/// `VALUES` clause, each value is coerced to the type of the target table
+/// via an assignment cast.
+///
+/// See: <https://github.com/postgres/postgres/blob/ad77039fa/src/backend/parser/analyze.c#L504-L518>
+fn plan_values_insert(
+    qcx: &QueryContext,
+    target_names: &[&ColumnName],
+    target_types: &[&ScalarType],
+    values: &[Vec<Expr<Aug>>],
+) -> Result<HirRelationExpr, PlanError> {
+    assert!(!values.is_empty());
+
+    if !values.iter().map(|row| row.len()).all_equal() {
+        sql_bail!("VALUES lists must all be the same length");
+    }
+
+    let ecx = &ExprContext {
+        qcx,
+        name: "VALUES",
+        scope: &Scope::empty(),
+        relation_type: &RelationType::empty(),
+        allow_aggregates: false,
+        allow_subqueries: true,
+        allow_windows: false,
+    };
+
+    let mut exprs = vec![];
+    let mut types = vec![];
+    for row in values {
+        if row.len() > target_names.len() {
+            sql_bail!("INSERT has more expressions than target columns");
+        }
+        for (column, val) in row.into_iter().enumerate() {
+            let target_type = &target_types[column];
+            let val = plan_expr(ecx, val)?;
+            let val = typeconv::plan_coerce(&ecx, val, &target_type)?;
+            let source_type = &ecx.scalar_type(&val);
+            let val = match typeconv::plan_cast(ecx, CastContext::Assignment, val, target_type) {
+                Ok(val) => val,
+                Err(_) => sql_bail!(
+                    "column {} is of type {} but expression is of type {}",
+                    target_names[column].as_str().quoted(),
+                    qcx.humanize_scalar_type(target_type),
+                    qcx.humanize_scalar_type(source_type),
+                ),
+            };
+            if column >= types.len() {
+                types.push(ecx.column_type(&val));
+            } else {
+                types[column] = types[column].union(&ecx.column_type(&val))?;
+            }
+            exprs.push(val);
+        }
+    }
+
+    Ok(HirRelationExpr::CallTable {
+        func: mz_expr::TableFunc::Wrap {
+            width: values[0].len(),
+            types,
+        },
+        exprs,
+    })
 }
 
 fn plan_join_identity() -> (HirRelationExpr, Scope) {
@@ -2670,11 +2725,10 @@ fn plan_using_constraint(
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
-            &format!(
+            &ecx.with_name(&format!(
                 "NATURAL/USING join column {}",
                 column_name.as_str().quoted()
-            ),
-            &ecx,
+            )),
             vec![
                 CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs)),
                 CoercibleScalarExpr::Coerced(HirScalarExpr::Column(rhs)),
@@ -2951,8 +3005,7 @@ fn plan_homogenizing_function(
             HomogenizingFunction::Least => VariadicFunc::Least,
         },
         exprs: coerce_homogeneous_exprs(
-            &function.to_string().to_lowercase(),
-            ecx,
+            &ecx.with_name(&function.to_string().to_lowercase()),
             plan_exprs(ecx, exprs)?,
             None,
         )?,
@@ -3480,34 +3533,64 @@ where
     Ok(out)
 }
 
+/// Plans an `ARRAY` expression.
 fn plan_array(
     ecx: &ExprContext,
     exprs: &[Expr<Aug>],
     type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
+    // Plan each element expression.
+    let mut out = vec![];
+    for expr in exprs {
+        out.push(match expr {
+            // Special case nested ARRAY expressions so we can plumb
+            // the type hint through.
+            Expr::Array(exprs) => plan_array(ecx, exprs, type_hint.clone())?,
+            _ => plan_expr(ecx, expr)?,
+        });
+    }
+
+    // Attempt to make use of the type hint.
+    let type_hint = match type_hint {
+        // The user has provided an explicit cast to an array type. We know the
+        // element type to coerce to. Need to be careful, though: if there's
+        // evidence that any of the array elements are themselves arrays, we
+        // want to coerce to the array type, not the element type.
+        Some(ScalarType::Array(elem_type)) => {
+            let multidimensional = out
+                .iter()
+                .any(|e| matches!(ecx.scalar_type(e), Some(ScalarType::Array(_))));
+            if multidimensional {
+                type_hint
+            } else {
+                Some(&**elem_type)
+            }
+        }
+        // The user provided an explicit cast to a non-array type. We'll have to
+        // guess what the correct type for the array. Our caller will then
+        // handle converting that array type to the desired non-array type.
+        Some(_) => None,
+        // No type hint. We'll have to guess the correct type for the array.
+        None => None,
+    };
+
+    // Coerce all elements to the same type.
     let (elem_type, exprs) = if exprs.is_empty() {
-        if let Some(ScalarType::Array(elem_type)) = type_hint {
-            ((**elem_type).clone(), vec![])
+        if let Some(elem_type) = type_hint {
+            (elem_type.clone(), vec![])
         } else {
             sql_bail!("cannot determine type of empty array");
         }
     } else {
-        let mut out = vec![];
-        for expr in exprs {
-            out.push(match expr {
-                // Special case nested ARRAY expressions so we can plumb
-                // the type hint through.
-                Expr::Array(exprs) => plan_array(ecx, exprs, type_hint.clone())?,
-                _ => plan_expr(ecx, expr)?,
-            });
-        }
-        let type_hint = match type_hint {
-            Some(ScalarType::Array(elem_type)) => Some(&**elem_type),
-            _ => None,
-        };
-        let out = coerce_homogeneous_exprs("ARRAY expression", ecx, out, type_hint)?;
+        let out = coerce_homogeneous_exprs(&ecx.with_name("ARRAY"), out, type_hint)?;
         (ecx.scalar_type(&out[0]), out)
     };
+
+    // Arrays of `char` type are disallowed due to a known limitation:
+    // https://github.com/MaterializeInc/materialize/issues/7613.
+    //
+    // Arrays of `list` and `map` types are disallowed due to mind-bending
+    // semantics.
     if matches!(
         elem_type,
         ScalarType::Char { .. } | ScalarType::List { .. } | ScalarType::Map { .. }
@@ -3548,7 +3631,7 @@ fn plan_list(
                 _ => plan_expr(ecx, expr)?,
             });
         }
-        let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
+        let out = coerce_homogeneous_exprs(&ecx.with_name("LIST"), out, type_hint)?;
         (ecx.scalar_type(&out[0]).default_embedded_value(), out)
     };
 
@@ -3568,6 +3651,11 @@ fn plan_list(
 /// same order as the input, where each expression has the appropriate casts to
 /// make them all of a uniform type.
 ///
+/// If `force_type` is `Some`, the expressions are forced to the specified type
+/// via an explicit cast. Otherwise the best common type is guessed via
+/// [`typeconv::guess_best_common_type`] and conversions are attempted via
+/// implicit casts
+///
 /// Note that this is our implementation of Postgres' type conversion for
 /// ["`UNION`, `CASE`, and Related Constructs"][union-type-conv], though it
 /// isn't yet used in all of those cases.
@@ -3575,31 +3663,35 @@ fn plan_list(
 /// [union-type-conv]:
 /// https://www.postgresql.org/docs/12/typeconv-union-case.html
 pub fn coerce_homogeneous_exprs(
-    name: &str,
     ecx: &ExprContext,
     exprs: Vec<CoercibleScalarExpr>,
-    type_hint: Option<&ScalarType>,
+    force_type: Option<&ScalarType>,
 ) -> Result<Vec<HirScalarExpr>, PlanError> {
     assert!(!exprs.is_empty());
 
-    let ecx = &ecx.with_name(name);
-
-    let types: Vec<_> = exprs.iter().map(|e| ecx.scalar_type(e)).collect();
-
-    let target = match typeconv::guess_best_common_type(&types, type_hint) {
+    let target_holder;
+    let target = match force_type {
         Some(t) => t,
-        None => sql_bail!("Cannot determine homogenous type for arguments to {}", name),
+        None => {
+            let types: Vec<_> = exprs.iter().map(|e| ecx.scalar_type(e)).collect();
+            target_holder = typeconv::guess_best_common_type(ecx, &types)?;
+            &target_holder
+        }
     };
 
     // Try to cast all expressions to `target`.
     let mut out = Vec::new();
     for expr in exprs {
         let arg = typeconv::plan_coerce(&ecx, expr, &target)?;
-        match typeconv::plan_cast(ecx, CastContext::Implicit, arg.clone(), &target) {
+        let ccx = match force_type {
+            None => CastContext::Implicit,
+            Some(_) => CastContext::Explicit,
+        };
+        match typeconv::plan_cast(ecx, ccx, arg.clone(), &target) {
             Ok(expr) => out.push(expr),
             Err(_) => sql_bail!(
-                "{} cannot be cast to uniform type: {} vs {}",
-                name,
+                "{} could not convert type {} to {}",
+                ecx.name,
                 ecx.humanize_scalar_type(&ecx.scalar_type(&arg)),
                 ecx.humanize_scalar_type(&target),
             ),
@@ -4075,8 +4167,11 @@ fn plan_case<'a>(
         Some(else_result) => else_result,
         None => &Expr::Value(Value::Null),
     });
-    let mut result_exprs =
-        coerce_homogeneous_exprs("CASE", ecx, plan_exprs(ecx, &result_exprs)?, None)?;
+    let mut result_exprs = coerce_homogeneous_exprs(
+        &ecx.with_name("CASE"),
+        plan_exprs(ecx, &result_exprs)?,
+        None,
+    )?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
     for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
