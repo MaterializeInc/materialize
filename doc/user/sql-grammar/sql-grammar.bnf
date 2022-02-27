@@ -71,6 +71,12 @@ create_source_kafka ::=
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
+create_source_kinesis ::=
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
+  'FROM' 'KINESIS ARN' arn with_options?
+  'FORMAT' kinesis_format_spec
+  ('ENVELOPE NONE')?
 create_source_csv_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -84,32 +90,12 @@ create_source_json ::=
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' 'BYTES'
   ('ENVELOPE NONE')?
-create_source_csv_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' 'CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS')
-  ('DELIMITED BY' char)?
-  ('ENVELOPE NONE')?
-create_source_json_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' 'BYTES'
-  ('ENVELOPE NONE')?
 create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
   'CONNECTION' connection_info
   'PUBLICATION' publication_name
   ('WITH timestamp_frequency_ms =' int)?
-create_source_protobuf_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' 'PROTOBUF MESSAGE' message_name
-  'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
-  ('ENVELOPE NONE')?
 create_source_pubnub_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -180,12 +166,6 @@ create_source_text ::=
     'BYTES'
   )
 ('ENVELOPE NONE')?
-create_source_text_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' ('BYTES' | 'TEXT')
-  ('ENVELOPE' 'NONE')?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
 create_user ::=
@@ -257,6 +237,12 @@ format_spec ::=
         'MESSAGE' message_name 'USING SCHEMA FILE' path |
         'USING CONFLUENT SCHEMA REGISTRY' url with_options
         ) |
+  'REGEX' regex |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'TEXT' |
+  'BYTES'
+kinesis_format_spec ::=
+  'PROTOBUF MESSAGE' message_name 'USING SCHEMA FILE' path |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
