@@ -75,7 +75,7 @@ create_source_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' kinesis_format_spec
+  'FORMAT' format_spec
   ('ENVELOPE NONE')?
 create_source_csv_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
