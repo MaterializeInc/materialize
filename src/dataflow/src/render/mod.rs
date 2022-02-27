@@ -174,6 +174,36 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                     src_id.clone(),
                 );
 
+                // Capture the frontier of `ok` to present as the "source upper".
+                // TODO: remove this code when storage has a better holistic take on source progress.
+                // This shared frontier is set up in `CreateSource`, and must be present by the time we render as source.
+                let shared_frontier = Rc::clone(&storage_state.source_uppers[src_id]);
+                let weak_token = Rc::downgrade(&token);
+                use timely::dataflow::operators::Operator;
+                ok.inner.sink(
+                    timely::dataflow::channels::pact::Pipeline,
+                    "frontier monitor",
+                    move |input| {
+                        // Drain the input; we don't need it.
+                        input.for_each(|_, _| {});
+
+                        // Only attempt the frontier update if the source is still live.
+                        // If it is shutting down, we shouldn't treat the frontier as correct.
+                        if let Some(_) = weak_token.upgrade() {
+                            // Read the input frontier, and join with the shared frontier.
+                            let mut joined_frontier = Antichain::new();
+                            let mut borrow = shared_frontier.borrow_mut();
+                            for time1 in borrow.iter() {
+                                for time2 in &input.frontier.frontier() {
+                                    use differential_dataflow::lattice::Lattice;
+                                    joined_frontier.insert(time1.join(time2));
+                                }
+                            }
+                            *borrow = joined_frontier;
+                        }
+                    },
+                );
+
                 let source_key = source.with_id(*src_id);
                 boundary.capture(source_key, ok, err, token, &debug_name, dataflow_id);
             }

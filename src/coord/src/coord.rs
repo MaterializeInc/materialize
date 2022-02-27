@@ -1485,19 +1485,13 @@ impl Coordinator {
         }
     }
 
-    /// Forward the subset of since updates that belong to persisted tables'
-    /// primary indexes to the persisted tables themselves.
-    ///
-    /// TODO: In the future the coordinator should perhaps track a table's upper and
-    /// since frontiers directly as it currently does for sources.
+    /// Allows compaction of identified collections through the indicated frontiers.
     fn persisted_table_allow_compaction(
         &mut self,
         since_updates: &[(GlobalId, Antichain<Timestamp>)],
     ) {
-        let mut table_since_updates = vec![];
-
-        // Updates for the persistence source that is backing a table.
-        let mut table_source_since_updates = vec![];
+        // The updates of `since_updates` identified by a persistence-internal `stream_id`.
+        let mut persistence_since_updates = vec![];
 
         for (id, frontier) in since_updates.iter() {
             // HACK: Avoid the "failed to compact persisted tables" error log at
@@ -1511,36 +1505,24 @@ impl Coordinator {
                 continue;
             }
 
-            // Not all ids will be present in the catalog however, those that are
-            // in the catalog must also have their dependencies in the catalog as
-            // well.
-            let item = self.catalog.try_get_by_id(*id).map(|e| e.item());
-            if let Some(CatalogItem::Index(catalog::Index { on, .. })) = item {
-                // We only want to forward since updates to persist if they:
-                //  - are from the primary index on a table
-                //  - and that table itself is currently persisted
-                if let Some(persist) = self.persister.table_details.get(&on) {
-                    if self.catalog.default_index_for(*on) == Some(*id) {
-                        table_since_updates.push((persist.stream_id, frontier.clone()));
-                        table_source_since_updates.push((*on, frontier.clone()));
-                    }
-                }
+            if let Some(persist) = self.persister.table_details.get(id) {
+                persistence_since_updates.push((persist.stream_id, frontier.clone()));
             }
         }
 
         // The persistence source that is backing a table on workers does not send frontier updates
         // back to the coordinator. We update our internal bookkeeping here, because we also
         // forward the compaction frontier here and therefore know that the since advances.
-        for (id, frontier) in table_source_since_updates {
+        for (id, frontier) in since_updates {
             let since_handle = self
                 .since_handles
                 .get_mut(&id)
                 .expect("missing since handle");
 
-            since_handle.maybe_advance(frontier);
+            since_handle.maybe_advance(frontier.iter().cloned());
         }
 
-        if !table_since_updates.is_empty() {
+        if !persistence_since_updates.is_empty() {
             let persist_multi = match &mut self.persister.table_writer {
                 Some(multi) => multi,
                 None => {
@@ -1549,7 +1531,7 @@ impl Coordinator {
                 }
             };
 
-            let compaction_fut = persist_multi.allow_compaction(&table_since_updates);
+            let compaction_fut = persist_multi.allow_compaction(&persistence_since_updates);
             let _ = task::spawn(
                 // TODO(guswynn): Add more relevant info here
                 || "compaction",
@@ -1581,18 +1563,6 @@ impl Coordinator {
             .collect();
 
         if !index_since_updates.is_empty() {
-            // TEMPORARY HACK: When since_updates got split into
-            // index_since_updates and source_since_updates, it looks like the
-            // ones persist was looking for ended up here (the wrong one). This
-            // means the compaction frontier for persisted tables never
-            // advances. Since we run a background test of persist on two system
-            // tables, this means unbounded storage (disk) usage, which is very
-            // much not correct. Putting this call to persist back in as a
-            // workaround while we fix the bug the proper way, which is making
-            // sure the messages end up in source_since_updates instead.
-            //
-            // See #10300 for context.
-            self.persisted_table_allow_compaction(&index_since_updates);
             // Error value is ignored because this call attempts to modify ids
             // for indexes that have not been installed. See above, presumably.
             self.dataflow_client

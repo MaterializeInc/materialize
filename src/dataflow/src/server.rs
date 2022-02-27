@@ -141,12 +141,13 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
             storage_state: StorageState {
                 local_inputs: HashMap::new(),
                 source_descriptions: HashMap::new(),
+                source_uppers: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 persisted_sources: PersistedSourceManager::new(),
                 unspecified_metrics,
                 persist: config.persister.clone(),
-                reported_bindings_frontiers: HashMap::new(),
+                reported_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
                 now: now.clone(),
                 source_metrics,
@@ -240,7 +241,8 @@ where
                     .report_compute_frontiers();
             }
             self.activate_storage().update_rt_timestamps();
-            self.activate_storage().report_timestamp_bindings();
+            self.activate_storage()
+                .report_conditional_frontier_progress();
 
             // Handle any received commands.
             let mut cmds = vec![];

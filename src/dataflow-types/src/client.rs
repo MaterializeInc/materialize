@@ -286,6 +286,11 @@ impl<T: timely::progress::Timestamp> Command<T> {
     /// added to `cease` will uninstall frontier tracking.
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {
+            Command::Storage(StorageCommand::CreateSources(sources)) => {
+                for (id, _) in sources.iter() {
+                    start.push(*id);
+                }
+            }
             Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
                 for dataflow in dataflows.iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
@@ -302,12 +307,6 @@ impl<T: timely::progress::Timestamp> Command<T> {
                         cease.push(*id);
                     }
                 }
-            }
-            Command::Storage(StorageCommand::AddSourceTimestamping { id, .. }) => {
-                start.push(*id);
-            }
-            Command::Storage(StorageCommand::DropSourceTimestamping { id }) => {
-                cease.push(*id);
             }
             Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
                 if let Some(logging_config) = logging {
@@ -768,6 +767,18 @@ pub mod partitioned {
                             changes.clear();
                         }
                     }
+                    // The following block implements a `list.retain()` of non-empty change batches.
+                    // This is more verbose than `list.retain()` because that method cannot mutate
+                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
+                    let mut cursor = 0;
+                    while let Some((_id, changes)) = feedback.changes.get_mut(cursor) {
+                        if changes.is_empty() {
+                            feedback.changes.swap_remove(cursor);
+                        } else {
+                            cursor += 1;
+                        }
+                    }
+
                     Box::new(
                         Some(Response::Storage(StorageResponse::TimestampBindings(
                             feedback,
