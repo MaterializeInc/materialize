@@ -14,7 +14,7 @@ aws-sdk-sqs = { version = "0.7.0", default-features = false, features = ["native
 aws-sdk-sts = { version = "0.7.0", default-features = false, features = ["native-tls"], optional = true }
 aws-smithy-client = { version = "0.37.0", default-features = false }
 aws-smithy-http = "0.37.0"
-aws-types = "0.7.0"
+aws-types = "0.8.0"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 openssl-sys = { version = "0.9.72", features = ["vendored"] }
 
