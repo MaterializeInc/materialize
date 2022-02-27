@@ -27,7 +27,7 @@ harness = false
 [dependencies]
 arrow2 = { version = "0.8.1", features = ["io_ipc", "io_parquet"] }
 async-trait = "0.1.0"
-aws-config = { version = "0.7.0", default-features = false, features = ["native-tls"] }
+aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
 aws-sdk-s3 = { version = "0.7.0", default-features = false }
 aws-types = "0.7.0"
 base64 = "0.13.0"

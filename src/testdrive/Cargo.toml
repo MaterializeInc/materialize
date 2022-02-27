@@ -11,7 +11,7 @@ anyhow = "1.0.55"
 async-compression = { version = "0.3.12", features = ["tokio", "gzip"] }
 async-trait = "0.1.52"
 atty = "0.2.0"
-aws-config = { version = "0.7.0", default-features = false, features = ["native-tls"] }
+aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.7.0", default-features = false }
 aws-sdk-s3 = { version = "0.7.0", default-features = false }
 aws-sdk-sqs = { version = "0.7.0", default-features = false }

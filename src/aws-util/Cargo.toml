@@ -7,7 +7,7 @@ rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-aws-config = { version = "0.7.0", default-features = false, features = ["native-tls"] }
+aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.7.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-s3 = { version = "0.7.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sqs = { version = "0.7.0", default-features = false, features = ["native-tls"], optional = true }
