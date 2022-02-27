@@ -10,7 +10,7 @@ publish = false
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 mz-persist-types = { path = "../persist-types" }
 mz-timely-util = { path = "../timely-util" }
-rusqlite = { version = "0.26.3", features = ["bundled"] }
+rusqlite = { version = "0.27.0", features = ["bundled"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
 [dev-dependencies]
