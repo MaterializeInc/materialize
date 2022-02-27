@@ -47,10 +47,10 @@ Field                                | Value     | Description
 
 |<div style="width:290px">Format</div> | Append-only envelope | Upsert envelope | Debezium envelope |
 ---------------------------------------|:--------------------:|:---------------:|:-----------------:|
-| [JSON](../json-kinesis)              | ✓                    |                 |                   |
-| [Protobuf](../protobuf-kinesis)      | ✓                    |                 |                   |
-| [Text/bytes](../text-kinesis)        | ✓                    |                 |                   |
-| [CSV](../csv-kinesis)                | ✓                    |                 |                   |
+| JSON                                 | ✓                    |                 |                   |
+| Protobuf                             | ✓                    |                 |                   |
+| Text/bytes                           | ✓                    |                 |                   |
+| CSV                                  | ✓                    |                 |                   |
 
 ## Features
 
