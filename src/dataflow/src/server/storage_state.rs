@@ -320,11 +320,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 .reported_frontiers
                 .get_mut(&id)
                 .expect("Frontier missing!");
-            assert!(<_ as PartialOrder>::less_equal(
-                prev_frontier,
-                &new_frontier
-            ));
-            if prev_frontier != &new_frontier {
+
+            // This is not an error in the case that the input has advanced without producing bindings, as in the
+            // case of a non-TAIL file, which will close its output and report itself as complete.
+            if <_ as PartialOrder>::less_than(prev_frontier, &new_frontier) {
                 let mut change_batch = ChangeBatch::new();
                 for time in prev_frontier.elements().iter() {
                     change_batch.update(time.clone(), -1);
