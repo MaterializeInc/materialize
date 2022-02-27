@@ -9,6 +9,7 @@
 
 use std::fmt::{self, Write};
 use std::hash::Hash;
+use std::iter;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
@@ -1693,19 +1694,25 @@ impl<'a> ScalarType {
 }
 
 lazy_static! {
-    static ref EMPTY_ARRAY_ROW: Row = unsafe {
-        Row::from_bytes_unchecked(vec![
-            23, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ])
+    static ref EMPTY_ARRAY_ROW: Row = {
+        let mut row = Row::default();
+        row.packer()
+            .push_array(&[], iter::empty::<Datum>())
+            .expect("array known to be valid");
+        row
     };
-    static ref EMPTY_LIST_ROW: Row =
-        unsafe { Row::from_bytes_unchecked(vec![24, 0, 0, 0, 0, 0, 0, 0, 0]) };
+    static ref EMPTY_LIST_ROW: Row = {
+        let mut row = Row::default();
+        row.packer().push_list(iter::empty::<Datum>());
+        row
+    };
 }
 
-impl Datum<'static> {
+impl Datum<'_> {
     pub fn empty_array() -> Datum<'static> {
         EMPTY_ARRAY_ROW.unpack_first()
     }
+
     pub fn empty_list() -> Datum<'static> {
         EMPTY_LIST_ROW.unpack_first()
     }
@@ -1742,41 +1749,4 @@ fn verify_base_eq_record_nullability() {
     };
     assert!(s1.base_eq(&s2));
     assert!(!s1.base_eq(&s3));
-}
-
-// Verify that bytes for static datums with manually stuffed bytes are correct.
-#[test]
-fn verify_static_datum_bytes() {
-    let arena = crate::RowArena::new();
-    {
-        let empty_array_datum: Datum = arena.make_datum(|packer| {
-            packer
-                .push_array::<_, Datum<'_>>(
-                    &[crate::adt::array::ArrayDimension {
-                        lower_bound: 1,
-                        length: 0,
-                    }],
-                    std::iter::empty(),
-                )
-                .unwrap();
-        });
-        if EMPTY_ARRAY_ROW.iter().next().is_none() || Datum::empty_array() != empty_array_datum {
-            panic!(
-                "expected EMPTY_ARRAY bytes: {:?}",
-                Row::pack_slice(&[empty_array_datum]).data()
-            );
-        }
-    }
-
-    {
-        let empty_list_datum: Datum = arena.make_datum(|packer| {
-            packer.push_list::<_, Datum<'_>>(std::iter::empty());
-        });
-        if EMPTY_LIST_ROW.iter().next().is_none() || Datum::empty_list() != empty_list_datum {
-            panic!(
-                "expected EMPTY_LIST bytes: {:?}",
-                Row::pack_slice(&[empty_list_datum]).data()
-            );
-        }
-    }
 }
