@@ -918,10 +918,8 @@ pub fn plan_cast(
     // Get cast which might include parameter rewrites + generating intermediate
     // expressions.
     //
-    // n.b PG solves this problem by making casts use the same process as their
-    // typical function selection, which already applies these semantics. Until
-    // we refactor this function to approximately use the function selection
-    // infrastructure, this is probably the fewest LOC change.
+    // String-like types get special handling to match PostgreSQL.
+    // See: https://github.com/postgres/postgres/blob/6b04abdfc/src/backend/parser/parse_coerce.c#L3205-L3223
     match (&cast_from, cast_to) {
         // Rewrite from char, varchar as from string
         (Char { .. } | VarChar { .. }, dest) if !dest.is_string_like() => {
