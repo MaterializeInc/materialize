@@ -340,6 +340,7 @@ pub mod client {
     };
     use differential_dataflow::{AsCollection, Collection};
     use futures::{Sink, SinkExt, TryStreamExt};
+    use itertools::Itertools;
     use mz_dataflow_types::{DataflowError, SourceInstanceKey};
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
@@ -377,7 +378,7 @@ pub mod client {
     /// A handle to the storage client. Implements [ComputeReplay].
     #[derive(Debug, Clone)]
     pub struct TcpEventLinkClientHandle {
-        announce_tx: UnboundedSender<Announce>,
+        announce_txs: Vec<UnboundedSender<Announce>>,
         storage_workers: usize,
     }
 
@@ -519,25 +520,34 @@ pub mod client {
     /// Connect to a storage boundary server. Returns a handle to replay sources and a join handle
     /// to await termination.
     pub async fn connect<A: ToSocketAddrs + std::fmt::Debug>(
-        addr: A,
+        addrs: &[A],
         workers: usize,
         storage_workers: usize,
-    ) -> std::io::Result<(TcpEventLinkClientHandle, JoinHandle<std::io::Result<()>>)> {
-        let (announce_tx, announce_rx) = unbounded_channel();
-        info!("About to connect to {addr:?}");
-        let stream = TcpStream::connect(addr).await?;
-        info!("Connected to storage server");
-        let thread = mz_ore::task::spawn(
-            || "storage client",
-            run_client(stream, announce_rx, workers),
-        );
-
+    ) -> std::io::Result<(
+        TcpEventLinkClientHandle,
+        Vec<JoinHandle<std::io::Result<()>>>,
+    )> {
+        let mut threads = Vec::with_capacity(addrs.len());
+        let (announce_txs, announce_rxs): (_, Vec<_>) = (0..addrs.len())
+            .into_iter()
+            .map(|_| unbounded_channel())
+            .unzip();
+        for (addr, announce_rx) in addrs.into_iter().zip(announce_rxs.into_iter()) {
+            info!("About to connect to {addr:?}");
+            let stream = TcpStream::connect(addr).await?;
+            info!("Connected to storage server");
+            let thread = mz_ore::task::spawn(
+                || "storage client",
+                run_client(stream, announce_rx, workers),
+            );
+            threads.push(thread);
+        }
         Ok((
             TcpEventLinkClientHandle {
-                announce_tx,
+                announce_txs,
                 storage_workers,
             },
-            thread,
+            threads,
         ))
     }
 
@@ -605,36 +615,54 @@ pub mod client {
             let ok_activator = ArcActivator::new(format!("{name}-ok-activator"), 1);
             let err_activator = ArcActivator::new(format!("{name}-err-activator"), 1);
 
+            // Determine storage workers to associate with this worker.
+            // We use a pattern where we assign each storage worker which is multiple of this
+            // worker's index
+            dbg!(self.storage_workers);
             let storage_workers = (0..self.storage_workers)
                 .into_iter()
                 .map(|x| scope.index() + x * scope.peers())
                 .filter(|x| *x < self.storage_workers)
                 .collect::<Vec<_>>();
+            dbg!(&storage_workers);
+            let caps = storage_workers.len();
+            let peer_storage_workers = storage_workers
+                .into_iter()
+                .map(|x| (x / (self.storage_workers / self.announce_txs.len()), x))
+                .into_group_map();
+            dbg!(&peer_storage_workers);
 
-            // Register with the storage client
-            let register = Announce::Register {
-                source_id,
-                worker: scope.index(),
-                storage_workers: storage_workers.clone(),
-                ok_tx,
-                err_tx,
-                ok_activator: ok_activator.clone(),
-                err_activator: err_activator.clone(),
-            };
-            self.announce_tx.send(register).unwrap();
-
+            let mut tokens = Vec::new();
+            for (storage_peer, storage_workers) in peer_storage_workers {
+                // Register with the storage client
+                let register = Announce::Register {
+                    source_id,
+                    worker: scope.index(),
+                    storage_workers: storage_workers.clone(),
+                    ok_tx: ok_tx.clone(),
+                    err_tx: err_tx.clone(),
+                    ok_activator: ok_activator.clone(),
+                    err_activator: err_activator.clone(),
+                };
+                self.announce_txs[storage_peer].send(register).unwrap();
+                // Construct drop token to unsubscribe from source
+                tokens.push(DropReplay {
+                    announce_tx: self.announce_txs[storage_peer].clone(),
+                    message: Some(Announce::Drop(source_id, scope.index(), storage_workers)),
+                });
+            }
             // Construct activators and replay data
             let mut ok_rx = Some(ok_rx);
-            let ok = storage_workers
-                .iter()
+            let ok = (0..caps)
+                .into_iter()
                 .map(|_| {
                     UnboundedEventPuller::new(ok_rx.take().unwrap_or_else(|| unbounded_channel().1))
                 })
                 .mz_replay(scope, &format!("{name}-ok"), Duration::MAX, ok_activator)
                 .as_collection();
             let mut err_rx = Some(err_rx);
-            let err = storage_workers
-                .iter()
+            let err = (0..caps)
+                .into_iter()
                 .map(|_| {
                     UnboundedEventPuller::new(
                         err_rx.take().unwrap_or_else(|| unbounded_channel().1),
@@ -643,13 +671,7 @@ pub mod client {
                 .mz_replay(scope, &format!("{name}-err"), Duration::MAX, err_activator)
                 .as_collection();
 
-            // Construct token to unsubscribe from source
-            let token = Rc::new(DropReplay {
-                announce_tx: self.announce_tx.clone(),
-                message: Some(Announce::Drop(source_id, scope.index(), storage_workers)),
-            });
-
-            (ok, err, Rc::new(token))
+            (ok, err, Rc::new(tokens))
         }
     }
 

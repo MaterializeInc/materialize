@@ -84,14 +84,17 @@ struct Args {
     /// The type of runtime hosted by this dataflowd
     #[clap(arg_enum, long, default_value = "legacy-multiplexed")]
     runtime: RuntimeType,
-    /// The address of the storage server to bind or connect to.
+    /// The address of the storage server to bind to.
     #[clap(
         long,
         env = "DATAFLOWD_STORAGE_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:6877"
     )]
-    storage_addr: String,
+    storage_listen_addr: String,
+    /// The address of the storage server to connect to.
+    #[clap(long)]
+    storage_addrs: Vec<String>,
     #[clap(long, default_value = "0")]
     storage_workers: usize,
 }
@@ -136,13 +139,6 @@ fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfi
             }
         }
 
-        assert!(
-            matches!(
-                args.runtime,
-                RuntimeType::LegacyMultiplexed | RuntimeType::Compute
-            ),
-            "Storage runtime with TCP boundary doesn't yet horizontally scaled Timely"
-        );
         assert_eq!(processes, addresses.len());
         Ok(timely::CommunicationConfig::Cluster {
             threads,
@@ -204,7 +200,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         RuntimeType::Compute => {
             assert!(args.storage_workers > 0, "Storage workers needs to be > 0");
             let (storage_client, _thread) = mz_dataflow::tcp_boundary::client::connect(
-                args.storage_addr,
+                &args.storage_addrs,
                 config.workers,
                 args.storage_workers,
             )
@@ -221,7 +217,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         }
         RuntimeType::Storage => {
             let (storage_server, _thread) =
-                mz_dataflow::tcp_boundary::server::serve(args.storage_addr).await?;
+                mz_dataflow::tcp_boundary::server::serve(args.storage_listen_addr).await?;
             let boundary = (0..config.workers)
                 .into_iter()
                 .map(|_| Some((storage_server.clone(), DummyBoundary)))

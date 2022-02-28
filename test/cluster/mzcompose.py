@@ -42,27 +42,33 @@ SERVICES = [
     ),
     Dataflowd(
         name="dataflowd_compute_1",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 0 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
+        options="--workers 2 --storage-workers 4 --processes 2 --process 0 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addrs dataflowd_storage_1:2102 --storage-addrs dataflowd_storage_2:2102 --runtime compute",
         # options="--workers 2 --storage-workers 2 --storage-addr dataflowd_storage:2102 --runtime compute",
         hostname="dataflowd_compute_1",
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_compute_2",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 1 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
+        options="--workers 2 --storage-workers 4 --processes 2 --process 1 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addrs dataflowd_storage_1:2102 --storage-addrs dataflowd_storage_2:2102 --runtime compute",
         # options="--workers 2 --storage-workers 2 --storage-addr dataflowd_storage:2102 --runtime compute",
         hostname="dataflowd_compute_2",
         ports=[6876, 2101],
     ),
     Dataflowd(
-        name="dataflowd_storage",
-        options="--workers 2 --storage-addr dataflowd_storage:2102 --runtime storage",
-        hostname="dataflowd_storage",
-        ports=[6876, 2102],
+        name="dataflowd_storage_1",
+        options="--workers 2 --processes 2 --process 0 dataflowd_storage_1:2101 dataflowd_storage_2:2101 --storage-listen-addr dataflowd_storage_1:2102 --runtime storage",
+        hostname="dataflowd_storage_1",
+        ports=[6876, 2101, 2102],
+    ),
+    Dataflowd(
+        name="dataflowd_storage_2",
+        options="--workers 2 --processes 2 --process 1 dataflowd_storage_1:2101 dataflowd_storage_2:2101 --storage-listen-addr dataflowd_storage_2:2102 --runtime storage",
+        hostname="dataflowd_storage_2",
+        ports=[6876, 2101, 2102],
     ),
     Coordd(
         name="materialized_compute_storage",
-        options="--workers 4 dataflowd_compute_1:6876 dataflowd_compute_2:6876 --storaged-addr dataflowd_storage:6876",
+        options="--workers 4 dataflowd_compute_1:6876 dataflowd_compute_2:6876 --storaged-addr dataflowd_storage_1:6876 --storaged-addr dataflowd_storage_2:6876",
     ),
     Testdrive(
         volumes=[
@@ -131,7 +137,8 @@ def workflow_nightly_compute_storage(c: Composition) -> None:
 
 
 def test_cluster_compute_storage(c: Composition, *glob: str) -> None:
-    c.up("dataflowd_storage")
+    c.up("dataflowd_storage_1")
+    c.up("dataflowd_storage_2")
     c.up("dataflowd_compute_1")
     c.up("dataflowd_compute_2")
     c.up("materialized_compute_storage")
