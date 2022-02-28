@@ -24,7 +24,7 @@ hex = "0.4.3"
 hmac = "0.12.1"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-md-5 = "0.10.0"
+md-5 = "0.10.1"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-pgrepr = { path = "../pgrepr" }
