@@ -154,11 +154,15 @@ impl<B: Blob> Maintainer<B> {
         // levels.
         debug_assert_eq!(first.level, second.level);
 
+        debug_assert_eq!(first.validate_data(&blob), Ok(()));
+        debug_assert_eq!(second.validate_data(&blob), Ok(()));
+
         let desc = Description::new(
             first.desc.lower().clone(),
             second.desc.upper().clone(),
             req.since.clone(),
         );
+        let format = ProtoBatchFormat::ParquetKvtd;
 
         let mut updates = vec![];
         let mut batches = vec![];
@@ -187,35 +191,41 @@ impl<B: Blob> Maintainer<B> {
 
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
-        let updates = updates.iter().collect::<ColumnarRecordsVec>().into_inner();
-        let new_batch = BlobTraceBatchPart {
-            desc: desc.clone(),
-            index: 0,
-            updates,
-        };
+        let (keys, level, size_bytes) = if !updates.is_empty() {
+            let updates = updates.iter().collect::<ColumnarRecordsVec>().into_inner();
+            let new_batch = BlobTraceBatchPart {
+                desc: desc.clone(),
+                index: 0,
+                updates,
+            };
 
-        let merged_key = Arrangement::new_blob_key();
-        let format = ProtoBatchFormat::ParquetKvtd;
-        let size_bytes = blob.set_trace_batch(merged_key.clone(), new_batch, format)?;
+            let merged_key = Arrangement::new_blob_key();
+            let size_bytes = blob.set_trace_batch(merged_key.clone(), new_batch, format)?;
 
-        // Only upgrade the compaction level if we know this new batch represents
-        // an increase in data over both of its parents so that we know we need
-        // even more additional batches to amortize the cost of compacting it in
-        // the future.
-        let merged_level = if size_bytes > first.size_bytes && size_bytes > second.size_bytes {
-            first.level + 1
+            // Only upgrade the compaction level if we know this new batch represents
+            // an increase in data over both of its parents so that we know we need
+            // even more additional batches to amortize the cost of compacting it in
+            // the future.
+            let merged_level = if size_bytes > first.size_bytes && size_bytes > second.size_bytes {
+                first.level + 1
+            } else {
+                first.level
+            };
+
+            (vec![merged_key], merged_level, size_bytes)
         } else {
-            first.level
+            (vec![], first.level, 0)
         };
 
         let merged = TraceBatchMeta {
-            keys: vec![merged_key],
+            keys,
             format,
             desc,
-            level: merged_level,
+            level,
             size_bytes,
         };
 
+        debug_assert_eq!(merged.validate_data(&blob), Ok(()));
         metrics
             .compaction_seconds
             .inc_by(start.elapsed().as_secs_f64());
@@ -263,7 +273,7 @@ mod tests {
                 (("k".as_bytes(), "v".as_bytes()), 0, 1),
                 (("k2".as_bytes(), "v2".as_bytes()), 0, 1),
             ]
-            .iter()
+            .into_iter()
             .collect::<ColumnarRecordsVec>()
             .into_inner(),
         };
@@ -277,7 +287,7 @@ mod tests {
                 (("k".as_bytes(), "v".as_bytes()), 2, 1),
                 (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
             ]
-            .iter()
+            .into_iter()
             .collect::<ColumnarRecordsVec>()
             .into_inner(),
         };
