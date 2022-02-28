@@ -1130,6 +1130,13 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     }
 }
 
+fn pg_get_constraintdef<'a>(_: Datum, _: Datum) -> Datum<'a> {
+    // Certain meta commands rely on this function not throwing an error, but we don't actually
+    // support constraints. Therefore we know any oid provided is not a valid constraint, so we
+    // can return NULL which is what PostgreSQL does when provided an invalid OID.
+    Datum::Null
+}
+
 fn rescale_numeric<'a>(a: Datum<'a>, scale: NumericMaxScale) -> Result<Datum<'a>, EvalError> {
     let mut d = a.unwrap_numeric();
     if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
@@ -2593,10 +2600,7 @@ impl BinaryFunc {
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
-            BinaryFunc::PgGetConstraintdef => Err(EvalError::Unsupported {
-                feature: "pg_get_constraintdef".to_string(),
-                issue_no: Some(9483),
-            }),
+            BinaryFunc::PgGetConstraintdef => Ok(eager!(pg_get_constraintdef)),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2753,7 +2757,7 @@ impl BinaryFunc {
                 ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
 
-            PgGetConstraintdef => ScalarType::String.nullable(in_nullable),
+            PgGetConstraintdef => ScalarType::String.nullable(true),
         }
     }
 
@@ -2849,7 +2853,6 @@ impl BinaryFunc {
                 | ModFloat32
                 | ModFloat64
                 | ModNumeric
-                | PgGetConstraintdef
         )
     }
 

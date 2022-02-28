@@ -1967,6 +1967,46 @@ lazy_static! {
                 params!(Oid) => UnaryFunc::PgGetConstraintdef(func::PgGetConstraintdef), 1387;
                 params!(Oid, Bool) => BinaryFunc::PgGetConstraintdef, 2508;
             },
+            // pg_get_indexdef reconstructs the creating command for an index. It currently isn't
+            // used anywhere, but is needed for certain meta-commands.
+            // TODO(jkosh44): In order to include the INDEX WITH options, they will need to be saved somewhere in the catalog
+            "pg_get_indexdef" => Scalar {
+                params!(Oid) => sql_impl_func(
+                    "(SELECT 'CREATE INDEX ' || i.name || ' ON ' || r.name || ' (' || (
+                        SELECT string_agg(cols.col_exp, ',' ORDER BY cols.index_position)
+                        FROM (
+                            SELECT c.name AS col_exp, ic.index_position
+                            FROM mz_catalog.mz_index_columns AS ic
+                            JOIN mz_catalog.mz_indexes AS i2 ON ic.index_id = i2.id
+                            JOIN mz_catalog.mz_columns AS c ON i2.on_id = c.id AND ic.on_position = c.position
+                            WHERE ic.index_id = i.id AND ic.on_expression IS NULL
+                            UNION
+                            SELECT ic.on_expression AS col_exp, ic.index_position
+                            FROM mz_catalog.mz_index_columns AS ic
+                            WHERE ic.index_id = i.id AND ic.on_expression IS NOT NULL
+                        ) AS cols
+                    ) || ')'
+                    FROM mz_catalog.mz_indexes AS i
+                    JOIN mz_catalog.mz_relations AS r ON i.on_id = r.id
+                    WHERE i.oid = $1)"
+                ) => String, 1643;
+                // A position of 0 is treated as if no position was given.
+                // Third parameter, pretty, is ignored.
+                params!(Oid, Int32, Bool) => sql_impl_func(
+                    "(SELECT CASE WHEN $2 = 0 THEN pg_get_indexdef($1) ELSE
+                        (SELECT c.name
+                        FROM mz_catalog.mz_indexes AS i
+                        JOIN mz_catalog.mz_index_columns AS ic ON i.id = ic.index_id
+                        JOIN mz_catalog.mz_columns AS c ON i.on_id = c.id AND ic.on_position = c.position
+                        WHERE i.oid = $1 AND ic.on_expression IS NULL AND ic.index_position = $2
+                        UNION
+                        SELECT ic.on_expression
+                        FROM mz_catalog.mz_indexes AS i
+                        JOIN mz_catalog.mz_index_columns AS ic ON i.id = ic.index_id
+                        WHERE i.oid = $1 AND ic.on_expression IS NOT NULL AND ic.index_position = $2)
+                    END)"
+                ) => String, 2507;
+            },
             // pg_get_expr is meant to convert the textual version of
             // pg_node_tree data into parseable expressions. However, we don't
             // use the pg_get_expr structure anywhere and the equivalent columns

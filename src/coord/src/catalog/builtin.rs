@@ -1557,18 +1557,46 @@ FROM mz_catalog.mz_schemas",
 pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
+    /*
+     * MZ doesn't support typed tables so reloftype is filled with 0
+     * MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
+     * MZ doesn't use TOAST tables so reltoastrelid is filled with 0
+     * MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
+       temporary objects don't show up here, so relpersistence is filled with 't'.
+       TODO(jkosh44): update this column when issue is resolved.
+     * MZ doesn't support constraints so relchecks is filled with 0
+     * MZ doesn't support creating rules so relhasrules is filled with false
+     * MZ doesn't support creating triggers so relhastriggers is filled with false
+     * MZ doesn't have row level security so relrowsecurity and relforcerowsecurity is filled with false
+     * MZ doesn't support replication so relreplident is filled with 'd' for default
+     * MZ doesn't support table partitioning so relispartition is filled with false
+     * PG removed relhasoids in v12 so it's filled with false
+     */
     sql: "CREATE VIEW pg_class AS SELECT
     mz_objects.oid,
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
+    0::pg_catalog.oid AS reloftype,
     NULL::pg_catalog.oid AS relowner,
     0::pg_catalog.oid AS relam,
+    0::pg_catalog.oid AS reltablespace,
+    0::pg_catalog.oid AS reltoastrelid,
+    EXISTS (SELECT * FROM mz_catalog.mz_indexes where mz_indexes.on_id = mz_objects.id) AS relhasindex,
+    't'::pg_catalog.\"char\" AS relpersistence,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
         WHEN mz_objects.type = 'source' THEN 'r'
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
-    END relkind
+    END relkind,
+    0::pg_catalog.int2 AS relchecks,
+    false AS relhasrules,
+    false AS relhastriggers,
+    false AS relrowsecurity,
+    false AS relforcerowsecurity,
+    'd'::pg_catalog.\"char\" AS relreplident,
+    false AS relispartition,
+    false AS relhasoids
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id",
     id: GlobalId::System(5015),
@@ -1594,10 +1622,20 @@ FROM mz_catalog.mz_databases",
 pub const PG_INDEX: BuiltinView = BuiltinView {
     name: "pg_index",
     schema: PG_CATALOG_SCHEMA,
+    /*
+     * MZ doesn't support creating unique indexes so indisunique is filled with false
+     * MZ doesn't support CLUSTER so indisclustered is filled with false
+     * MZ never creates invalid indexes so indisvalid is filled with true
+     * MZ doesn't support replication so indisreplident is filled with false
+     */
     sql: "CREATE VIEW pg_index AS SELECT
     mz_indexes.oid AS indexrelid,
     mz_objects.oid AS indrelid,
     false::pg_catalog.bool AS indisprimary,
+    false::pg_catalog.bool AS indisunique,
+    false::pg_catalog.bool AS indisclustered,
+    true::pg_catalog.bool AS indisvalid,
+    false::pg_catalog.bool AS indisreplident,
     pg_catalog.array_agg(mz_index_columns.on_position ORDER BY mz_index_columns.index_position) AS indkey
 FROM mz_catalog.mz_indexes
 JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
@@ -1623,6 +1661,9 @@ FROM pg_catalog.pg_class",
 pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
     schema: PG_CATALOG_SCHEMA,
+    /*
+     * MZ doesn't support COLLATE so typcollation is filled with 0
+     */
     sql: "CREATE VIEW pg_type AS SELECT
     mz_types.oid,
     mz_types.name AS typname,
@@ -1651,6 +1692,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype,
     -1::pg_catalog.int4 AS typtypmod,
+    0::pg_catalog.oid AS typcollation,
     NULL::pg_catalog.text AS typdefault
 FROM
     mz_catalog.mz_types
@@ -1672,6 +1714,10 @@ FROM
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
+    /*
+     * MZ doesn't support generated columns so attgenerated is filled with ''
+     * MZ doesn't support COLLATE so attcollation is filled with 0
+     */
     sql: "CREATE VIEW pg_attribute AS SELECT
     mz_objects.oid as attrelid,
     mz_columns.name as attname,
@@ -1682,7 +1728,9 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
-    FALSE as attisdropped
+    ''::pg_catalog.\"char\" as attgenerated,
+    FALSE as attisdropped,
+    0::pg_catalog.oid as attcollation
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
 JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid",
@@ -2030,7 +2078,63 @@ JOIN mz_catalog.mz_databases d on s.database_id = d.id",
     needs_logs: false,
 };
 
-// Next id BuiltinView: 5041
+// MZ doesn't support COLLATE so the table is filled with NULLs and made empty. pg_database hard
+// codes a collation of 'C' for every database, so we could copy that here.
+pub const PG_COLLATION: BuiltinView = BuiltinView {
+    name: "pg_collation",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_class
+AS SELECT
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS collname,
+    NULL::pg_catalog.oid AS collnamespace,
+    NULL::pg_catalog.oid AS collowner,
+    NULL::pg_catalog.\"char\" AS collprovider,
+    NULL::pg_catalog.bool AS collisdeterministic,
+    NULL::pg_catalog.int4 AS collencoding,
+    NULL::pg_catalog.text AS collcollate,
+    NULL::pg_catalog.text AS collctype,
+    NULL::pg_catalog.text AS collversion
+WHERE false",
+    id: GlobalId::System(5041),
+    needs_logs: false,
+};
+
+// MZ doesn't support row level security policies so the table is filled in with NULLs and made empty.
+pub const PG_POLICY: BuiltinView = BuiltinView {
+    name: "pg_policy",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_class
+AS SELECT
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS polname,
+    NULL::pg_catalog.oid AS polrelid,
+    NULL::pg_catalog.\"char\" AS polcmd,
+    NULL::pg_catalog.bool AS polpermissive,
+    NULL::pg_catalog.oid[] AS polroles,
+    NULL::pg_catalog.text AS polqual,
+    NULL::pg_catalog.text AS polwithcheck
+WHERE false",
+    id: GlobalId::System(5042),
+    needs_logs: false,
+};
+
+// MZ doesn't support table inheritance so the table is filled in with NULLs and made empty.
+pub const PG_INHERITS: BuiltinView = BuiltinView {
+    name: "pg_inherits",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_inherits
+AS SELECT
+    NULL::pg_catalog.oid AS inhrelid,
+    NULL::pg_catalog.oid AS inhparent,
+    NULL::pg_catalog.int4 AS inhseqno,
+    NULL::pg_catalog.bool AS inhdetachpending
+WHERE false",
+    id: GlobalId::System(5043),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5044
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -2177,6 +2281,9 @@ lazy_static! {
             Builtin::View(&PG_ACCESS_METHODS),
             Builtin::View(&PG_ROLES),
             Builtin::View(&PG_VIEWS),
+            Builtin::View(&PG_COLLATION),
+            Builtin::View(&PG_POLICY),
+            Builtin::View(&PG_INHERITS),
             Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
             Builtin::View(&INFORMATION_SCHEMA_TABLES),
         ];
