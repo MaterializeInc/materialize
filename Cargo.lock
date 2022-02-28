@@ -2720,9 +2720,9 @@ dependencies = [
 
 [[package]]
 name = "md-5"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6a38fc55c8bbc10058782919516f88826e70320db6d206aebc49611d24216ae"
+checksum = "658646b21e0b72f7866c7038ab086d3d5e1cd6271f060fd37defb241949d0582"
 dependencies = [
  "digest",
 ]

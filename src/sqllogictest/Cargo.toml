@@ -15,7 +15,7 @@ futures = "0.3.21"
 junit-report = "0.7.0"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
-md-5 = "0.10.0"
+md-5 = "0.10.1"
 mz-coord = { path = "../coord" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
