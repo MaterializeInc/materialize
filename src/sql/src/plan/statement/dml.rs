@@ -65,7 +65,7 @@ pub fn plan_insert(
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
-    let expr = expr.optimize_and_lower(&scx.into());
+    let expr = expr.optimize_and_lower(&scx.into())?;
 
     Ok(Plan::Insert(InsertPlan { id, values: expr }))
 }
@@ -116,7 +116,7 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, anyhow::Error> {
     selection.bind_parameters(&params)?;
-    let selection = selection.optimize_and_lower(&scx.into());
+    let selection = selection.optimize_and_lower(&scx.into())?;
     let mut assignments_outer = HashMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(&params)?;
@@ -263,7 +263,7 @@ pub fn plan_query(
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
     Ok(query::PlannedQuery {
-        expr: expr.optimize_and_lower(&scx.into()),
+        expr: expr.optimize_and_lower(&scx.into())?,
         desc,
         finishing,
         depends_on,

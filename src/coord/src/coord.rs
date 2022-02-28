@@ -3369,13 +3369,15 @@ impl Coordinator {
             optimization: None,
         };
 
-        let decorrelate = |timings: &mut Timings, raw_plan: HirRelationExpr| -> MirRelationExpr {
+        let decorrelate = |timings: &mut Timings,
+                           raw_plan: HirRelationExpr|
+         -> Result<MirRelationExpr, CoordError> {
             let start = Instant::now();
             let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
                 qgm_optimizations: session.vars().qgm_optimizations(),
-            });
+            })?;
             timings.decorrelation = Some(start.elapsed());
-            decorrelated_plan
+            Ok(decorrelated_plan)
         };
 
         let optimize =
@@ -3428,7 +3430,7 @@ impl Coordinator {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
                     &mut timings,
                     raw_plan,
-                ));
+                )?);
                 let catalog = self.catalog.for_session(session);
                 let formatter =
                     mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
@@ -3440,7 +3442,7 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
-                let decorrelated_plan = decorrelate(&mut timings, raw_plan);
+                let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
@@ -3455,7 +3457,7 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::PhysicalPlan => {
-                let decorrelated_plan = decorrelate(&mut timings, raw_plan);
+                let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let dataflow_plan =
