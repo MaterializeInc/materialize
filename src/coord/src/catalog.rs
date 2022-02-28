@@ -1612,21 +1612,20 @@ impl Catalog {
         Ok(ret)
     }
 
-    /// Compact timestamp bindings for a source
+    /// Compact timestamp bindings for several sources.
     ///
     /// In practice this ends up being "remove all bindings less than a given timestamp"
     /// because all offsets are then assigned to the next available binding.
     pub fn compact_timestamp_bindings(
         &mut self,
-        source_id: GlobalId,
-        frontier: Timestamp,
+        sources: &[(GlobalId, Timestamp)],
     ) -> Result<(), Error> {
         let mut storage = self.storage();
         let tx = storage.transaction()?;
-
-        tx.compact_timestamp_bindings(source_id, frontier)?;
+        for (source_id, frontier) in sources {
+            tx.compact_timestamp_bindings(*source_id, *frontier)?;
+        }
         tx.commit()?;
-
         Ok(())
     }
 
