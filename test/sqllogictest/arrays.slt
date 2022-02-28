@@ -38,7 +38,7 @@ SELECT '{{1}, {2}}'::int[]
 
 # Test coercion behavior of multidimensional arrays.
 
-query error ARRAY expression cannot be cast to uniform type: integer\[\] vs text\[\]
+query error ARRAY could not convert type text\[\] to integer\[\]
 SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]
 
 query T
@@ -105,7 +105,7 @@ SELECT 'hi'::text = ANY(ARRAY[]::text[])
 ----
 false
 
-query error ARRAY expression cannot be cast to uniform type: integer vs boolean
+query error ARRAY types integer and boolean cannot be matched
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
 query B
@@ -829,7 +829,7 @@ INSERT INTO users VALUES (1, 10), (2, 5), (3, 8);
 statement ok
 INSERT INTO customer VALUES (1, 'alice', 'lasta', '10003'::text), (2, 'bob', 'lastb', '10013'::text), (3, 'charlie', 'lastc', '11217'::text);
 
-query error ARRAY expression cannot be cast to uniform type: text\[\] vs integer\[\]
+query error ARRAY could not convert type integer\[\] to text\[\]
 SELECT ARRAY[ARRAY[customer.first_name, customer.last_name], ARRAY[customer.zip], ARRAY[customer.id]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
 
 query T

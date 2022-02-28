@@ -21,6 +21,8 @@ use mz_expr::func;
 use mz_expr::VariadicFunc;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
+use crate::func::TypeCategory;
+
 use super::error::PlanError;
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
@@ -724,63 +726,49 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 /// Postgres' ["`UNION`, `CASE`, and Related Constructs"][union-type-conv] type
 /// conversion.
 ///
-/// ## Type hints
-/// Some types contain embedded values, e.g. [`ScalarType::Numeric`] contains
-/// the values' scales. When choosing a common type, and the `type_hint` is of
-/// the type chosen, you should guess _it_ because the given type hint can
-/// contain a distinct embedded value necessary to retain type invariants.
-///
-/// [union-type-conv]:
-/// https://www.postgresql.org/docs/12/typeconv-union-case.html
+/// [union-type-conv]: https://www.postgresql.org/docs/12/typeconv-union-case.html
 pub fn guess_best_common_type(
+    ecx: &ExprContext,
     types: &[Option<ScalarType>],
-    type_hint: Option<&ScalarType>,
-) -> Option<ScalarType> {
-    // Remove unknown types and chain type_hint
-    let known_types: Vec<_> = types
-        .into_iter()
-        .filter_map(|v| match v {
-            None => type_hint.cloned(),
-            v => v.clone(),
-        })
-        .collect();
+) -> Result<ScalarType, PlanError> {
+    // This function is a direct translation of `select_common_type` in
+    // PostgreSQL.
+    // https://github.com/postgres/postgres/blob/d1b307eef/src/backend/parser/parse_coerce.c#L1288-L1308
 
-    if known_types.is_empty() {
-        return Some(ScalarType::String);
+    // Remove unknown types.
+    let types: Vec<_> = types.into_iter().filter_map(|v| v.as_ref()).collect();
+
+    // If no known types, fall back to `String`.
+    if types.is_empty() {
+        return Ok(ScalarType::String);
     }
 
-    // Tracks order of preferences for implicit casts for each [`TypeCategory`] that
-    // contains multiple types, but does so irrespective of [`TypeCategory`].
-    //
-    // We could make this deterministic, but it offers no real benefit because the
-    // information it provides is used in fallible functions anyway, so a bad guess
-    // just gets caught elsewhere.
-    let r = known_types
-        .iter()
-        .max_by_key(|scalar_type| match scalar_type {
-            // TypeCategory::String
-            ScalarType::String => 0,
-            ScalarType::Char { .. } => 1,
-            ScalarType::VarChar { .. } => 2,
-            // TypeCategory::Numeric
-            ScalarType::Int16 => 3,
-            ScalarType::Int32 => 4,
-            ScalarType::Int64 => 5,
-            ScalarType::Numeric { .. } => 6,
-            ScalarType::Float32 => 7,
-            ScalarType::Float64 => 8,
-            // TypeCategory::DateTime
-            ScalarType::Date => 9,
-            ScalarType::Timestamp => 10,
-            ScalarType::TimestampTz => 11,
-            _ => 12,
-        })
-        .unwrap();
+    let mut types = types.into_iter();
 
-    match type_hint {
-        Some(th) if r.base_eq(th) => type_hint.cloned(),
-        _ => Some(r.default_embedded_value()),
+    // Start by guessing the first type, then look at each following type in
+    // turn.
+    let mut candidate = types.next().unwrap();
+    for typ in types {
+        if TypeCategory::from_type(candidate) != TypeCategory::from_type(typ) {
+            // The next type is in a different category; give up.
+            sql_bail!(
+                "{} types {} and {} cannot be matched",
+                ecx.name,
+                ecx.humanize_scalar_type(&candidate),
+                ecx.humanize_scalar_type(&typ),
+            );
+        } else if TypeCategory::from_type(candidate).preferred_type().as_ref() != Some(candidate)
+            && can_cast(ecx, CastContext::Implicit, &candidate, &typ)
+            && !can_cast(ecx, CastContext::Implicit, &typ, &candidate)
+        {
+            // The current candidate is not the preferred type for its category
+            // and the next type is implicitly convertible to the current
+            // candidate, but not vice-versa, so take the next type as the new
+            // candidate.
+            candidate = typ;
+        }
     }
+    Ok(candidate.default_embedded_value())
 }
 
 pub fn plan_coerce<'a>(
@@ -953,17 +941,17 @@ pub fn plan_cast(
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    cast_from: ScalarType,
-    cast_to: ScalarType,
+    cast_from: &ScalarType,
+    cast_to: &ScalarType,
 ) -> bool {
     // All char values are cast to strings during casts, so this transformation
     // is equivalent.
     let cast_from = match cast_from {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
         from => from,
     };
     let cast_to = match cast_to {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
         to => to,
     };
     get_cast(ecx, ccx, &cast_from, &cast_to).is_some()

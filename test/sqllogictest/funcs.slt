@@ -400,7 +400,7 @@ SELECT greatest(1, NULL, -1)
 ----
 1
 
-query error greatest cannot be cast to uniform type: text vs integer
+query error greatest types integer and text cannot be matched
 SELECT greatest(1::int, 2::text)
 
 # Test least.
@@ -429,7 +429,7 @@ SELECT least(1, NULL, -1)
 ----
 -1
 
-query error least cannot be cast to uniform type: text vs integer
+query error least types integer and text cannot be matched
 SELECT least(1::int, 2::text)
 
 # Tests issue #2355, that type information for Maps are correctly constructed

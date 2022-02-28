@@ -22,7 +22,7 @@ SELECT (LIST[1,2,3])::text
 ----
 {1,2,3}
 
-query error LIST expression cannot be cast to uniform type: integer vs integer list
+query error LIST types integer and integer list cannot be matched
 SELECT LIST[1,LIST[2,3]]
 
 query T
@@ -65,7 +65,7 @@ SELECT (LIST[[[[1], [2]]], [[[3]]]])::text
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error LIST expression cannot be cast to uniform type: integer vs integer list
+query error LIST could not convert type integer to integer list
 SELECT LIST[1, null] :: INT LIST LIST
 
 query T
@@ -1133,7 +1133,7 @@ NULL
 query error invalid input syntax for type integer: invalid digit found in string: "dog"
 SELECT (LIST['1', 'dog']::int list)::text
 
-query error CAST does not support casting from date list to integer list
+query error LIST could not convert type date to integer
 SELECT LIST[DATE '2008-02-01']::int list
 
 # 🔬🔬🔬 Layered and jagged lists
@@ -1571,10 +1571,13 @@ query error invalid input syntax for type list: malformed literal; missing eleme
 SELECT ('{  ,a}'::text list)::text
 
 # 🔬🔬🔬🔬 homogeneous text lists
-query T
+query error char list not yet supported
 SELECT (LIST['ab'::char, 'cd'::varchar, 'ef'::text])::text
+
+query T
+SELECT (LIST['cd'::varchar, 'ef'::text])::text
 ----
-{a,cd,ef}
+{cd,ef}
 
 # 🔬🔬 char lists
 # ensures that the list type does not pick up an elements' typmod
@@ -2469,7 +2472,7 @@ INSERT INTO users VALUES (1, 10), (2, 5), (3, 8);
 statement ok
 INSERT INTO customer VALUES (1, 'alice', 'lasta', '10003'::text), (2, 'bob', 'lastb', '10013'::text), (3, 'charlie', 'lastc', '11217'::text);
 
-query error LIST expression cannot be cast to uniform type: text list vs integer list
+query error LIST could not convert type integer list to text list
 SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
 
 query T
