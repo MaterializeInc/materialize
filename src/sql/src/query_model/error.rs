@@ -12,12 +12,17 @@
 //! The public interface consists of the [`QGMError`] method and the
 //! implemented traits.
 
+use std::error::Error;
 use std::fmt;
 
 use crate::plan::{HirRelationExpr, HirScalarExpr};
 use crate::query_model::model::{BoxScalarExpr, BoxType, QuantifierType};
 
 /// Errors that can occur while handling a QGM model.
+///
+/// A bunch of the error types exist because our support for HIR ⇒ QGM
+/// conversion and QGM ⇒ MIR conversion is currently incomplete. They will be
+/// removed once these limitations are addressed.
 #[derive(Debug, Clone)]
 pub enum QGMError {
     /// Indicates HIR ⇒ QGM conversion failure due to unsupported [`HirRelationExpr`].
@@ -35,6 +40,8 @@ pub enum QGMError {
     /// An unstructured error.
     Internal { msg: String },
 }
+
+impl Error for QGMError {}
 
 #[derive(Debug, Clone)]
 pub struct UnsupportedBoxType {
