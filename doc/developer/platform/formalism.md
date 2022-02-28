@@ -8,6 +8,11 @@ Materialize records, transforms, and presents the contents of time varying colle
 
 Materialize's primary function is to provide the contents of time-varying collection at specific times with absolute certainty.
 
+This document details the **intended behavior** of the system.
+It does not intend to describe the **current behavior** of the system.
+Various liberties are taken in the names of commands and types, in the interest of simplicity.
+Not all commands here may be found in the implementation, nor all implementation commands found here.
+
 # Time-varying collections
 
 Materialize represents TVCs as a set of "updates" of the form `(data, time, diff)`.
@@ -194,3 +199,111 @@ A view introduces *constraints* on the capabilities and frontiers of its input a
     Outputs may need to be recovered in the case of failure, but also in other less dramatic query migration scenarios.
 
 These constraints are effected using the capability abstractions.
+The Compute layer acquires and maintains read capabilities for collections managed by it, and by the Storage layer.
+
+# Adapter
+
+The adapter layer translates SQL statements into commands for the Storage and Compute layers.
+
+The most significant differences between SQL statements and commands to the Storage and Compute layers are:
+1.  The absence of explicit timestamps in SQL statements.
+
+    A `SELECT` statement does not indicate *when* it should be run, or against which version of its input data.
+    The Adapter layer introduces timestamps to these commands, in a way that provides the appearance of sequential execution.
+
+2.  The use of user-defined and reused names in SQL statements rather than `GlobalId` identifiers.
+
+    SQL statements reference user-assigned names that may be rebound over time.
+    The meaning, and even the validity, of a query depends on the current association of user-defined name to `GlobalId`.
+    The Adapter layer maintains a map from user-assigned names to `GlobalId` identifiers, and introduces new ones as appropriate.
+
+Generally, SQL is "more ambiguous" than the Storage and Compute layers, and the Adapter layer must resolve that ambiguity.
+
+The SQL commands are a mix of DDL (data definition language) and DML (data manipulation language).
+In Materialize today, the DML commands are timestamped, and the DDL commands are largely not (although perhaps they should be).
+That DDL commands are not timestamped is a known potential source of all manner of apparent consistency issues.
+While it may be beneficial to think of Adapter's state as a pTVC, changes to its state are not meant to cascade through established views definitions.
+
+Commands acknowledged by the Adapter layer are durably recorded in a total order.
+Any user can rely on all future behavior of the system reflecting any acknowledged command.
+
+## Timelines
+
+The locus of consistency in Materialize is called a timeline.
+A timeline is a durable stateful object that assigns timestamps to a sequence of DML statements, such that
+1. The timestamps never decrease.
+2. The timestamps of INSERT/UPDATE/DELETE statements are strictly greater than those of preceding SELECT statements.
+3. The timestamps of SELECT statements are greater than or equal to the read capabilities of their input collections.
+4. The timestamps of INSERT/UPDATE/DELETE statements are greater than or equal to the write capabilities of their target collection.
+
+All commands are serialized through the timeline.
+A timeline is not a complicated concurrent object.
+
+The timeline timestamps do not need to strictly increase, and any events that have the same timestamp are *concurrent*.
+Concurrent events (at the same timestamp) first modify collections and then read collections.
+All writes at a timestamp are visible to all reads at the same timestamp.
+
+SELECT statements observe all data mutations up through and including their timestamp.
+For this reason, we strictly advance the timestamp for each write that occurs after a read, to ensure that it the write is not visible to the read.
+ADAPTER uses `UpdateAndDowngrade` in response to the first read after a write, to ensure that prior writes are readable and to strictly advance the write frontier.
+
+Some DML operations, like UPDATE and DELETE, require a read-write transaction which prevents other writes from intervening.
+In these and other non-trivial cases, we rely on the total order of timestamps to provide the apparent total order of system execution.
+
+---
+
+Several commands support an optional `AS OF <time>` clause, which instructs the Adapter to use a specific query `time`, if valid.
+The presence of this clause opts a command out of the timeline reasoning: it is neither constrainted by nor does it constrain timestamp selection for other commands.
+The command will observe all writes up through `time` (if it reads) and be visible by all reads from `time` onward (if it writes).
+
+---
+
+## Sources
+
+Materialize supports a `CREATE SOURCE` command that binds to a user-specified name a `GlobalId` produced by the Storage layer in response to a `Create` command.
+A created source has an initial read capability and write capability, which may not be at the beginning of time.
+Two sources created with the same arguments are not guaranteed to have the same contents at the same time (said differently: Materialize uses *nominal* rather than *structural* equivalence for sources).
+
+Sources remain active until a `DROP SOURCE` command is received, at which point the Adapter layer drops its read capability.
+
+One common specialization of source is the "table".
+The `CREATE TABLE` command introduces a new source that is not automatically populated by an external source, and is instead populated by `UpdateAndDowngrade` commands.
+The Adapter layer may use a write-ahead log to durably coalesce multiple writes at the same timestamp, as the `UpdateAndDowngrade` command does not otherwise allow this.
+The `DROP TABLE` command drops both the read and write capabilities for the source.
+
+## Indexes
+
+Materialize supports a `CREATE INDEX` command that results in a dataflow that computes and maintains the contents of the index's subject, in indexed representation.
+The `CREATE INDEX` command can be applied to any read-only view whose definition avoids certain non-deterministic functions (e.g. `now()`, `rand()`, environment variables).
+
+Materialize's main feature is that for any indexable view, one receives identical results whether re-evaluating the view from scratch or reading it from a created index.
+
+The `CREATE INDEX` command results in a `MaintainView` command for the Compute layer.
+The inputs to that command are `GlobalId` identifiers naming Storage or Compute collections.
+The command is issued with read capabilities all advanced to a common frontier (often: the maximum frontier of read capabilities in the input).
+The command returns a read capability for the indexed collection, which the Adapter layer maintains and perhaps regularly downgrades, as is its wont.
+The dataflow remains active until a corresponding `DROP INDEX` command is received by the Adapter layer, which discards its read capability for the indexed collection.
+
+## Transactions
+
+The Adapter layer provides interactive transactions through the `BEGIN`, `COMMIT`, and `ROLLBACK` commands.
+There are various restrictions on these transactions, primarily because the Storage and Compute layers require you to durably write before you can read from them.
+This makes read-after-write transactions challenging.
+Write-after-read transactions are implemented by **exclusively** performing all reads at the current timestamp and then writing at the next timestamp.
+Other read-only or write-only transactions may co-occur with a write-after-read transaction, but only one write-after-read transaction may span each transition from one time to the next.
+
+It is possible that multiple write-after-read transactions on disjoint collections could be made concurrent, but the technical requirements are open at the moment.
+
+Read-after-write, and general transactions are technically possible using advanced timestamps that allow for Adapter-private further resolution.
+All MZ collections support compensating update actions, and one can tentatively deploy updates and eventually potentially retract them, as long as others are unable to observe violations of atomicity.
+Further detail available upon request.
+
+It is critical that Adapter not deploy commands to Storage and Compute until a transaction has committed.
+These lower layers should provide similar "transactional" interfaces that validate tentative commands and ensure they can be committed without errors.
+
+## Compaction
+
+As Materialize runs, the Adapter may see fit to "allow compaction" of collections Materialize maintains.
+It does so by downgrading its held read capabilities for the collection (identifier by `GlobalId`).
+Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timeline timestamps forward.
+Generally, the Adapter should not downgrade its read capabilities past the timeline timestamp, thereby avoiding this constraint.
