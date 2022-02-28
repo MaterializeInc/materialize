@@ -903,6 +903,7 @@ impl Coordinator {
                     .expect("inserting timestamp bindings cannot fail");
 
                 let mut durability_updates = Vec::new();
+                let mut timestamp_compactions = Vec::new();
                 for (source_id, mut changes) in changes {
                     if let Some(source_state) = self.sources.get_mut(&source_id) {
                         // Apply the updates the dataflow worker sent over, and check if there
@@ -942,11 +943,13 @@ impl Coordinator {
                             .first()
                             .expect("known to exist");
 
-                        self.catalog
-                            .compact_timestamp_bindings(source_id, compaction_ts)
-                            .expect("compacting timestamp bindings cannot fail");
+                        timestamp_compactions.push((source_id, compaction_ts));
                     }
                 }
+
+                self.catalog
+                    .compact_timestamp_bindings(&timestamp_compactions)
+                    .expect("compacting timestamp bindings cannot fail");
 
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
