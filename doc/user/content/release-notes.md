@@ -101,7 +101,7 @@ process by the release notes team.
   type names when possible, rather than PostgreSQL-specific type names.
 
 - Support assuming AWS roles in S3 and Kinesis sources {{% gh 5895 %}}. See
-  [Specifying AWS credentials](/sql/create-source/text-s3/#specifying-aws-credentials)
+  [Specifying AWS credentials](/sql/create-source/kinesis/#aws-credentials)
   for details.
 
 - Support arbitrary `SELECT` statements in [`TAIL`](/sql/tail).
@@ -468,10 +468,10 @@ Improve PostgreSQL compatibility:
 - Speed up the creation or restart of a [Kafka sink](/sql/create-sink/)
   that uses the `reuse_topic` option {{% gh 9094 %}}.
 
-- Accept message names in [Protobuf sources] that do not start with a leading
+- Accept message names in Protobuf sources that do not start with a leading
   dot {{% gh 9372 %}}. This fixes a regression introduced in v0.9.12.
 
-- Fix decoding of [Protobuf sources] whose type contains a nested message type
+- Fix decoding of Protobuf sources whose type contains a nested message type
   with one or more integer fields {{% gh 8930 %}}. These messages could
   cause previous versions of Materialize to crash.
 
@@ -536,7 +536,7 @@ Improve PostgreSQL compatibility:
 
 {{% version-header v0.9.12 %}}
 
-- **Known issue.** Message names in [Protobuf sources] that do not start with a
+- **Known issue.** Message names in Protobuf sources that do not start with a
   leading dot are erroneously rejected. As a workaround, add a leading dot to
   the message name. This regression is corrected in v0.11.0.
 
@@ -742,7 +742,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 {{% version-header v0.9.0 %}}
 
-- **Breaking change.** Reject [Protobuf sources] whose schemas contain
+- **Breaking change.** Reject Protobuf sources whose schemas contain
   unsigned integer types (`uint32`, `uint64`, `fixed32`, and `fixed64`).
   Materialize previously converted these types to
   [`numeric`](/sql/types/numeric).
@@ -1731,7 +1731,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   other Debezium connectors (e.g., PostgreSQL).
 
 - Automatically refresh
-  [AWS credentials for Kinesis sources](/sql/create-source/json-kinesis/#with-options)
+  [AWS credentials for Kinesis sources](/sql/create-source/kinesis/#aws-credentials)
   when credentials are sourced from an IAM instance or container profile
   {{% gh 2928 %}}.
 
@@ -1832,7 +1832,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   - [SHOW COLUMNS](/sql/show-index)
 
 - Support reading from Kinesis streams with multiple shards. For details, about
-  Kinesis sources, see [CREATE SOURCE: JSON over Kinesis](/sql/create-source/json-kinesis).
+  Kinesis sources, see [CREATE SOURCE: Kinesis Data Streams](/sql/create-source/kinesis).
 
 {{% version-header v0.2.0 %}}
 
@@ -1881,7 +1881,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 {{% version-header v0.1.3 %}}
 
-- Support [Amazon Kinesis Data Stream sources](/sql/create-source/json-kinesis/).
+- Support [Amazon Kinesis Data Streams sources](/sql/create-source/kinesis).
 
 - Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
   round `x` to the `y`th digit after the decimal. (Default 0).
@@ -1962,4 +1962,3 @@ a problem with PostgreSQL JDBC 42.3.0.
 [pgwire-simple]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
 [pgwire-extended]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 [PgJDBC]: https://jdbc.postgresql.org
-[Protobuf sources]: /sql/create-source/protobuf-kinesis/#protobuf-format-details
