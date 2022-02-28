@@ -19,7 +19,8 @@ not beyond `upper`. Batches are immutable and are never modified after their
 creation. When they are no longer needed they are garbage collected.
 
 The batches are organized in two separate areas, a **versioned** "merged area"
-and a "pending area" that is sharded by writer id.
+and a per writer "pending area" containing the batches produced by a particular
+writer.
 
 ### The merged area
 
@@ -46,16 +47,16 @@ contains no batches.
 
 ### The pending area
 
-The pending area of a persistent collection is not versioned (there is only
-one) and is sharded by writer id. Each shard contains a list of batches
-produced by a particular writer that are contiguous in time.
+Each pending area contains a list of batches produced by a particular writer
+that are contiguous in time.
 
-If a collection contains more than one writer shard then the batches of the two
-shards must contain identical updates for all times `t`. If this invariant is
-not upheld then the contents of the persistent collection are undefined.
+If a collection is being written to by multiple writers, and therefore there
+are multiple pending areas, then the batches of the two areas must contain
+identical updates for all times `t`. If this invariant is not upheld then the
+contents of the persistent collection are undefined.
 
 Note that there is no requirement that the `lower` and `upper` frontiers of the
-batches in two separate shards to match up. Only that the diffs at each
+batches in two separate pending areas to match up. Only that the diffs at each
 particular time are identical.
 
 ## Collection lifecycle
@@ -74,21 +75,21 @@ A persisted collection is managed by the PERSIST CONTROLLER which has the follow
 A read handle of a persistent collection is described by a merged area version
 and a compaction frontier. **Readers of a collection must use the batches
 referred to by their current merged area version for any reads at times not
-beyond the merged area's `upper`. For times beyond `upper` the pending area is
-used instead.**
+beyond the merged area's `upper`. For times beyond `upper` the pending areas
+are used instead.**
 
 This behavior is the key to allow the PERSIST CONTROLLER to decide with
 certainty which batches are reachable and perform background garbage collection
 of unreachable batches.
 
 When a reader wants to read at a time `t` that is beyond the merged area's
-`upper` there might be multiple batches in the pending area that include that
-time. This can happen in the case of multiple writers writing out a definite
-collection. Readers are free to choose which batches to select based on any
-strategy. For example, a reader could pick a writer shard to follow and only
-switch to a different shard if its current shard is falling behind too much.
-The trade-off for switching which shard is followed is the additional work that
-needs to be done if the frontiers of the batches don't exactly line up.
+`upper` there might be multiple pending areas (due to multiple writers)
+containing a batch that includes that time. Readers are free to choose which
+pending area to read from based on any strategy. For example, a reader could
+pick a pending area to follow and only switch to a different one if its current
+pending area is falling behind too much. The trade-off for switching which
+pending area is followed is the additional work that needs to be done if the
+frontiers of the batches don't exactly line up.
 
 Readers continually try to discover newly minted merged area versions and
 increase their associated version to that, indicating that they will never use
@@ -114,7 +115,7 @@ identified by a name and it is up to the user to ensure that unique names are
 chosen.
 
 A writer writes to the collection by simply publishing new batches into its
-corresponding pending area shard.
+corresponding pending area.
 
 ## Background maintenance
 
