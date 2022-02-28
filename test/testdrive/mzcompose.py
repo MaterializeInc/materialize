@@ -106,20 +106,3 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "testdrive", Path(__file__).parent / junit_report
             )
         c.kill("materialized")
-
-
-def workflow_testdrive_redpanda_ci(c: Composition) -> None:
-    """Run testdrive against files known to be supported by Redpanda."""
-
-    # https://github.com/vectorizedio/redpanda/issues/2397
-    KNOWN_FAILURES = {"kafka-time-offset.td"}
-
-    files = set(
-        # NOTE(benesch): invoking the shell like this to filter testdrive files is
-        # pretty gross. Let's not get into the habit of using this construction.
-        spawn.capture(
-            ["sh", "-c", "grep -lr '\$.*kafka-ingest' *.td"], cwd=Path(__file__).parent
-        ).split()
-    )
-    files -= KNOWN_FAILURES
-    c.workflow("default", "--redpanda", *files)

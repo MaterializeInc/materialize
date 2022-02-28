@@ -92,7 +92,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-redpanda-ci
+          run: default
+          args: [--redpanda, "*.td"]
 
   - id: redpanda-testdrive-aarch64
     label: ":panda_face: :racing_car: testdrive aarch64"
@@ -101,7 +102,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-redpanda-ci
+          run: default
+          args: [--redpanda, "*.td"]
 
   - id: upgrade
     label: "Upgrade testing"
