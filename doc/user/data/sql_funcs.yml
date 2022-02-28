@@ -485,6 +485,18 @@
     description: Converts a timestamp into a string using the specified format.
     url: to_char
 
+  - signature: 'justify_days(val: interval) -> interval'
+    description: Adjust interval so 30-day time periods are represented as months.
+    url: justify-days
+
+  - signature: 'justify_hours(val: interval) -> interval'
+    description: Adjust interval so 24-hour time periods are represented as days.
+    url: justify-hours
+
+  - signature: 'justify_interval(val: interval) -> interval'
+    description: Adjust interval using justify_days and justify_hours, with additional sign adjustments.
+    url: justify-interval
+
 - type: UUID
   functions:
   - signature: mz_cluster_id() -> uuid

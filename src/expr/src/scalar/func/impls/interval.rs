@@ -51,3 +51,25 @@ sqlfunc!(
         i.checked_neg().ok_or(EvalError::IntervalOutOfRange)
     }
 );
+
+sqlfunc!(
+    #[sqlname = "justify_days"]
+    fn justify_days(i: Interval) -> Result<Interval, EvalError> {
+        i.justify_days().map_err(|_| EvalError::IntervalOutOfRange)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "justify_hours"]
+    fn justify_hours(i: Interval) -> Result<Interval, EvalError> {
+        i.justify_hours().map_err(|_| EvalError::IntervalOutOfRange)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "justify_interval"]
+    fn justify_interval(i: Interval) -> Result<Interval, EvalError> {
+        i.justify_interval()
+            .map_err(|_| EvalError::IntervalOutOfRange)
+    }
+);

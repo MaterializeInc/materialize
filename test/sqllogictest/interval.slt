@@ -1063,3 +1063,67 @@ query T
 SELECT INTERVAL '-1 day' < INTERVAL '-9999999 hours';
 ----
 true
+
+# Justify tests
+query T
+SELECT justify_hours(interval '6 months 3 days 52 hours 3 minutes 2 seconds');
+----
+6 months 5 days 04:03:02
+
+query T
+SELECT justify_hours(interval '27 hours');
+----
+1 day 03:00:00
+
+query T
+SELECT justify_days(interval '6 months 36 days 5 hours 4 minutes 3 seconds');
+----
+7 months 6 days 05:04:03
+
+query T
+SELECT justify_days(interval '35 days');
+----
+1 month 5 days
+
+query T
+SELECT justify_interval(interval '1 month -1 hour');
+----
+29 days 23:00:00
+
+query error interval out of range
+SELECT justify_hours(interval '2147483647 days 24 hrs');
+
+query error interval out of range
+SELECT justify_days(interval '2147483647 months 30 days');
+
+query T
+SELECT justify_interval(interval '2147483647 days 24 hrs');
+----
+5965232 years 4 months 8 days
+
+query T
+SELECT justify_interval(interval '-2147483648 days -24 hrs');
+----
+-5965232 years -4 months -9 days
+
+query error interval out of range
+SELECT justify_interval(interval '2147483647 months 30 days');
+
+query error interval out of range
+SELECT justify_interval(interval '-2147483648 months -30 days');
+
+query T
+SELECT justify_interval(interval '2147483647 months 30 days -24 hrs');
+----
+178956970 years 7 months 29 days
+
+query T
+SELECT justify_interval(interval '-2147483648 months -30 days 24 hrs');
+----
+-178956970 years -8 months -29 days
+
+query error interval out of range
+SELECT justify_interval(interval '2147483647 months -30 days 1440 hrs');
+
+query error interval out of range
+SELECT justify_interval(interval '-2147483648 months 30 days -1440 hrs');

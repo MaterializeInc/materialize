@@ -3442,6 +3442,9 @@ pub enum UnaryFunc {
         wall_time: NaiveDateTime,
     },
     ToTimestamp(ToTimestamp),
+    JustifyDays(JustifyDays),
+    JustifyHours(JustifyHours),
+    JustifyInterval(JustifyInterval),
     JsonbArrayLength,
     JsonbTypeof,
     JsonbStripNulls,
@@ -3572,6 +3575,9 @@ derive_unary!(
     CastBoolToStringNonstandard,
     CastBoolToInt32,
     ToTimestamp,
+    JustifyDays,
+    JustifyHours,
+    JustifyInterval,
     CastFloat64ToString,
     CastNumericToFloat32,
     CastNumericToFloat64,
@@ -3797,6 +3803,9 @@ impl UnaryFunc {
             | CastIntervalToString(_)
             | CastIntervalToTime(_)
             | NegInterval(_)
+            | JustifyDays(_)
+            | JustifyHours(_)
+            | JustifyInterval(_)
             | CastUuidToString(_)
             | CastArrayToListOneDim(_)
             | CastTimestampToString(_)
@@ -4032,6 +4041,9 @@ impl UnaryFunc {
             | CastIntervalToString(_)
             | CastIntervalToTime(_)
             | NegInterval(_)
+            | JustifyDays(_)
+            | JustifyHours(_)
+            | JustifyInterval(_)
             | CastUuidToString(_)
             | CastArrayToListOneDim(_)
             | CastTimestampToString(_)
@@ -4291,6 +4303,9 @@ impl UnaryFunc {
             | CastIntervalToString(_)
             | CastIntervalToTime(_)
             | NegInterval(_)
+            | JustifyDays(_)
+            | JustifyHours(_)
+            | JustifyInterval(_)
             | CastUuidToString(_)
             | CastArrayToListOneDim(_)
             | CastTimestampToString(_)
@@ -4418,6 +4433,9 @@ impl UnaryFunc {
             | CastIntervalToString(_)
             | CastIntervalToTime(_)
             | NegInterval(_)
+            | JustifyDays(_)
+            | JustifyHours(_)
+            | JustifyInterval(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4566,6 +4584,9 @@ impl UnaryFunc {
             | CastIntervalToString(_)
             | CastIntervalToTime(_)
             | NegInterval(_)
+            | JustifyDays(_)
+            | JustifyHours(_)
+            | JustifyInterval(_)
             | CastUuidToString(_)
             | CastArrayToListOneDim(_)
             | CastTimestampToString(_)

@@ -1853,6 +1853,15 @@ lazy_static! {
             "jsonb_typeof" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbTypeof, 3210;
             },
+            "justify_days" => Scalar {
+                params!(Interval) => UnaryFunc::JustifyDays(func::JustifyDays), 1295;
+            },
+            "justify_hours" => Scalar {
+                params!(Interval) => UnaryFunc::JustifyHours(func::JustifyHours), 1175;
+            },
+            "justify_interval" => Scalar {
+                params!(Interval) => UnaryFunc::JustifyInterval(func::JustifyInterval), 2711;
+            },
             "left" => Scalar {
                 params!(String, Int32) => BinaryFunc::Left, 3060;
             },
