@@ -143,3 +143,23 @@ Group multiple linkboxes together to form a grid:
 - [Link number three](/)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
+
+### `tabs` shortcode
+
+{{< tabs >}}
+{{< tab "Tab 1">}}
+block1
+{{< /tab >}}
+{{< tab "Tab 2">}}
+block1
+{{< /tab >}}
+{{< /tabs >}}
+
+{{< tabs >}}
+{{< tab "Tab 1">}}
+block2
+{{< /tab >}}
+{{< tab "Tab 2">}}
+block2
+{{< /tab >}}
+{{< /tabs >}}

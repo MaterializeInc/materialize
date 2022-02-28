@@ -1,5 +1,5 @@
-<!-- Adapted from https://discourse.gohugo.io/t/code-tabs-widget/975/7 -->
-<div class='code-tabs'>
+<!--&lt;!&ndash; Adapted from https://discourse.gohugo.io/t/code-tabs-widget/975/7 &ndash;&gt;-->
+<div class='code-tabs' title="{{ .Get 0 }}">
   <ul class="nav nav-tabs"></ul>
   <div class="tab-content">{{ .Inner }}</div>
 </div>
@@ -7,11 +7,19 @@
 <script>
     $(document).ready(function () {
 
-    $('.tab-content').find('.tab-pane').each(function (idx, item) {
-        var navTabs = $(this).closest('.code-tabs').find('.nav-tabs'),
-            title = $(this).attr('title');
-        navTabs.append('<li><a href="#">' + title + '</a></li');
-    });
+      $(this).find('.code-tabs').each(function (idx, item) {
+        // For each tabs group; make new unordered list
+        var n = $("<ul/>", {
+          id: "div-id",
+          class: "nav nav-tabs"
+        });
+        // For each tab pane; make new list item
+          $(this).find('.tab-pane').each(function (idx, item) {
+          n.append('<li><a href="#">' + $(this).attr("title") + '</a></li>');
+        })
+        // Replace
+        $(this).find('.nav-tabs').replaceWith(n);
+      });
 
     updateCurrentTab()
 
@@ -37,8 +45,6 @@
     });
 
     function updateCurrentTab() {
-        var holder = '.nav-tabs a'
-
         // By default current tab number is 1
         var tabNumber = 1
 
