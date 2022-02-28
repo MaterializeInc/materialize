@@ -77,8 +77,4 @@ networks:
     driver: bridge
     ipam:
       config:
-      - subnet: 10.0.0.0/25
-
-fault_injector:
-  blocked: 10.0.0.0/26
-  unblocked: 10.0.0.65/26
+      - subnet: 10.0.0.0/24
