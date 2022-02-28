@@ -259,7 +259,7 @@ impl LazyUnaryFunc for CastStringToList {
 
     /// The output ColumnType of this function
     fn output_type(&self, _input_type: ColumnType) -> ColumnType {
-        self.return_ty.default_embedded_value().nullable(false)
+        self.return_ty.without_modifiers().nullable(false)
     }
 
     /// Whether this function will produce NULL on NULL input

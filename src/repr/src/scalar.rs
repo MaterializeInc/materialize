@@ -1457,24 +1457,24 @@ impl<'a> ScalarType {
         layers
     }
 
-    /// Returns `self` with any embedded values set to a value appropriate for a
-    /// collection of the type. Namely, this should set optional scales or
-    /// limits to `None`.
-    pub fn default_embedded_value(&self) -> ScalarType {
+    /// Returns `self` with any type modifiers removed.
+    ///
+    /// Namely, this should set optional scales or limits to `None`.
+    pub fn without_modifiers(&self) -> ScalarType {
         use ScalarType::*;
         match self {
             List {
                 element_type,
                 custom_oid: None,
             } => List {
-                element_type: Box::new(element_type.default_embedded_value()),
+                element_type: Box::new(element_type.without_modifiers()),
                 custom_oid: None,
             },
             Map {
                 value_type,
                 custom_oid: None,
             } => Map {
-                value_type: Box::new(value_type.default_embedded_value()),
+                value_type: Box::new(value_type.without_modifiers()),
                 custom_oid: None,
             },
             Record {
@@ -1482,25 +1482,25 @@ impl<'a> ScalarType {
                 custom_oid: None,
                 custom_name: None,
             } => {
-                let default_embedded_field_values = fields
+                let fields = fields
                     .iter()
                     .map(|(column_name, column_type)| {
                         (
                             column_name.clone(),
                             ColumnType {
-                                scalar_type: column_type.scalar_type.default_embedded_value(),
+                                scalar_type: column_type.scalar_type.without_modifiers(),
                                 nullable: column_type.nullable,
                             },
                         )
                     })
                     .collect_vec();
                 Record {
-                    fields: default_embedded_field_values,
+                    fields,
                     custom_name: None,
                     custom_oid: None,
                 }
             }
-            Array(a) => Array(Box::new(a.default_embedded_value())),
+            Array(a) => Array(Box::new(a.without_modifiers())),
             Numeric { .. } => Numeric { max_scale: None },
             // Char's default length should not be `Some(1)`, but instead `None`
             // to support Char values of different lengths in e.g. lists.

@@ -2730,16 +2730,10 @@ impl BinaryFunc {
             }
 
             ArrayArrayConcat | ArrayRemove | ListListConcat | ListElementConcat | ListRemove => {
-                input1_type
-                    .scalar_type
-                    .default_embedded_value()
-                    .nullable(true)
+                input1_type.scalar_type.without_modifiers().nullable(true)
             }
 
-            ElementListConcat => input2_type
-                .scalar_type
-                .default_embedded_value()
-                .nullable(true),
+            ElementListConcat => input2_type.scalar_type.without_modifiers().nullable(true),
 
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Position => ScalarType::Int32.nullable(in_nullable),
@@ -4090,12 +4084,10 @@ impl UnaryFunc {
             CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
 
             CastRecord1ToRecord2 { return_ty, .. } => {
-                return_ty.default_embedded_value().nullable(nullable)
+                return_ty.without_modifiers().nullable(nullable)
             }
 
-            CastList1ToList2 { return_ty, .. } => {
-                return_ty.default_embedded_value().nullable(false)
-            }
+            CastList1ToList2 { return_ty, .. } => return_ty.without_modifiers().nullable(false),
 
             ExtractInterval(_)
             | ExtractTime(_)
