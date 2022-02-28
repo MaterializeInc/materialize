@@ -3428,15 +3428,15 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::QueryGraph => {
-                // TODO add type information to the output graph
-                let model = mz_sql::query_model::Model::try_from(raw_plan)?;
-                model.as_dot("")?
+                let catalog = self.catalog.for_session(session);
+                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
+                model.as_dot("", &catalog, options.typed)?
             }
             ExplainStage::OptimizedQueryGraph => {
-                // TODO add type information to the output graph
+                let catalog = self.catalog.for_session(session);
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 model.optimize();
-                model.as_dot("")?
+                model.as_dot("", &catalog, options.typed)?
             }
             ExplainStage::DecorrelatedPlan => {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(

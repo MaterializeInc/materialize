@@ -111,7 +111,7 @@ fn run_command(
             Err(err) => Err(err.to_string()),
         }
     } else {
-        match model.as_dot(input) {
+        match model.as_dot(input, catalog, false) {
             Ok(graph) => Ok(graph),
             Err(e) => return Err(format!("graph generation error: {}", e)),
         }
