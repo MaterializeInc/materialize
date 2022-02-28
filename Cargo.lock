@@ -3188,6 +3188,8 @@ dependencies = [
  "mz-kafka-util",
  "mz-ore",
  "mz-persist-types",
+ "mz-pgrepr",
+ "mz-postgres-util",
  "mz-repr",
  "num_enum",
  "prost",
@@ -3644,7 +3646,6 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "mz-dataflow-types",
  "mz-ore",
  "mz-pgrepr",
  "mz-repr",

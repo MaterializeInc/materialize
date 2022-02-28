@@ -29,7 +29,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
-use mz_dataflow_types::postgres_source::{PostgresColumn, PostgresTable};
+use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
 use mz_repr::{Datum, Row};
@@ -154,21 +154,24 @@ impl PostgresSourceReader {
             .map(|t| (t.rel_id, PostgresTable::from(t)))
             .collect();
         for (id, schema) in self.source_tables.iter() {
-            if let Some(pub_schema) = pub_tables.get(id) {
-                if pub_schema != schema {
-                    error!(
-                        "Error validating table in publication. Expected: {:?} Actual: {:?}",
-                        schema, pub_schema
-                    );
-                    bail!("Schema for table {} differs, recreate materialized source to use new schema", schema.name)
+            match pub_tables.get(id) {
+                Some(pub_schema) => {
+                    if pub_schema != schema {
+                        error!(
+                            "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                            schema, pub_schema
+                        );
+                        bail!("Schema for table {} differs, recreate materialized source to use new schema", schema.name)
+                    }
                 }
-            } else {
-                error!("publication missing table: {} with id {}", schema.name, id);
-                bail!(
-                    "Publication missing expected table {} with oid {}",
-                    schema.name,
-                    id
-                )
+                None => {
+                    error!("publication missing table: {} with id {}", schema.name, id);
+                    bail!(
+                        "Publication missing expected table {} with oid {}",
+                        schema.name,
+                        id
+                    )
+                }
             }
         }
         Ok(())
@@ -258,7 +261,7 @@ impl PostgresSourceReader {
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
                 let mut raw_values = parser.iter_raw(info.columns.len() as i32);
-                try_fatal!(mz_row.push_list_with(|rp| -> Result<(), anyhow::Error> {
+                try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
                     while let Some(raw_value) = raw_values.next() {
                         match raw_value? {
                             Some(value) => rp.push(Datum::String(std::str::from_utf8(value)?)),
@@ -463,49 +466,76 @@ impl PostgresSourceReader {
                         }
                         Relation(relation) => {
                             let rel_id = relation.rel_id();
-                            if let Some(source_table) = self.source_tables.get(&rel_id) {
-                                // Start with the cheapest check first, this will catch the majority of alters
-                                if source_table.columns.len() != relation.columns().len() {
-                                    error!(
-                                        "alter table detected on {} with id {}",
-                                        source_table.name, source_table.relation_id
-                                    );
-                                    return Err(Fatal(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        source_table.name,
-                                        source_table.relation_id
-                                    )));
+                            match self.source_tables.get(&rel_id) {
+                                Some(source_table) => {
+                                    // Start with the cheapest check first, this will catch the majority of alters
+                                    if source_table.columns.len() != relation.columns().len() {
+                                        error!(
+                                            "alter table detected on {} with id {}",
+                                            source_table.name, source_table.relation_id
+                                        );
+                                        return Err(Fatal(anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            source_table.name,
+                                            source_table.relation_id
+                                        )));
+                                    }
+                                    if source_table.name.ne(relation.name().unwrap())
+                                        || source_table.namespace.ne(relation.namespace().unwrap())
+                                    {
+                                        error!(
+                                            "table name changed on {}.{} with id {} to {}.{}",
+                                            source_table.namespace,
+                                            source_table.name,
+                                            source_table.relation_id,
+                                            relation.namespace().unwrap(),
+                                            relation.name().unwrap()
+                                        );
+                                        return Err(Fatal(anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            source_table.name,
+                                            source_table.relation_id
+                                        )));
+                                    }
+                                    // Relation messages do not include nullability/primary_key data
+                                    // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
+                                    if !source_table.columns.iter().zip(relation.columns()).all(
+                                        |(src, rel)| {
+                                            src.name == rel.name().unwrap()
+                                                && src.type_oid == rel.type_id()
+                                                && src.type_mod == rel.type_modifier()
+                                        },
+                                    ) {
+                                        error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.relation_id, source_table.columns, relation.columns());
+                                        return Err(Fatal(anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            source_table.name,
+                                            source_table.relation_id
+                                        )));
+                                    }
                                 }
-                                let cols = relation.columns().iter().map(|c| PostgresColumn {
-                                    name: c.name().unwrap().to_string(),
-                                    type_oid: c.type_id(),
-                                    type_mod: c.type_modifier(),
-                                    nullable: bool::default(),
-                                    primary_key: bool::default(),
-                                });
-                                // Relation messages do not include nullability/primary_key data
-                                // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
-                                if !source_table.columns.iter().zip(cols).all(|(src, rel)| {
-                                    src.name == rel.name
-                                        && src.type_oid == rel.type_oid
-                                        && src.type_mod == rel.type_mod
-                                }) {
-                                    error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.relation_id, source_table.columns, relation.columns());
-                                    return Err(Fatal(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        source_table.name,
-                                        source_table.relation_id
-                                    )));
-                                }
-                            } else {
-                                // We do not care about this table so ignore the message entirely
-                                continue;
+                                // Ignore messages for tables we do not know about
+                                None => continue,
                             }
                         }
                         Origin(_) | Type(_) => {
                             self.metrics.ignored.inc();
                         }
-                        Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
+                        Truncate(truncate) => {
+                            let tables = truncate
+                                .rel_ids()
+                                .iter()
+                                // Filter here makes option handling in map "safe"
+                                .filter_map(|id| self.source_tables.get(&id))
+                                .map(|table| {
+                                    format!("name: {} id: {}", table.name, table.relation_id)
+                                })
+                                .collect::<Vec<String>>();
+                            return Err(Fatal(anyhow!(
+                                "source table(s) {} got truncated",
+                                tables.join(", ")
+                            )));
+                        }
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
                         _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
