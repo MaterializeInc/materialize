@@ -14,7 +14,7 @@ The Redpanda integration has [beta-level](../supported-tools#beta-level-support)
 
 You can use most of the Kafka source options for Redpanda as a Kafka broker, with an exception:
 
-- The `start_offset` option may not work properly ([Redpanda #2397](https://github.com/vectorizedio/redpanda/issues/2397)).
+- The `kafka_time_offset` option may not work properly ([Redpanda #2397](https://github.com/vectorizedio/redpanda/issues/2397)).
 
 ## Configuration
 
