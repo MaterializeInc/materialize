@@ -1,0 +1,525 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test interpretation note: You can tell if a particular index is being used to
+# speed up a filter operation if the physical plan has the following two things:
+# * "Get"->"key_val"[0] is a list with the same `MirScalarExpr`s as those
+#   representing the index.
+# * "Get"->"key_val"[1] is not null.
+
+statement ok
+CREATE TABLE test (f1 int, f2 character varying)
+
+statement ok
+INSERT INTO test VALUES (1, 'hello'), (2, 'world') 
+
+# Control: queries work fine without indexes.
+
+query I
+SELECT f1 from test where f1 = 1::bigint
+----
+1
+
+query T
+SELECT f2 from test where f2 = 'world'::string
+----
+world
+
+#################################################################
+## Varchar and String have the same underlying representation. ##
+
+# Create an index on the varchar column cast to string.
+statement ok
+CREATE INDEX test_f2_idx_upcast ON test(f2::string)
+
+# The index is used at rendering time.
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT f2 from test where f2 = 'world'::string
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 1
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "CallUnary": {
+                "func": {
+                  "CastVarCharToString": null
+                },
+                "expr": {
+                  "Column": 1
+                }
+              }
+            }
+          ],
+          {
+            "0": 1,
+            "1": 2
+          },
+          [
+            0,
+            1
+          ]
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [
+        [
+          3,
+          {
+            "CallBinary": {
+              "func": "Eq",
+              "expr1": {
+                "Literal": [
+                  {
+                    "Ok": {
+                      "data": [
+                        18,
+                        5,
+                        119,
+                        111,
+                        114,
+                        108,
+                        100
+                      ]
+                    }
+                  },
+                  {
+                    "scalar_type": "String",
+                    "nullable": false
+                  }
+                ]
+              },
+              "expr2": {
+                "CallUnary": {
+                  "func": {
+                    "CastVarCharToString": null
+                  },
+                  "expr": {
+                    "Column": 2
+                  }
+                }
+              }
+            }
+          }
+        ]
+      ],
+      "projection": [
+        2
+      ],
+      "input_arity": 3
+    },
+    "key_val": [
+      [
+        {
+          "CallUnary": {
+            "func": {
+              "CastVarCharToString": null
+            },
+            "expr": {
+              "Column": 1
+            }
+          }
+        }
+      ],
+      {
+        "data": [
+          18,
+          5,
+          119,
+          111,
+          114,
+          108,
+          100
+        ]
+      }
+    ]
+  }
+}
+
+EOF
+
+# We get a correct result.
+query T
+SELECT f2 from test where f2 = 'world'::string
+----
+world
+
+statement ok
+DROP INDEX test_f2_idx_upcast
+
+# Create an index on the varchar column itself.
+statement ok
+CREATE INDEX test_f2_idx_upcast ON test(f2)
+
+# This index can also be used for the same query.
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT f2 from test where f2 = 'world'::string
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 1
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "Column": 1
+            }
+          ],
+          {
+            "0": 1,
+            "1": 0
+          },
+          [
+            0
+          ]
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [
+        [
+          1,
+          {
+            "CallBinary": {
+              "func": "Eq",
+              "expr1": {
+                "Literal": [
+                  {
+                    "Ok": {
+                      "data": [
+                        18,
+                        5,
+                        119,
+                        111,
+                        114,
+                        108,
+                        100
+                      ]
+                    }
+                  },
+                  {
+                    "scalar_type": "String",
+                    "nullable": false
+                  }
+                ]
+              },
+              "expr2": {
+                "CallUnary": {
+                  "func": {
+                    "CastVarCharToString": null
+                  },
+                  "expr": {
+                    "Column": 0
+                  }
+                }
+              }
+            }
+          }
+        ]
+      ],
+      "projection": [
+        0
+      ],
+      "input_arity": 2
+    },
+    "key_val": [
+      [
+        {
+          "Column": 1
+        }
+      ],
+      {
+        "data": [
+          18,
+          5,
+          119,
+          111,
+          114,
+          108,
+          100
+        ]
+      }
+    ]
+  }
+}
+
+EOF
+
+# We get a correct result.
+query T
+SELECT f2 from test where f2 = 'world'::string
+----
+world
+
+###############################################################
+## Int and BigInt have different underlying representations. ##
+
+# Create an index on the int column cast to bigint.
+statement ok
+CREATE INDEX test_f1_idx_upcast ON test(f1::bigint)
+
+# The index is used at rendering time.
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT f1 from test where f1 = 1::bigint
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 1
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "CallUnary": {
+                "func": {
+                  "CastInt32ToInt64": null
+                },
+                "expr": {
+                  "Column": 0
+                }
+              }
+            }
+          ],
+          {
+            "0": 1,
+            "1": 2
+          },
+          [
+            0,
+            1
+          ]
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [
+        [
+          2,
+          {
+            "CallBinary": {
+              "func": "Eq",
+              "expr1": {
+                "Literal": [
+                  {
+                    "Ok": {
+                      "data": [
+                        5,
+                        1,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0
+                      ]
+                    }
+                  },
+                  {
+                    "scalar_type": "Int64",
+                    "nullable": false
+                  }
+                ]
+              },
+              "expr2": {
+                "CallUnary": {
+                  "func": {
+                    "CastInt32ToInt64": null
+                  },
+                  "expr": {
+                    "Column": 1
+                  }
+                }
+              }
+            }
+          }
+        ]
+      ],
+      "projection": [
+        1
+      ],
+      "input_arity": 3
+    },
+    "key_val": [
+      [
+        {
+          "CallUnary": {
+            "func": {
+              "CastInt32ToInt64": null
+            },
+            "expr": {
+              "Column": 0
+            }
+          }
+        }
+      ],
+      {
+        "data": [
+          5,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ]
+  }
+}
+
+EOF
+
+# We get a correct result.
+query I
+SELECT f1 from test where f1 = 1::bigint
+----
+1
+
+statement ok
+DROP INDEX test_f1_idx_upcast
+
+# Create an index on the int column itself.
+statement ok
+CREATE INDEX test_f1_idx ON test(f1)
+
+# This index can also be used for the same query.
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT f1 from test where f1 = 1::bigint
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 1
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "Column": 0
+            }
+          ],
+          {
+            "0": 0,
+            "1": 1
+          },
+          [
+            1
+          ]
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [
+        [
+          1,
+          {
+            "CallBinary": {
+              "func": "Eq",
+              "expr1": {
+                "Literal": [
+                  {
+                    "Ok": {
+                      "data": [
+                        5,
+                        1,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0
+                      ]
+                    }
+                  },
+                  {
+                    "scalar_type": "Int64",
+                    "nullable": false
+                  }
+                ]
+              },
+              "expr2": {
+                "CallUnary": {
+                  "func": {
+                    "CastInt32ToInt64": null
+                  },
+                  "expr": {
+                    "Column": 0
+                  }
+                }
+              }
+            }
+          }
+        ]
+      ],
+      "projection": [
+        0
+      ],
+      "input_arity": 2
+    },
+    "key_val": [
+      [
+        {
+          "Column": 0
+        }
+      ],
+      {
+        "data": [
+          5,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ]
+  }
+}
+
+EOF
+
+# But the query fails to return any results.
+query I
+SELECT f1 from test where f1 = 1::bigint
+----

@@ -180,12 +180,12 @@ impl MapFilterProject {
             } = predicate
             {
                 if let Some(Ok(datum1)) = expr1.as_literal() {
-                    if &**expr2 == expr {
+                    if &**expr2 == expr || &**expr2 == &MirScalarExpr::call_unary(expr.clone(), crate::UnaryFunc::CastInt32ToInt64(crate::func::CastInt32ToInt64)) || &**expr2 == &MirScalarExpr::call_unary(expr.clone(), crate::UnaryFunc::CastVarCharToString(crate::func::CastVarCharToString)){
                         return Some(datum1);
                     }
                 }
                 if let Some(Ok(datum2)) = expr2.as_literal() {
-                    if &**expr1 == expr {
+                    if &**expr1 == expr || &**expr1 == &MirScalarExpr::call_unary(expr.clone(), crate::UnaryFunc::CastInt32ToInt64(crate::func::CastInt32ToInt64))  || &**expr2 == &MirScalarExpr::call_unary(expr.clone(), crate::UnaryFunc::CastVarCharToString(crate::func::CastVarCharToString)){
                         return Some(datum2);
                     }
                 }
