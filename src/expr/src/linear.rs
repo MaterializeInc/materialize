@@ -1376,7 +1376,7 @@ pub mod plan {
 
             let mut temporal = Vec::new();
 
-            // Optimize, to ensure that temporal predicates are move in to `mfp.predicates`.
+            // Optimize, to ensure that temporal predicates are moved into `mfp.predicates`.
             mfp.optimize();
 
             mfp.predicates.retain(|(_position, predicate)| {
@@ -1578,15 +1578,17 @@ pub mod plan {
             }
 
             // If the lower bound exceeds `u64::MAX` the update cannot appear in the output.
-            if lower_bound.is_none() {
+            let lower_bound = if let Some(lower_bound) = lower_bound {
+                lower_bound
+            } else {
                 return None.into_iter().chain(None.into_iter());
-            }
+            };
 
             // If there are any upper bounds, determine the minimum upper bound.
             for u in self.upper_bounds.iter() {
                 // We can cease as soon as the lower and upper bounds match,
                 // as the update will certainly not be produced in that case.
-                if upper_bound != lower_bound {
+                if upper_bound != Some(lower_bound) {
                     match u.eval(datums, &arena) {
                         Err(e) => {
                             return Some(Err((e.into(), time, diff)))
@@ -1597,7 +1599,7 @@ pub mod plan {
                             // If the upper bound is negative, it is impossible to satisfy.
                             // We set the upper bound to the lower bound to indicate this.
                             if d.0.is_negative() {
-                                upper_bound = lower_bound;
+                                upper_bound = Some(lower_bound);
                             } else {
                                 // An `Ok` conversion is a valid upper bound, and an `Err` error
                                 // indicates a value above `u64::MAX`. The `ok()` method does the
@@ -1613,8 +1615,8 @@ pub mod plan {
                                 // Force the upper bound to be at least the lower bound.
                                 // The `is_some()` test is required as `None < Some(_)`,
                                 // and we do not want to set `None` to `Some(_)`.
-                                if upper_bound.is_some() && upper_bound < lower_bound {
-                                    upper_bound = lower_bound;
+                                if upper_bound.is_some() && upper_bound < Some(lower_bound) {
+                                    upper_bound = Some(lower_bound);
                                 }
                             }
                         }
@@ -1630,22 +1632,17 @@ pub mod plan {
 
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
-            if lower_bound != upper_bound && !null_eval {
+            if Some(lower_bound) != upper_bound && !null_eval {
                 row_builder
                     .packer()
                     .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                let (lower_opt, upper_opt) = match (lower_bound, upper_bound) {
-                    (Some(lower_bound), Some(upper_bound)) => (
+                let (lower_opt, upper_opt) = if let Some(upper_bound) = upper_bound {
+                    (
                         Some(Ok((row_builder.clone(), lower_bound, diff))),
                         Some(Ok((row_builder.clone(), upper_bound, -diff))),
-                    ),
-                    (Some(lower_bound), None) => {
-                        (Some(Ok((row_builder.clone(), lower_bound, diff))), None)
-                    }
-                    (None, Some(upper_bound)) => {
-                        (None, Some(Ok((row_builder.clone(), upper_bound, -diff))))
-                    }
-                    _ => (None, None),
+                    )
+                } else {
+                    (Some(Ok((row_builder.clone(), lower_bound, diff))), None)
                 };
                 lower_opt.into_iter().chain(upper_opt.into_iter())
             } else {
