@@ -220,8 +220,8 @@ The most significant differences between SQL statements and commands to the Stor
 Generally, SQL is "more ambiguous" than the Storage and Compute layers, and the Adapter layer must resolve that ambiguity.
 
 The SQL commands are a mix of DDL (data definition language) and DML (data manipulation language).
-In Materialize today, the DML commands are timestamped, and the DDL commands are largely not (although perhaps they should be).
-That DDL commands are not timestamped is a known potential source of all manner of apparent consistency issues.
+In Materialize today, the DML commands are timestamped, and the DDL commands are largely not (although their creation of `GlobalId` identifiers is essentially sequential).
+That DDL commands are not timestamped in the same sense as a pTVC is a known potential source of apparent consistency issues.
 While it may be beneficial to think of Adapter's state as a pTVC, changes to its state are not meant to cascade through established views definitions.
 
 Commands acknowledged by the Adapter layer are durably recorded in a total order.
@@ -274,7 +274,7 @@ The `DROP TABLE` command drops both the read and write capabilities for the sour
 ## Indexes
 
 Materialize supports a `CREATE INDEX` command that results in a dataflow that computes and maintains the contents of the index's subject, in indexed representation.
-The `CREATE INDEX` command can be applied to any read-only view whose definition avoids certain non-deterministic functions (e.g. `now()`, `rand()`, environment variables).
+The `CREATE INDEX` command can be applied to any collection whose definition avoids certain non-deterministic functions (e.g. `now()`, `rand()`, environment variables).
 
 Materialize's main feature is that for any indexable view, one receives identical results whether re-evaluating the view from scratch or reading it from a created index.
 
@@ -288,9 +288,11 @@ The dataflow remains active until a corresponding `DROP INDEX` command is receiv
 
 The Adapter layer provides interactive transactions through the `BEGIN`, `COMMIT`, and `ROLLBACK` commands.
 There are various restrictions on these transactions, primarily because the Storage and Compute layers require you to durably write before you can read from them.
-This makes read-after-write transactions challenging.
-Write-after-read transactions are implemented by **exclusively** performing all reads at the current timestamp and then writing at the next timestamp.
-Other read-only or write-only transactions may co-occur with a write-after-read transaction, but only one write-after-read transaction may span each transition from one time to the next.
+This makes read-after-write transactions challenging to perform efficiently, and they are not currently supported.
+Write-after-read transactions are implemented by performing all reads at the current timestamp and then writing at a strictly later timestamp.
+Other read-only transactions may co-occur with a write-after-read transaction (logically preceding the transaction, as its writes are only visible at its write timestamp).
+Other write-only transactions may precede or follow a write-after-read transaction, but may not occur *between* the read and write times of that transaction.
+Multiple write-after-read transactions may not co-occur (their [read, write) half-open timestamp intervals must be disjoint).
 
 It is possible that multiple write-after-read transactions on disjoint collections could be made concurrent, but the technical requirements are open at the moment.
 
@@ -298,7 +300,7 @@ Read-after-write, and general transactions are technically possible using advanc
 All MZ collections support compensating update actions, and one can tentatively deploy updates and eventually potentially retract them, as long as others are unable to observe violations of atomicity.
 Further detail available upon request.
 
-It is critical that Adapter not deploy commands to Storage and Compute until a transaction has committed.
+It is critical that Adapter not deploy `UpdateAndDowngrade` commands to Storage and Compute until a transaction has committed.
 These lower layers should provide similar "transactional" interfaces that validate tentative commands and ensure they can be committed without errors.
 
 ## Compaction
