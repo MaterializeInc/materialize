@@ -106,14 +106,14 @@ impl SourceReader for KafkaSourceReader {
             topic,
             config_options,
             group_id_prefix,
-            cluster_id,
+            install_id,
             ..
         } = kc;
         let kafka_config = create_kafka_config(
             &source_name,
             &addrs,
             group_id_prefix,
-            cluster_id,
+            install_id,
             &config_options,
         );
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
@@ -510,7 +510,7 @@ fn create_kafka_config(
     name: &str,
     addrs: &KafkaAddrs,
     group_id_prefix: Option<String>,
-    cluster_id: Uuid,
+    install_id: Uuid,
     config_options: &BTreeMap<String, String>,
 ) -> ClientConfig {
     let mut kafka_config = ClientConfig::new();
@@ -555,7 +555,7 @@ fn create_kafka_config(
         &format!(
             "{}materialize-{}-{}",
             group_id_prefix.unwrap_or_else(String::new),
-            cluster_id,
+            install_id,
             name
         ),
     );

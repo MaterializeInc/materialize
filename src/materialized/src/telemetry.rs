@@ -27,8 +27,8 @@ pub struct Config {
     pub domain: String,
     /// How often to report telemetry data.
     pub interval: Duration,
-    /// The ID of the Materialize cluster.
-    pub cluster_id: Uuid,
+    /// The ID of the Materialize instance.
+    pub install_id: Uuid,
     /// The number of workers the dataflow server is hosting.
     pub workers: usize,
     /// A client for the coordinator to introspect.
@@ -128,7 +128,7 @@ async fn report_one(config: &Config) -> Result<semver::Version, anyhow::Error> {
             let response = mz_http_proxy::reqwest::client()
                 .post(format!(
                     "https://{}/api/telemetry/{}",
-                    config.domain, config.cluster_id
+                    config.domain, config.install_id
                 ))
                 .timeout(Duration::from_secs(10))
                 .json(&query_result.rows[0][0])

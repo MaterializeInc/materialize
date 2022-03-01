@@ -153,7 +153,7 @@ const MIGRATIONS: &[&str] = &[
 pub struct Connection {
     inner: rusqlite::Connection,
     experimental_mode: bool,
-    cluster_id: Uuid,
+    install_id: Uuid,
 }
 
 impl Connection {
@@ -193,7 +193,7 @@ impl Connection {
 
         Ok(Connection {
             experimental_mode: Self::set_or_get_experimental_mode(&mut sqlite, experimental_mode)?,
-            cluster_id: Self::set_or_get_cluster_id(&mut sqlite)?,
+            install_id: Self::set_or_get_install_id(&mut sqlite)?,
             inner: sqlite,
         })
     }
@@ -260,12 +260,12 @@ impl Connection {
         res
     }
 
-    /// Sets catalog's `cluster_id` setting on initialization or gets that value.
-    fn set_or_get_cluster_id(sqlite: &mut rusqlite::Connection) -> Result<Uuid, Error> {
+    /// Sets catalog's `install_id` setting on initialization or gets that value.
+    fn set_or_get_install_id(sqlite: &mut rusqlite::Connection) -> Result<Uuid, Error> {
         let tx = sqlite.transaction()?;
         let current_setting: Option<SqlVal<Uuid>> = tx
             .query_row(
-                "SELECT value FROM settings WHERE name = 'cluster_id';",
+                "SELECT value FROM settings WHERE name = 'install_id';",
                 params![],
                 |row| row.get(0),
             )
@@ -275,12 +275,12 @@ impl Connection {
             // Server init
             None => {
                 // Generate a new version 4 UUID. These are generated from random input.
-                let cluster_id = Uuid::new_v4();
+                let install_id = Uuid::new_v4();
                 tx.execute(
-                    "INSERT INTO settings VALUES ('cluster_id', ?);",
-                    params![SqlVal(cluster_id)],
+                    "INSERT INTO settings VALUES ('install_id', ?);",
+                    params![SqlVal(install_id)],
                 )?;
-                Ok(cluster_id)
+                Ok(install_id)
             }
             // Server reboot
             Some(cs) => Ok(cs.0),
@@ -380,8 +380,8 @@ impl Connection {
         })
     }
 
-    pub fn cluster_id(&self) -> Uuid {
-        self.cluster_id
+    pub fn install_id(&self) -> Uuid {
+        self.install_id
     }
 
     pub fn experimental_mode(&self) -> bool {

@@ -359,7 +359,7 @@ pub fn plan_create_source(
                 config_options,
                 start_offsets,
                 group_id_prefix,
-                cluster_id: scx.catalog.config().cluster_id,
+                install_id: scx.catalog.config().install_id,
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,

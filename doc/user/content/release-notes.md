@@ -1341,9 +1341,10 @@ a problem with PostgreSQL JDBC 42.3.0.
   not persist across restarts. We expect to add support for persistent table
   data in a future release.
 
-- Generate a persistent, unique identifier associated with each cluster. This
-  can be retrieved using the new [`mz_cluster_id`](/sql/functions#uuid-func) SQL
-  function.
+- Generate a persistent, unique identifier associated with each installation.
+  This can be retrieved using the new `mz_cluster_id` SQL function. (_Note:_
+  This has since been moved to the `mz_internal` schema and renamed to
+  `mz_install_id`).
 
 - Automatically check for new versions of Materialize on server startup. If a
   new version is available, a warning will be logged encouraging you to upgrade.

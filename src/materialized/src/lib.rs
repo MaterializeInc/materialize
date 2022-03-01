@@ -257,9 +257,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let persister = config
         .persist
         .init(
-            // Safe to use the cluster ID as the reentrance ID because
+            // Safe to use the installation ID as the reentrance ID because
             // `materialized` can only run as a single node.
-            coord_storage.cluster_id(),
+            coord_storage.install_id(),
             BUILD_INFO,
             &config.metrics_registry,
         )
@@ -352,7 +352,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         let config = telemetry::Config {
             domain: telemetry.domain,
             interval: telemetry.interval,
-            cluster_id: coord_handle.cluster_id(),
+            install_id: coord_handle.install_id(),
             workers,
             coord_client,
         };

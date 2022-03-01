@@ -136,7 +136,7 @@ impl CoordTest {
             Some(experimental_mode),
         )?;
         let persister = PersistConfig::disabled()
-            .init(storage.cluster_id(), DUMMY_BUILD_INFO, &metrics_registry)
+            .init(storage.install_id(), DUMMY_BUILD_INFO, &metrics_registry)
             .await?;
         let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
             dataflow_client: Box::new(dataflow_client.clone()),

@@ -157,7 +157,7 @@ pub struct CatalogConfig {
     /// topics. Perhaps we can remove this when #2915 is complete.
     pub nonce: u64,
     /// A persistent UUID associated with the catalog.
-    pub cluster_id: Uuid,
+    pub install_id: Uuid,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
     /// Whether the server is running in experimental mode.
@@ -421,7 +421,7 @@ lazy_static! {
         start_time: MIN_DATETIME,
         start_instant: Instant::now(),
         nonce: 0,
-        cluster_id: Uuid::from_u128(0),
+        install_id: Uuid::from_u128(0),
         session_id: Uuid::from_u128(0),
         experimental_mode: true,
         safe_mode: false,

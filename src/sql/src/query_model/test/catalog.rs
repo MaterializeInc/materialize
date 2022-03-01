@@ -33,7 +33,7 @@ lazy_static! {
         start_time: MIN_DATETIME,
         start_instant: Instant::now(),
         nonce: 0,
-        cluster_id: Uuid::from_u128(0),
+        install_id: Uuid::from_u128(0),
         session_id: Uuid::from_u128(0),
         experimental_mode: false,
         safe_mode: false,

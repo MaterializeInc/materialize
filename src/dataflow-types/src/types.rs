@@ -1083,7 +1083,7 @@ pub mod sources {
         // Map from partition -> starting offset
         pub start_offsets: HashMap<i32, i64>,
         pub group_id_prefix: Option<String>,
-        pub cluster_id: Uuid,
+        pub install_id: Uuid,
         /// If present, include the timestamp as an output column of the source with the given name
         pub include_timestamp: Option<IncludedColumnPos>,
         /// If present, include the partition as an output column of the source with the given name.

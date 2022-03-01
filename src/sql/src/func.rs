@@ -2599,9 +2599,6 @@ lazy_static! {
                     Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
                 }) => ListAny, oid::FUNC_LIST_REMOVE_OID;
             },
-            "mz_cluster_id" => Scalar {
-                params!() => NullaryFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;
-            },
             "mz_logical_timestamp" => Scalar {
                 params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
             },
@@ -2707,6 +2704,9 @@ lazy_static! {
                         WHEN $1 like 't%' THEN 'temp'
                     END"
                 ) => String, oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID;
+            },
+            "mz_install_id" => Scalar {
+                params!() => NullaryFunc::MzInstallId, oid::FUNC_MZ_INSTALL_ID_OID;
             },
             "mz_error_if_null" => Scalar {
                 // If the first argument is NULL, returns an EvalError::Internal whose error

@@ -811,7 +811,7 @@ impl Catalog {
                     nonce: rand::random(),
                     experimental_mode: config.storage.experimental_mode(),
                     safe_mode: config.safe_mode,
-                    cluster_id: config.storage.cluster_id(),
+                    install_id: config.storage.install_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     aws_external_id: config.aws_external_id.clone(),

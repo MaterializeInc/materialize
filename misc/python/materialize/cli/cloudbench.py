@@ -200,7 +200,7 @@ def start(ns: argparse.Namespace) -> None:
     os.chdir(os.environ["MZ_ROOT"])
 
     if ns.append_metadata:
-        munge_result = 'awk \'{ if (NR == 1) { print $0 ",Timestamp,BenchId,ClusterId,GitRef,S3Root" } else { print $0 ",\'$(date +%s)",$MZ_CB_BENCH_ID,$MZ_CB_CLUSTER_ID,$MZ_CB_GIT_REV,$MZ_CB_S3_ROOT"\'"}}\''
+        munge_result = 'awk \'{ if (NR == 1) { print $0 ",Timestamp,BenchId,InstallId,GitRef,S3Root" } else { print $0 ",\'$(date +%s)",$MZ_CB_BENCH_ID,$MZ_CB_INSTALL_ID,$MZ_CB_GIT_REV,$MZ_CB_S3_ROOT"\'"}}\''
     else:
         munge_result = "cat"
 
@@ -213,9 +213,9 @@ MZ_ROOT=/home/ubuntu/materialize python3 -m {script_name} {script_args}
 result=$?
 echo $result > ~/bench_exit_code
 if [ $result -eq 0 ]; then
-    {munge_result} < ~/materialize/results.csv | aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv >&2
+    {munge_result} < ~/materialize/results.csv | aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_INSTALL_ID.csv >&2
 else
-    aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.log < ~/mzscratch.log >&2
+    aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_INSTALL_ID-FAILURE.log < ~/mzscratch.log >&2
 fi
 sudo shutdown -h now # save some money
 """
@@ -285,7 +285,7 @@ sudo systemctl start confluent-schema-registry
             },
             extra_env={
                 "MZ_CB_BENCH_ID": bench_id,
-                "MZ_CB_CLUSTER_ID": f"{i}-{rev}",
+                "MZ_CB_INSTALL_ID": f"{i}-{rev}",
                 "MZ_CB_GIT_REV": rev,
                 "MZ_CB_S3_ROOT": ns.s3_root,
             },

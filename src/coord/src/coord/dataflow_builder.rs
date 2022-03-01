@@ -404,7 +404,7 @@ impl<'a> DataflowBuilder<'a> {
             }
             NullaryFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
             NullaryFunc::CurrentUser => pack(Datum::from(session.user())),
-            NullaryFunc::MzClusterId => pack(Datum::from(self.catalog.config().cluster_id)),
+            NullaryFunc::MzInstallId => pack(Datum::from(self.catalog.config().install_id)),
             NullaryFunc::MzLogicalTimestamp => match logical_time {
                 None => coord_bail!("cannot call mz_logical_timestamp in this context"),
                 Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),

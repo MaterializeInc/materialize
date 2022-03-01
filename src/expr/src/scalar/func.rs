@@ -65,7 +65,7 @@ pub enum NullaryFunc {
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
     CurrentUser,
-    MzClusterId,
+    MzInstallId,
     MzLogicalTimestamp,
     MzSessionId,
     MzUptime,
@@ -88,7 +88,7 @@ impl NullaryFunc {
             }
             NullaryFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
             NullaryFunc::CurrentUser => ScalarType::String.nullable(false),
-            NullaryFunc::MzClusterId => ScalarType::Uuid.nullable(false),
+            NullaryFunc::MzInstallId => ScalarType::Uuid.nullable(false),
             NullaryFunc::MzLogicalTimestamp => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
@@ -111,7 +111,7 @@ impl fmt::Display for NullaryFunc {
             NullaryFunc::CurrentSchemasWithoutSystem => f.write_str("current_schemas(false)"),
             NullaryFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             NullaryFunc::CurrentUser => f.write_str("current_user"),
-            NullaryFunc::MzClusterId => f.write_str("mz_cluster_id"),
+            NullaryFunc::MzInstallId => f.write_str("mz_install_id"),
             NullaryFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
             NullaryFunc::MzSessionId => f.write_str("mz_session_id"),
             NullaryFunc::MzUptime => f.write_str("mz_uptime"),

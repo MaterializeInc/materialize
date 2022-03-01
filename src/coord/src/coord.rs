@@ -4635,7 +4635,7 @@ pub async fn serve(
         persister: &persister,
     })
     .await?;
-    let cluster_id = catalog.config().cluster_id;
+    let install_id = catalog.config().install_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
 
@@ -4700,7 +4700,7 @@ pub async fn serve(
     match bootstrap_rx.await.unwrap() {
         Ok(()) => {
             let handle = Handle {
-                cluster_id,
+                install_id,
                 session_id,
                 start_instant,
                 _thread: thread.join_on_drop(),
