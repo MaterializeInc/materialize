@@ -124,6 +124,7 @@ Frameworks and ORMs tend to make more advanced queries to PostgreSQL behind the 
 | --- | --- | --- | --- |
 | Laravel ORM | 🟡 Alpha | TODO: Summarize. Link to GitHub Issue. | [](#notify) |
 | Adonis.JS | 🟡 Alpha | TODO: Summarize. Link to GitHub Issue. | [](#notify) |
+| Postgraphile | 🟡 Alpha | TODO: Summarize. Link to GitHub Issue. | [](#notify) |
 | Ruby on Rails | 🔴 Researching | The Rails Active-Record ORM executes many PostgreSQL configuration queries and queries to `pg_catalog` endpoints that are not yet implemented in Materialize. | [](#notify) |
 | Django | 🔴 Researching | TODO: Investigate, create GitHub issue. | [](#notify) |
 | SQLAlchemy | 🔴 Researching | TODO: Investigate, create GitHub issue. | [](#notify) |
