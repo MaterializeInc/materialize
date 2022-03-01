@@ -679,6 +679,9 @@ impl Timestamper {
 
     /// Start a transaction at a particular point in time. The timestamper will freeze its internal
     /// clock while a transaction is active.
+    ///
+    /// NOTE: Calling `start_tx` a second time, or other methods on `Timestamper`,
+    /// before dropping the transaction guard could result in a deadlock.
     pub async fn start_tx<'a>(&'a self) -> SourceTransaction<'a> {
         SourceTransaction {
             timestamp: self.inner.read().await,
@@ -791,12 +794,21 @@ where
                 let source = connector.start(&timestamper);
                 tokio::pin!(source);
 
+                // Build the future before the select! statement, and reset
+                // it in the completion block, to prevent subtle bugs where we drop the `tick`
+                // future
+                let tick_future = timestamper.tick();
+                tokio::pin!(tick_future);
+
                 loop {
                     tokio::select! {
-                        res = timestamper.tick() => {
+                        res = &mut tick_future => {
                             if res.is_err() {
                                 break;
                             }
+                            // TODO(guswynn): consider passing the current timestamp into a source
+                            // `poll` function
+                            tick_future.set(timestamper.tick());
                         }
                         res = &mut source => {
                             if let Err(err) = res {
