@@ -1237,7 +1237,8 @@ pub mod plan {
     use serde::{Deserialize, Serialize};
 
     use crate::{
-        func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc,
+        func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc,
+        UnmaterializableFunc,
     };
     use mz_repr::adt::numeric::Numeric;
     use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
@@ -1398,7 +1399,10 @@ pub mod plan {
                 {
                     // Attempt to put `LogicalTimestamp` in the first argument position.
                     if !expr1.contains_temporal()
-                        && *expr2 == MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
+                        && *expr2
+                            == MirScalarExpr::CallUnmaterializable(
+                                UnmaterializableFunc::MzLogicalTimestamp,
+                            )
                     {
                         std::mem::swap(&mut expr1, &mut expr2);
                         func = match func {
@@ -1418,7 +1422,10 @@ pub mod plan {
 
                     // Error if MLT is referenced in an unsuppported position.
                     if expr2.contains_temporal()
-                        || *expr1 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
+                        || *expr1
+                            != MirScalarExpr::CallUnmaterializable(
+                                UnmaterializableFunc::MzLogicalTimestamp,
+                            )
                     {
                         return Err(format!(
                             "Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: {:?}",

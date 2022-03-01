@@ -25,7 +25,7 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
+use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 use crate::scalar::func::parse_timezone;
 use crate::RECURSION_LIMIT;
 
@@ -39,8 +39,11 @@ pub enum MirScalarExpr {
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
     Literal(Result<Row, EvalError>, ColumnType),
-    /// A function call that takes no arguments.
-    CallNullary(NullaryFunc),
+    /// A call to an unmaterializable function.
+    ///
+    /// These functions cannot be evaluated by `MirScalarExpr::eval`. They must
+    /// be transformed away by a higher layer.
+    CallUnmaterializable(UnmaterializableFunc),
     /// A function call that takes one expression as an argument.
     CallUnary {
         func: UnaryFunc,
@@ -312,7 +315,7 @@ impl MirScalarExpr {
                     // 1b) Evaluate and pull up constants
                     MirScalarExpr::Column(_)
                     | MirScalarExpr::Literal(_, _)
-                    | MirScalarExpr::CallNullary(_) => (),
+                    | MirScalarExpr::CallUnmaterializable(_) => (),
                     MirScalarExpr::CallUnary { func, expr } => {
                         if expr.is_literal() {
                             *e = eval(e);
@@ -764,7 +767,7 @@ impl MirScalarExpr {
     /// Returns `Some(expressions)` if the outer IsNull is to be
     /// replaced by some other expression.
     fn decompose_is_null(&mut self) -> Option<MirScalarExpr> {
-        // TODO: allow simplification of VariadicFunc and NullaryFunc
+        // TODO: allow simplification of VariadicFunc and NonePure
         if let MirScalarExpr::CallBinary { func, expr1, expr2 } = self {
             // (<expr1> <op> <expr2>) IS NULL can often be simplified to
             // (<expr1> IS NULL) OR (<expr2> IS NULL).
@@ -944,7 +947,7 @@ impl MirScalarExpr {
                 columns.insert(*col);
             }
             MirScalarExpr::Literal(..) => {}
-            MirScalarExpr::CallNullary(_) => (),
+            MirScalarExpr::CallUnmaterializable(_) => (),
             MirScalarExpr::CallUnary { func, expr } => {
                 if func.propagates_nulls() {
                     expr.non_null_requirements(columns);
@@ -971,7 +974,7 @@ impl MirScalarExpr {
         match self {
             MirScalarExpr::Column(i) => relation_type.column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
-            MirScalarExpr::CallNullary(func) => func.output_type(),
+            MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(relation_type)),
             MirScalarExpr::CallBinary { expr1, expr2, func } => {
                 func.output_type(expr1.typ(relation_type), expr2.typ(relation_type))
@@ -998,11 +1001,11 @@ impl MirScalarExpr {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),
             },
-            // Nullary functions must be transformed away before evaluation.
-            // Their purpose is as a placeholder for data that is not known at
-            // plan time but can be inlined before runtime.
-            MirScalarExpr::CallNullary(x) => Err(EvalError::Internal(format!(
-                "cannot evaluate nullary function: {:?}",
+            // Unmaterializable functions must be transformed away before
+            // evaluation. Their purpose is as a placeholder for data that is
+            // not known at plan time but can be inlined before runtime.
+            MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(format!(
+                "cannot evaluate unmaterializable function: {:?}",
                 x
             ))),
             MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
@@ -1021,22 +1024,24 @@ impl MirScalarExpr {
         }
     }
 
-    /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.
+    /// True iff the expression contains
+    /// `UnmaterializableFunc::MzLogicalTimestamp`.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
         self.visit_post(&mut |e| {
-            if let MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) = e {
+            if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzLogicalTimestamp) = e
+            {
                 contains = true;
             }
         });
         contains
     }
 
-    /// True iff the expression contains a `NullaryFunc`.
-    pub fn contains_nullary(&self) -> bool {
+    /// True iff the expression contains an `UnmaterializableFunc`.
+    pub fn contains_unmaterializable(&self) -> bool {
         let mut contains = false;
         self.visit_post(&mut |e| {
-            if let MirScalarExpr::CallNullary(_) = e {
+            if let MirScalarExpr::CallUnmaterializable(_) = e {
                 contains = true;
             }
         });
@@ -1051,7 +1056,7 @@ impl fmt::Display for MirScalarExpr {
             Column(i) => write!(f, "#{}", i)?,
             Literal(Ok(row), _) => write!(f, "{}", row.unpack_first())?,
             Literal(Err(e), _) => write!(f, "(err: {})", e)?,
-            CallNullary(func) => write!(f, "{}()", func)?,
+            CallUnmaterializable(func) => write!(f, "{}()", func)?,
             CallUnary { func, expr } => {
                 write!(f, "{}({})", func, expr)?;
             }
@@ -1097,7 +1102,7 @@ impl MirScalarExprVisitor {
         match expr {
             MirScalarExpr::Column(_) => (),
             MirScalarExpr::Literal(_, _) => (),
-            MirScalarExpr::CallNullary(_) => (),
+            MirScalarExpr::CallUnmaterializable(_) => (),
             MirScalarExpr::CallUnary { expr, .. } => {
                 f(expr);
             }
@@ -1126,7 +1131,7 @@ impl MirScalarExprVisitor {
         match expr {
             MirScalarExpr::Column(_) => (),
             MirScalarExpr::Literal(_, _) => (),
-            MirScalarExpr::CallNullary(_) => (),
+            MirScalarExpr::CallUnmaterializable(_) => (),
             MirScalarExpr::CallUnary { expr, .. } => {
                 f(expr);
             }

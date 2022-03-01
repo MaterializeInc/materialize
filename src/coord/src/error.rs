@@ -14,7 +14,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_expr::{EvalError, NullaryFunc};
+use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::NotNullViolation;
@@ -117,7 +117,7 @@ pub enum CoordError {
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
-    UnmaterializableFunction(NullaryFunc),
+    UnmaterializableFunction(UnmaterializableFunc),
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
 }

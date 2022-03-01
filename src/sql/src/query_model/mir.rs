@@ -657,7 +657,9 @@ impl<'a> Lowerer<'a> {
             BoxScalarExpr::Literal(row, column_type) => {
                 mz_expr::MirScalarExpr::Literal(Ok(row.clone()), column_type.clone())
             }
-            BoxScalarExpr::CallNullary(func) => mz_expr::MirScalarExpr::CallNullary(func.clone()),
+            BoxScalarExpr::CallUnmaterializable(func) => {
+                mz_expr::MirScalarExpr::CallUnmaterializable(func.clone())
+            }
             BoxScalarExpr::CallUnary { func, expr } => mz_expr::MirScalarExpr::CallUnary {
                 func: func.clone(),
                 expr: Box::new(Self::lower_expression(&*expr, column_map)),

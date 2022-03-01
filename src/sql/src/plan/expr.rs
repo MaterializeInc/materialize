@@ -32,7 +32,9 @@ use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
-pub use mz_expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
+pub use mz_expr::{
+    BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+};
 
 use super::Explanation;
 
@@ -131,7 +133,7 @@ pub enum HirScalarExpr {
     Column(ColumnRef),
     Parameter(usize),
     Literal(Row, ColumnType),
-    CallNullary(NullaryFunc),
+    CallUnmaterializable(UnmaterializableFunc),
     CallUnary {
         func: UnaryFunc,
         expr: Box<HirScalarExpr>,
@@ -1417,7 +1419,7 @@ impl HirScalarExpr {
     {
         use HirScalarExpr::*;
         match self {
-            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
             CallUnary { expr, .. } => f(expr),
             CallBinary { expr1, expr2, .. } => {
                 f(expr1);
@@ -1465,7 +1467,7 @@ impl HirScalarExpr {
     {
         use HirScalarExpr::*;
         match self {
-            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
             CallUnary { expr, .. } => f(expr),
             CallBinary { expr1, expr2, .. } => {
                 f(expr1);
@@ -1556,7 +1558,7 @@ impl HirScalarExpr {
         match self {
             HirScalarExpr::Literal(_, _)
             | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallNullary(_)
+            | HirScalarExpr::CallUnmaterializable(_)
             | HirScalarExpr::Column(_) => (),
             HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively(depth, f)?,
             HirScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -1593,7 +1595,7 @@ impl HirScalarExpr {
         match self {
             HirScalarExpr::Literal(_, _)
             | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallNullary(_)
+            | HirScalarExpr::CallUnmaterializable(_)
             | HirScalarExpr::Column(_) => (),
             HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively_mut(depth, f)?,
             HirScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -1689,7 +1691,7 @@ impl AbstractExpr for HirScalarExpr {
             }
             HirScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
             HirScalarExpr::Literal(_, typ) => typ.clone(),
-            HirScalarExpr::CallNullary(func) => func.output_type(),
+            HirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             HirScalarExpr::CallUnary { expr, func } => {
                 func.output_type(expr.typ(outers, inner, params))
             }
