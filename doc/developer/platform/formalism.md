@@ -244,7 +244,7 @@ Concurrent events (at the same timestamp) first modify collections and then read
 All writes at a timestamp are visible to all reads at the same timestamp.
 
 SELECT statements observe all data mutations up through and including their timestamp.
-For this reason, we strictly advance the timestamp for each write that occurs after a read, to ensure that it the write is not visible to the read.
+For this reason, we strictly advance the timestamp for each write that occurs after a read, to ensure that the write is not visible to the read.
 ADAPTER uses `UpdateAndDowngrade` in response to the first read after a write, to ensure that prior writes are readable and to strictly advance the write frontier.
 
 Some DML operations, like UPDATE and DELETE, require a read-write transaction which prevents other writes from intervening.
