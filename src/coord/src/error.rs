@@ -53,6 +53,8 @@ pub enum CoordError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
+    /// At least one input has no complete timestamps yet
+    IncompleteTimestamp(Vec<mz_expr::GlobalId>),
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
     /// Attempted to build a materialization on a source that does not allow multiple materializations
@@ -305,6 +307,11 @@ impl fmt::Display for CoordError {
                 p.value().quoted()
             ),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
+            CoordError::IncompleteTimestamp(unstarted) => write!(
+                f,
+                "At least one input has no complete timestamps yet: {:?}",
+                unstarted
+            ),
             CoordError::Internal(e) => write!(f, "internal error: {}", e),
             CoordError::InvalidAlterOnDisabledIndex(name) => {
                 write!(f, "invalid ALTER on disabled index {}", name.quoted())
