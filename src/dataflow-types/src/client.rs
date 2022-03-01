@@ -70,7 +70,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Subsequent commands may arbitrarily compact the arrangements;
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
-    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan, T>>),
+    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, T>>),
     /// Enable compaction in compute-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -563,27 +563,24 @@ pub mod partitioned {
     /// This exists so we can consolidate rows and
     /// sort them by timestamp before passing them to the consumer
     /// (currently, coord.rs).
-    struct PendingTail {
+    struct PendingTail<T> {
         /// `frontiers[i]` is an antichain representing the times at which we may
         /// still receive results from worker `i`.
-        frontiers: HashMap<usize, Antichain<Timestamp>>,
+        frontiers: HashMap<usize, Antichain<T>>,
         /// Consolidated frontiers
-        change_batch: ChangeBatch<Timestamp>,
+        change_batch: ChangeBatch<T>,
         /// The results (possibly unsorted) which have not yet been delivered.
-        buffer: Vec<(Timestamp, Row, Diff)>,
+        buffer: Vec<(T, Row, Diff)>,
         /// The number of unique shard IDs expected.
         parts: usize,
         /// The last progress message that has been reported to the consumer.
-        reported_frontier: Antichain<Timestamp>,
+        reported_frontier: Antichain<T>,
     }
 
-    impl PendingTail {
+    impl<T: timely::progress::Timestamp + Copy> PendingTail<T> {
         /// Return all the updates with time less than `upper`,
         /// in sorted and consolidated representation.
-        pub fn consolidate_up_to(
-            &mut self,
-            upper: Antichain<Timestamp>,
-        ) -> Vec<(Timestamp, Row, Diff)> {
+        pub fn consolidate_up_to(&mut self, upper: Antichain<T>) -> Vec<(T, Row, Diff)> {
             differential_dataflow::consolidation::consolidate_updates(&mut self.buffer);
             let split_point = self
                 .buffer
@@ -591,15 +588,15 @@ pub mod partitioned {
             self.buffer.drain(0..split_point).collect()
         }
 
-        pub fn push_data<I: IntoIterator<Item = (Timestamp, Row, Diff)>>(&mut self, data: I) {
+        pub fn push_data<I: IntoIterator<Item = (T, Row, Diff)>>(&mut self, data: I) {
             self.buffer.extend(data);
         }
 
         pub fn record_progress(
             &mut self,
             shard_id: usize,
-            progress: Antichain<Timestamp>,
-        ) -> Option<Antichain<Timestamp>> {
+            progress: Antichain<T>,
+        ) -> Option<Antichain<T>> {
             // In the future, we can probably replace all this logic with the use of a `MutableAntichain`.
             // We would need to have the tail workers report both their old frontier and their new frontier, rather
             // than just the latter. But this will all be subsumed anyway by the proposed refactor to make TAILs
@@ -654,11 +651,11 @@ pub mod partitioned {
     ///
     /// This helper type unifies the responses of multiple partitioned
     /// workers in order to present as a single worker.
-    pub struct PartitionedClientState {
+    pub struct PartitionedClientState<T = mz_repr::Timestamp> {
         /// Upper frontiers for indexes, sources, and sinks.
         ///
         /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
-        uppers: HashMap<(GlobalId, Option<ComputeInstanceId>), MutableAntichain<Timestamp>>,
+        uppers: HashMap<(GlobalId, Option<ComputeInstanceId>), MutableAntichain<T>>,
         /// Pending responses for a peek; returnable once all are available.
         peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
@@ -670,9 +667,9 @@ pub mod partitioned {
         /// further messages should be forwarded.
         ///
         /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
-        pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail>>,
+        pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail<T>>>,
         /// The next responses to return immediately, if any
-        stashed_responses: Fuse<Box<dyn Iterator<Item = Response> + Send>>,
+        stashed_responses: Fuse<Box<dyn Iterator<Item = Response<T>> + Send>>,
     }
 
     impl PartitionedClientState {

@@ -3684,8 +3684,9 @@ impl Coordinator {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
-                let dataflow_plan = mz_dataflow_types::Plan::finalize_dataflow(dataflow)
-                    .expect("Dataflow planning failed; unrecoverable error");
+                let dataflow_plan =
+                    mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                        .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
                     &dataflow_plan,
@@ -4113,9 +4114,9 @@ impl Coordinator {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    async fn catalog_transact<F, T>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<T, CoordError>
+    async fn catalog_transact<F, R>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<R, CoordError>
     where
-        F: FnOnce(DataflowBuilder) -> Result<T, CoordError>,
+        F: FnOnce(DataflowBuilder) -> Result<R, CoordError>,
     {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
@@ -4895,8 +4896,8 @@ pub mod fast_path_peek {
     use mz_repr::{Diff, Row};
 
     #[derive(Debug)]
-    pub struct PeekDataflowPlan {
-        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
+    pub struct PeekDataflowPlan<T> {
+        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, T>,
         id: GlobalId,
         key: Vec<MirScalarExpr>,
         permutation: HashMap<usize, usize>,
@@ -4905,13 +4906,13 @@ pub mod fast_path_peek {
 
     /// Possible ways in which the coordinator could produce the result for a goal view.
     #[derive(Debug)]
-    pub enum Plan {
+    pub enum Plan<T = mz_repr::Timestamp> {
         /// The view evaluates to a constant result that can be returned.
-        Constant(Result<Vec<(Row, mz_repr::Timestamp, Diff)>, EvalError>),
+        Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
         /// The view can be read out of an existing arrangement.
         PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
         /// The view must be installed as a dataflow and then read.
-        PeekDataflow(PeekDataflowPlan),
+        PeekDataflow(PeekDataflowPlan<T>),
     }
 
     /// Determine if the dataflow plan can be implemented without an actual dataflow.

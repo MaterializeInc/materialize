@@ -134,11 +134,11 @@ impl AvailableCollections {
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Plan {
+pub enum Plan<T = mz_repr::Timestamp> {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, mz_repr::Timestamp, Diff)>, EvalError>,
+        rows: Result<Vec<(Row, T, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -178,10 +178,10 @@ pub enum Plan {
         /// The local identifier to be used, available to `body` as `Id::Local(id)`.
         id: LocalId,
         /// The collection that should be bound to `id`.
-        value: Box<Plan>,
+        value: Box<Plan<T>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan>,
+        body: Box<Plan<T>>,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -190,7 +190,7 @@ pub enum Plan {
     /// and topk stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// Linear operator to apply to each record.
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so,
@@ -211,7 +211,7 @@ pub enum Plan {
     /// in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Expressions that for each row prepare the arguments to `func`.
@@ -229,7 +229,7 @@ pub enum Plan {
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan>,
+        inputs: Vec<Plan<T>>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
@@ -240,7 +240,7 @@ pub enum Plan {
     /// Aggregation by key.
     Reduce {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -256,7 +256,7 @@ pub enum Plan {
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
@@ -267,7 +267,7 @@ pub enum Plan {
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -275,7 +275,7 @@ pub enum Plan {
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
@@ -291,7 +291,7 @@ pub enum Plan {
     /// implementing the "distinct" operator.
     Union {
         /// The input collections
-        inputs: Vec<Plan>,
+        inputs: Vec<Plan<T>>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -301,7 +301,7 @@ pub enum Plan {
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input.
         ///
@@ -314,7 +314,7 @@ pub enum Plan {
     },
 }
 
-impl Plan {
+impl<T: timely::progress::Timestamp> Plan<T> {
     /// Replace the plan with another one
     /// that has the collection in some additional forms.
     pub fn arrange_by(
@@ -418,11 +418,10 @@ impl Plan {
             }
             // These operators may not have been extracted, and need to result in a `Plan`.
             MirRelationExpr::Constant { rows, typ: _ } => {
-                use timely::progress::Timestamp;
                 let plan = Plan::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
-                            .map(|(row, diff)| (row, mz_repr::Timestamp::minimum(), diff))
+                            .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
                 };

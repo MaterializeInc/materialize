@@ -109,7 +109,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
     /// always able to return to a state that can serve the output read capabilities.
     pub async fn create_dataflows(
         &mut self,
-        dataflows: Vec<DataflowDescription<crate::plan::Plan, T>>,
+        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, T>>,
     ) -> Result<(), ComputeError> {
         // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
