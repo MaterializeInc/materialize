@@ -1,33 +1,25 @@
 ---
-title: "Supported Tools Overview"
-description: "Get details about third-party tool support with Materialize"
+title: Tools and Integrations
+description: "Get details about third-party tools and integrations support with Materialize"
 menu:
   main:
     parent: 'third-party'
+    name: Overview
 weight: 1
 ---
 
-## Production-level support
+The status, level of support, and usage notes for commonly used and requested Materialize integrations and tools are listed below.
 
-| Tool | Purpose |
-|------|---------|
-| [Docker](/third-party/docker) | Easily deploy Materialize and other required infrastructure.
-| [Debezium](/third-party/debezium) | Propagate change data capture (CDC) data from an upstream database to Materialize.
+_How to use the information on this page:_
+
+| Support Level | Meaning |
+| ------------- | ------- |
+| <strong class="success_color">Production</strong> | We are committed to prioritizing bugs in the interaction between these tools and Materialize. |
+| <strong class="success_color">Beta</strong> | There may be small performance issues and minor missing features, but Materialize supports the major use cases for this tool. You can file bug reports or feature requests for Materialize integration with these tools [here](https://github.com/MaterializeInc/materialize) but they may not be prioritized. |
+| **Alpha** | Some of our community members have made this integration work, but we haven’t tested it ourselves and can’t guarantee its stability. |
+| <strong class="warning_color">Active Development</strong> | **There are known issues** preventing the integration from working, but we are actively developing features to unblock the integration. |
+| <strong class="danger_color">In Research</strong> | **There are known issues** preventing the integration from working, but we are gathering user feedback and gauging interest in supporting these integrations. |
 
 
-## Beta-level support
 
-Beta-level support means that there may be small performance issues and minor missing features, but Materialize supports the major use cases for this tool. You can file bug reports or feature requests for Materialize integration with these tools [here](https://github.com/MaterializeInc/materialize).
-
-| Tool                    | Purpose                                                                    | What's missing?                                                                                                            |
-| ----------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| [dbt](/third-party/dbt) | Create views and materialized views in your Materialize instance using dbt | Full `dbt-materialize` adapter support is a [work in progress](https://github.com/MaterializeInc/materialize/issues/5462). |
-| [Redpanda](/third-party/redpanda) | Set up Redpanda as a data source. | Kafka offsets are ignored.
-
-## Alpha-level support
-
-Alpha-level support means that some of our community members have made this integration work, but we haven't tested it ourselves and can't guarantee its stability.
-
-| Tool | Purpose | What's missing? |
-|------|---------|---------|
-| [Metabase](/third-party/metabase) | Create business intelligence dashboards on top of your Materialize data | Running Metabase cleanly, without our forked changes, requires further [pgjdbc support](https://github.com/MaterializeInc/materialize/issues/3727).
+{{< integrations-table >}}

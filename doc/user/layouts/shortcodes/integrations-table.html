@@ -1,0 +1,104 @@
+{{/*  Converts data/integrations.yml into table. */}}
+{{ range $.Site.Data.integrations }}
+  {{ with .name }}<h2>{{ . }}</h2>{{ end }}
+  {{ with .description }}<p>{{ . | markdownify }}</p>{{ end }}
+  {{ range .categories }}
+    {{ with .name }}<h3>{{ . }}</h3>{{ end }}
+    {{ with .description }}<p>{{ . | markdownify }}</p>{{ end }}
+    <table>
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Materialize Support</th>
+          <th>Notes</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {{ range .integrations }}
+        <tr>
+          <td>{{ .name }}</td>
+          <td>
+            {{ if eq .support "production" }}
+              <strong class="success_color">Production</strong>
+            {{ else }}
+              {{ if eq .support "beta" }}
+                <strong class="success_color">Beta</strong>
+              {{ else if eq .support "development" }}
+                <span class="warning_color">Active Development</span>
+              {{ else if eq .support "research" }}
+                <span class="danger_color">In Research</span>
+              {{ else }}
+                <span>{{ .support | title }}</span>
+              {{ end }}
+            {{ end }}
+          </td>
+          <td>{{ .notes | markdownify }}</td>
+          <td>
+            {{ if eq .support "production" }}
+              {{ with .more_link }}
+                <a href="{{ . }}">More Info</a>
+              {{ end }}
+            {{ else }}
+              <button class="default_button" data-js="subscribe_open" data-subject="{{ .name }}" title="Get notified when support is upgraded.">Notify Me</button>
+            {{ end }}
+          </td>
+        </tr>
+      {{ end }}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3">
+            <em>Are we missing integrations? <a href="https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml">Open a GitHub Issue here</a>.</em>
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  {{ end }}
+{{ end }}
+
+<form id="subscribe_form">
+  <input name="email" type="email" placeholder="Email Address" required="required"/>
+  <input type="submit" class="default_button" value="Confirm" />
+  <div class="disclaimer">
+    <em>Subscribe to receive an email when support status is upgraded. No spam!</em>
+  </div>
+</form>
+
+<script>
+
+  $(function () {
+
+    var removeForms = function(){
+      $('.subscribe_form_active').removeClass('subscribe_form_active');
+    };
+    
+    $("[data-js='subscribe_open']").on("click", function(){
+      !$(this).hasClass('success') &&
+      $(this).parent()
+        .addClass('subscribe_form_active')
+        .append($('#subscribe_form'));
+      return false;
+    });
+
+    $("#subscribe_form").submit(function(e) {
+      var email = $(this).find('[name="email"]').val(),
+          subject = $(this).siblings("[data-js='subscribe_open']")
+        .addClass('success')
+        .attr('title', 'Subscribed')
+        .text('✔️')
+        .attr('data-subject');
+      removeForms();
+      window.analytics && window.analytics.identify(email);
+      window.analytics && window.analytics.track("Integration Status Subscribed", { subject: subject });
+      e.preventDefault();
+    });
+
+    $("body").on("click", function(e){
+      if(!$(e.target).closest('#subscribe_form').length) {
+        removeForms();
+      }
+    });
+ });
+  
+</script>
