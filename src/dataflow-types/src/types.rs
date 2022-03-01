@@ -367,7 +367,7 @@ pub mod sources {
         use serde::{Deserialize, Serialize};
 
         use mz_interchange::{avro, protobuf};
-        use mz_repr::{ColumnType, RelationDesc, ScalarType};
+        use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 
         /// A description of how to interpret data from various sources
         ///
@@ -394,7 +394,7 @@ pub mod sources {
             Postgres,
             Bytes,
             Text,
-            Json(String),
+            Json(JsonEncoding),
         }
 
         impl SourceDataEncoding {
@@ -516,6 +516,12 @@ pub mod sources {
                             }
                             .nullable(false),
                         ),
+                    DataEncoding::Json(JsonEncoding { fields }) => fields.into_iter().fold(
+                        RelationDesc::empty(),
+                        |desc, (col_name, col_type)| {
+                            desc.with_column(col_name.as_str(), col_type.clone())
+                        },
+                    ),
                 })
             }
 
@@ -529,6 +535,7 @@ pub mod sources {
                     DataEncoding::Csv(_) => "Csv",
                     DataEncoding::Text => "Text",
                     DataEncoding::Postgres => "Postgres",
+                    DataEncoding::Json(_) => "Json",
                 }
             }
         }
@@ -592,6 +599,11 @@ pub mod sources {
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct RegexEncoding {
             pub regex: mz_repr::adt::regex::Regex,
+        }
+
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        pub struct JsonEncoding {
+            pub fields: Vec<(ColumnName, ColumnType)>,
         }
     }
 

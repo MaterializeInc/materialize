@@ -4298,7 +4298,7 @@ pub fn scalar_type_from_sql(
     }
 }
 
-fn scalar_type_from_catalog(
+pub fn scalar_type_from_catalog(
     scx: &StatementContext,
     id: GlobalId,
     modifiers: &[i64],

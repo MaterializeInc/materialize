@@ -23,6 +23,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
+use crate::decode::json::JsonDecoderState;
 use mz_dataflow_types::{
     sources::{
         encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
@@ -43,6 +44,7 @@ use crate::source::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
+mod json;
 mod protobuf;
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
@@ -160,7 +162,7 @@ pub(crate) enum DataDecoderInner {
         format: PreDelimitedFormat,
     },
     Csv(CsvDecoderState),
-
+    Json(JsonDecoderState),
     PreDelimited(PreDelimitedFormat),
 }
 
@@ -172,6 +174,7 @@ struct DataDecoder {
 
 impl DataDecoder {
     pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
+        println!("Data decoder: inner {:?}", self.inner);
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -185,6 +188,11 @@ impl DataDecoder {
             }
             DataDecoderInner::Avro(avro) => avro.decode(bytes),
             DataDecoderInner::Csv(csv) => csv.decode(bytes),
+            DataDecoderInner::Json(json) => {
+                let result = json.decode(bytes);
+                *bytes = &[];
+                result
+            }
             DataDecoderInner::PreDelimited(format) => {
                 let result = format.decode(*bytes);
                 *bytes = &[];
@@ -296,6 +304,14 @@ fn get_decoder(
             let state = CsvDecoderState::new(enc, operators);
             DataDecoder {
                 inner: DataDecoderInner::Csv(state),
+                metrics,
+            }
+        }
+        DataEncoding::Json(enc) => {
+            println!("Creating a JSON encoding state");
+            let state = JsonDecoderState::new(enc.fields);
+            DataDecoder {
+                inner: DataDecoderInner::Json(state),
                 metrics,
             }
         }

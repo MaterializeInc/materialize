@@ -28,6 +28,7 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
+use mz_dataflow_types::sources::encoding::JsonEncoding;
 use mz_dataflow_types::{
     postgres_source::PostgresSourceDetails,
     sinks::{
@@ -51,8 +52,8 @@ use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
-use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
+use mz_repr::{strconv, ColumnName, ColumnType, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, JsonSchema, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -75,7 +76,7 @@ use crate::names::{
 use crate::normalize;
 use crate::normalize::ident;
 use crate::plan::error::PlanError;
-use crate::plan::query::QueryLifetime;
+use crate::plan::query::{scalar_type_from_catalog, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -354,7 +355,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(scx, format, envelope, with_options_original)?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -437,7 +438,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(scx, format, envelope, with_options_original)?;
             (connector, encoding)
         }
         CreateSourceConnector::File { path, compression } => {
@@ -455,7 +456,7 @@ pub fn plan_create_source(
                 },
                 tail,
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(scx, format, envelope, with_options_original)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("File sources do not support key decoding");
             }
@@ -500,7 +501,7 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(scx, format, envelope, with_options_original)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -996,19 +997,20 @@ fn typecheck_debezium_dedup(
 }
 
 fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
+    scx: &StatementContext,
     format: &CreateSourceFormat<Raw>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<T>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
-        CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options)?,
+        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format, with_options)?,
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(key, with_options)? {
+            let key = match get_encoding_inner(scx, key, with_options)? {
                 SourceDataEncoding::Single(key) => key,
                 SourceDataEncoding::KeyValue { key, .. } => key,
             };
-            let value = match get_encoding_inner(value, with_options)? {
+            let value = match get_encoding_inner(scx, value, with_options)? {
                 SourceDataEncoding::Single(value) => value,
                 SourceDataEncoding::KeyValue { value, .. } => value,
             };
@@ -1029,6 +1031,7 @@ fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
 }
 
 fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
+    scx: &StatementContext,
     format: &Format<Raw>,
     with_options: &Vec<SqlOption<T>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
@@ -1210,7 +1213,42 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
                 },
             })
         }
-        Format::Json { .. } => bail_unsupported!("JSON sources"),
+        Format::Json(schema) => match schema {
+            JsonSchema::JsonbSingleton => {
+                unimplemented!()
+            }
+            JsonSchema::NamedCompositeType { name } => {
+                let named_composite_type = scx.resolve_item(name.clone())?;
+                println!("Resolving USING SCHEMA type: {:?}", name);
+                if let Some(CatalogTypeDetails {
+                    typ: CatalogType::Record { fields },
+                    array_id,
+                }) = named_composite_type.type_details()
+                {
+                    println!(
+                        "Grabbing schema from composite type: {:?}. Array ID: {:?}",
+                        fields, array_id
+                    );
+                    let fields: Vec<(ColumnName, ColumnType)> = fields
+                        .iter()
+                        .map(|(column, id)| {
+                            let scalar_type = scalar_type_from_catalog(scx, *id, &[])?;
+                            Ok((
+                                column.clone(),
+                                ColumnType {
+                                    scalar_type,
+                                    nullable: true,
+                                },
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, PlanError>>()?;
+
+                    DataEncoding::Json(JsonEncoding { fields })
+                } else {
+                    bail!("Must specify record type for JSON schema")
+                }
+            }
+        },
         Format::Text => DataEncoding::Text,
     }))
 }
@@ -1245,7 +1283,8 @@ fn get_key_envelope(
                     DataEncoding::Avro(_)
                     | DataEncoding::Csv(_)
                     | DataEncoding::Protobuf(_)
-                    | DataEncoding::Regex { .. } => true,
+                    | DataEncoding::Regex { .. }
+                    | DataEncoding::Json(_) => true,
                 };
 
                 if is_composite {
@@ -2186,13 +2225,10 @@ pub fn plan_create_type(
                 let key = ident(column_def.name.clone());
                 let (data_type, dt_ids) =
                     resolve_names_data_type(scx, column_def.data_type.clone())?;
-                ensure_valid_data_type(scx, &data_type, &as_type, &key)?;
-                depends_on.extend(dt_ids);
-                if let ResolvedDataType::Named { id, .. } = data_type {
-                    record_fields.push((ColumnName::from(key.clone()), id));
-                } else {
-                    bail!("field {} must be a named type", key)
-                }
+                println!("Data type: {:?}, dt_ids {:?}", data_type, dt_ids);
+                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
+                ids.extend(dt_ids);
+                record_field_names.push(ColumnName::from(key.clone()));
             }
         }
     };

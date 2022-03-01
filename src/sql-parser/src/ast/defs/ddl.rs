@@ -123,8 +123,8 @@ impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JsonSchema {
-    Blob,
-    NamedCompositeType { name: Ident },
+    JsonbSingleton,
+    NamedCompositeType { name: UnresolvedObjectName },
 }
 
 impl AstDisplay for JsonSchema {
@@ -133,17 +133,17 @@ impl AstDisplay for JsonSchema {
         W: Write,
     {
         match self {
+            Self::JsonbSingleton => {
+                unimplemented!();
+            }
             Self::NamedCompositeType { name } => {
                 f.write_str("USING SCHEMA ");
                 f.write_node(name);
             }
-            Self::Blob { .. } => {
-                unimplemented!();
-            }
         }
     }
 }
-impl_display_t!(JsonSchema);
+impl_display!(JsonSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorAvro<T: AstInfo> {
@@ -438,7 +438,10 @@ impl<T: AstInfo> AstDisplay for Format<T> {
                     f.write_str("'");
                 }
             }
-            Self::Json => f.write_str("JSON"),
+            Self::Json(inner) => {
+                f.write_str("JSON ");
+                f.write_node(inner);
+            }
             Self::Text => f.write_str("TEXT"),
         }
     }

@@ -33,6 +33,7 @@ impl Metrics {
         let format_label = match decoder {
             DataDecoderInner::Avro(_) => "avro",
             DataDecoderInner::Csv(_) => "csv",
+            DataDecoderInner::Json(_) => "json",
             DataDecoderInner::DelimitedBytes { format, .. }
             | DataDecoderInner::PreDelimited(format) => match format {
                 PreDelimitedFormat::Bytes => "raw",

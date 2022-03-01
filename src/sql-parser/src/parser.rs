@@ -1650,12 +1650,13 @@ impl<'a> Parser<'a> {
             Format::Csv { columns, delimiter }
         } else if self.parse_keyword(JSON) {
             if self.parse_keywords(&[USING, SCHEMA]) {
-                let composite_type = self.parse_identifier()?;
+                let composite_type = self.parse_object_name()?;
                 Format::Json(JsonSchema::NamedCompositeType {
                     name: composite_type,
                 })
+            } else {
+                Format::Json(JsonSchema::JsonbSingleton)
             }
-            Format::Json(JsonSchema::Blob)
         } else if self.parse_keyword(TEXT) {
             Format::Text
         } else if self.parse_keyword(BYTES) {
