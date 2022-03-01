@@ -564,12 +564,12 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
         return Td(
             f"""
 > DROP SOURCE IF EXISTS s1;
+  /* A */
 
 > CREATE MATERIALIZED SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
   FORMAT BYTES
   ENVELOPE NONE
-  /* A */
 
 > SELECT COUNT(*) = {self.n()} FROM s1
   /* B */
@@ -630,12 +630,12 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         return Td(
             f"""
 > DROP SOURCE IF EXISTS s1;
+  /* A */
 
 > CREATE MATERIALIZED SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
   ENVELOPE UPSERT
-  /* A */
 
 > SELECT COUNT(*) FROM s1;
   /* B */
