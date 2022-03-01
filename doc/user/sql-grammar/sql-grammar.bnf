@@ -102,7 +102,7 @@ create_source_pubnub_text ::=
   'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
   'FORMAT' 'TEXT'
   ('ENVELOPE' 'NONE')?
-create_source_s3_text ::=
+create_source_s3 ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'S3' 'DISCOVER OBJECTS'
@@ -117,45 +117,8 @@ create_source_s3_text ::=
   )*
   ('COMPRESSION' ('NONE' | 'GZIP'))?
   with_options?
-  ('FORMAT' (
-    'REGEX' regex |
-    'TEXT' |
-    'BYTES'
-  ))
+  'FORMAT' format_spec
   ('ENVELOPE NONE')?
-create_source_s3_json ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM' 'S3' 'DISCOVER OBJECTS'
-  ('MATCHING' pattern)?
-  'USING' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-  ) ( ',' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-    )
-  )*
-  ('COMPRESSION' ('NONE' | 'GZIP'))?
-  with_options?
-  'FORMAT' ('TEXT' | 'BYTES')
-  ('ENVELOPE NONE')?
-create_source_s3_csv ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
-  src_name ( '(' col_name (',' col_name)* ')' ( ',' key_constraint )? )?
-  'FROM' 'S3' 'DISCOVER OBJECTS'
-  ('MATCHING' pattern)?
-  'USING' (
-    'BUCKET SCAN' bucket_name |
-    'SQS NOTIFICATIONS' queue_name
-    ) ( ',' (
-    'BUCKET SCAN' bucket_name |
-    'SQS NOTIFICATIONS' queue_name
-      )
-    )*
-    ('COMPRESSION' ('NONE' | 'GZIP'))?
-    with_options?
-    'FORMAT' 'CSV' 'WITH' column_count 'COLUMNS'
-    ('ENVELOPE NONE')?
 create_source_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -243,6 +206,11 @@ format_spec ::=
   'BYTES'
 kinesis_format_spec ::=
   'PROTOBUF MESSAGE' message_name 'USING SCHEMA FILE' path |
+  'REGEX' regex |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'TEXT' |
+  'BYTES'
+s3_format_spec ::=
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
