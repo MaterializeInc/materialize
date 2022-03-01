@@ -30,7 +30,9 @@ use crate::error::CoordError;
 
 mod vars;
 
-pub use self::vars::{ClientSeverity, Var, Vars};
+pub use self::vars::{
+    ClientSeverity, Var, Vars, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+};
 
 const DUMMY_CONNECTION_ID: u32 = 0;
 

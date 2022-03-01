@@ -139,6 +139,7 @@ allow = [
     "ICU",
     "ISC",
     "MIT",
+    "Zlib",
 ]
 copyleft = "deny"
 private = { ignore = true }
