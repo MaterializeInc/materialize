@@ -75,7 +75,7 @@ lazy_static! {
     static ref VER_0_9_2: Version = Version::new(0, 9, 2);
     static ref VER_0_9_13: Version = Version::new(0, 9, 13);
     static ref VER_0_20_0: Version = Version::new(0, 20, 0);
-    static ref VER_0_21_0: Version = Version::new(0, 21, 0);
+    static ref VER_0_22_0: Version = Version::new(0, 22, 0);
 }
 
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
@@ -106,8 +106,8 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         if catalog_version < *VER_0_20_0 {
             ast_rewrite_ccsr_with_options_to_compiled_0_20_0(stmt)?;
         }
-        if catalog_version < *VER_0_21_0 {
-            ast_rewrite_pgcdc_with_details_0_21_0(stmt)?;
+        if catalog_version < *VER_0_22_0 {
+            ast_rewrite_pgcdc_with_details_0_22_0(stmt)?;
         }
         Ok(())
     })?;
@@ -149,8 +149,8 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 
 // Connects to source postgres database, captures state of the publication and
 // serializes this into a string in the `details` field. This is the same logic
-// used during purification starting in 0.21.0
-fn ast_rewrite_pgcdc_with_details_0_21_0(
+// used during purification starting in 0.22.0
+fn ast_rewrite_pgcdc_with_details_0_22_0(
     stmt: &mut mz_sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement { connector, .. }) = stmt {
