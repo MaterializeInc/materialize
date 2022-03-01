@@ -620,16 +620,6 @@ pre {
     }
 }
 
-.success_color {
-    color: $text-success;
-}
-.warning_color {
-    color: $text-warning;
-}
-.danger_color {
-    color: $text-danger;
-}
-
 .default_button {
     padding: 7px 5px 6px 5px;
     border: none;
@@ -650,11 +640,10 @@ pre {
     }
 }
 
-#subscribe_form {
+#subscribe_dialog {
     display: none;
     z-index: 10;
     position: absolute;
-    width: 250px;
     top: 4px;
     right: 4px;
     background-color: $purple-v2;
@@ -662,17 +651,24 @@ pre {
     border-radius: $border-radius;
     box-shadow: 0 1px 1px #00000011, 0 2px 2px #00000011, 0 4px 4px #00000011, 0 8px 8px #00000011, 0 16px 16px #00000011;
 
-    input[type="email"] {
-        padding: 7px 5px 6px 5px;
-        border-radius: $border-radius;
-        border: none;
-    }
-    input[type="submit"] {
-        background-color: $white-v2;
-        padding: 7px 18px 6px 18px;
+    form {
+        display: flex;
+
+        input[type="email"] {
+            padding: 7px 5px 6px 5px;
+            border-radius: $border-radius;
+            border: none;
+            margin-right: 4px;
+        }
+
+        input[type="submit"] {
+            background-color: $white-v2;
+            padding: 7px 18px 6px 18px;
+        }
     }
 
     .disclaimer {
+        width: 100%;
         color: #FFF;
         padding: 4px 8px;
         font-size: 12px;
@@ -681,10 +677,10 @@ pre {
     }
 }
 
-.subscribe_form_active {
+.subscribe_dialog_active {
     position: relative;
 
-    #subscribe_form {
+    #subscribe_dialog {
         display: block;
     }
 }
