@@ -28,6 +28,7 @@ members = [
     "src/process-collector",
     "src/mzcloud-cli",
     "src/ore",
+    "src/persist-client",
     "src/persist-types",
     "src/persist",
     "src/pgcopy",
