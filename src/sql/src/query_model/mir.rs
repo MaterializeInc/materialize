@@ -13,7 +13,8 @@
 //! [`Into<mz_expr::MirRelationExpr>`] for [`Model`].
 
 use crate::query_model::error::{
-    QGMError, UnsupportedBoxScalarExpr, UnsupportedBoxType, UnsupportedQuantifierType,
+    QGMError, UnsupportedBoxScalarExpr, UnsupportedBoxType, UnsupportedDecorrelation,
+    UnsupportedQuantifierType,
 };
 use crate::query_model::model::{
     BaseColumn, BoundRef, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get,
@@ -182,7 +183,7 @@ impl<'a> Lowerer<'a> {
                 let correlation_info = the_box.correlation_info();
                 if !correlation_info.is_empty() {
                     let msg = String::from("correlated joins are not supported yet");
-                    return Err(QGMError::UnsupportedDecorrelation { msg });
+                    return Err(QGMError::from(UnsupportedDecorrelation { msg }));
                 }
 
                 let outer_arity = get_outer.arity();
@@ -309,7 +310,7 @@ impl<'a> Lowerer<'a> {
                 let correlation_info = the_box.correlation_info();
                 if !correlation_info.is_empty() {
                     let msg = String::from("correlated joins are not supported yet");
-                    return Err(QGMError::UnsupportedDecorrelation { msg });
+                    return Err(QGMError::from(UnsupportedDecorrelation { msg }));
                 }
 
                 let ot = get_outer.typ();
@@ -525,7 +526,7 @@ impl<'a> Lowerer<'a> {
                 "get_outer: expected a MirRelationExpr::Get, found {:?}",
                 get_outer
             );
-            return Err(QGMError::UnsupportedDecorrelation { msg });
+            return Err(QGMError::from(UnsupportedDecorrelation { msg }));
         }
 
         let outer_arity = get_outer.arity();

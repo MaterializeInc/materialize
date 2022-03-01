@@ -26,9 +26,9 @@ use crate::query_model::model::{BoxScalarExpr, BoxType, QuantifierType};
 #[derive(Debug, Clone)]
 pub enum QGMError {
     /// Indicates HIR ⇒ QGM conversion failure due to unsupported [`HirRelationExpr`].
-    UnsupportedHirRelationExpr { expr: HirRelationExpr, msg: String },
+    UnsupportedHirRelationExpr(UnsupportedHirRelationExpr),
     /// Indicates HIR ⇒ QGM conversion failure due to unsupported [`HirScalarExpr`].
-    UnsupportedHirScalarExpr { expr: HirScalarExpr, msg: String },
+    UnsupportedHirScalarExpr(UnsupportedHirScalarExpr),
     /// Indicates QGM ⇒ MIR conversion failure due to unsupported box type.
     UnsupportedBoxType(UnsupportedBoxType),
     /// Indicates QGM ⇒ MIR conversion failure due to unsupported scalar expression.
@@ -36,12 +36,59 @@ pub enum QGMError {
     /// Indicates QGM ⇒ MIR conversion failure due to unsupported quantifier type.
     UnsupportedQuantifierType(UnsupportedQuantifierType),
     /// Indicates QGM ⇒ MIR conversion failure due to lack of support for decorrelation.
-    UnsupportedDecorrelation { msg: String },
+    UnsupportedDecorrelation(UnsupportedDecorrelation),
     /// An unstructured error.
-    Internal { msg: String },
+    Internal(Internal),
 }
 
 impl Error for QGMError {}
+
+#[derive(Debug, Clone)]
+pub struct UnsupportedHirRelationExpr {
+    pub(crate) expr: HirRelationExpr,
+    pub(crate) explanation: Option<String>,
+}
+
+impl From<UnsupportedHirRelationExpr> for QGMError {
+    fn from(inner: UnsupportedHirRelationExpr) -> Self {
+        QGMError::UnsupportedHirRelationExpr(inner)
+    }
+}
+
+impl fmt::Display for UnsupportedHirRelationExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Unsupported HirRelationExpr variant in QGM conversion: {}.",
+            serde_json::to_string(&self.expr).unwrap()
+        )?;
+        if let Some(explanation) = &self.explanation {
+            write!(f, " Explanation: {}", explanation)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnsupportedHirScalarExpr {
+    pub(crate) scalar: HirScalarExpr,
+}
+
+impl From<UnsupportedHirScalarExpr> for QGMError {
+    fn from(inner: UnsupportedHirScalarExpr) -> Self {
+        QGMError::UnsupportedHirScalarExpr(inner)
+    }
+}
+
+impl fmt::Display for UnsupportedHirScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Unsupported HirScalarExpr variant in QGM conversion: {}",
+            serde_json::to_string(&self.scalar).unwrap()
+        )
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct UnsupportedBoxType {
@@ -111,17 +158,43 @@ impl fmt::Display for UnsupportedBoxScalarExpr {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UnsupportedDecorrelation {
+    pub(crate) msg: String,
+}
+
+impl From<UnsupportedDecorrelation> for QGMError {
+    fn from(inner: UnsupportedDecorrelation) -> Self {
+        QGMError::UnsupportedDecorrelation(inner)
+    }
+}
+
+impl fmt::Display for UnsupportedDecorrelation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Internal {
+    pub(crate) msg: String,
+}
+
+impl From<Internal> for QGMError {
+    fn from(inner: Internal) -> Self {
+        QGMError::Internal(inner)
+    }
+}
+
+impl fmt::Display for Internal {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
 impl fmt::Display for QGMError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            QGMError::UnsupportedHirRelationExpr { msg, .. } => f.write_str(msg),
-            QGMError::UnsupportedHirScalarExpr { msg, .. } => f.write_str(msg),
-            QGMError::UnsupportedBoxType(s) => write!(f, "{}", s),
-            QGMError::UnsupportedDecorrelation { msg } => f.write_str(msg),
-            QGMError::UnsupportedBoxScalarExpr(s) => write!(f, "{}", s),
-            QGMError::UnsupportedQuantifierType(s) => write!(f, "{}", s),
-            QGMError::Internal { msg } => f.write_str(msg),
-        }
+        write!(f, "{}", self)
     }
 }
 

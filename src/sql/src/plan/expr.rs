@@ -18,6 +18,8 @@ use std::mem;
 
 use anyhow::bail;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+
 use mz_expr::DummyHumanizer;
 
 use mz_ore::collections::CollectionExt;
@@ -38,7 +40,7 @@ pub use mz_expr::{
 
 use super::Explanation;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Just like MirRelationExpr, except where otherwise noted below.
 pub enum HirRelationExpr {
     Constant {
@@ -124,7 +126,7 @@ pub enum HirRelationExpr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Just like mz_expr::MirScalarExpr, except where otherwise noted below.
 pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
@@ -167,7 +169,7 @@ pub enum HirScalarExpr {
     Windowing(WindowExpr),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Represents the invocation of a window function over a partition with an optional
 /// order.
 pub struct WindowExpr {
@@ -206,7 +208,7 @@ impl WindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// A window function with its parameters.
 ///
 /// There are two types of window functions: scalar window functions, that
@@ -251,7 +253,7 @@ impl WindowExprType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScalarWindowExpr {
     pub func: ScalarWindowFunc,
     pub order_by: Vec<ColumnOrder>,
@@ -296,7 +298,7 @@ impl ScalarWindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
@@ -452,7 +454,7 @@ impl From<HirScalarExpr> for CoercibleScalarExpr {
 /// from the reference, using `column` as a unique identifier in that subquery level.
 /// A `level` of zero corresponds to the current scope, and levels increase to
 /// indicate subqueries further "outwards".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct ColumnRef {
     // scope level, where 0 is the current scope and 1+ are outer scopes.
     pub level: usize,
@@ -460,7 +462,7 @@ pub struct ColumnRef {
     pub column: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JoinKind {
     Inner,
     LeftOuter,
@@ -492,7 +494,7 @@ impl JoinKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: Box<HirScalarExpr>,
@@ -506,7 +508,7 @@ pub struct AggregateExpr {
 /// here than in `expr`, as these aggregates may be applied over empty
 /// result sets and should be null in those cases, whereas `expr` variants
 /// only return null values when supplied nulls as input.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
