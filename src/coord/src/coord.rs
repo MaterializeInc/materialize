@@ -4181,9 +4181,10 @@ impl Coordinator {
             self.send_builtin_table_updates(builtin_table_updates).await;
 
             if !sources_to_drop.is_empty() {
-                for &id in &sources_to_drop {
-                    self.update_timestamper(id, false).await;
-                    self.sources.remove(&id);
+                for id in &sources_to_drop {
+                    self.update_timestamper(*id, false).await;
+                    self.sources.remove(id);
+                    self.since_handles.remove(id);
                 }
                 self.dataflow_client
                     .storage()
@@ -4195,9 +4196,10 @@ impl Coordinator {
                 // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
                 // in `self.sources` to make sure that it is taken into account when rendering
                 // dataflows that use it. We must make sure to remove that here.
-                for &id in &tables_to_drop {
-                    self.sources.remove(&id);
-                    self.persister.remove_table(id);
+                for id in &tables_to_drop {
+                    self.sources.remove(id);
+                    self.persister.remove_table(*id);
+                    self.since_handles.remove(id);
                 }
                 self.dataflow_client
                     .storage()
@@ -4317,6 +4319,7 @@ impl Coordinator {
             if self.indexes.remove(&id).is_some() {
                 trace_keys.push(id);
             }
+            self.since_handles.remove(&id);
         }
         if !trace_keys.is_empty() {
             self.dataflow_client
