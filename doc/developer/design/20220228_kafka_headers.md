@@ -24,9 +24,10 @@ dynamic schema's supported by Kafka Connect.
 
 ### Phase 1
 
-Add an `INCLUDE HEADERS` syntax that allows users to declare specific, named headers, as additional columns
-provided in kafka sources. This will provide nullable, bytes-typed values equal to the header with the specified name.
+Add an `INCLUDE HEADERS` syntax that allows users to declare that they want a `headers` column for their source,
+as provided in kafka sources. This will provide a map from text to bytes (`bytea`).
 Users are expected to cast these bytes values to the types they want in a later view.
+This option will only be available for `ENVELOPE NONE` and `ENVELOPE UPSERT`.
 
 ### Phase 2
 As an extension to phase 1, allows users to pre-declare their expected types in the source definition, simplifying their usage.
@@ -51,12 +52,12 @@ as an example:
 CREATE MATERIALIZED SOURCE avroavro
 FROM KAFKA BROKER '...' TOPI '...`
 FORMAT ...
-INCLUDE HEADERS (my_special_header)
+INCLUDE HEADERS
 ENVELOPE ...
 ```
 
 This will add a new column to the row from the kafka source that is of type
-`NULLABLE bytes` with the name `my_special_header`, if it doesn't clash
+`map[text=>bytea]` with the name `headers`, if it doesn't clash
 with an existing column.
 
 In phase 2, the syntax will be
@@ -75,20 +76,19 @@ where `type` will override the type from `bytes` to the given one.
 
 ## Implementation notes
 
-In phase 1, once the planner places the headers in the right spot, all we need to do is pass the header names down
-into the kafka source creation, but they should be in the `SourceDesc` somewhere. The source would pack the `SourceMessage`
-with the headers (or `null`) for each record, and packing them in the row sent to the envelope would happen in the deode stage.
+In phase 1, once the planner places the headers in the right spot, all we need to do is pass down if we want the headers as a boolean,
+into the kafka source creation. The `SourceDesc` will contain the extra column. The source would pack the `SourceMessage`
+with the headers (or an empty map) for each record.
 
-In phase 2, the source would need also read any type information, and convert the types. If we support complex schematization,
-refactoring sources so that header's can also be decoded in the decode stage.
+In phase 2, the source would need also be given any type information, and convert the types. If we support complex schematization,
+refactoring sources so that header's can be decoded in the decode stage.
 
 
 ## Alternatives
 
-- In phase 1, we could instead NOT pre-declare the headers' names, and instead collate them into a `json` record (or, we could add a new
-`string -> bytes` `map` type and use that). This would simplify the implementation, but would complicate the user experience.
+- (Original plan): In phase 1, we could still support only `bytea` header values, but pre-declare the specific header keys we want
 
-- In both phases, we could collate the headers into a record field, instead of upgrading them to full columns.
+- In both phases, we could collate the headers into a record field, instead of upgrading them to full columns (this may only be possible in phase 1).
 
 - In phase 2, we could come up with some way of declaring an actual `schema` with a format. This would complicate the syntax and the implemention
 by quite a bit.
