@@ -74,6 +74,7 @@ pub enum Statement<T: AstInfo> {
     Prepare(PrepareStatement<T>),
     Execute(ExecuteStatement<T>),
     Deallocate(DeallocateStatement),
+    Raise(RaiseStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -122,6 +123,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Prepare(stmt) => f.write_node(stmt),
             Statement::Execute(stmt) => f.write_node(stmt),
             Statement::Deallocate(stmt) => f.write_node(stmt),
+            Statement::Raise(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -1770,3 +1772,39 @@ impl AstDisplay for DeallocateStatement {
     }
 }
 impl_display!(DeallocateStatement);
+
+/// `RAISE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RaiseStatement {
+    pub severity: NoticeSeverity,
+}
+
+impl AstDisplay for RaiseStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("RAISE ");
+        f.write_node(&self.severity);
+    }
+}
+impl_display!(RaiseStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NoticeSeverity {
+    Debug,
+    Info,
+    Log,
+    Notice,
+    Warning,
+}
+
+impl AstDisplay for NoticeSeverity {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            NoticeSeverity::Debug => "DEBUG",
+            NoticeSeverity::Info => "INFO",
+            NoticeSeverity::Log => "LOG",
+            NoticeSeverity::Notice => "NOTICE",
+            NoticeSeverity::Warning => "WARNING",
+        })
+    }
+}
+impl_display!(NoticeSeverity);

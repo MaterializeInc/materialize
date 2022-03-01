@@ -76,6 +76,7 @@ Day
 Days
 Deallocate
 Debezium
+Debug
 Dec
 Decimal
 Declare
@@ -132,6 +133,7 @@ In
 Include
 Index
 Indexes
+Info
 Inner
 Insert
 Int
@@ -157,6 +159,7 @@ Like
 Limit
 List
 Local
+Log
 Login
 Map
 Matching
@@ -175,6 +178,7 @@ Nologin
 None
 Nosuperuser
 Not
+Notice
 Notifications
 Null
 Nullif
@@ -206,6 +210,7 @@ Protobuf
 Publication
 Pubnub
 Query
+Raise
 Range
 Raw
 Read
@@ -289,6 +294,7 @@ Varchar
 Varying
 View
 Views
+Warning
 When
 Where
 With

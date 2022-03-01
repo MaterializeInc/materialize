@@ -322,6 +322,27 @@ impl ErrorResponse {
         ErrorResponse::new(Severity::Warning, code, message)
     }
 
+    pub fn info<S>(code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse::new(Severity::Info, code, message)
+    }
+
+    pub fn log<S>(code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse::new(Severity::Log, code, message)
+    }
+
+    pub fn debug<S>(code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse::new(Severity::Debug, code, message)
+    }
+
     fn new<S>(severity: Severity, code: SqlState, message: S) -> ErrorResponse
     where
         S: Into<String>,

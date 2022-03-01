@@ -32,6 +32,7 @@ use crate::plan::{Params, Plan, PlanContext};
 
 mod ddl;
 mod dml;
+mod raise;
 mod scl;
 mod show;
 mod tcl;
@@ -152,6 +153,9 @@ pub fn describe(
         Statement::SetTransaction(stmt) => tcl::describe_set_transaction(&scx, stmt)?,
         Statement::Rollback(stmt) => tcl::describe_rollback(&scx, stmt)?,
         Statement::Commit(stmt) => tcl::describe_commit(&scx, stmt)?,
+
+        // RAISE statements.
+        Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -239,6 +243,9 @@ pub fn plan(
         Statement::SetTransaction(stmt) => tcl::plan_set_transaction(scx, stmt),
         Statement::Rollback(stmt) => tcl::plan_rollback(scx, stmt),
         Statement::Commit(stmt) => tcl::plan_commit(scx, stmt),
+
+        // RAISE statements.
+        Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
     }
 }
 
