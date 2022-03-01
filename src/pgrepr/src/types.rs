@@ -147,26 +147,6 @@ pub trait TypeConstraint: fmt::Display {
     fn into_typmod(&self) -> i32;
 }
 
-/// A precision associatd with [`Type::Interval`]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct IntervalPrecision(i32);
-
-impl TypeConstraint for IntervalPrecision {
-    fn from_typmod(typmod: i32) -> Option<IntervalPrecision> {
-        // https://github.com/postgres/postgres/blob/52377bb81/src/backend/utils/adt/varchar.c#L139
-        if typmod >= VARHDRSZ {
-            Some(IntervalPrecision(typmod - VARHDRSZ))
-        } else {
-            None
-        }
-    }
-
-    fn into_typmod(self) -> i32 {
-        // https://github.com/postgres/postgres/blob/52377bb81/src/backend/utils/adt/varchar.c#L60-L65
-        self.0 + VARHDRSZ
-    }
-}
-
 /// A length associated with [`Type::Char`] and [`Type::VarChar`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct CharLength(i32);

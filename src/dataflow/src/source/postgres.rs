@@ -501,6 +501,14 @@ impl PostgresSourceReader {
                                     // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
                                     if !source_table.columns.iter().zip(relation.columns()).all(
                                         |(src, rel)| {
+                                            // Todo: Fix interval type to support type modifiers and remove this exception
+                                            if src.type_oid == 1186 // TYPE_INTERVAL from src/coord/src/catalog/builtin.rs
+                                            {
+                                                return {
+                                                    src.name == rel.name().unwrap()
+                                                        && src.type_oid == rel.type_id()
+                                                };
+                                            }
                                             src.name == rel.name().unwrap()
                                                 && src.type_oid == rel.type_id()
                                                 && src.type_mod == rel.type_modifier()
