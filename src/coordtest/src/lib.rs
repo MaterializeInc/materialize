@@ -574,7 +574,7 @@ impl<C> mz_dataflow_types::client::Client for InterceptingDataflowClient<C>
 where
     C: mz_dataflow_types::client::Client,
 {
-    async fn send(&mut self, cmd: mz_dataflow_types::client::Command) {
+    async fn send(&mut self, cmd: mz_dataflow_types::client::Command) -> Result<(), anyhow::Error> {
         self.inner.lock().await.send(cmd).await
     }
 

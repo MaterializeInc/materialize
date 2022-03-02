@@ -53,7 +53,7 @@ where
         &mut self,
         instance: ComputeInstanceId,
         logging: Option<LoggingConfig>,
-    ) {
+    ) -> Result<(), anyhow::Error> {
         self.compute
             .insert(instance, compute::ComputeControllerState::new(&logging));
         self.client
@@ -61,13 +61,16 @@ where
                 ComputeCommand::CreateInstance(logging),
                 instance,
             ))
-            .await;
+            .await
     }
-    pub async fn drop_instance(&mut self, instance: ComputeInstanceId) {
+    pub async fn drop_instance(
+        &mut self,
+        instance: ComputeInstanceId,
+    ) -> Result<(), anyhow::Error> {
         self.compute.remove(&instance);
         self.client
             .send(Command::Compute(ComputeCommand::DropInstance, instance))
-            .await;
+            .await
     }
 }
 

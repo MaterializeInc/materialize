@@ -370,7 +370,9 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 #[async_trait(?Send)]
 pub trait Client<T = mz_repr::Timestamp> {
     /// Sends a command to the dataflow server.
-    async fn send(&mut self, cmd: Command<T>);
+    ///
+    /// The command can error for various reasons.
+    async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error>;
 
     /// Receives the next response from the dataflow server.
     ///
@@ -381,7 +383,7 @@ pub trait Client<T = mz_repr::Timestamp> {
 
 #[async_trait(?Send)]
 impl Client for Box<dyn Client> {
-    async fn send(&mut self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
@@ -474,7 +476,7 @@ impl LocalClient {
 
 #[async_trait(?Send)]
 impl Client for LocalClient {
-    async fn send(&mut self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
@@ -529,12 +531,13 @@ pub mod partitioned {
 
     #[async_trait(?Send)]
     impl<C: Client> Client for Partitioned<C> {
-        async fn send(&mut self, cmd: Command) {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
             self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
-                shard.send(cmd_part).await;
+                shard.send(cmd_part).await?;
             }
+            Ok(())
         }
 
         async fn recv(&mut self) -> Option<Response> {
@@ -921,11 +924,12 @@ pub mod process_local {
 
     #[async_trait(?Send)]
     impl Client for ProcessLocal {
-        async fn send(&mut self, cmd: Command) {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
             self.worker_tx
                 .send(cmd)
                 .expect("worker command receiver should not drop first");
             self.worker_thread.unpark();
+            Ok(())
         }
 
         async fn recv(&mut self) -> Option<Response> {
