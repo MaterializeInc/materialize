@@ -46,7 +46,7 @@ impl RemoteClient {
 
 #[async_trait(?Send)]
 impl Client for RemoteClient {
-    async fn send(&mut self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         trace!("Sending dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
@@ -75,7 +75,7 @@ impl<S: Client, C: Client> SplitClient<S, C> {
 
 #[async_trait(?Send)]
 impl<S: Client, C: Client> Client for SplitClient<S, C> {
-    async fn send(&mut self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         trace!("SplitClient: Sending dataflow command: {:?}", cmd);
         match cmd {
             cmd @ Command::Compute(_, _) => self.compute_client.send(cmd),
@@ -102,7 +102,7 @@ pub mod tcp {
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
-    use mz_dataflow_types::client::{Command, Response};
+    use mz_dataflow_types::client::{Client, Command, Response};
 
     /// A client to a remote dataflow server.
     pub struct TcpClient {
@@ -118,16 +118,13 @@ pub mod tcp {
     }
 
     #[async_trait(?Send)]
-    impl mz_dataflow_types::client::Client for TcpClient {
-        async fn send(&mut self, cmd: mz_dataflow_types::client::Command) {
+    impl Client for TcpClient {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
             // TODO: something better than panicking.
-            self.connection
-                .send(cmd)
-                .await
-                .expect("worker command receiver should not drop first");
+            self.connection.send(cmd).await.map_err(|err| err.into())
         }
 
-        async fn recv(&mut self) -> Option<mz_dataflow_types::client::Response> {
+        async fn recv(&mut self) -> Option<Response> {
             // TODO: something better than panicking.
             self.connection
                 .next()

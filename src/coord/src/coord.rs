@@ -852,7 +852,8 @@ impl Coordinator {
         self.dataflow_client
             .storage()
             .advance_all_table_timestamps(advance_to)
-            .await;
+            .await
+            .unwrap();
     }
 
     async fn message_worker(&mut self, message: DataflowResponse) {
@@ -956,7 +957,8 @@ impl Coordinator {
                     self.dataflow_client
                         .storage()
                         .update_durability_frontiers(durability_updates)
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
         }
@@ -1712,7 +1714,8 @@ impl Coordinator {
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .cancel_peek(conn_id)
-                .await;
+                .await
+                .unwrap();
         }
     }
 
@@ -3001,7 +3004,8 @@ impl Coordinator {
                                 self.dataflow_client
                                     .storage()
                                     .table_insert(id, updates)
-                                    .await;
+                                    .await
+                                    .unwrap();
                             }
                         }
                     }
@@ -4290,6 +4294,7 @@ impl Coordinator {
                     .storage()
                     .table_insert(id, updates)
                     .await
+                    .unwrap();
             }
         }
     }
@@ -4478,14 +4483,16 @@ impl Coordinator {
                     self.dataflow_client
                         .storage()
                         .add_source_timestamping(source_id, s.connector.clone(), bindings)
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
         } else {
             self.dataflow_client
                 .storage()
                 .drop_source_timestamping(source_id)
-                .await;
+                .await
+                .unwrap();
         }
     }
 
@@ -4688,11 +4695,13 @@ pub async fn serve(
                     .collect(),
                 log_logging: config.log_logging,
             });
-            handle.block_on(
-                coord
-                    .dataflow_client
-                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
-            );
+            handle
+                .block_on(
+                    coord
+                        .dataflow_client
+                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
+                )
+                .unwrap();
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();

@@ -52,6 +52,14 @@ pub enum StorageError {
     SourceIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
+    /// An error from the underlying client.
+    ClientError(anyhow::Error),
+}
+
+impl From<anyhow::Error> for StorageError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::ClientError(error)
+    }
 }
 
 impl<T> StorageControllerState<T> {
@@ -106,7 +114,8 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
 
         self.client
             .send(Command::Storage(StorageCommand::CreateSources(bindings)))
-            .await;
+            .await
+            .expect("Storage command failed; unrecoverable");
 
         Ok(())
     }
@@ -119,24 +128,33 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             .collect();
         self.allow_compaction(compaction_commands).await
     }
-    pub async fn table_insert(&mut self, id: GlobalId, updates: Vec<Update<T>>) {
+    pub async fn table_insert(
+        &mut self,
+        id: GlobalId,
+        updates: Vec<Update<T>>,
+    ) -> Result<(), StorageError> {
         self.client
             .send(Command::Storage(StorageCommand::Insert { id, updates }))
             .await
+            .map_err(StorageError::from)
     }
-    pub async fn update_durability_frontiers(&mut self, updates: Vec<(GlobalId, Antichain<T>)>) {
+    pub async fn update_durability_frontiers(
+        &mut self,
+        updates: Vec<(GlobalId, Antichain<T>)>,
+    ) -> Result<(), StorageError> {
         self.client
             .send(Command::Storage(StorageCommand::DurabilityFrontierUpdates(
                 updates,
             )))
             .await
+            .map_err(StorageError::from)
     }
     pub async fn add_source_timestamping(
         &mut self,
         id: GlobalId,
         connector: SourceConnector,
         bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
-    ) {
+    ) -> Result<(), StorageError> {
         self.client
             .send(Command::Storage(StorageCommand::AddSourceTimestamping {
                 id,
@@ -144,6 +162,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
                 bindings,
             }))
             .await
+            .map_err(StorageError::from)
     }
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
     ///
@@ -180,19 +199,24 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         self.update_read_capabilities(&mut updates).await;
         Ok(())
     }
-    pub async fn drop_source_timestamping(&mut self, id: GlobalId) {
+    pub async fn drop_source_timestamping(&mut self, id: GlobalId) -> Result<(), StorageError> {
         self.client
             .send(Command::Storage(StorageCommand::DropSourceTimestamping {
                 id,
             }))
             .await
+            .map_err(StorageError::from)
     }
-    pub async fn advance_all_table_timestamps(&mut self, advance_to: T) {
+    pub async fn advance_all_table_timestamps(
+        &mut self,
+        advance_to: T,
+    ) -> Result<(), StorageError> {
         self.client
             .send(Command::Storage(StorageCommand::AdvanceAllLocalInputs {
                 advance_to,
             }))
             .await
+            .map_err(StorageError::from)
     }
 }
 
@@ -254,7 +278,10 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
                 .send(Command::Storage(StorageCommand::AllowCompaction(
                     compaction_commands,
                 )))
-                .await;
+                .await
+                .expect(
+                    "Failed to send storage command; aborting as compute instance state corrupted",
+                );
         }
     }
 }
