@@ -1585,7 +1585,7 @@ impl Coordinator {
             // Aggregate compute instance ID.
             compute_instance_update_map
                 .entry(instance_id)
-                .or_insert(vec![])
+                .or_insert_with(Vec::new)
                 .push(isu);
         }
 
@@ -4411,7 +4411,7 @@ impl Coordinator {
                 // Aggregate them by instance ID.
                 instance_key_map
                     .entry(instance_id)
-                    .or_insert(vec![])
+                    .or_insert_with(Vec::new)
                     .push(id);
             }
             self.since_handles.remove(&id);
@@ -4471,7 +4471,7 @@ impl Coordinator {
         for dataflow in dataflows {
             compute_instance_dataflow_map
                 .entry(dataflow.compute_instance_id)
-                .or_insert(vec![])
+                .or_insert_with(Vec::new)
                 .push(self.finalize_dataflow(dataflow));
         }
 

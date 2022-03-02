@@ -1470,7 +1470,7 @@ impl Catalog {
             .state
             .compute_instance_names
             .get(name)
-            .ok_or(SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
+            .ok_or_else(|| SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
         Ok(&self.state.compute_instances_by_id[id])
     }
 
