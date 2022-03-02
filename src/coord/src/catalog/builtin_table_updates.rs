@@ -307,6 +307,7 @@ impl CatalogState {
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
                 Datum::from(index.enabled),
+                Datum::Int64(index.compute_instance_id.try_into().expect("not more than i64::MAX clusters"))
             ]),
             diff,
         });

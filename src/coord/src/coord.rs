@@ -594,7 +594,7 @@ impl Coordinator {
                         .await
                         .unwrap();
                 }
-                CatalogItem::Index(_) => {
+                CatalogItem::Index(index) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
@@ -607,6 +607,7 @@ impl Coordinator {
                         // that everything else uses?
                         let frontiers = self.new_index_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
+                        self.catalog.add_index_to_instance(index.compute_instance_id, entry.id());
                     } else {
                         let index_id = entry.id();
                         if let Some((name, description)) =
