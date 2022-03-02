@@ -2098,7 +2098,7 @@ pub fn plan_create_type(
     let CreateTypeStatement { name, as_type, .. } = stmt;
     fn ensure_valid_data_type(
         scx: &StatementContext,
-        data_type: ResolvedDataType,
+        data_type: &ResolvedDataType,
         as_type: &CreateTypeAs<Raw>,
         key: &str,
     ) -> Result<(), anyhow::Error> {
@@ -2163,7 +2163,7 @@ pub fn plan_create_type(
                 match with_options.remove(&key.to_string()) {
                     Some(SqlOption::DataType { data_type, .. }) => {
                         let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
-                        ensure_valid_data_type(scx, data_type, &as_type, key)?;
+                        ensure_valid_data_type(scx, &data_type, &as_type, key)?;
                         ids.extend(dt_ids);
                     }
                     Some(_) => bail!("{} must be a data type", key),
@@ -2176,10 +2176,13 @@ pub fn plan_create_type(
         CreateTypeAs::Record { ref column_defs } => {
             for column_def in column_defs {
                 let key = ident(column_def.name.clone());
-                let (data_type, dt_ids) =
-                    resolve_names_data_type(scx, column_def.data_type.clone())?;
-                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
-                ids.extend(dt_ids);
+                let (data_type, _) = resolve_names_data_type(scx, column_def.data_type.clone())?;
+                ensure_valid_data_type(scx, &data_type, &as_type, &key)?;
+                if let ResolvedDataType::Named { id, .. } = data_type {
+                    ids.push(id);
+                } else {
+                    bail!("field {} must be a named type", key)
+                }
                 record_field_names.push(ColumnName::from(key.clone()));
             }
         }
