@@ -1557,45 +1557,43 @@ FROM mz_catalog.mz_schemas",
 pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
-    /*
-     * MZ doesn't support typed tables so reloftype is filled with 0
-     * MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
-     * MZ doesn't use TOAST tables so reltoastrelid is filled with 0
-     * MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
-       temporary objects don't show up here, so relpersistence is filled with 't'.
-       TODO(jkosh44): update this column when issue is resolved.
-     * MZ doesn't support constraints so relchecks is filled with 0
-     * MZ doesn't support creating rules so relhasrules is filled with false
-     * MZ doesn't support creating triggers so relhastriggers is filled with false
-     * MZ doesn't have row level security so relrowsecurity and relforcerowsecurity is filled with false
-     * MZ doesn't support replication so relreplident is filled with 'd' for default
-     * MZ doesn't support table partitioning so relispartition is filled with false
-     * PG removed relhasoids in v12 so it's filled with false
-     */
     sql: "CREATE VIEW pg_class AS SELECT
     mz_objects.oid,
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
+    -- MZ doesn't support typed tables so reloftype is filled with 0
     0::pg_catalog.oid AS reloftype,
     NULL::pg_catalog.oid AS relowner,
     0::pg_catalog.oid AS relam,
+    -- MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
     0::pg_catalog.oid AS reltablespace,
+    -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
     0::pg_catalog.oid AS reltoastrelid,
     EXISTS (SELECT * FROM mz_catalog.mz_indexes where mz_indexes.on_id = mz_objects.id) AS relhasindex,
-    't'::pg_catalog.\"char\" AS relpersistence,
+    -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
+    -- temporary objects don't show up here, so relpersistence is filled with 'p' for permanent.
+    -- TODO(jkosh44): update this column when issue is resolved.
+    'p'::pg_catalog.\"char\" AS relpersistence,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
         WHEN mz_objects.type = 'source' THEN 'r'
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
     END relkind,
+    -- MZ doesn't support constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
+    -- MZ doesn't support creating rules so relhasrules is filled with false
     false AS relhasrules,
+    -- MZ doesn't support creating triggers so relhastriggers is filled with false
     false AS relhastriggers,
+    -- MZ doesn't have row level security so relrowsecurity and relforcerowsecurity is filled with false
     false AS relrowsecurity,
     false AS relforcerowsecurity,
+    -- MZ doesn't support replication so relreplident is filled with 'd' for default
     'd'::pg_catalog.\"char\" AS relreplident,
+    -- MZ doesn't support table partitioning so relispartition is filled with false
     false AS relispartition,
+    -- PG removed relhasoids in v12 so it's filled with false
     false AS relhasoids
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id",
@@ -1622,19 +1620,17 @@ FROM mz_catalog.mz_databases",
 pub const PG_INDEX: BuiltinView = BuiltinView {
     name: "pg_index",
     schema: PG_CATALOG_SCHEMA,
-    /*
-     * MZ doesn't support creating unique indexes so indisunique is filled with false
-     * MZ doesn't support CLUSTER so indisclustered is filled with false
-     * MZ never creates invalid indexes so indisvalid is filled with true
-     * MZ doesn't support replication so indisreplident is filled with false
-     */
     sql: "CREATE VIEW pg_index AS SELECT
     mz_indexes.oid AS indexrelid,
     mz_objects.oid AS indrelid,
     false::pg_catalog.bool AS indisprimary,
+    -- MZ doesn't support creating unique indexes so indisunique is filled with false
     false::pg_catalog.bool AS indisunique,
+    -- MZ doesn't support CLUSTER so indisclustered is filled with false
     false::pg_catalog.bool AS indisclustered,
+    -- MZ never creates invalid indexes so indisvalid is filled with true
     true::pg_catalog.bool AS indisvalid,
+    -- MZ doesn't support replication so indisreplident is filled with false
     false::pg_catalog.bool AS indisreplident,
     pg_catalog.array_agg(mz_index_columns.on_position ORDER BY mz_index_columns.index_position) AS indkey
 FROM mz_catalog.mz_indexes
@@ -1661,9 +1657,6 @@ FROM pg_catalog.pg_class",
 pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
     schema: PG_CATALOG_SCHEMA,
-    /*
-     * MZ doesn't support COLLATE so typcollation is filled with 0
-     */
     sql: "CREATE VIEW pg_type AS SELECT
     mz_types.oid,
     mz_types.name AS typname,
@@ -1692,6 +1685,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype,
     -1::pg_catalog.int4 AS typtypmod,
+    -- MZ doesn't support COLLATE so typcollation is filled with 0
     0::pg_catalog.oid AS typcollation,
     NULL::pg_catalog.text AS typdefault
 FROM
@@ -1714,10 +1708,6 @@ FROM
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
-    /*
-     * MZ doesn't support generated columns so attgenerated is filled with ''
-     * MZ doesn't support COLLATE so attcollation is filled with 0
-     */
     sql: "CREATE VIEW pg_attribute AS SELECT
     mz_objects.oid as attrelid,
     mz_columns.name as attname,
@@ -1728,8 +1718,10 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
+    -- MZ doesn't support generated columns so attgenerated is filled with ''
     ''::pg_catalog.\"char\" as attgenerated,
     FALSE as attisdropped,
+    -- MZ doesn't support COLLATE so attcollation is filled with 0
     0::pg_catalog.oid as attcollation
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
