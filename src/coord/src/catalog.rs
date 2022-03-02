@@ -521,6 +521,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance_id: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2277,6 +2278,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

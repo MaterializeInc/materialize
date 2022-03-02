@@ -2504,6 +2504,7 @@ impl Coordinator {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
         };
 
