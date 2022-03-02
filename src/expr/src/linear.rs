@@ -1642,6 +1642,11 @@ pub mod plan {
                     (Some(lower_bound), None) => {
                         (Some(Ok((row_builder.clone(), lower_bound, diff))), None)
                     }
+                    // NB: as of 2022-03-02 this code is dead, since
+                    // we already check if `lower_bound` is `None` above.
+                    // Thus, the actual behavior in this case
+                    // is *not* to emit only a retraction as the following code suggests,
+                    // but actually to emit nothing.
                     (None, Some(upper_bound)) => {
                         (None, Some(Ok((row_builder.clone(), upper_bound, -diff))))
                     }
