@@ -2529,13 +2529,14 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
                 let ty = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, TOPIC, OFFSET])?
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, TOPIC, OFFSET, HEADERS])?
                 {
                     KEY => SourceIncludeMetadataType::Key,
                     TIMESTAMP => SourceIncludeMetadataType::Timestamp,
                     PARTITION => SourceIncludeMetadataType::Partition,
                     TOPIC => SourceIncludeMetadataType::Topic,
                     OFFSET => SourceIncludeMetadataType::Offset,
+                    HEADERS => SourceIncludeMetadataType::Headers,
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
                 let alias = parser

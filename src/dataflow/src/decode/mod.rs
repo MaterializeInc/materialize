@@ -381,6 +381,7 @@ where
                     position,
                     upstream_time_millis,
                     partition,
+                    headers,
                 } in data.iter()
                 {
                     let key = key_decoder
@@ -406,6 +407,7 @@ where
                             partition.clone(),
                             *position,
                             *upstream_time_millis,
+                            headers.as_deref(),
                         ),
                     });
                 }
@@ -476,6 +478,7 @@ where
                     position: _,
                     upstream_time_millis,
                     partition,
+                    headers,
                 } in data.iter()
                 {
                     let value = match value {
@@ -506,6 +509,7 @@ where
                                         partition.clone(),
                                         position,
                                         *upstream_time_millis,
+                                        headers.as_deref(),
                                     );
 
                                     session.give(DecodeResult {
@@ -566,6 +570,7 @@ where
                             partition.clone(),
                             position,
                             *upstream_time_millis,
+                            headers.as_deref(),
                         );
 
                         if value_bytes_remaining.is_empty() {
@@ -614,6 +619,7 @@ fn to_metadata_row(
     partition: PartitionId,
     position: i64,
     upstream_time_millis: Option<i64>,
+    headers: Option<&[(String, MessagePayload)]>,
 ) -> Row {
     let mut row = Row::default();
     let mut packer = row.packer();
@@ -639,6 +645,25 @@ fn to_metadata_row(
                         )))
                     }
                     IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
+                    IncludedColumnSource::Headers => {
+                        packer.push_list_with(|r| {
+                            // If the source asked for headers, but we didn't get any, we still
+                            // want to run the `push_dict_with`, to produce an empty map value
+                            //
+                            // This is a `BTreeMap`, so the `push_dict_with` ordering invariant is
+                            // upheld
+                            if let Some(headers) = headers {
+                                for (k, v) in headers {
+                                    if let MessagePayload::Data(v) = v {
+                                        r.push_list_with(|record_row| {
+                                            record_row.push(Datum::String(&k));
+                                            record_row.push(Datum::Bytes(&v));
+                                        })
+                                    }
+                                }
+                            }
+                        });
+                    }
                 }
             }
         }

@@ -60,5 +60,16 @@ pub enum MessagePayload {
     /// For example, CSV records are normally terminated by a newline,
     /// but files might not be newline-terminated; thus we need
     /// the decoder to emit a CSV record when the end of a file is seen.
+    ///
+    // Note that the ordering here matters for the PartialOrd impl
     EOF,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_message_payload_ordering() {
+        assert!(MessagePayload::Data(vec![]) < MessagePayload::EOF);
+    }
 }

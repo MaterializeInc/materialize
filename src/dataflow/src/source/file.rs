@@ -177,6 +177,7 @@ impl SourceReader for FileSourceReader {
                     upstream_time_millis: None,
                     key: (),
                     value: record,
+                    headers: None,
                 };
                 Ok(NextMessage::Ready(message))
             }

@@ -801,6 +801,7 @@ pub mod sources {
         Offset,
         Timestamp,
         Topic,
+        Headers,
     }
 
     /// Whether and how to include the decoded key of a stream in dataflows
@@ -1163,6 +1164,7 @@ pub mod sources {
         pub include_topic: Option<IncludedColumnPos>,
         /// If present, include the offset as an output column of the source with the given name.
         pub include_offset: Option<IncludedColumnPos>,
+        pub include_headers: Option<IncludedColumnPos>,
     }
 
     /// Legacy logic included something like an offset into almost data streams
@@ -1307,6 +1309,7 @@ pub mod sources {
                     include_timestamp: time,
                     include_topic: topic,
                     include_offset: offset,
+                    include_headers: headers,
                     ..
                 }) => {
                     let mut items = BTreeMap::new();
@@ -1320,6 +1323,32 @@ pub mod sources {
                         (part, ScalarType::Int32),
                         (time, ScalarType::Timestamp),
                         (topic, ScalarType::String),
+                        (
+                            headers,
+                            ScalarType::List {
+                                element_type: Box::new(ScalarType::Record {
+                                    fields: vec![
+                                        (
+                                            "key".into(),
+                                            ColumnType {
+                                                nullable: false,
+                                                scalar_type: ScalarType::String,
+                                            },
+                                        ),
+                                        (
+                                            "value".into(),
+                                            ColumnType {
+                                                nullable: false,
+                                                scalar_type: ScalarType::Bytes,
+                                            },
+                                        ),
+                                    ],
+                                    custom_oid: None,
+                                    custom_name: None,
+                                }),
+                                custom_oid: None,
+                            },
+                        ),
                     ] {
                         if let Some(include) = include {
                             items.insert(include.pos + 1, (&include.name, ty.nullable(false)));
@@ -1378,6 +1407,7 @@ pub mod sources {
                     include_timestamp: time,
                     include_topic: topic,
                     include_offset: offset,
+                    include_headers: headers,
                     ..
                 }) => {
                     // create a sorted list of column types based on the order they were declared in sql
@@ -1392,6 +1422,7 @@ pub mod sources {
                         (part, IncludedColumnSource::Partition),
                         (time, IncludedColumnSource::Timestamp),
                         (topic, IncludedColumnSource::Topic),
+                        (headers, IncludedColumnSource::Headers),
                     ] {
                         if let Some(include) = include {
                             items.insert(include.pos, ty);

@@ -324,6 +324,7 @@ pub enum SourceIncludeMetadataType {
     Partition,
     Topic,
     Offset,
+    Headers,
 }
 
 impl AstDisplay for SourceIncludeMetadataType {
@@ -334,6 +335,7 @@ impl AstDisplay for SourceIncludeMetadataType {
             SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
             SourceIncludeMetadataType::Topic => f.write_str("TOPIC"),
             SourceIncludeMetadataType::Offset => f.write_str("OFFSET"),
+            SourceIncludeMetadataType::Headers => f.write_str("HEADERS"),
         }
     }
 }
