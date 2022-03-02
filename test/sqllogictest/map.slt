@@ -616,3 +616,24 @@ CREATE TYPE qualified_qualified_int4_map AS MAP (key_type=pg_catalog.text, value
 # Supports type aliases
 statement ok
 CREATE TYPE int_map AS MAP (key_type=pg_catalog.text, value_type=int)
+
+# `map_length`
+query T
+SELECT map_length('{}'::map[text=>int])
+----
+0
+
+query T
+SELECT map_length('{a=>1}'::map[text=>int])
+----
+1
+
+query T
+SELECT map_length('{a=>1, b=>2}'::map[text=>int])
+----
+2
+
+query T
+SELECT map_length(NULL::map[text=>int])
+----
+NULL

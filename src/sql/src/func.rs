@@ -2701,6 +2701,9 @@ lazy_static! {
                     Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
                 }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
             },
+            "map_length" => Scalar {
+                params![MapAny] => UnaryFunc::MapLength => Int32, oid::FUNC_MAP_LENGTH_OID;
+            },
             "mz_cluster_id" => Scalar {
                 params!() => UnmaterializableFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;
             },

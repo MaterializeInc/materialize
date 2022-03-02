@@ -236,3 +236,16 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'd', '1'] as search_for_any_
 ---------------------
  f
 ```
+
+#### Count entries in map (`map_length`)
+
+Returns the number of entries in the map.
+
+```sql
+SELECT map_length('{a=>1, b=>2}'::map[text=>int]) as count;
+```
+```nofmt
+ count
+---------------------
+ 2
+```
