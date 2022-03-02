@@ -1960,12 +1960,16 @@ lazy_static! {
             "pg_backend_pid" => Scalar {
                 params!() => NullaryFunc::PgBackendPid, 2026;
             },
-            // pg_get_constraintdef gives more info about a constraint with in the `pg_constraint`
-            // view. It currently returns no information as the `pg_constraint` view is empty in
-            // materialize
+            // pg_get_constraintdef gives more info about a constraint within the `pg_constraint`
+            // view. Certain meta commands rely on this function not throwing an error, but the
+            // `pg_constraint` view is empty in materialize. Therefore we know any oid provided is
+            // not a valid constraint, so we can return NULL which is what PostgreSQL does when
+            // provided an invalid OID.
             "pg_get_constraintdef" => Scalar {
-                params!(Oid) => UnaryFunc::PgGetConstraintdef(func::PgGetConstraintdef), 1387;
-                params!(Oid, Bool) => BinaryFunc::PgGetConstraintdef, 2508;
+                params!(Oid) => Operation::unary(|_ecx, _oid|
+                    Ok(HirScalarExpr::literal_null(ScalarType::String))), 1387;
+                params!(Oid, Bool) => Operation::binary(|_ecx, _oid, _pretty|
+                    Ok(HirScalarExpr::literal_null(ScalarType::String))), 2508;
             },
             // pg_get_indexdef reconstructs the creating command for an index. It currently isn't
             // used anywhere, but is needed for certain meta-commands.

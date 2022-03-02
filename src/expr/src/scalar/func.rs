@@ -1130,13 +1130,6 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     }
 }
 
-fn pg_get_constraintdef<'a>(_: Datum, _: Datum) -> Datum<'a> {
-    // Certain meta commands rely on this function not throwing an error, but we don't actually
-    // support constraints. Therefore we know any oid provided is not a valid constraint, so we
-    // can return NULL which is what PostgreSQL does when provided an invalid OID.
-    Datum::Null
-}
-
 fn rescale_numeric<'a>(a: Datum<'a>, scale: NumericMaxScale) -> Result<Datum<'a>, EvalError> {
     let mut d = a.unwrap_numeric();
     if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
@@ -2358,7 +2351,6 @@ pub enum BinaryFunc {
     LogNumeric,
     Power,
     PowerNumeric,
-    PgGetConstraintdef,
 }
 
 impl BinaryFunc {
@@ -2600,7 +2592,6 @@ impl BinaryFunc {
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
-            BinaryFunc::PgGetConstraintdef => Ok(eager!(pg_get_constraintdef)),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2756,8 +2747,6 @@ impl BinaryFunc {
             | RoundNumeric | SubNumeric => {
                 ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
-
-            PgGetConstraintdef => ScalarType::String.nullable(true),
         }
     }
 
@@ -2994,7 +2983,6 @@ impl BinaryFunc {
             | Power
             | PowerNumeric
             | RepeatString
-            | PgGetConstraintdef
             | ArrayRemove
             | ListRemove
             | LikeEscape => false,
@@ -3165,7 +3153,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
-            BinaryFunc::PgGetConstraintdef => f.write_str("pg_get_constraintdef"),
         }
     }
 }
@@ -3486,7 +3473,6 @@ pub enum UnaryFunc {
     Sleep(Sleep),
     RescaleNumeric(NumericMaxScale),
     PgColumnSize(PgColumnSize),
-    PgGetConstraintdef(PgGetConstraintdef),
     MzRowSize(MzRowSize),
     MzTypeName(MzTypeName),
 }
@@ -3558,7 +3544,6 @@ derive_unary!(
     CastOidToRegType,
     CastRegTypeToOid,
     PgColumnSize,
-    PgGetConstraintdef,
     MzRowSize,
     MzTypeName,
     IsNull,
@@ -3694,7 +3679,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -3932,7 +3916,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4194,7 +4177,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4401,7 +4383,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4475,7 +4456,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)

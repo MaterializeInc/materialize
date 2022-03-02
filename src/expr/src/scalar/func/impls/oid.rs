@@ -68,16 +68,6 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "pg_get_constraintdef"]
-    fn pg_get_constraintdef(_oid: Oid) -> Option<String> {
-        // Certain meta commands rely on this function not throwing an error, but we don't actually
-        // support constraints. Therefore we know any oid provided is not a valid constraint, so we
-        // can return NULL which is what PostgreSQL does when provided an invalid OID.
-        None
-    }
-);
-
-sqlfunc!(
     fn mz_type_name<'a>(oid: Oid) -> Option<String> {
         if let Some(t) = Type::from_oid(oid.0) {
             Some(t.name().to_string())
