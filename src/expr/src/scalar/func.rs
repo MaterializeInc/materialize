@@ -1351,6 +1351,13 @@ fn map_get_values<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) ->
     })
 }
 
+fn map_length(a: Datum) -> Result<Datum, EvalError> {
+    match a.unwrap_map().iter().count().try_into() {
+        Ok(c) => Ok(Datum::Int32(c)),
+        Err(_) => Err(EvalError::Int32OutOfRange),
+    }
+}
+
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -2726,9 +2733,9 @@ impl BinaryFunc {
             ))
             .nullable(true),
 
-            ListLengthMax { .. } | ArrayLength | ArrayLower | ArrayUpper => {
-                ScalarType::Int64.nullable(true)
-            }
+            ArrayLength | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
+
+            ListLengthMax { .. } => ScalarType::Int32.nullable(true),
 
             ArrayArrayConcat | ArrayRemove | ListListConcat | ListElementConcat | ListRemove => {
                 input1_type.scalar_type.without_modifiers().nullable(true)
@@ -3450,6 +3457,7 @@ pub enum UnaryFunc {
     TrimTrailingWhitespace,
     RecordGet(usize),
     ListLength,
+    MapLength,
     Upper,
     Lower,
     Cos(Cos),
@@ -3879,7 +3887,8 @@ impl UnaryFunc {
             TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
             TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
             RecordGet(i) => Ok(record_get(a, *i)),
-            ListLength => Ok(list_length(a)),
+            ListLength => list_length(a),
+            MapLength => map_length(a),
             Upper => Ok(upper(a, temp_storage)),
             Lower => Ok(lower(a, temp_storage)),
             RescaleNumeric(scale) => rescale_numeric(a, *scale),
@@ -4131,7 +4140,7 @@ impl UnaryFunc {
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
-            ListLength => ScalarType::Int64.nullable(nullable),
+            ListLength | MapLength => ScalarType::Int32.nullable(nullable),
 
             RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(nullable),
 
@@ -4348,7 +4357,7 @@ impl UnaryFunc {
             TimezoneTimestampTz(_) => false,
             TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } => false,
-            JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
+            JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength | MapLength => false,
             ExtractInterval(_)
             | ExtractTime(_)
             | ExtractTimestamp(_)
@@ -4650,6 +4659,7 @@ impl UnaryFunc {
             TrimTrailingWhitespace => f.write_str("rtrim"),
             RecordGet(i) => write!(f, "record_get[{}]", i),
             ListLength => f.write_str("list_length"),
+            MapLength => f.write_str("map_length"),
             Upper => f.write_str("upper"),
             Lower => f.write_str("lower"),
             RescaleNumeric(..) => f.write_str("rescale_numeric"),
@@ -5374,8 +5384,11 @@ fn record_get(a: Datum, i: usize) -> Datum {
     a.unwrap_list().iter().nth(i).unwrap()
 }
 
-fn list_length(a: Datum) -> Datum {
-    Datum::Int64(a.unwrap_list().iter().count() as i64)
+fn list_length(a: Datum) -> Result<Datum, EvalError> {
+    match a.unwrap_list().iter().count().try_into() {
+        Ok(c) => Ok(Datum::Int32(c)),
+        Err(_) => Err(EvalError::Int32OutOfRange),
+    }
 }
 
 fn upper<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -5597,7 +5610,7 @@ fn list_length_max<'a>(
     b: Datum<'a>,
     max_layer: usize,
 ) -> Result<Datum<'a>, EvalError> {
-    fn max_len_on_layer<'a>(d: Datum<'a>, on_layer: i64) -> Option<i64> {
+    fn max_len_on_layer<'a>(d: Datum<'a>, on_layer: i64) -> Option<usize> {
         match d {
             Datum::List(i) => {
                 let mut i = i.iter();
@@ -5609,7 +5622,7 @@ fn list_length_max<'a>(
                     }
                     max_len
                 } else {
-                    Some(i.count() as i64)
+                    Some(i.count())
                 }
             }
             Datum::Null => None,
@@ -5622,10 +5635,13 @@ fn list_length_max<'a>(
     if b as usize > max_layer || b < 1 {
         Err(EvalError::InvalidLayer { max_layer, val: b })
     } else {
-        Ok(match max_len_on_layer(a, b) {
-            Some(l) => Datum::from(l),
-            None => Datum::Null,
-        })
+        match max_len_on_layer(a, b) {
+            Some(l) => match l.try_into() {
+                Ok(c) => Ok(Datum::Int32(c)),
+                Err(_) => Err(EvalError::Int32OutOfRange),
+            },
+            None => Ok(Datum::Null),
+        }
     }
 }
 
