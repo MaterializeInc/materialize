@@ -220,8 +220,10 @@ impl PostgresSourceReader {
                 let mut raw_values = parser.iter_raw(info.schema.len() as i32);
                 try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
                     while let Some(raw_value) = raw_values.next() {
-                        let value = std::str::from_utf8(raw_value?)?;
-                        rp.push(Datum::String(value));
+                        match raw_value? {
+                            Some(value) => rp.push(Datum::String(std::str::from_utf8(value)?)),
+                            None => rp.push(Datum::Null),
+                        }
                     }
                     Ok(())
                 }));
