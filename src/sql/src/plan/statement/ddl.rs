@@ -2195,8 +2195,9 @@ pub fn plan_create_type(
         Ok(())
     }
 
-    let mut depends_on = vec![];
-    let mut record_fields = vec![];
+    let mut ids = vec![];
+    let mut record_field_ids = vec![];
+    let mut record_field_names = vec![];
     match &as_type {
         CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
             let mut with_options = normalize::option_objects(&with_options);
@@ -2225,6 +2226,11 @@ pub fn plan_create_type(
                 let key = ident(column_def.name.clone());
                 let (data_type, dt_ids) =
                     resolve_names_data_type(scx, column_def.data_type.clone())?;
+
+                if let ResolvedDataType::Named { id, .. } = data_type {
+                    record_field_ids.push(id);
+                }
+
                 println!("Data type: {:?}, dt_ids {:?}", data_type, dt_ids);
                 ensure_valid_data_type(scx, data_type, &as_type, &key)?;
                 ids.extend(dt_ids);
@@ -2260,7 +2266,10 @@ pub fn plan_create_type(
             }
         }
         CreateTypeAs::Record { .. } => CatalogType::Record {
-            fields: record_fields,
+            fields: record_field_names
+                .into_iter()
+                .zip_eq(record_field_ids.iter().cloned())
+                .collect_vec(),
         },
     };
 

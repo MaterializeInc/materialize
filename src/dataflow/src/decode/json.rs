@@ -10,7 +10,7 @@
 use anyhow::bail;
 use mz_dataflow_types::DecodeError;
 use mz_repr::strconv::parse_uuid;
-use mz_repr::{strconv, ColumnName, ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{strconv, ColumnName, ColumnType, Datum, Row, RowArena, RowPacker, ScalarType};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -29,7 +29,6 @@ impl JsonDecoderState {
     }
 
     pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
-        self.packer.clear();
         for (col_name, col_type) in &self.columns {
             let json: serde_json::Value = serde_json::from_slice(chunk).unwrap();
             if let Err(e) = decode_column(&mut self.packer, json, col_name, col_type) {
@@ -41,7 +40,7 @@ impl JsonDecoderState {
             }
         }
 
-        Ok(Some(self.packer.finish_and_reuse()))
+        Ok(Some(self.packer.clone()))
     }
 }
 
@@ -56,11 +55,12 @@ pub fn decode_column(
         scalar_type,
     } = col_type;
 
+    let mut row_packer = row.packer();
     let json_field = json.get(col_name.as_str());
 
     if json_field.is_none() {
         if *nullable {
-            row.push(Datum::Null);
+            row_packer.push(Datum::Null);
         } else {
             bail!("column {} cannot be null", col_name.as_str())
         }
@@ -77,7 +77,7 @@ pub fn decode_column(
     );
 
     let arena = RowArena::default();
-    decode_and_push_value(row, &arena, json_field, scalar_type)
+    decode_and_push_value(&mut row_packer, &arena, json_field, scalar_type)
 }
 
 pub fn decode_value<'a>(
@@ -203,7 +203,7 @@ pub fn decode_value<'a>(
 }
 
 pub fn decode_and_push_value(
-    row: &mut Row,
+    row: &mut RowPacker,
     row_arena: &RowArena,
     json_field: &Value,
     scalar_type: &ScalarType,
