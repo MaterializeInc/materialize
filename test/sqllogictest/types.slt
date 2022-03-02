@@ -868,7 +868,7 @@ numeric
 query T
 SELECT format_type(26, 1);
 ----
-oid
+oid(1)
 
 query T
 SELECT format_type(26, -1);

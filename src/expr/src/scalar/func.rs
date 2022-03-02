@@ -5801,11 +5801,14 @@ fn mz_render_typmod<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let oid = oid.unwrap_uint32();
     let typmod = typmod.unwrap_int32();
-    let typ = Type::from_oid_and_typmod(oid, typmod);
-    let constraint = typ.as_ref().and_then(|typ| typ.constraint());
-    Ok(Datum::String(
-        temp_storage.push_string(constraint.display_or("").to_string()),
-    ))
+    let s = match Type::from_oid_and_typmod(oid, typmod) {
+        Ok(typ) => typ.constraint().display_or("").to_string(),
+        // Match dubious PostgreSQL behavior of outputting the unmodified
+        // `typmod` when positive if the type OID/typmod is invalid.
+        Err(_) if typmod >= 0 => format!("({typmod})"),
+        Err(_) => "".into(),
+    };
+    Ok(Datum::String(temp_storage.push_string(s)))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]

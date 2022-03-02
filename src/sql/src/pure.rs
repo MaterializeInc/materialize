@@ -290,6 +290,22 @@ pub fn purify(
 
                             let mut projection = vec![];
                             for (i, column) in table_info.schema.iter().enumerate() {
+                                let mut ty = column.ty.clone();
+                                // Ignore precision constraints on date/time types until we support
+                                // it. This should be safe enough because our types are wide enough
+                                // to support the maximum possible precision.
+                                //
+                                // See: https://github.com/MaterializeInc/materialize/issues/10837
+                                match &mut ty {
+                                    mz_pgrepr::Type::Interval { constraints } => {
+                                        *constraints = None
+                                    }
+                                    mz_pgrepr::Type::Time { precision } => *precision = None,
+                                    mz_pgrepr::Type::TimeTz { precision } => *precision = None,
+                                    mz_pgrepr::Type::Timestamp { precision } => *precision = None,
+                                    mz_pgrepr::Type::TimestampTz { precision } => *precision = None,
+                                    _ => (),
+                                }
                                 // NOTE(benesch): this *looks* gross, but it is
                                 // safe enough. The `fmt::Display`
                                 // representation on `pgrepr::Type` promises to
@@ -299,7 +315,7 @@ pub fn purify(
                                 // TODO(benesch): converting `json` to `jsonb`
                                 // is wrong. We ought to support the `json` type
                                 // directly.
-                                let mut ty = format!("pg_catalog.{}", column.ty);
+                                let mut ty = format!("pg_catalog.{}", ty);
                                 if ty == "pg_catalog.json" {
                                     ty = "pg_catalog.jsonb".into();
                                 }

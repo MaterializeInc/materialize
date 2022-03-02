@@ -80,7 +80,7 @@ sqlfunc!(
 
 sqlfunc!(
     fn mz_type_name<'a>(oid: Oid) -> Option<String> {
-        if let Some(t) = Type::from_oid(oid.0) {
+        if let Ok(t) = Type::from_oid(oid.0) {
             Some(t.name().to_string())
         } else {
             None
