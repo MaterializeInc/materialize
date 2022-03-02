@@ -118,11 +118,6 @@ available to Docker Engine.
     Go ahead and do that a few times; you should see the `region_sum` continue
     to increase for all `region_id`s.
 
-    The first time you run the command, you may see a message stating "At least
-    one input has no complete timestamps yet." This indicates that Materialize
-    is still reading the initial batch of data from Kafka, and is usually
-    resolved by trying again in a few moments.
-
 1. Close out of the Materialize CLI (<kbd>Ctrl</kbd> + <kbd>D</kbd>).
 
 1. Watch the report change using the `watch-sql` container, which continually
