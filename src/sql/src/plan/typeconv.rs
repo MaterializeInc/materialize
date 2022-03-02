@@ -768,7 +768,7 @@ pub fn guess_best_common_type(
             candidate = typ;
         }
     }
-    Ok(candidate.default_embedded_value())
+    Ok(candidate.without_modifiers())
 }
 
 pub fn plan_coerce<'a>(

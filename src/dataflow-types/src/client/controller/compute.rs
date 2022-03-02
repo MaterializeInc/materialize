@@ -62,6 +62,14 @@ pub enum ComputeError {
     DataflowSinceViolation(GlobalId),
     /// The peek `timestamp` was not greater than the `since` of the identifier.
     PeekSinceViolation(GlobalId),
+    /// An error from the underlying client.
+    ClientError(anyhow::Error),
+}
+
+impl From<anyhow::Error> for ComputeError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::ClientError(error)
+    }
 }
 
 impl<T: Timestamp + Lattice> ComputeControllerState<T> {
@@ -109,7 +117,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
     /// always able to return to a state that can serve the output read capabilities.
     pub async fn create_dataflows(
         &mut self,
-        dataflows: Vec<DataflowDescription<crate::plan::Plan, T>>,
+        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, T>>,
     ) -> Result<(), ComputeError> {
         // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
@@ -217,13 +225,15 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         self.client
             .send(Command::Storage(StorageCommand::RenderSources(sources)))
-            .await;
+            .await
+            .expect("Storage command failed; unrecoverable");
         self.client
             .send(Command::Compute(
                 ComputeCommand::CreateDataflows(dataflows),
                 self.instance,
             ))
-            .await;
+            .await
+            .expect("Compute command failed; unrecoverable");
 
         Ok(())
     }
@@ -279,18 +289,18 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                 },
                 self.instance,
             ))
-            .await;
-
-        Ok(())
+            .await
+            .map_err(ComputeError::from)
     }
     /// Cancels an existing peek request.
-    pub async fn cancel_peek(&mut self, conn_id: u32) {
+    pub async fn cancel_peek(&mut self, conn_id: u32) -> Result<(), ComputeError> {
         self.client
             .send(Command::Compute(
                 ComputeCommand::CancelPeek { conn_id },
                 self.instance,
             ))
-            .await;
+            .await
+            .map_err(ComputeError::from)
     }
 
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
@@ -406,7 +416,8 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                     ComputeCommand::AllowCompaction(compaction_commands),
                     self.instance,
                 ))
-                .await;
+                .await
+                .expect("Compute instance command failed; unrecoverable");
         }
 
         // We may have storage consequences to process.

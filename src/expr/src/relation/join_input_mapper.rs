@@ -44,25 +44,24 @@ impl JoinInputMapper {
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns.
     pub fn new(inputs: &[MirRelationExpr]) -> Self {
-        Self::new_from_input_arities(inputs.iter().map(|i| i.arity()).collect::<Vec<_>>())
+        Self::new_from_input_arities(inputs.iter().map(|i| i.arity()))
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns. Using this method saves is more
     /// efficient if input types have been pre-calculated
     pub fn new_from_input_types(types: &[RelationType]) -> Self {
-        let arities = types
-            .iter()
-            .map(|t| t.column_types.len())
-            .collect::<Vec<_>>();
-
-        Self::new_from_input_arities(arities)
+        Self::new_from_input_arities(types.iter().map(|t| t.column_types.len()))
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns. Using this method saves is more
     /// efficient if input arities have been pre-calculated
-    pub fn new_from_input_arities(arities: Vec<usize>) -> Self {
+    pub fn new_from_input_arities<I>(arities: I) -> Self
+    where
+        I: Iterator<Item = usize>,
+    {
+        let arities = arities.collect::<Vec<usize>>();
         let mut offset = 0;
         let mut prior_arities = Vec::new();
         for input in 0..arities.len() {

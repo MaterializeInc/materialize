@@ -41,7 +41,7 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement,
+    ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,
     TransactionAccessMode,
 };
 use crate::catalog::CatalogType;
@@ -112,6 +112,7 @@ pub enum Plan {
     Prepare(PreparePlan),
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
+    Raise(RaisePlan),
 }
 
 #[derive(Debug)]
@@ -358,6 +359,11 @@ pub struct ExecutePlan {
 #[derive(Debug)]
 pub struct DeallocatePlan {
     pub name: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct RaisePlan {
+    pub severity: NoticeSeverity,
 }
 
 #[derive(Clone, Debug)]

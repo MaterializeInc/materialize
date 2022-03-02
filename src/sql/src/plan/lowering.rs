@@ -351,7 +351,7 @@ impl HirRelationExpr {
                                 &mut input,
                                 &Some(&subquery_map),
                             );
-                            input = input.map(vec![scalar]);
+                            input = input.map_one(scalar);
                             scalar_columns.push(input.arity() - 1);
                         }
 
@@ -457,7 +457,7 @@ impl HirRelationExpr {
                                 .column_types
                                 .into_iter()
                                 .skip(get_left.arity())
-                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                .map(|typ| (Datum::Null, typ.scalar_type))
                                 .collect();
                             get_left.lookup(id_gen, join, default)
                         } else {
@@ -537,7 +537,7 @@ impl HirRelationExpr {
                                         id_gen,
                                         get_join.clone(),
                                         rt.into_iter()
-                                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                                            .map(|typ| (Datum::Null, typ.scalar_type))
                                             .collect(),
                                     );
                                     result = result.union(left_outer);
@@ -556,7 +556,7 @@ impl HirRelationExpr {
                                                         .collect(),
                                                 ),
                                             lt.into_iter()
-                                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                                .map(|typ| (Datum::Null, typ.scalar_type))
                                                 .collect(),
                                         )
                                         // swap left and right back again
@@ -610,12 +610,7 @@ impl HirRelationExpr {
                     let input_type = input.typ();
                     let default = applied_aggregates
                         .iter()
-                        .map(|agg| {
-                            (
-                                agg.func.default(),
-                                agg.typ(&input_type).nullable(agg.func.default().is_null()),
-                            )
-                        })
+                        .map(|agg| (agg.func.default(), agg.typ(&input_type).scalar_type))
                         .collect();
                     // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
                     let mut reduced =
@@ -795,7 +790,7 @@ impl HirScalarExpr {
                             );
                             let then_arity = then_inner.arity();
                             then_inner = then_inner
-                                .map(vec![then_expr])
+                                .map_one(then_expr)
                                 .project((0..inner_arity).chain(Some(then_arity)).collect());
 
                             // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
@@ -820,7 +815,7 @@ impl HirScalarExpr {
                             );
                             let else_arity = else_inner.arity();
                             else_inner = else_inner
-                                .map(vec![else_expr])
+                                .map_one(else_expr)
                                 .project((0..inner_arity).chain(Some(else_arity)).collect());
 
                             // concatenate the two results.
@@ -916,7 +911,7 @@ impl HirScalarExpr {
                                             if let mz_expr::MirScalarExpr::Column(c) = key {
                                                 group_key.push(c);
                                             } else {
-                                                get_inner = get_inner.map(vec![key]);
+                                                get_inner = get_inner.map_one(key);
                                                 group_key.push(get_inner.arity() - 1);
                                             }
                                         }
@@ -1010,8 +1005,10 @@ impl HirScalarExpr {
 
                                             // Unpack the record
                                             for c in 0..input_arity {
-                                                reduce = reduce.take_dangerous().map(vec![
-                                                    mz_expr::MirScalarExpr::CallUnary {
+                                                reduce =
+                                                    reduce
+                                                        .take_dangerous()
+                                                        .map_one(mz_expr::MirScalarExpr::CallUnary {
                                                         func: mz_expr::UnaryFunc::RecordGet(c),
                                                         expr: Box::new(
                                                             mz_expr::MirScalarExpr::CallUnary {
@@ -1025,19 +1022,18 @@ impl HirScalarExpr {
                                                                 ),
                                                             },
                                                         ),
-                                                    },
-                                                ]);
+                                                    });
                                             }
 
                                             // Append the column with the result of the window function.
-                                            reduce = reduce.take_dangerous().map(vec![
+                                            reduce = reduce.take_dangerous().map_one(
                                                 mz_expr::MirScalarExpr::CallUnary {
                                                     func: mz_expr::UnaryFunc::RecordGet(0),
                                                     expr: Box::new(mz_expr::MirScalarExpr::Column(
                                                         record_col,
                                                     )),
                                                 },
-                                            ]);
+                                            );
 
                                             let agg_col = record_col + 1 + input_arity;
                                             reduce.project(
@@ -1428,15 +1424,15 @@ fn apply_scalar_subquery(
                             mz_expr::BinaryFunc::Gt,
                         )])
                     .project((0..inner_arity).collect::<Vec<_>>())
-                    .map(vec![mz_expr::MirScalarExpr::literal(
+                    .map_one(mz_expr::MirScalarExpr::literal(
                         Err(mz_expr::EvalError::MultipleRowsFromSubquery),
                         col_type.clone().scalar_type,
-                    )]);
+                    ));
                 // Return `get_select` and any errors added in.
                 get_select.union(errors)
             });
             // append Null to anything that didn't return any rows
-            let default = vec![(Datum::Null, col_type.nullable(true))];
+            let default = vec![(Datum::Null, col_type.scalar_type)];
             get_inner.lookup(id_gen, guarded, default)
         },
     )
@@ -1473,8 +1469,7 @@ fn apply_existential_subquery(
                     RelationType::new(vec![ScalarType::Bool.nullable(false)]),
                 ));
             // append False to anything that didn't return any rows
-            let default = vec![(Datum::False, ScalarType::Bool.nullable(false))];
-            get_inner.lookup(id_gen, exists, default)
+            get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
         },
     )
 }

@@ -29,7 +29,7 @@ use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::ArrangementFrontiers;
 use crate::coord::Coordinator;
 use crate::error::RematerializedSourceType;
-use crate::session::Session;
+use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::{CoordError, PersisterWithConfig};
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -425,8 +425,11 @@ impl<'a> DataflowBuilder<'a> {
             NullaryFunc::Version => {
                 let build_info = self.catalog.config().build_info;
                 let version = format!(
-                    "PostgreSQL 9.6 on {} (materialized {})",
-                    build_info.target_triple, build_info.version,
+                    "PostgreSQL {}.{} on {} (materialized {})",
+                    SERVER_MAJOR_VERSION,
+                    SERVER_MINOR_VERSION,
+                    build_info.target_triple,
+                    build_info.version,
                 );
                 pack(Datum::from(&*version))
             }

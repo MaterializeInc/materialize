@@ -2599,21 +2599,6 @@ impl BinaryFunc {
     pub fn output_type(&self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
-        let is_div_mod = matches!(
-            self,
-            DivInt16
-                | ModInt16
-                | DivInt32
-                | ModInt32
-                | DivInt64
-                | ModInt64
-                | DivFloat32
-                | ModFloat32
-                | DivFloat64
-                | ModFloat64
-                | DivNumeric
-                | ModNumeric
-        );
         match self {
             And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
                 ScalarType::Bool.nullable(in_nullable)
@@ -2629,7 +2614,7 @@ impl BinaryFunc {
 
             AddInt16 | SubInt16 | MulInt16 | DivInt16 | ModInt16 | BitAndInt16 | BitOrInt16
             | BitXorInt16 | BitShiftLeftInt16 | BitShiftRightInt16 => {
-                ScalarType::Int16.nullable(in_nullable || is_div_mod)
+                ScalarType::Int16.nullable(in_nullable)
             }
 
             AddInt32
@@ -2643,19 +2628,19 @@ impl BinaryFunc {
             | BitShiftLeftInt32
             | BitShiftRightInt32
             | EncodedBytesCharLength
-            | SubDate => ScalarType::Int32.nullable(in_nullable || is_div_mod),
+            | SubDate => ScalarType::Int32.nullable(in_nullable),
 
             AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 | BitAndInt64 | BitOrInt64
             | BitXorInt64 | BitShiftLeftInt64 | BitShiftRightInt64 => {
-                ScalarType::Int64.nullable(in_nullable || is_div_mod)
+                ScalarType::Int64.nullable(in_nullable)
             }
 
             AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
-                ScalarType::Float32.nullable(in_nullable || is_div_mod)
+                ScalarType::Float32.nullable(in_nullable)
             }
 
             AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
-                ScalarType::Float64.nullable(in_nullable || is_div_mod)
+                ScalarType::Float64.nullable(in_nullable)
             }
 
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
@@ -2725,16 +2710,10 @@ impl BinaryFunc {
             }
 
             ArrayArrayConcat | ArrayRemove | ListListConcat | ListElementConcat | ListRemove => {
-                input1_type
-                    .scalar_type
-                    .default_embedded_value()
-                    .nullable(true)
+                input1_type.scalar_type.without_modifiers().nullable(true)
             }
 
-            ElementListConcat => input2_type
-                .scalar_type
-                .default_embedded_value()
-                .nullable(true),
+            ElementListConcat => input2_type.scalar_type.without_modifiers().nullable(true),
 
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Position => ScalarType::Int32.nullable(in_nullable),
@@ -4088,12 +4067,10 @@ impl UnaryFunc {
             CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
 
             CastRecord1ToRecord2 { return_ty, .. } => {
-                return_ty.default_embedded_value().nullable(nullable)
+                return_ty.without_modifiers().nullable(nullable)
             }
 
-            CastList1ToList2 { return_ty, .. } => {
-                return_ty.default_embedded_value().nullable(false)
-            }
+            CastList1ToList2 { return_ty, .. } => return_ty.without_modifiers().nullable(false),
 
             ExtractInterval(_)
             | ExtractTime(_)

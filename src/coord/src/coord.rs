@@ -146,7 +146,7 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
-    MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
+    MutationKind, Params, PeekPlan, PeekWhen, Plan, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
     SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
@@ -852,7 +852,8 @@ impl Coordinator {
         self.dataflow_client
             .storage()
             .advance_all_table_timestamps(advance_to)
-            .await;
+            .await
+            .unwrap();
     }
 
     async fn message_worker(&mut self, message: DataflowResponse) {
@@ -903,6 +904,7 @@ impl Coordinator {
                     .expect("inserting timestamp bindings cannot fail");
 
                 let mut durability_updates = Vec::new();
+                let mut timestamp_compactions = Vec::new();
                 for (source_id, mut changes) in changes {
                     if let Some(source_state) = self.sources.get_mut(&source_id) {
                         // Apply the updates the dataflow worker sent over, and check if there
@@ -942,18 +944,21 @@ impl Coordinator {
                             .first()
                             .expect("known to exist");
 
-                        self.catalog
-                            .compact_timestamp_bindings(source_id, compaction_ts)
-                            .expect("compacting timestamp bindings cannot fail");
+                        timestamp_compactions.push((source_id, compaction_ts));
                     }
                 }
+
+                self.catalog
+                    .compact_timestamp_bindings(&timestamp_compactions)
+                    .expect("compacting timestamp bindings cannot fail");
 
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
                     self.dataflow_client
                         .storage()
                         .update_durability_frontiers(durability_updates)
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
         }
@@ -1219,7 +1224,8 @@ impl Coordinator {
                                 | Statement::ShowVariable(_)
                                 | Statement::SetVariable(_)
                                 | Statement::StartTransaction(_)
-                                | Statement::Tail(_) => {
+                                | Statement::Tail(_)
+                                | Statement::Raise(_) => {
                                     // Always safe.
                                 }
 
@@ -1708,7 +1714,8 @@ impl Coordinator {
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .cancel_peek(conn_id)
-                .await;
+                .await
+                .unwrap();
         }
     }
 
@@ -2041,6 +2048,9 @@ impl Coordinator {
                     tx.send(Ok(ExecuteResponse::Deallocate { all: true }), session);
                 }
             },
+            Plan::Raise(RaisePlan { severity }) => {
+                tx.send(Ok(ExecuteResponse::Raise { severity }), session);
+            }
         }
     }
 
@@ -2994,7 +3004,8 @@ impl Coordinator {
                                 self.dataflow_client
                                     .storage()
                                     .table_insert(id, updates)
-                                    .await;
+                                    .await
+                                    .unwrap();
                             }
                         }
                     }
@@ -3677,8 +3688,9 @@ impl Coordinator {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
-                let dataflow_plan = mz_dataflow_types::Plan::finalize_dataflow(dataflow)
-                    .expect("Dataflow planning failed; unrecoverable error");
+                let dataflow_plan =
+                    mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                        .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
                     &dataflow_plan,
@@ -4106,9 +4118,9 @@ impl Coordinator {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    async fn catalog_transact<F, T>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<T, CoordError>
+    async fn catalog_transact<F, R>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<R, CoordError>
     where
-        F: FnOnce(DataflowBuilder) -> Result<T, CoordError>,
+        F: FnOnce(DataflowBuilder) -> Result<R, CoordError>,
     {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
@@ -4174,9 +4186,10 @@ impl Coordinator {
             self.send_builtin_table_updates(builtin_table_updates).await;
 
             if !sources_to_drop.is_empty() {
-                for &id in &sources_to_drop {
-                    self.update_timestamper(id, false).await;
-                    self.sources.remove(&id);
+                for id in &sources_to_drop {
+                    self.update_timestamper(*id, false).await;
+                    self.sources.remove(id);
+                    self.since_handles.remove(id);
                 }
                 self.dataflow_client
                     .storage()
@@ -4188,9 +4201,10 @@ impl Coordinator {
                 // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
                 // in `self.sources` to make sure that it is taken into account when rendering
                 // dataflows that use it. We must make sure to remove that here.
-                for &id in &tables_to_drop {
-                    self.sources.remove(&id);
-                    self.persister.remove_table(id);
+                for id in &tables_to_drop {
+                    self.sources.remove(id);
+                    self.persister.remove_table(*id);
+                    self.since_handles.remove(id);
                 }
                 self.dataflow_client
                     .storage()
@@ -4280,6 +4294,7 @@ impl Coordinator {
                     .storage()
                     .table_insert(id, updates)
                     .await
+                    .unwrap();
             }
         }
     }
@@ -4310,6 +4325,7 @@ impl Coordinator {
             if self.indexes.remove(&id).is_some() {
                 trace_keys.push(id);
             }
+            self.since_handles.remove(&id);
         }
         if !trace_keys.is_empty() {
             self.dataflow_client
@@ -4467,14 +4483,16 @@ impl Coordinator {
                     self.dataflow_client
                         .storage()
                         .add_source_timestamping(source_id, s.connector.clone(), bindings)
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
         } else {
             self.dataflow_client
                 .storage()
                 .drop_source_timestamping(source_id)
-                .await;
+                .await
+                .unwrap();
         }
     }
 
@@ -4677,11 +4695,13 @@ pub async fn serve(
                     .collect(),
                 log_logging: config.log_logging,
             });
-            handle.block_on(
-                coord
-                    .dataflow_client
-                    .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
-            );
+            handle
+                .block_on(
+                    coord
+                        .dataflow_client
+                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
+                )
+                .unwrap();
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
@@ -4885,8 +4905,8 @@ pub mod fast_path_peek {
     use mz_repr::{Diff, Row};
 
     #[derive(Debug)]
-    pub struct PeekDataflowPlan {
-        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
+    pub struct PeekDataflowPlan<T> {
+        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, T>,
         id: GlobalId,
         key: Vec<MirScalarExpr>,
         permutation: HashMap<usize, usize>,
@@ -4895,13 +4915,13 @@ pub mod fast_path_peek {
 
     /// Possible ways in which the coordinator could produce the result for a goal view.
     #[derive(Debug)]
-    pub enum Plan {
+    pub enum Plan<T = mz_repr::Timestamp> {
         /// The view evaluates to a constant result that can be returned.
-        Constant(Result<Vec<(Row, mz_repr::Timestamp, Diff)>, EvalError>),
+        Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
         /// The view can be read out of an existing arrangement.
         PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
         /// The view must be installed as a dataflow and then read.
-        PeekDataflow(PeekDataflowPlan),
+        PeekDataflow(PeekDataflowPlan<T>),
     }
 
     /// Determine if the dataflow plan can be implemented without an actual dataflow.

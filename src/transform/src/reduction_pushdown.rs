@@ -304,9 +304,8 @@ fn try_push_reduce_through_join(
     }
 
     // 4) Construct the new `MirRelationExpr`.
-    let new_join_mapper = JoinInputMapper::new_from_input_arities(
-        new_reduces.iter().map(|builder| builder.arity()).collect(),
-    );
+    let new_join_mapper =
+        JoinInputMapper::new_from_input_arities(new_reduces.iter().map(|builder| builder.arity()));
 
     let new_inputs = new_reduces
         .into_iter()

@@ -1,0 +1,69 @@
+# Test that the RAISE statement sends messages with the correct severity.
+
+# Ensure all severity levels are actually sent to the client
+send
+Query {"query": "SET client_min_messages TO DEBUG"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+
+send
+Query {"query": "RAISE DEBUG"}
+----
+
+until err_field_typs=S
+CommandComplete
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"DEBUG"}]}
+CommandComplete {"tag":"RAISE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "RAISE INFO"}
+----
+
+until err_field_typs=S
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"INFO"}]}
+CommandComplete {"tag":"RAISE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "RAISE LOG"}
+----
+
+until err_field_typs=S
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"LOG"}]}
+CommandComplete {"tag":"RAISE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "RAISE NOTICE"}
+----
+
+until err_field_typs=S
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"}]}
+CommandComplete {"tag":"RAISE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "RAISE WARNING"}
+----
+
+until err_field_typs=S
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"}]}
+CommandComplete {"tag":"RAISE"}
+ReadyForQuery {"status":"I"}

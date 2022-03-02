@@ -10,7 +10,10 @@
 use std::borrow::Borrow;
 use std::fmt;
 
+use const_format::concatcp;
 use uncased::UncasedStr;
+
+use mz_ore::cast;
 
 use crate::error::CoordError;
 use crate::session::EndTransactionAction;
@@ -22,6 +25,20 @@ macro_rules! static_uncased_str {
         unsafe { ::core::mem::transmute::<&'static str, &'static UncasedStr>($string) }
     }};
 }
+
+// We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
+// be. Too new and some clients will emit a "server too new" warning. Too old
+// and some clients will fall back to legacy code paths. v9.5.0 empirically
+// seems to be a good compromise.
+
+/// The major version of PostgreSQL that Materialize claims to be.
+pub const SERVER_MAJOR_VERSION: u8 = 9;
+
+/// The minor version of PostgreSQL that Materialize claims to be.
+pub const SERVER_MINOR_VERSION: u8 = 5;
+
+/// The patch version of PostgreSQL that Materialize claims to be.
+pub const SERVER_PATCH_VERSION: u8 = 0;
 
 const APPLICATION_NAME: ServerVar<str> = ServerVar {
     name: static_uncased_str!("application_name"),
@@ -87,18 +104,21 @@ const SEARCH_PATH: ServerVar<[&str]> = ServerVar {
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
     name: static_uncased_str!("server_version"),
-    // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
-    // be. Too new and some clients will emit a "server too new" warning. Too
-    // old and some clients will fall back to legacy code paths. v9.5.0
-    // empirically seems to be a good compromise.
-    value: "9.5.0",
+    value: concatcp!(
+        SERVER_MAJOR_VERSION,
+        ".",
+        SERVER_MINOR_VERSION,
+        ".",
+        SERVER_PATCH_VERSION
+    ),
     description: "Shows the server version (PostgreSQL).",
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     name: static_uncased_str!("server_version_num"),
-    // See the comment on `SERVER_VERSION`.
-    value: &90500,
+    value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
+        + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
+        + cast::u8_to_i32(SERVER_PATCH_VERSION)),
     description: "Shows the server version as an integer (PostgreSQL).",
 };
 

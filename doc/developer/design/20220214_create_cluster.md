@@ -240,10 +240,14 @@ corresponds to the [account](../platform/ux.md#account) ID in Materialize Platfo
 ## Future work
 
 * Introduce `ALTER SYSTEM` to change the system default for the `cluster`
-  session variable.
+  server configuration parameter.
 
 * Allow individual users to configure a default for the `cluster` session
   variable.
+
+  Note that this necessitates building out a variable/parameter hierarchy where
+  `cluster` can be set on the server (i.e. `ALTER SYSTEM SET`), but also
+  overridden by a session setting (`SET`).
 
 * Introduce logging sources in the system catalog that show the active cluster's
   resource usage (e.g., `mz_cluster_cpu_usage` and `mz_cluster_memory_usage`).

@@ -446,7 +446,7 @@ fn test_record_types() -> Result<(), Box<dyn Error>> {
 fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
-        let server = util::start_server(util::Config::default()).unwrap();
+        let server = util::start_server(util::Config::default().experimental_mode()).unwrap();
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {

@@ -175,12 +175,7 @@ impl<'a> Lowerer<'a> {
                     let input_type = input.typ();
                     let default = aggregates
                         .iter()
-                        .map(|agg| {
-                            (
-                                agg.func.default(),
-                                agg.typ(&input_type).nullable(agg.func.default().is_null()),
-                            )
-                        })
+                        .map(|agg| (agg.func.default(), agg.typ(&input_type).scalar_type))
                         .collect_vec();
 
                     input = SR::Reduce {
@@ -382,7 +377,7 @@ impl<'a> Lowerer<'a> {
                                         id_gen,
                                         get_join.clone(),
                                         rt.into_iter()
-                                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                                            .map(|typ| (Datum::Null, typ.scalar_type))
                                             .collect(),
                                     );
                                     result = result.union(left_outer);
@@ -402,7 +397,7 @@ impl<'a> Lowerer<'a> {
                                                         .collect(),
                                                 ),
                                             lt.into_iter()
-                                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                                .map(|typ| (Datum::Null, typ.scalar_type))
                                                 .collect(),
                                         )
                                         // swap left and right back again
@@ -483,10 +478,9 @@ impl<'a> Lowerer<'a> {
         let (quantifiers, join_inputs): (Vec<_>, Vec<_>) = inputs.into_iter().unzip();
         let (join, input_mapper) = if join_inputs.len() == 1 {
             let only_input = join_inputs.into_iter().next().unwrap();
-            let input_mapper = mz_expr::JoinInputMapper::new_from_input_arities(vec![
-                outer_arity,
-                only_input.arity() - outer_arity,
-            ]);
+            let input_mapper = mz_expr::JoinInputMapper::new_from_input_arities(
+                [outer_arity, only_input.arity() - outer_arity].into_iter(),
+            );
             (only_input, input_mapper)
         } else {
             Self::join_on_prefix(join_inputs, outer_arity)
@@ -556,15 +550,15 @@ impl<'a> Lowerer<'a> {
                                 mz_expr::BinaryFunc::Gt,
                             )])
                         .project((0..outer_arity).collect::<Vec<_>>())
-                        .map(vec![mz_expr::MirScalarExpr::literal(
+                        .map_one(mz_expr::MirScalarExpr::literal(
                             Err(mz_expr::EvalError::MultipleRowsFromSubquery),
                             col_type.clone().scalar_type,
-                        )]);
+                        ));
                     // Return `get_select` and any errors added in.
                     get_select.union(errors)
                 });
                 // append Null to anything that didn't return any rows
-                let default = vec![(Datum::Null, col_type.nullable(true))];
+                let default = vec![(Datum::Null, col_type.scalar_type)];
                 input = get_outer.lookup(id_gen, guarded, default);
             }
             _ => panic!("Unsupported quantifier type"),
@@ -644,13 +638,11 @@ impl<'a> Lowerer<'a> {
         (
             mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences).project(projection),
             mz_expr::JoinInputMapper::new_from_input_arities(
-                std::iter::once(prefix_length)
-                    .chain(
-                        (0..input_mapper.total_inputs())
-                            .into_iter()
-                            .map(|i| input_mapper.input_arity(i) - prefix_length),
-                    )
-                    .collect_vec(),
+                std::iter::once(prefix_length).chain(
+                    (0..input_mapper.total_inputs())
+                        .into_iter()
+                        .map(|i| input_mapper.input_arity(i) - prefix_length),
+                ),
             ),
         )
     }
