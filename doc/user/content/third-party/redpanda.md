@@ -8,7 +8,7 @@ menu:
 
 Because [Redpanda] is Kafka API-compatible, Materialize can process data from it in the same way it processes data from Kafka sources.
 
-The Redpanda integration has [beta-level](../supported-tools#beta-level-support) support.
+The Redpanda integration has [beta-level](../supported-tools#beta) support.
 
 ## What's missing?
 
