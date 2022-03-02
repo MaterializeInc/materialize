@@ -13,20 +13,99 @@ It does not intend to describe the **current behavior** of the system.
 Various liberties are taken in the names of commands and types, in the interest of simplicity.
 Not all commands here may be found in the implementation, nor all implementation commands found here.
 
-# Time-varying collections
+# Data Model
 
-Materialize represents TVCs as a set of "updates" of the form `(data, time, diff)`.
-The difference `diff` represents the change in the multiplicity of `data` as we go from `time-1` to `time` (for times that form a sequence; for partially ordered times consult the Differential Dataflow source material for more details).
-To go from a sequence of collections to this representation one subtracts the old from new frequencies for each `data`.
-To go from this representation to a sequence of collections, one updates the multiplicities of each `data` by `diff` for each `time`.
+## Data
 
-Materialize most often only has partial information about TVCs.
-A TVC's future is usually not yet completely known, and its deep past also may not be faithfully recorded.
-To represent what Materialize knows with certainty, Materialize maintains two "frontiers" for each TVC.
-A frontier is a lower bound on times, and is used to describe the set of times greater or equal to the lower bound.
-The two frontiers Materialize maintains for each TVC are:
+A *datum* is a single piece of arbitrary typed data. For example, one might use
+a datum to represent a single row in an SQL database, or a single key-value
+pair in a key-value store.
 
-*   The `upper` frontier, which communicates that for times `time` not greater or equal to `upper`, the updates at `time` are complete.
+## Times
+
+TODO: it sounds like there's more than one `T`, but Materialize will likely
+have *some* primary/local/privileged/internal choice of `T`. We should come up
+with a name for this concept: "local time", "Materialize time", etc. If there
+are multiple times in a cluster, we should figure out how to name them, what
+object each `T` is associated with, and when can we compare one time to
+another.
+
+Each instance of Materialize has a single set of *times* `T`, together with a
+*join* (least upper bound) `join(t1, t2) => t3` which takes two elements of `T`
+and yields a third. `join` must be associative, commutative, and idempotent.
+The times in a Materialize instance therefore form a
+[join-semilattice](https://en.wikipedia.org/wiki/Semilattice).
+
+A *time* is an element of `T`. We define a partial order `<=t` over times in
+the usual way for join semilattices: for any two times `t1` and `t2` in `T`,
+`t1 <=t t2` iff `join(t1, t2) = t2`. We also define a strict partial order over
+times `<t`, such that `t1 < t2` iff `t1 <= t2` and `t1 != t2`.
+
+As a concrete example, we might choose `T` to be the integers, with `max` as
+our join. The usual integer senses of `<=` and `<` then serve as `<=t` and
+`<t`, respectively.
+
+A *frontier* is a set of times in `T`. We use frontiers to specify a lower (or
+upper) bound on times in `T`. We say that a time `t` *is later than* a frontier
+`F` iff there exists some `f` in `F` such that `f <t t`. Similarly, we can
+define times which come before `F`, are at least `F`, are at most `F`, and so
+on, in the obvious ways. For integers, a frontier could be the singleton set `F
+= {5}`; the set of times before `F` are therefore `{1, 2, 3, 4}`, and the times
+after `F` are `{6, 7, ...}`.
+
+The maximum frontier is the empty set `{}`. No time is greater than `{}`.
+
+## Collection Versions
+
+A *collection version* is a [multiset](https://en.wikipedia.org/wiki/Multiset)
+of data which are all of the same type. Collection versions represent the state
+of a collection at a single instant in time. For example, a collection version
+could store the state of a relation (e.g. table) in SQL, or the state of a
+collection/bucket/keyspace in a key-value store.
+
+The *multiplicity* (or *frequency*) of a datum in some collection version `c`
+is the number of times it appears in `c`. We can encode a collection version as
+a map of `{datum => multiplicity}`.
+
+## Time-varying collections
+
+A *time-varying collection* (TVC) represents the entire history of a collection
+which changes over time. At any time, it has an effective value: a collection
+version. We can think of a TVC as a map of `{time => collection-version}` for
+all possible times.
+
+Because the set of times is (in general) very large, and because TVCs usually
+change incrementally, it is more efficient to represent a TVC as a set of
+*updates* which encode changes between collection versions. An *update* is a
+triple `[datum, time, diff]`. When `<=t` is a total order, `diff` is the change
+in multiplicity for `datum` between `time - 1` and `time`. When `<=t` is only
+partial, see the [VLDB](https://vldb.org/pvldb/vol13/p1793-mcsherry.pdf) and
+[CIDR](https://github.com/TimelyDataflow/differential-dataflow/blob/master/differentialdataflow.pdf)
+papers on differential dataflow, as well as the [DD
+library](https://github.com/TimelyDataflow/differential-dataflow).
+
+TODO: define some notion of a read at a particular time? It feels like we need
+this to talk about pTVC correctness.
+
+## Partial time-varying collections
+
+At any wall-clock time a TVC is (in general) unknowable. Some of its past
+changes have been forgotten, some information has yet to arrive, and its future
+is unwritten. A *partial time-varying collection* (pTVC) provides a correct
+view of a TVC during a specific range of times. TODO: something here about
+density of times and what that concept means for partially ordered
+times/frontiers?
+
+We say that a collection version read from a pTVC is *correct* when it is
+exactly the same collection version as would be read from the pTVC's
+corresponding TVC.
+
+We represent a pTVC as a triple of `[updates, since, upper]`, where `updates`
+is a set of updates (just like a TVC), and `since` and `upper` are two
+frontiers which define which times we can correctly read, and which times may
+be written in future versions of the pTVC.
+
+*   The `upper` frontier communicates that for times `time` not greater or equal to `upper`, the updates at `time` are complete.
 
     The upper frontier provides the information about how a TVC may continue to evolve.
     All future updates will necessarily have their `time` greater or equal to the `upper` frontier.
@@ -34,7 +113,7 @@ The two frontiers Materialize maintains for each TVC are:
 
     We think of `upper` as the "write frontier": times greater or equal to it may still be written to the TVC.
 
-*   The `since` frontier, which communicates that for times `time` greater or equal to `since`, the accumulated collection at `time` will be correct.
+*   The `since` frontier communicates that for times `time` greater or equal to `since`, the accumulated collection at `time` will be correct.
 
     Informally, updates at times not greater than the `since` frontier may have been consolidated with updates at other times.
     The updates are not discarded, but their times may have been advanced to allow cancelation and consolidation of updates to occur.
@@ -307,5 +386,4 @@ These lower layers should provide similar "transactional" interfaces that valida
 
 As Materialize runs, the Adapter may see fit to "allow compaction" of collections Materialize maintains.
 It does so by downgrading its held read capabilities for the collection (identifier by `GlobalId`).
-Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timeline timestamps forward.
-Generally, the Adapter should not downgrade its read capabilities past the timeline timestamp, thereby avoiding this constraint.
+Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timeline timestamps forward. Generally, the Adapter should not downgrade its read capabilities past the timeline timestamp, thereby avoiding this constraint.
