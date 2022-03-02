@@ -23,6 +23,8 @@ use mz_pgrepr::Type as PgType;
 pub struct PgColumn {
     pub name: String,
     pub ty: PgType,
+    pub oid: u32,
+    pub typmod: i32,
     pub nullable: bool,
     pub primary_key: bool,
 }
@@ -170,6 +172,8 @@ pub async fn publication_info(
                 Ok(PgColumn {
                     name,
                     ty,
+                    oid,
+                    typmod,
                     nullable: !not_null,
                     primary_key,
                 })

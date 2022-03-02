@@ -17,8 +17,8 @@ impl From<PgColumn> for PostgresColumn {
     fn from(c: PgColumn) -> PostgresColumn {
         PostgresColumn {
             name: c.name,
-            type_oid: c.ty.oid().try_into().unwrap(),
-            type_mod: c.ty.typmod(),
+            type_oid: c.oid.try_into().unwrap(),
+            type_mod: c.typmod,
             nullable: c.nullable,
             primary_key: c.primary_key,
         }
@@ -30,6 +30,8 @@ impl From<PostgresColumn> for PgColumn {
         PgColumn {
             name: c.name,
             ty: PgType::from_oid_and_typmod(c.type_oid.try_into().unwrap(), c.type_mod).unwrap(),
+            oid: c.type_oid.try_into().unwrap(),
+            typmod: c.type_mod,
             nullable: c.nullable,
             primary_key: c.primary_key,
         }
