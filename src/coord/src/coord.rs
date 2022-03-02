@@ -607,7 +607,8 @@ impl Coordinator {
                         // that everything else uses?
                         let frontiers = self.new_index_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
-                        self.catalog.add_index_to_instance(index.compute_instance_id, entry.id());
+                        self.catalog
+                            .add_index_to_instance(index.compute_instance_id, entry.id());
                     } else {
                         let index_id = entry.id();
                         if let Some((name, description)) =
@@ -1580,6 +1581,7 @@ impl Coordinator {
 
         for isu in index_since_updates {
             let instance_id = self.catalog.find_index_among_instances(&isu.0);
+
             // Aggregate compute instance ID.
             compute_instance_update_map
                 .entry(instance_id)
@@ -4397,11 +4399,13 @@ impl Coordinator {
         }
     }
 
-    // TODO: get instance ID
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
         let mut instance_key_map = HashMap::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
+                // We no longer need to worry about compaction for the index we're dropping.
+                self.index_since_updates.borrow_mut().remove(&id);
+
                 // Find the instances for each index to remove.
                 let instance_id = self.catalog.find_index_among_instances(&id);
                 // Aggregate them by instance ID.
