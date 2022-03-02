@@ -408,6 +408,18 @@ impl FromHir {
                     position: 0,
                 }))
             }
+            HirScalarExpr::Exists(mut expr) => {
+                let box_id = self.within_context(context_box, &mut move |generator| {
+                    generator.generate_select(expr.take())
+                })?;
+                let quantifier_id =
+                    self.model
+                        .make_quantifier(QuantifierType::Existential, box_id, context_box);
+                Ok(BoxScalarExpr::ColumnReference(ColumnReference {
+                    quantifier_id,
+                    position: 0,
+                }))
+            }
             scalar => Err(QGMError::from(UnsupportedHirScalarExpr { scalar })),
         }
     }
