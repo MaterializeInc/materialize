@@ -19,7 +19,7 @@ SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, rel
 FROM pg_catalog.pg_class
 WHERE relname = 'a';
 ----
-a 0 0 0 0 true t r 0 false false false false d false false
+a 0 0 0 0 true p r 0 false false false false d false false
 
 # Default index on a
 query IIIIBTTIBBBBTBB
@@ -28,4 +28,4 @@ SELECT reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersisten
 FROM pg_catalog.pg_class
 WHERE relname = (SELECT name FROM mz_indexes WHERE on_id = (SELECT id FROM mz_objects WHERE name = 'a'));
 ----
-0 0 0 0 false t i 0 false false false false d false false
+0 0 0 0 false p i 0 false false false false d false false
