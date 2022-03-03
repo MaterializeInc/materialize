@@ -1971,12 +1971,12 @@ lazy_static! {
                 params!(Oid, Bool) => Operation::binary(|_ecx, _oid, _pretty|
                     Ok(HirScalarExpr::literal_null(ScalarType::String))), 2508;
             },
-            // pg_get_indexdef reconstructs the creating command for an index. It currently isn't
-            // used anywhere, but is needed for certain meta-commands.
-            // TODO(jkosh44): In order to include the INDEX WITH options, they will need to be saved somewhere in the catalog
+            // pg_get_indexdef reconstructs the creating command for an index. We only support
+            // arrangement based indexes, so we can hardcode that in.
+            // TODO(jkosh44): In order to include the index WITH options, they will need to be saved somewhere in the catalog
             "pg_get_indexdef" => Scalar {
                 params!(Oid) => sql_impl_func(
-                    "(SELECT 'CREATE INDEX ' || i.name || ' ON ' || r.name || ' (' || (
+                    "(SELECT 'CREATE INDEX ' || i.name || ' ON ' || r.name || ' USING arrangement (' || (
                         SELECT string_agg(cols.col_exp, ',' ORDER BY cols.index_position)
                         FROM (
                             SELECT c.name AS col_exp, ic.index_position
