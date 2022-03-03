@@ -42,7 +42,7 @@ a   b
 13  37
 100 200
 
-# message with extra columns that get dropped
+# message with extra columns that get ignored
 $ kafka-ingest format=bytes topic=kafka_ints timestamp=1
 {"a": 300, "b": 400, "c": "extra text", "d": {"e": 10}}
 
@@ -94,18 +94,17 @@ $ kafka-ingest format=bytes topic=kafka_text timestamp=1
 
 > CREATE TYPE test_arrays AS (a bigint[]);
 
-# TODO(phemberger): need to fix named composite type handling of arrays https://github.com/MaterializeInc/materialize/issues/10975
 # $ kafka-create-topic topic=kafka_arrays partitions=1
 
 # $ kafka-ingest format=bytes topic=kafka_arrays timestamp=1
 {"a": [1, 2, 3, 4, 5, 6]}
 
-# > CREATE MATERIALIZED SOURCE json_source_arrays
-#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka_arrays-${testdrive.seed}'
-# FORMAT JSON USING SCHEMA test_arrays;
+> CREATE MATERIALIZED SOURCE json_source_arrays
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka_arrays-${testdrive.seed}'
+  FORMAT JSON USING SCHEMA test_arrays;
 
-# > SELECT a FROM json_source_arrays;
-# {1, 2, 3, 4, 5, 6}
+> SELECT a FROM json_source_arrays;
+{1, 2, 3, 4, 5, 6}
 
 > DROP TYPE test_arrays;
 
