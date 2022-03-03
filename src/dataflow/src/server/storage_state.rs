@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
 use mz_dataflow_types::client::{
-    Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
+    CreateSourceCommand, Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
@@ -98,28 +98,97 @@ pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
 }
 
 impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
+    /// Sets up the timestamp binding machinery if needed for this source
+    fn setup_timestamp_binding_state(&mut self, source: &CreateSourceCommand<u64>) {
+        let source_timestamp_data = if let SourceConnector::External {
+            connector,
+            ts_frequency,
+            ..
+        } = &source.desc.connector
+        {
+            let rt_default = TimestampBindingRc::new(
+                ts_frequency.as_millis().try_into().unwrap(),
+                self.storage_state.now.clone(),
+            );
+            match connector {
+                ExternalSourceConnector::AvroOcf(_)
+                | ExternalSourceConnector::File(_)
+                | ExternalSourceConnector::Kinesis(_)
+                | ExternalSourceConnector::S3(_) => {
+                    rt_default.add_partition(PartitionId::None, None);
+                    Some(rt_default)
+                }
+                ExternalSourceConnector::Kafka(_) => Some(rt_default),
+                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => None,
+            }
+        } else {
+            debug!(
+                "Timestamping not supported for local sources {}. Ignoring",
+                source.id
+            );
+            None
+        };
+
+        // Add any timestamp bindings that we were already aware of on restart.
+        if let Some(data) = source_timestamp_data {
+            for (pid, timestamp, offset) in source.ts_bindings.iter().cloned() {
+                if crate::source::responsible_for(
+                    &source.id,
+                    self.timely_worker.index(),
+                    self.timely_worker.peers(),
+                    &pid,
+                ) {
+                    trace!(
+                        "Adding partition/binding on worker {}: ({}, {}, {})",
+                        self.timely_worker.index(),
+                        pid,
+                        timestamp,
+                        offset
+                    );
+                    data.add_partition(pid.clone(), None);
+                    data.add_binding(pid, timestamp, offset);
+                } else {
+                    trace!(
+                        "NOT adding partition/binding on worker {}: ({}, {}, {})",
+                        self.timely_worker.index(),
+                        pid,
+                        timestamp,
+                        offset
+                    );
+                }
+            }
+
+            self.storage_state.ts_histories.insert(source.id, data);
+        } else {
+            assert!(source.ts_bindings.is_empty());
+        }
+    }
+
     /// Entry point for applying a storage command.
     pub(crate) fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::CreateSources(sources) => {
                 // Nothing to do at the moment, but in the future prepare source ingestion.
-                for (id, (description, _since)) in sources.into_iter() {
+                for source in sources {
+                    self.setup_timestamp_binding_state(&source);
+
                     self.storage_state
                         .source_descriptions
-                        .insert(id, description);
+                        .insert(source.id, source.desc);
 
                     // Initialize shared frontier tracking.
                     use timely::progress::Timestamp;
                     self.storage_state.source_uppers.insert(
-                        id,
+                        source.id,
                         Rc::new(RefCell::new(Antichain::from_elem(
                             mz_repr::Timestamp::minimum(),
                         ))),
                     );
 
-                    self.storage_state
-                        .reported_frontiers
-                        .insert(id, Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                    self.storage_state.reported_frontiers.insert(
+                        source.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    );
                 }
             }
             StorageCommand::RenderSources(sources) => self.build_storage_dataflow(sources),
@@ -136,6 +205,8 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
+                        self.storage_state.ts_histories.remove(&id);
+                        self.storage_state.ts_source_mapping.remove(&id);
                     } else {
                         if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                             ts_history.set_compaction_frontier(frontier.borrow());
@@ -175,88 +246,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
-                }
-            }
-
-            StorageCommand::AddSourceTimestamping {
-                id,
-                connector,
-                bindings,
-            } => {
-                let source_timestamp_data = if let SourceConnector::External {
-                    connector,
-                    ts_frequency,
-                    ..
-                } = connector
-                {
-                    let rt_default = TimestampBindingRc::new(
-                        ts_frequency.as_millis().try_into().unwrap(),
-                        self.storage_state.now.clone(),
-                    );
-                    match connector {
-                        ExternalSourceConnector::AvroOcf(_)
-                        | ExternalSourceConnector::File(_)
-                        | ExternalSourceConnector::Kinesis(_)
-                        | ExternalSourceConnector::S3(_) => {
-                            rt_default.add_partition(PartitionId::None, None);
-                            Some(rt_default)
-                        }
-                        ExternalSourceConnector::Kafka(_) => Some(rt_default),
-                        ExternalSourceConnector::Postgres(_)
-                        | ExternalSourceConnector::PubNub(_) => None,
-                    }
-                } else {
-                    debug!(
-                        "Timestamping not supported for local sources {}. Ignoring",
-                        id
-                    );
-                    None
-                };
-
-                // Add any timestamp bindings that we were already aware of on restart.
-                if let Some(data) = source_timestamp_data {
-                    for (pid, timestamp, offset) in bindings {
-                        if crate::source::responsible_for(
-                            &id,
-                            self.timely_worker.index(),
-                            self.timely_worker.peers(),
-                            &pid,
-                        ) {
-                            trace!(
-                                "Adding partition/binding on worker {}: ({}, {}, {})",
-                                self.timely_worker.index(),
-                                pid,
-                                timestamp,
-                                offset
-                            );
-                            data.add_partition(pid.clone(), None);
-                            data.add_binding(pid, timestamp, offset);
-                        } else {
-                            trace!(
-                                "NOT adding partition/binding on worker {}: ({}, {}, {})",
-                                self.timely_worker.index(),
-                                pid,
-                                timestamp,
-                                offset
-                            );
-                        }
-                    }
-
-                    let prev = self.storage_state.ts_histories.insert(id, data);
-                    assert!(prev.is_none());
-                } else {
-                    assert!(bindings.is_empty());
-                }
-            }
-            StorageCommand::DropSourceTimestamping { id } => {
-                let prev = self.storage_state.ts_histories.remove(&id);
-                if prev.is_none() {
-                    debug!("Attempted to drop timestamping for source {} that was not previously known", id);
-                }
-
-                let prev = self.storage_state.ts_source_mapping.remove(&id);
-                if prev.is_none() {
-                    debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
             }
         }

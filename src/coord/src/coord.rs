@@ -110,7 +110,9 @@ use tracing::error;
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
 use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
-use mz_dataflow_types::client::{Response as DataflowResponse, StorageResponse};
+use mz_dataflow_types::client::{
+    CreateSourceCommand, Response as DataflowResponse, StorageResponse,
+};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -528,8 +530,6 @@ impl Coordinator {
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    // Inform the timestamper about this source.
-                    self.update_timestamper(entry.id(), true).await;
                     let since_ts = self
                         .persister
                         .load_source_persist_desc(&source)
@@ -549,12 +549,20 @@ impl Coordinator {
                         .state()
                         .source_description_for(entry.id())
                         .unwrap();
+
+                    let ts_bindings = self
+                        .catalog
+                        .load_timestamp_bindings(entry.id())
+                        .expect("loading timestamps from coordinator cannot fail");
+
                     self.dataflow_client
                         .storage()
-                        .create_sources(vec![(
-                            entry.id(),
-                            (source_description, Antichain::from_elem(since_ts)),
-                        )])
+                        .create_sources(vec![CreateSourceCommand {
+                            id: entry.id(),
+                            desc: source_description,
+                            since: Antichain::from_elem(since_ts),
+                            ts_bindings,
+                        }])
                         .await
                         .unwrap();
                 }
@@ -587,10 +595,12 @@ impl Coordinator {
                         .unwrap();
                     self.dataflow_client
                         .storage()
-                        .create_sources(vec![(
-                            entry.id(),
-                            (source_description, Antichain::from_elem(since_ts)),
-                        )])
+                        .create_sources(vec![CreateSourceCommand {
+                            id: entry.id(),
+                            desc: source_description,
+                            since: Antichain::from_elem(since_ts),
+                            ts_bindings: vec![],
+                        }])
                         .await
                         .unwrap();
                 }
@@ -2230,10 +2240,12 @@ impl Coordinator {
                     .unwrap();
                 self.dataflow_client
                     .storage()
-                    .create_sources(vec![(
-                        table_id,
-                        (source_description, Antichain::from_elem(since_ts)),
-                    )])
+                    .create_sources(vec![CreateSourceCommand {
+                        id: table_id,
+                        desc: source_description,
+                        since: Antichain::from_elem(since_ts),
+                        ts_bindings: vec![],
+                    }])
                     .await
                     .unwrap();
                 // Install the dataflow if so required.
@@ -2322,7 +2334,10 @@ impl Coordinator {
                     .zip_eq(since_timestamps)
                     .zip_eq(descriptions)
                 {
-                    self.update_timestamper(source_id, true).await;
+                    let ts_bindings = self
+                        .catalog
+                        .load_timestamp_bindings(source_id)
+                        .expect("loading timestamps from coordinator cannot fail");
 
                     let frontiers = self.new_source_frontiers(
                         source_id,
@@ -2330,8 +2345,12 @@ impl Coordinator {
                         self.logical_compaction_window_ms,
                     );
                     self.sources.insert(source_id, frontiers);
-                    source_descriptions
-                        .push((source_id, (description, Antichain::from_elem(since_ts))));
+                    source_descriptions.push(CreateSourceCommand {
+                        id: source_id,
+                        desc: description,
+                        since: Antichain::from_elem(since_ts),
+                        ts_bindings,
+                    });
                 }
 
                 self.dataflow_client
@@ -4188,7 +4207,6 @@ impl Coordinator {
 
             if !sources_to_drop.is_empty() {
                 for id in &sources_to_drop {
-                    self.update_timestamper(*id, false).await;
                     self.sources.remove(id);
                     self.since_handles.remove(id);
                 }
@@ -4470,31 +4488,6 @@ impl Coordinator {
 
         mz_dataflow_types::Plan::finalize_dataflow(dataflow)
             .expect("Dataflow planning failed; unrecoverable error")
-    }
-
-    // Notify the timestamper thread that a source has been created or dropped.
-    async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
-        if create {
-            let bindings = self
-                .catalog
-                .load_timestamp_bindings(source_id)
-                .expect("loading timestamps from coordinator cannot fail");
-            if let Some(entry) = self.catalog.try_get_by_id(source_id) {
-                if let CatalogItem::Source(s) = entry.item() {
-                    self.dataflow_client
-                        .storage()
-                        .add_source_timestamping(source_id, s.connector.clone(), bindings)
-                        .await
-                        .unwrap();
-                }
-            }
-        } else {
-            self.dataflow_client
-                .storage()
-                .drop_source_timestamping(source_id)
-                .await
-                .unwrap();
-        }
     }
 
     fn allocate_transient_id(&mut self) -> Result<GlobalId, CoordError> {
