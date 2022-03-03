@@ -49,7 +49,7 @@ Field | Use
 
 ### `map` properties
 
-Name | Use
+Field | Use
 -----|-----
 `key_type` | Creates a custom [`map`](../types/map) whose keys are of `key_type`. `key_type` must resolve to [`text`](../types/text).
 `value_type` | Creates a custom [`map`](../types/map) whose values are of `value_type`.
