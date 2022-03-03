@@ -77,7 +77,7 @@ behavior of PostgreSQL.
 
 - More precisely infer the output type of numeric division and modulo operations as `NOT NULL` when the input arguments are `NOT NULL`.
 
-- Allow specifying [command line flags](/cli/) multiple times. The last
+- Allow specifying the same [command line flag](/cli/) multiple times. The last
 specification takes precedence. This matches the behavior of many standard
 Unix tools and is particularly useful for folks using `materialized` via
 Docker.
