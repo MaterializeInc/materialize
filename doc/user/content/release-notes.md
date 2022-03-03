@@ -48,10 +48,12 @@ process by the release notes team.
   functions were incorrectly allowed in materialized views.
 
 - **Breaking change.** Store days separately in [`interval`].
-Unlike the previous version, Hours are never converted to days. This
-means that: an Interval of 24 hours will not be equal to an Interval
+Unlike in previous versions, hours are not automatically converted to days. This
+means that: an interval of 24 hours will not be equal to an interval
 of 1 day, you cannot subtract hours from days, and when ordering
-Intervals `d days > h hours` for all `d,h` {{% gh 10708 %}}.
+intervals `d days > h hours` for all `d` and `h` {{% gh 10708 %}}.
+
+To force a conversion from hours to days, use the new [`justify_hours`](/sql/functions/justify-hours) function.
 
 - **Breaking change.** Print all negative [`interval`]
 units as plural (e.g., `-1 days` will be printed instead of `-1 day`). This
