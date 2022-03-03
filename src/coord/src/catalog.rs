@@ -908,12 +908,6 @@ impl Catalog {
         }
 
         let compute_instances = dbg!(catalog.storage().load_compute_instances()?);
-        assert_eq!(
-            compute_instances.len(),
-            1,
-            "dataflows only shipped to 1 instance currently"
-        );
-
         // TODO(CREATE+DROP CLUSTER): anything that depends on the default instance must be spun up per-cluster.
         for (id, name) in compute_instances.into_iter() {
             let id = id.try_into().expect("no negative compute_instance IDs");
@@ -1157,6 +1151,9 @@ impl Catalog {
         }
         for (role_name, _role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role_name, 1));
+        }
+        for (cluster_name, _id) in &catalog.state.compute_instance_names {
+            builtin_table_updates.push(catalog.state.pack_cluster_update(cluster_name, 1));
         }
 
         Ok((catalog, builtin_table_updates))
@@ -1732,6 +1729,10 @@ impl Catalog {
                 oid: u32,
                 name: String,
             },
+            CreateCluster {
+                id: ComputeInstanceId,
+                name: String,
+            },
             CreateItem {
                 id: GlobalId,
                 oid: u32,
@@ -1822,6 +1823,20 @@ impl Catalog {
                         oid,
                         name,
                     }]
+                }
+                Op::CreateCluster { name } => {
+                    if is_reserved_name(&name) {
+                        return Err(CoordError::Catalog(Error::new(
+                            ErrorKind::ReservedClusterName(name),
+                        )));
+                    }
+                    vec![dbg!(Action::CreateCluster {
+                        id: tx
+                            .insert_cluster(&name)?
+                            .try_into()
+                            .expect("no negative cluster IDs"),
+                        name,
+                    })]
                 }
                 Op::CreateItem {
                     id,
@@ -2071,6 +2086,19 @@ impl Catalog {
                         },
                     );
                     builtin_table_updates.push(state.pack_role_update(&name, 1));
+                }
+
+                Action::CreateCluster { id, name } => {
+                    info!("create cluster {}", name);
+                    state.compute_instances_by_id.insert(
+                        id,
+                        ComputeInstance {
+                            name: name.clone(),
+                            id,
+                        },
+                    );
+                    state.compute_instance_names.insert(name.clone(), id);
+                    builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                 }
 
                 Action::CreateItem {
@@ -2509,6 +2537,9 @@ pub enum Op {
     CreateRole {
         name: String,
         oid: u32,
+    },
+    CreateCluster {
+        name: String,
     },
     CreateItem {
         id: GlobalId,

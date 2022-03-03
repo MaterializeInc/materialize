@@ -52,7 +52,7 @@ use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
-use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
+use mz_sql_parser::ast::{CreateClusterStatement, CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -79,11 +79,11 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
-    Source, Table, Type, View,
+    AlterItemRenamePlan, AlterNoopPlan, CreateClusterPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params,
+    Plan, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2288,6 +2288,26 @@ pub fn plan_create_role(
     }
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
+    }))
+}
+
+pub fn describe_create_cluster(
+    _: &StatementContext,
+    _: CreateClusterStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_cluster(
+    _: &StatementContext,
+    CreateClusterStatement {
+        name,
+        if_not_exists,
+    }: CreateClusterStatement,
+) -> Result<Plan, anyhow::Error> {
+    Ok(Plan::CreateCluster(CreateClusterPlan {
+        name: normalize::ident(name),
+        if_not_exists,
     }))
 }
 

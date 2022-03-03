@@ -73,6 +73,7 @@ pub enum Plan {
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
+    CreateCluster(CreateClusterPlan),
     CreateSource(CreateSourcePlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -136,6 +137,12 @@ pub struct CreateSchemaPlan {
 #[derive(Debug)]
 pub struct CreateRolePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct CreateClusterPlan {
+    pub name: String,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug)]

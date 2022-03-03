@@ -1067,6 +1067,9 @@ where
                 let existed = false;
                 created!(existed, SqlState::DUPLICATE_OBJECT, "role")
             }
+            ExecuteResponse::CreatedCluster { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "cluster")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }

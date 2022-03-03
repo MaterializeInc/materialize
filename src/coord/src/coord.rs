@@ -145,12 +145,12 @@ use mz_sql::catalog::{CatalogError, CatalogTypeDetails, SessionCatalog as _};
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
-    ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
-    MutationKind, Params, PeekPlan, PeekWhen, Plan, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
+    AlterItemRenamePlan, CreateClusterPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
+    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, RaisePlan,
+    ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
 use mz_transform::Optimizer;
@@ -1291,6 +1291,7 @@ impl Coordinator {
                                 | Statement::CreateDatabase(_)
                                 | Statement::CreateIndex(_)
                                 | Statement::CreateRole(_)
+                                | Statement::CreateCluster(_)
                                 | Statement::CreateSchema(_)
                                 | Statement::CreateSink(_)
                                 | Statement::CreateSource(_)
@@ -1908,6 +1909,9 @@ impl Coordinator {
             Plan::CreateRole(plan) => {
                 tx.send(self.sequence_create_role(plan).await, session);
             }
+            Plan::CreateCluster(plan) => {
+                tx.send(self.sequence_create_cluster(plan).await, session);
+            }
             Plan::CreateTable(plan) => {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
@@ -2205,6 +2209,22 @@ impl Coordinator {
         self.catalog_transact(vec![op], |_builder| Ok(()))
             .await
             .map(|_| ExecuteResponse::CreatedRole)
+    }
+
+    async fn sequence_create_cluster(
+        &mut self,
+        plan: CreateClusterPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let op = catalog::Op::CreateCluster { name: plan.name };
+        let r = self.catalog_transact(vec![op], |_builder| Ok(())).await;
+        match r {
+            Ok(()) => Ok(ExecuteResponse::CreatedCluster { existed: false }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ClusterAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedCluster { existed: true }),
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_table(

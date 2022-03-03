@@ -188,6 +188,10 @@ pub enum ExecuteResponse {
     },
     /// The requested role was created.
     CreatedRole,
+    /// The requested cluster was created.
+    CreatedCluster {
+        existed: bool,
+    },
     /// The requested index was created.
     CreatedIndex {
         existed: bool,

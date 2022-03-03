@@ -571,6 +571,20 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn insert_cluster(&mut self, cluster_name: &str) -> Result<i64, Error> {
+        match self
+            .inner
+            .prepare_cached("INSERT INTO compute_instances (name) VALUES (?)")?
+            .execute(params![cluster_name])
+        {
+            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::ClusterAlreadyExists(cluster_name.to_owned()),
+            )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn insert_item(
         &self,
         id: GlobalId,

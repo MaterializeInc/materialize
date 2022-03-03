@@ -46,6 +46,7 @@ pub enum Statement<T: AstInfo> {
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
+    CreateCluster(CreateClusterStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement),
     Discard(DiscardStatement),
@@ -95,6 +96,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
+            Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
@@ -811,6 +813,29 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
     }
 }
 impl_display_t!(CreateTypeStatement);
+
+/// `CREATE CLUSTER ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateClusterStatement {
+    /// Name of the created cluster.
+    pub name: Ident,
+    pub if_not_exists: bool,
+}
+
+impl AstDisplay for CreateClusterStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CLUSTER ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+
+        if self.if_not_exists {
+            f.write_str("WITH VIRTUAL");
+        };
+    }
+}
+impl_display!(CreateClusterStatement);
 
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
