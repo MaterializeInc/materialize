@@ -165,6 +165,39 @@ $ kafka-ingest format=bytes topic=kafka_jsonb timestamp=3
 ! SELECT * from json_source_jsonb;
 contains: Decode error: Text: invalid json: expected `,` or `]`
 
+# Read JSON into MAP, LIST, and Int2Vector columns
+> CREATE TYPE int4_map AS MAP (key_type = text, value_type = int4);
+> CREATE TYPE float8_list AS LIST (element_type = float8);
+> CREATE TYPE test_map_and_list AS (a int4_map, b float8_list, c int2vector);
+
+$ kafka-create-topic topic=kafka_map_and_list partitions=1
+
+$ kafka-ingest format=bytes topic=kafka_map_and_list timestamp=1
+{"a": {"z_1": 98, "z_2": 76}, "b": [1.23, 3.456, 7.8], "c": [100, 200, 300]}
+
+> CREATE MATERIALIZED SOURCE json_source_map_and_list
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka_map_and_list-${testdrive.seed}'
+  FORMAT JSON USING TYPE test_map_and_list;
+
+> SELECT pg_typeof(a), pg_typeof(b), pg_typeof(c) FROM json_source_map_and_list;
+int4_map float8_list int2vector
+
+$ kafka-ingest format=bytes topic=kafka_map_and_list timestamp=2
+{"a": {"y_1": 54}, "b": [1.234567], "c": []}
+
+> SELECT a::text, b::text, c::text FROM json_source_map_and_list ORDER BY a DESC;
+"{z_1=>98,z_2=>76}" "{1.23,3.456,7.8}" "100 200 300"
+"{y_1=>54}" "{1.234567}" ""
+
+# $ kafka-ingest format=bytes topic=kafka_map_and_list timestamp=3
+# {}
+
+> DROP TYPE test_map_and_list;
+
+> DROP TYPE float8_list;
+
+> DROP TYPE int4_map;
+
 > DROP TYPE test_jsonb;
 
 > DROP TYPE test_outer_record;

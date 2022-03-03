@@ -174,7 +174,6 @@ struct DataDecoder {
 
 impl DataDecoder {
     pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
-        println!("Data decoder: inner {:?}", self.inner);
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -308,7 +307,6 @@ fn get_decoder(
             }
         }
         DataEncoding::Json(enc) => {
-            println!("Creating a JSON encoding state");
             let state = JsonDecoderState::new(enc.fields);
             DataDecoder {
                 inner: DataDecoderInner::Json(state),

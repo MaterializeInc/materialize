@@ -155,6 +155,7 @@ pub fn decode_and_pack_value(
                         decode_and_pack_value(row, row_arena, v, &field_type.scalar_type)?;
                     } else {
                         if field_type.nullable {
+                            // TODO(phemberger): do absent collections become Null or empty?
                             row.push(Datum::Null);
                         } else {
                             bail!(

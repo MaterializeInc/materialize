@@ -1219,16 +1219,11 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
             }
             JsonSchema::NamedCompositeType { name } => {
                 let named_composite_type = scx.resolve_item(name.clone())?;
-                println!("Resolving USING SCHEMA type: {:?}", name);
                 if let Some(CatalogTypeDetails {
                     typ: CatalogType::Record { fields },
-                    array_id,
+                    ..
                 }) = named_composite_type.type_details()
                 {
-                    println!(
-                        "Grabbing schema from composite type: {:?}. Array ID: {:?}",
-                        fields, array_id
-                    );
                     let fields: Vec<(ColumnName, ColumnType)> = fields
                         .iter()
                         .map(|(column, id)| {
