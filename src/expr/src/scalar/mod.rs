@@ -11,14 +11,14 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
-use mz_ore::stack::CheckedRecursion;
-use mz_ore::stack::RecursionGuard;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::separated;
+use mz_pgrepr::TypeFromOidError;
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
@@ -1286,6 +1286,7 @@ pub enum EvalError {
     IncompatibleArrayDimensions {
         dims: Option<(usize, usize)>,
     },
+    TypeFromOid(String),
 }
 
 impl fmt::Display for EvalError {
@@ -1423,6 +1424,7 @@ impl fmt::Display for EvalError {
             EvalError::IncompatibleArrayDimensions { dims: _ } => {
                 write!(f, "cannot concatenate incompatible arrays")
             }
+            EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1480,6 +1482,12 @@ impl From<InvalidArrayError> for EvalError {
 impl From<regex::Error> for EvalError {
     fn from(e: regex::Error) -> EvalError {
         EvalError::InvalidRegex(e.to_string())
+    }
+}
+
+impl From<TypeFromOidError> for EvalError {
+    fn from(e: TypeFromOidError) -> EvalError {
+        EvalError::TypeFromOid(e.to_string())
     }
 }
 

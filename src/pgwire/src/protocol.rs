@@ -502,7 +502,7 @@ where
         let mut param_types = vec![];
         for oid in param_oids {
             match mz_pgrepr::Type::from_oid(oid) {
-                Some(ty) => match ScalarType::try_from(&ty) {
+                Ok(ty) => match ScalarType::try_from(&ty) {
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
@@ -513,12 +513,12 @@ where
                             .await
                     }
                 },
-                None if oid == 0 => param_types.push(None),
-                None => {
+                Err(_) if oid == 0 => param_types.push(None),
+                Err(e) => {
                     return self
                         .error(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
-                            format!("unable to decode parameter whose type OID is {}", oid),
+                            e.to_string(),
                         ))
                         .await;
                 }
