@@ -224,7 +224,7 @@ impl SessionCatalog for TestCatalog {
 
     fn resolve_compute_instance_or_default(
         &self,
-        _item_name: &Option<Ident>,
+        _item_name: Option<&str>,
     ) -> Result<String, CatalogError> {
         Ok("default".to_owned())
     }

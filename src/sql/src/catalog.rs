@@ -23,7 +23,7 @@ use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, RelationDesc, ScalarType};
-use mz_sql_parser::ast::{Expr, Ident, Raw};
+use mz_sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
 use crate::func::Func;
@@ -110,7 +110,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// compute instances within the catalog.
     fn resolve_compute_instance_or_default(
         &self,
-        item_name: &Option<Ident>,
+        item_name: Option<&str>,
     ) -> Result<String, CatalogError>;
 
     /// Gets an item by its ID.
@@ -481,10 +481,7 @@ impl SessionCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn resolve_compute_instance_or_default(
-        &self,
-        _: &Option<Ident>,
-    ) -> Result<String, CatalogError> {
+    fn resolve_compute_instance_or_default(&self, _: Option<&str>) -> Result<String, CatalogError> {
         unimplemented!();
     }
 

@@ -428,6 +428,7 @@ impl_display_t!(CreateSourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
+    pub in_cluster: Option<Ident>,
     pub from: UnresolvedObjectName,
     pub connector: CreateSinkConnector<T>,
     pub with_options: Vec<SqlOption<T>>,
@@ -445,6 +446,11 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
+            f.write_str(" ");
+        }
         f.write_str(" FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");
@@ -673,6 +679,7 @@ impl_display_t!(CreateTableStatement);
 pub struct CreateIndexStatement<T: AstInfo> {
     /// Optional index name.
     pub name: Option<Ident>,
+    pub in_cluster: Option<Ident>,
     /// `ON` table or view name
     pub on_name: UnresolvedObjectName,
     /// Expressions that form part of the index key. If not included, the
@@ -694,6 +701,11 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
         }
         if let Some(name) = &self.name {
             f.write_node(name);
+            f.write_str(" ");
+        }
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
             f.write_str(" ");
         }
         f.write_str("ON ");

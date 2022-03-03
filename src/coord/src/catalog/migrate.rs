@@ -108,6 +108,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_23_0 {
             ast_rewrite_pgcdc_with_details_0_23_0(stmt)?;
+            ast_rewrite_index_sink_cluster_default_0_23_0(stmt)?;
         }
         Ok(())
     })?;
@@ -180,6 +181,47 @@ fn ast_rewrite_pgcdc_with_details_0_23_0(
             _ => (),
         }
     }
+    Ok(())
+}
+
+/// Adds the default cluster to all existing indexes and sinks.
+fn ast_rewrite_index_sink_cluster_default_0_23_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    lazy_static! {
+        static ref DEFAULT_CLUSTER: Option<Ident> = Some(Ident::new("default"));
+    }
+
+    match stmt {
+        Statement::CreateIndex(CreateIndexStatement {
+            name: _,
+            in_cluster,
+            on_name: _,
+            key_parts: _,
+            with_options: _,
+            if_not_exists: _,
+        }) => {
+            *in_cluster = DEFAULT_CLUSTER.clone();
+        }
+
+        Statement::CreateSink(CreateSinkStatement {
+            name: _,
+            in_cluster,
+            from: _,
+            connector: _,
+            with_options: _,
+            format: _,
+            envelope: _,
+            with_snapshot: _,
+            as_of: _,
+            if_not_exists: _,
+        }) => {
+            *in_cluster = DEFAULT_CLUSTER.clone();
+        }
+
+        _ => {}
+    };
+
     Ok(())
 }
 
@@ -379,6 +421,7 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options,
@@ -552,6 +595,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options: _,
@@ -566,6 +610,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
 
         Statement::CreateSink(CreateSinkStatement {
             name: _,
+            in_cluster: _,
             from: _,
             connector: _,
             with_options: _,
@@ -650,6 +695,7 @@ fn ast_rewrite_type_references_0_6_1(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options,

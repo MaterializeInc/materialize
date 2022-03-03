@@ -2255,6 +2255,7 @@ impl Coordinator {
             conn_id,
             index_depends_on,
             self.catalog.index_enabled_by_default(&index_id),
+            instance_name.into(),
             instance_id,
         );
 
@@ -2510,6 +2511,7 @@ impl Coordinator {
                     None,
                     vec![source_id],
                     self.catalog.index_enabled_by_default(&index_id),
+                    instance_name.into(),
                     instance_id,
                 );
                 let index_oid = self.catalog.allocate_oid()?;
@@ -2703,6 +2705,7 @@ impl Coordinator {
                 view.conn_id,
                 vec![view_id],
                 self.catalog.index_enabled_by_default(&index_id),
+                instance_name.into(),
                 instance_id,
             );
             let index_oid = self.catalog.allocate_oid()?;
@@ -4906,11 +4909,13 @@ fn auto_generate_primary_idx(
     conn_id: Option<u32>,
     depends_on: Vec<GlobalId>,
     enabled: bool,
+    // n.b SQL refers to compute instances as clusters
+    in_cluster: String,
     compute_instance_id: ComputeInstanceId,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
-        create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
+        create_sql: index_sql(index_name, in_cluster, on_name, &on_desc, &default_key),
         on: on_id,
         keys: default_key
             .iter()
@@ -4927,6 +4932,7 @@ fn auto_generate_primary_idx(
 // the responsibility of the SQL package.
 pub fn index_sql(
     index_name: String,
+    in_cluster: String,
     view_name: FullName,
     view_desc: &RelationDesc,
     keys: &[usize],
@@ -4935,6 +4941,7 @@ pub fn index_sql(
 
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
+        in_cluster: Some(Ident::new(in_cluster)),
         on_name: mz_sql::normalize::unresolve(view_name),
         key_parts: Some(
             keys.iter()

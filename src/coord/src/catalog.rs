@@ -42,7 +42,7 @@ use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Ident, Raw};
+use mz_sql::ast::{Expr, Raw};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogTypeDetails, SessionCatalog,
@@ -932,15 +932,16 @@ impl Catalog {
                 .insert(name.clone(), id);
         }
 
-        println!(
-            "catalog.state.compute_instances_by_id {:?}",
-            catalog.state.compute_instances_by_id
-        );
-
         assert!(
             catalog.state.compute_instances_by_id[&DEFAULT_COMPUTE_INSTANCE_ID].id
                 == DEFAULT_COMPUTE_INSTANCE_ID
         );
+
+        // Pretend we don't know what the default instance name is.
+        let default_instance_name = catalog.state.compute_instances_by_id
+            [&DEFAULT_COMPUTE_INSTANCE_ID]
+            .name
+            .clone();
 
         for builtin in BUILTINS.values() {
             let name = FullName {
@@ -985,6 +986,7 @@ impl Catalog {
                                 .collect(),
                             create_sql: super::coord::index_sql(
                                 index_name,
+                                default_instance_name.clone(),
                                 name,
                                 &log.variant.desc(),
                                 &log.variant.index_by(),
@@ -1002,6 +1004,7 @@ impl Catalog {
                     let index_columns = table.desc.typ().default_key();
                     let index_sql = super::coord::index_sql(
                         index_name.clone(),
+                        default_instance_name.clone(),
                         name.clone(),
                         &table.desc,
                         &index_columns,
@@ -2779,15 +2782,11 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn resolve_compute_instance_or_default(
         &self,
-        name: &Option<Ident>,
+        name: Option<&str>,
     ) -> Result<String, SqlCatalogError> {
         Ok(match name {
             None => self.cluster.clone(),
-            Some(name) => self
-                .catalog
-                .resolve_compute_instance(name.as_str())?
-                .name
-                .clone(),
+            Some(name) => self.catalog.resolve_compute_instance(name)?.name.clone(),
         })
     }
 

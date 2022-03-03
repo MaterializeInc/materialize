@@ -53,6 +53,7 @@ Character
 Characteristics
 Check
 Close
+Cluster
 Coalesce
 Collate
 Columns

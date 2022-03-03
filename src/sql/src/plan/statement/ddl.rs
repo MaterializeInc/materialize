@@ -1751,13 +1751,14 @@ pub fn describe_create_sink(
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    stmt: CreateSinkStatement<Raw>,
+    mut stmt: CreateSinkStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
-    let in_cluster = scx.resolve_cluster(&None)?;
+    stmt.in_cluster = Some(Ident::new(scx.resolve_cluster(&stmt.in_cluster)?));
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
+        in_cluster,
         from,
         connector,
         with_options,
@@ -1901,7 +1902,7 @@ pub fn plan_create_sink(
             connector_builder,
             envelope,
             depends_on,
-            in_cluster,
+            in_cluster: in_cluster.unwrap().into_string(),
         },
         with_snapshot,
         if_not_exists,
@@ -1998,6 +1999,7 @@ pub fn plan_create_index(
 ) -> Result<Plan, anyhow::Error> {
     let CreateIndexStatement {
         name,
+        in_cluster,
         on_name,
         key_parts,
         with_options,
@@ -2077,7 +2079,8 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
-    let in_cluster = scx.resolve_cluster(&None)?;
+    let in_cluster_pass = scx.resolve_cluster(in_cluster)?;
+    *in_cluster = Some(Ident::new(in_cluster_pass.clone()));
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
     let mut depends_on = vec![on.id()];
     depends_on.extend(exprs_depend_on);
@@ -2089,7 +2092,7 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
             depends_on,
-            in_cluster,
+            in_cluster: in_cluster_pass,
         },
         options,
         if_not_exists,

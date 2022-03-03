@@ -384,6 +384,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_cluster(&self, name: &Option<Ident>) -> Result<String, PlanError> {
+        let name = name.as_ref().map(|name| name.as_str());
         Ok(self.catalog.resolve_compute_instance_or_default(name)?)
     }
 

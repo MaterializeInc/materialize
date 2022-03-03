@@ -310,6 +310,7 @@ pub fn create_statement(
 
         Statement::CreateSink(CreateSinkStatement {
             name,
+            in_cluster: _,
             from,
             connector: _,
             with_options: _,
@@ -354,6 +355,7 @@ pub fn create_statement(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name,
             key_parts,
             with_options: _,
