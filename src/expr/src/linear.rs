@@ -1643,7 +1643,7 @@ pub mod plan {
                         (Some(Ok((row_builder.clone(), lower_bound, diff))), None)
                     }
                     (None, Some(upper_bound)) => {
-                        (None, Some(Ok((row_builder.clone(), upper_bound, -diff))))
+                        unreachable!("prior loop ensures that lower_bound <= upper_bound")
                     }
                     _ => (None, None),
                 };
