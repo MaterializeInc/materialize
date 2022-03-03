@@ -320,6 +320,14 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         self.set_read_policy(policies.collect()).await;
     }
 
+    /// Assigns a read policy to specific identifiers.
+    ///
+    /// The policies are assigned in the order presented, and repeated identifiers should
+    /// conclude with the last policy. Changing a policy will immediately downgrade the read
+    /// capability if appropriate, but it will not "recover" the read capability if the prior
+    /// capability is already ahead of it.
+    ///
+    /// Identifiers not present in `policies` retain their existing read policies.
     pub async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
@@ -485,26 +493,27 @@ pub struct CollectionState<T> {
     ///
     /// This accumulation will always contain `self.implied_capability`, but may also contain
     /// capabilities held by others who have read dependencies on this collection.
-    pub(super) read_capabilities: MutableAntichain<T>,
+    pub read_capabilities: MutableAntichain<T>,
     /// The implicit capability associated with collection creation.
-    pub(super) implied_capability: Antichain<T>,
+    pub implied_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
-    pub(super) read_policy: ReadPolicy<T>,
+    pub read_policy: ReadPolicy<T>,
 
     /// Storage identifiers on which this collection depends.
-    pub(super) storage_dependencies: Vec<GlobalId>,
+    pub storage_dependencies: Vec<GlobalId>,
     /// Compute identifiers on which this collection depends.
-    pub(super) compute_dependencies: Vec<GlobalId>,
+    pub compute_dependencies: Vec<GlobalId>,
 
     /// Reported progress in the write capabilities.
     ///
     /// Importantly, this is not a write capability, but what we have heard about the
     /// write capabilities of others. All future writes will have times greater than or
     /// equal to `upper_frontier.frontier()`.
-    pub(super) write_frontier: MutableAntichain<T>,
+    pub write_frontier: MutableAntichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
+    /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
         since: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
@@ -520,5 +529,10 @@ impl<T: Timestamp> CollectionState<T> {
             compute_dependencies,
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
         }
+    }
+
+    /// Reports the current read capability.
+    pub fn read_capability(&self) -> &Antichain<T> {
+        &self.implied_capability
     }
 }
