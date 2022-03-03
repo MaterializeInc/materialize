@@ -71,7 +71,7 @@ behavior of PostgreSQL.
 
 - Add the [`justify_days`](/sql/functions/justify-days), [`justify_hours`](/sql/functions/justify-hours), and [`justify_interval`](/sql/functions/justify-interval) functions.
 
-- Add support for [named composite types](https://www.postgresql.org/docs/current/rowtypes.html). Unimplemented features are listed in the original issue {{% gh 10734 %}}.
+- Add support for [named composite types](/sql/create-type/#custom-row-type). Unimplemented features are listed in the original issue {{% gh 10734 %}}.
 
 - Change the range of the `oid` type from [-2<sup>31</sup>, 2<sup>31</sup> - 1] to [0, 2<sup>32</sup> - 1] to match PostgreSQL.
 
