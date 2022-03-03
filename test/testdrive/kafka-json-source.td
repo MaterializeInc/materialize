@@ -150,18 +150,20 @@ integer jsonb text
 $ kafka-ingest format=bytes topic=kafka_jsonb timestamp=2
 {"a": 2222, "b": true, "c": "bar" }
 {"a": 3333, "b": ["o", "m", "g"], "c": "baz" }
+{"a": 4444, "b": {"b_inner": null}, "c": "foo again"}
 
 > SELECT a,b,c FROM json_source_jsonb;
 1111 "{\"d\":\"arbitrarily\",\"e\":{\"f\":\"nested\"},\"g\":[\"v\",\"a\",\"l\",\"u\",\"e\",\"s\"],\"h\":2222,\"i\":3.456}" "foo"
 2222 "true" "bar"
 3333 "\[\"o\",\"m\",\"g\"\]" "baz"
+4444 "{\"b_inner\":null}" "foo again"
 
 # malformed inner document
 $ kafka-ingest format=bytes topic=kafka_jsonb timestamp=3
 {"a": 2222, "b": {"d": [1,2,3}, "c": "bar" }
 
 ! SELECT * from json_source_jsonb;
-contains: Decode error: Text: invalid json document: expected `,` or `]`
+contains: Decode error: Text: invalid json: expected `,` or `]`
 
 > DROP TYPE test_jsonb;
 
