@@ -67,22 +67,30 @@ behavior of PostgreSQL.
 
 - Add several new time units to [`interval`](/sql/types/interval) parsing: `yr`, `yrs`, `hr`, `hrs`, `min`, `mins`, `sec`, and `secs`.
 
+  Thanks to external contributor [@sunisdown](https://github.com/sunisdown).
+
 - Add the [`justify_days`](/sql/functions/justify-days), [`justify_hours`](/sql/functions/justify-hours), and [`justify_interval`](/sql/functions/justify-interval) functions.
+
+- Add support for [named composite types](https://www.postgresql.org/docs/current/rowtypes.html). Unimplemented features are listed in the original issue {{% gh 10734 %}}.
 
 - Change the range of the `oid` type from [-2<sup>31</sup>, 2<sup>31</sup> - 1] to [0, 2<sup>32</sup> - 1] to match PostgreSQL.
 
-- Fix a panic when materializing a source that has been renamed since it was last materialized {{% gh 10904 %}}.
-
 - Change the claimed PostgreSQL version returned by the `version()` function to 9.5 to match the values of the `server_version` and `server_version_num session` parameters.
-
-- Fix a data loss bug in [Postgres sources] introduced in version v0.20.0 {{% gh 10981 %}}.
-
-- More precisely infer the output type of numeric division and modulo operations as `NOT NULL` when the input arguments are `NOT NULL`.
 
 - Allow specifying the same [command line flag](/cli/) multiple times. The last
 specification takes precedence. This matches the behavior of many standard
 Unix tools and is particularly useful for folks using `materialized` via
-Docker.
+Docker, as it allows overwriting the default `--log-file` option.
+
+- Fix a panic that could occur if you performed the following sequence of operations {{% gh 10904 %}}:
+
+  - `CREATE SOURCE src ...;`
+  - `CREATE INDEX src_idx ON src ...;`
+  - `ALTER src RENAME TO new_src;`
+  - `DROP INDEX src_idx;`
+  - `CREATE INDEX new_src_idx ON new_src ...;`
+
+- Fix a data loss bug in [Postgres sources] introduced in version v0.20.0 {{% gh 10981 %}}.
 
 {{% version-header v0.21.0 %}}
 
