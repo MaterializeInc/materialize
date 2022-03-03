@@ -875,7 +875,7 @@ impl Coordinator {
                 let uuids = self
                     .client_pending_peeks
                     .get_mut(&conn_id)
-                    .expect(format!("no client state for connection {conn_id}").as_str());
+                    .unwrap_or_else(|| panic!("no client state for connection {conn_id}"));
                 uuids.remove(&uuid);
                 if uuids.is_empty() {
                     self.client_pending_peeks.remove(&conn_id);
