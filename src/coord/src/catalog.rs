@@ -253,7 +253,7 @@ impl CatalogState {
         &self.by_id[id]
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
+    fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
         }
@@ -1369,10 +1369,6 @@ impl Catalog {
         self.state.get_by_id(id)
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
-        self.state.insert_item(id, oid, name, item)
-    }
-
     pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
         self.state.get_by_oid(oid)
     }
@@ -1397,7 +1393,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: &str) -> bool {
+    fn item_exists_in_temp_schemas(&self, conn_id: u32, item_name: &str) -> bool {
         self.state.temporary_schemas[&conn_id]
             .items
             .contains_key(item_name)
