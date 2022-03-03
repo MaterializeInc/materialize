@@ -97,7 +97,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         key: Option<Row>,
         /// The identifier of this peek request.
         ///
-        /// Used in responses and cancelation requests.
+        /// Used in responses and cancellation requests.
         uuid: Uuid,
         /// The logical timestamp at which the arrangement is queried.
         timestamp: T,

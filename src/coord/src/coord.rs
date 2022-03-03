@@ -265,6 +265,11 @@ pub struct Config {
     pub now: NowFn,
 }
 
+struct PendingPeek {
+    sender: mpsc::UnboundedSender<PeekResponse>,
+    conn_id: u32,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
@@ -330,7 +335,7 @@ pub struct Coordinator {
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
-    pending_peeks: HashMap<Uuid, (mpsc::UnboundedSender<PeekResponse>, u32)>,
+    pending_peeks: HashMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client
     client_pending_peeks: HashMap<u32, HashSet<Uuid>>,
     /// A map from pending tails to the tail description.
@@ -865,7 +870,10 @@ impl Coordinator {
                 assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
-                let (rows_tx, conn_id) = self
+                let PendingPeek {
+                    sender: rows_tx,
+                    conn_id,
+                } = self
                     .pending_peeks
                     .remove(&uuid)
                     .expect("no more PeekResponses after closing peek channel");
@@ -4916,6 +4924,7 @@ pub mod fast_path_peek {
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
+    use crate::coord::PendingPeek;
     use crate::CoordError;
     use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
     use mz_repr::{Diff, Row};
@@ -5128,7 +5137,13 @@ pub mod fast_path_peek {
 
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
-            self.pending_peeks.insert(uuid, (rows_tx, conn_id));
+            self.pending_peeks.insert(
+                uuid,
+                PendingPeek {
+                    sender: rows_tx,
+                    conn_id,
+                },
+            );
             self.client_pending_peeks
                 .entry(conn_id)
                 .or_insert_with(HashSet::new)

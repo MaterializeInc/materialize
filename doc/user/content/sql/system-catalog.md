@@ -381,12 +381,12 @@ Field       | Type       | Meaning
 The `mz_peek_active` source describes all read queries ("peeks") that are
 pending in the dataflow layer.
 
-Field    | Type       | Meaning
----------|------------|--------
-`uuid`   | [`text`]   | The ID of the connection that requested the peek. `uuid` is a misnomer; connection IDs are 32-bit unsigned integers.
-`worker` | [`bigint`] | The ID of the worker thread servicing the peek.
-`id`     | [`text`]   | The ID of the index the peek is targeting.
-`time`   | [`bigint`] | The timestamp the peek has requested.
+Field      | Type       | Meaning
+-----------|------------|--------
+`id`       | [`text`]   | The ID of the peek request.
+`worker`   | [`bigint`] | The ID of the worker thread servicing the peek.
+`index_id` | [`text`]   | The ID of the index the peek is targeting.
+`time`     | [`bigint`] | The timestamp the peek has requested.
 
 ### `mz_peek_durations`
 
