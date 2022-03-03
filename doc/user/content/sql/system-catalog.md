@@ -383,7 +383,7 @@ pending in the dataflow layer.
 
 Field      | Type       | Meaning
 -----------|------------|--------
-`id`       | [`text`]   | The ID of the peek request.
+`id`       | [`uuid`]   | The ID of the peek request.
 `worker`   | [`bigint`] | The ID of the worker thread servicing the peek.
 `index_id` | [`text`]   | The ID of the index the peek is targeting.
 `time`     | [`bigint`] | The timestamp the peek has requested.
@@ -679,6 +679,7 @@ Materialize should use the documented [`mz_catalog`](#mz_catalog) API instead.
 [`text`]: /sql/types/text
 [`timestamp`]: /sql/types/timestamp
 [`timestamp with time zone`]: /sql/types/timestamp
+[`uuid`]: /sql/types/uuid
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [oid]: /sql/types/oid
 [`text array`]: /sql/types/array

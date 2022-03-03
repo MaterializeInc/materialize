@@ -324,7 +324,7 @@ pub fn construct<A: Allocate>(
         let peek_current = peek.as_collection().map({
             move |(peek, worker)| {
                 Row::pack_slice(&[
-                    Datum::String(&format!("{}", peek.uuid)),
+                    Datum::Uuid(peek.uuid),
                     Datum::Int64(worker as i64),
                     Datum::String(&peek.id.to_string()),
                     Datum::Int64(peek.time as i64),
