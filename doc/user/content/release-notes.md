@@ -19,6 +19,90 @@ the PR description instead. They will be migrated here during the release
 process by the release notes team.
 {{< /comment >}}
 
+{{% version-header v0.22.0 %}}
+
+- **Breaking change.** Standardize handling of the following [nonpure functions](/sql/functions/#pure-and-nonpure-functions) {{% gh 10445 %}}:
+
+  - `current_database`
+  - `current_timestamp`
+  - `current_role`
+  - `current_schema`
+  - `current_schemas`
+  - `current_user`
+  - `mz_cluster_id`
+  - `mz_logical_timestamp`
+  - `mz_uptime`
+  - `mz_version`
+  - `session_user`
+  - `pg_backend_pid`
+  - `pg_postmaster_start_time`
+  - `version`
+
+  Materialize now allows use of nonpure functions in views, but will refuse to
+  create an index that directly or indirectly depends on a nonpure function.
+  The one exception is [`mz_logical_timestamp`], which can be used in limited
+  contexts in a materialized view as a [temporal filter](/guides/temporal-filters).
+
+  Previously `current_timestamp`, `mz_logical_timestamp`, and `mz_uptime` were
+  incorrectly disallowed in unmaterialized views, while the remaining nonpure
+  functions were incorrectly allowed in materialized views.
+
+- **Breaking change.** Store days separately in [`interval`].
+Unlike in previous versions, hours are not automatically converted to days. This
+means that: an interval of 24 hours will not be equal to an interval
+of 1 day, you cannot subtract hours from days, and when ordering
+intervals `d days > h hours` for all `d` and `h` {{% gh 10708 %}}.
+
+  To force a conversion from hours to days, use the new [`justify_hours`](/sql/functions/justify-hours) function.
+
+- **Breaking change.** Print all negative [`interval`]
+units as plural (e.g., `-1 days` will be printed instead of `-1 day`). This
+matches the behavior of PostgreSQL.
+
+- **Breaking change.** Round microsecond field of
+[`interval`] to 6 places before applying the
+given precision. For example `INTERVAL '1.2345649' SECOND(5)` will be
+rounded to `00:00:01.23457`, not `00:00:01.23456`. This matches the
+behavior of PostgreSQL.
+
+- Add several new time units to [`interval`](/sql/types/interval) parsing: `yr`, `yrs`, `hr`, `hrs`, `min`, `mins`, `sec`, and `secs`.
+
+  Thanks to external contributor [@sunisdown](https://github.com/sunisdown).
+
+- Add the [`justify_days`](/sql/functions/justify-days), [`justify_hours`](/sql/functions/justify-hours), and [`justify_interval`](/sql/functions/justify-interval) functions.
+
+- Add support for [named composite types](/sql/create-type/#custom-row-type). Unimplemented features are listed in the original issue {{% gh 10734 %}}.
+
+- Change the range of the `oid` type from [-2<sup>31</sup>, 2<sup>31</sup> - 1] to [0, 2<sup>32</sup> - 1] to match PostgreSQL.
+
+- Change the claimed PostgreSQL version returned by the `version()` function to 9.5 to match the values of the `server_version` and `server_version_num session` parameters.
+
+- In Kafka sources that use `INCLUDE KEY`, allow the key schema to be directly provided by the Confluent Schema Registry using the bare `FORMAT` syntax:
+
+  ```sql
+  CREATE SOURCE src
+    FROM KAFKA BROKER '...' TOPIC '...'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '...'
+    INCLUDE KEY AS named;
+  ```
+
+  Previously, this required explicitly using the `KEY FORMAT...VALUE FORMAT` syntax _also_ when using the Confluent Schema Registry.
+
+- Allow specifying the same [command line flag](/cli/) multiple times. The last
+specification takes precedence. This matches the behavior of many standard
+Unix tools and is particularly useful for folks using `materialized` via
+Docker, as it allows overwriting the default `--log-file` option.
+
+- Fix a panic that could occur if you performed the following sequence of operations {{% gh 10904 %}}:
+
+  - `CREATE SOURCE src ...;`
+  - `CREATE INDEX src_idx ON src ...;`
+  - `ALTER src RENAME TO new_src;`
+  - `DROP INDEX src_idx;`
+  - `CREATE INDEX new_src_idx ON new_src ...;`
+
+- Fix a data loss bug in [Postgres sources] introduced in version v0.20.0 {{% gh 10981 %}}.
+
 {{% version-header v0.21.0 %}}
 
 - **Breaking change.** Return an empty list for slice operations that yield no
@@ -431,7 +515,7 @@ Improve PostgreSQL compatibility:
   function.
 
 - Avoid crashing when executing certain queries involving the
-  [`mz_logical_timestamp`](/sql/functions/#date-and-time-func) function
+  [`mz_logical_timestamp`] function
   {{% gh 9504 %}}.
 
 {{% version-header v0.11.0 %}}
@@ -479,7 +563,7 @@ Improve PostgreSQL compatibility:
   of our intermediate representations. These queries now report an internal
   error of the form "exceeded recursion limit of {X}".
 
-- Correctly autogenerate views from Postgres sources during [`CREATE
+- Correctly autogenerate views from [Postgres sources] during [`CREATE
   VIEWS`](/sql/create-source/postgres/#creating-replication-views) when the upstream table
   contains numeric columns with no specified scale and precision {{% gh 9268
   %}}.
@@ -786,11 +870,11 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 {{% version-header v0.8.2 %}}
 
-- Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
+- Stabilized [Postgres sources] (no longer require
   `--experimental`)
 
 - **Breaking change.** `HOST` keyword when creating
-  [postgres sources](/sql/create-source/postgres/#syntax) has been renamed to
+  [Postgres sources] has been renamed to
   `CONNECTION`.
 
 - Record the initial high watermark offset on the broker for Kafka sources. This
@@ -1947,6 +2031,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/
+[`mz_logical_timestamp`]: /sql/functions/#date-and-time-func
 [`numeric`]: /sql/types/numeric
 [`oid`]: /sql/types/oid/
 [`real`]: /sql/types/float4
@@ -1958,6 +2043,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`time`]: /sql/types/time
 [`timestamp`]: /sql/types/timestamp
 [`timestamp with time zone`]: /sql/types/timestamptz
+[Postgres sources]: /sql/create-source/postgres
 [pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
 [pgwire-simple]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
 [pgwire-extended]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
