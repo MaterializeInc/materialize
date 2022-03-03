@@ -23,12 +23,10 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 
-use crate::client::SourceConnector;
-use crate::client::{Client, Command, StorageCommand};
+use crate::client::{Client, Command, CreateSourceCommand, StorageCommand};
 use crate::sources::SourceDesc;
 use crate::Update;
 use mz_expr::GlobalId;
-use mz_expr::PartitionId;
 
 /// Controller state maintained for each storage instance.
 pub struct StorageControllerState<T> {
@@ -78,38 +76,42 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
-    /// Create sources from descriptions and initial `since` read validity frontiers.
+    /// Create the sources described in the individual CreateSourceCommand commands.
     ///
-    /// This command installs collection state for the indicated identifiers, and the are
+    /// Each command carries the source id, the  source description, an initial `since` read
+    /// validity frontier, and initial timestamp bindings.
+    ///
+    /// This command installs collection state for the indicated sources, and the are
     /// now valid to use in queries at times beyond the initial `since` frontiers. Each
     /// collection also acquires a read capability at this frontier, which will need to
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
     pub async fn create_sources(
         &mut self,
-        mut bindings: Vec<(GlobalId, (crate::sources::SourceDesc, Antichain<T>))>,
+        mut bindings: Vec<CreateSourceCommand<T>>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         // 1. create a dropped source identifier, or
         // 2. create an existing source identifier with a new description.
         // Make sure to check for errors within `bindings` as well.
-        bindings.sort_by_key(|b| b.0);
+        bindings.sort_by_key(|b| b.id);
         bindings.dedup();
         for pos in 1..bindings.len() {
-            if bindings[pos - 1].0 == bindings[pos].0 {
-                Err(StorageError::SourceIdReused(bindings[pos].0))?;
+            if bindings[pos - 1].id == bindings[pos].id {
+                Err(StorageError::SourceIdReused(bindings[pos].id))?;
             }
         }
-        for (id, description_since) in bindings.iter() {
-            if let Ok(collection) = self.collection(*id) {
-                if &collection.description != description_since {
-                    Err(StorageError::SourceIdReused(*id))?
+        for binding in bindings.iter() {
+            if let Ok(collection) = self.collection(binding.id) {
+                let (ref desc, ref since) = collection.description;
+                if (desc, since) != (&binding.desc, &binding.since) {
+                    Err(StorageError::SourceIdReused(binding.id))?
                 }
             }
         }
         // Install collection state for each bound source.
-        for (id, (description, since)) in bindings.iter() {
-            let collection = CollectionState::new(description.clone(), since.clone());
-            self.storage.collections.insert(*id, collection);
+        for binding in bindings.iter() {
+            let collection = CollectionState::new(binding.desc.clone(), binding.since.clone());
+            self.storage.collections.insert(binding.id, collection);
         }
 
         self.client
@@ -149,21 +151,6 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             .await
             .map_err(StorageError::from)
     }
-    pub async fn add_source_timestamping(
-        &mut self,
-        id: GlobalId,
-        connector: SourceConnector,
-        bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
-    ) -> Result<(), StorageError> {
-        self.client
-            .send(Command::Storage(StorageCommand::AddSourceTimestamping {
-                id,
-                connector,
-                bindings,
-            }))
-            .await
-            .map_err(StorageError::from)
-    }
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
     ///
     /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
@@ -198,14 +185,6 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
 
         self.update_read_capabilities(&mut updates).await;
         Ok(())
-    }
-    pub async fn drop_source_timestamping(&mut self, id: GlobalId) -> Result<(), StorageError> {
-        self.client
-            .send(Command::Storage(StorageCommand::DropSourceTimestamping {
-                id,
-            }))
-            .await
-            .map_err(StorageError::from)
     }
     pub async fn advance_all_table_timestamps(
         &mut self,

@@ -24,8 +24,8 @@ use tracing::trace;
 
 use crate::logging::LoggingConfig;
 use crate::{
-    sources::MzOffset, sources::SourceConnector, DataflowDescription, PeekResponse,
-    SourceInstanceDesc, TailResponse, Update,
+    sources::{MzOffset, SourceDesc},
+    DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
 use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
 use mz_repr::Row;
@@ -130,6 +130,19 @@ impl ComputeCommandKind {
     }
 }
 
+/// A command creating a single source
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateSourceCommand<T> {
+    /// The source identifier
+    pub id: GlobalId,
+    /// The source description
+    pub desc: SourceDesc,
+    /// The initial `since` frontier
+    pub since: Antichain<T>,
+    /// Any previously stored timestamp bindings
+    pub ts_bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
+}
+
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
 #[enum_kind(
@@ -139,9 +152,7 @@ impl ComputeCommandKind {
 )]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    ///
-    /// For each identifier, there is a source description and a valid `since` frontier.
-    CreateSources(Vec<(GlobalId, (crate::types::sources::SourceDesc, Antichain<T>))>),
+    CreateSources(Vec<CreateSourceCommand<T>>),
     /// Render the enumerated sources.
     ///
     /// Each source has a name for debugging purposes, an optional "as of" frontier and collection
@@ -173,20 +184,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
     /// all the same data)
     DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
-    /// Add a new source to be aware of for timestamping.
-    AddSourceTimestamping {
-        /// The ID of the timestamped source
-        id: GlobalId,
-        /// The connector for the timestamped source.
-        connector: SourceConnector,
-        /// Previously stored timestamp bindings.
-        bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
-    },
-    /// Drop all timestamping info for a source
-    DropSourceTimestamping {
-        /// The ID id of the formerly timestamped source.
-        id: GlobalId,
-    },
     /// Advance all local inputs to the given timestamp.
     AdvanceAllLocalInputs {
         /// The timestamp to advance to.
@@ -200,9 +197,7 @@ impl StorageCommandKind {
     /// Must remain unique over all variants of `Command`.
     pub fn metric_name(&self) -> &'static str {
         match self {
-            StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
-            StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
             StorageCommandKind::AllowCompaction => "allow_storage_compaction",
             StorageCommandKind::CreateSources => "create_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
@@ -287,8 +282,8 @@ impl<T: timely::progress::Timestamp> Command<T> {
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {
             Command::Storage(StorageCommand::CreateSources(sources)) => {
-                for (id, _) in sources.iter() {
-                    start.push(*id);
+                for source in sources.iter() {
+                    start.push(source.id);
                 }
             }
             Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
