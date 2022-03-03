@@ -11,6 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::iter;
@@ -20,7 +21,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
-use itertools::Itertools;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use reqwest::Url;
@@ -30,11 +30,12 @@ use tokio::task;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
-use mz_dataflow_types::postgres_source::PostgresSourceDetails;
+use mz_dataflow_types::postgres_source::{PostgresSourceDetails, PostgresTable};
 use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
 };
+use mz_postgres_util::TableInfo;
 use mz_pgrepr::Type;
 use mz_repr::strconv;
 use mz_sql_parser::parser::parse_data_type;
@@ -297,31 +298,24 @@ pub fn purify(
                                 .entry(table.namespace.clone())
                                 .or_insert(table);
                         }
+                        let mut details_info_idx: HashMap<String, PostgresTable> = HashMap::new();
+                        for table in details.tables {
+                            details_info_idx
+                                .entry(format!(
+                                    "{}.{}",
+                                    table.name.clone(),
+                                    table.namespace.clone()
+                                ))
+                                .or_insert(table);
+                        }
 
                         for target in targets {
-                            let name = normalize::unresolved_object_name(target.name.clone())
-                                .map_err(anyhow::Error::new)?;
-
-                            let schemas = pub_info_idx.get(&name.item).ok_or_else(|| {
-                                anyhow!("table {} does not exist in upstream database", name)
-                            })?;
-
-                            let table_info = if let Some(schema) = &name.schema {
-                                schemas.get(schema).ok_or_else(|| {
-                                    anyhow!("schema {} does not exist in upstream database", schema)
-                                })?
-                            } else {
-                                schemas.values().exactly_one().or_else(|_| {
-                                    Err(anyhow!(
-                                        "table {} is ambiguous, consider specifying the schema",
-                                        name
-                                    ))
-                                })?
-                            };
-
                             let view_name =
                                 target.alias.clone().unwrap_or_else(|| target.name.clone());
-
+                            let t = details_info_idx
+                                .get(&target.name.to_string())
+                                .ok_or_else(|| anyhow!("table {} does not exist", target.name))?;
+                            let table_info: TableInfo = t.clone().into();
                             let mut projection = vec![];
                             for (i, column) in table_info.schema.iter().enumerate() {
                                 let mut ty = Type::from_oid_and_typmod(column.oid, column.typmod)?;
