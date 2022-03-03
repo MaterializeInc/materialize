@@ -849,7 +849,7 @@ CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: Unresolved
 parse-statement
 CREATE INDEX foo ON myschema.bar USING arrangement (a, b)
 ----
-CREATE INDEX foo ON myschema.bar USING arrangement (a, b)
+CREATE INDEX foo ON myschema.bar (a, b)
 =>
 CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
