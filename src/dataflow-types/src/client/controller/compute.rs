@@ -35,6 +35,8 @@ use mz_expr::GlobalId;
 use mz_expr::RowSetFinishing;
 use mz_repr::Row;
 
+use super::ReadPolicy;
+
 /// Controller state maintained for each compute instance.
 pub(super) struct ComputeControllerState<T> {
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
@@ -312,32 +314,45 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         // // Validate that the ids exist.
         // self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+        let policies = frontiers
+            .into_iter()
+            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
+        self.set_read_policy(policies.collect()).await;
+    }
 
-        let mut updates = BTreeMap::new();
-        for (id, mut frontier) in frontiers.into_iter() {
-            // If-let to evade some identifiers incorrectly sent to us.
+    pub async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
+        let mut read_capability_changes = BTreeMap::default();
+        for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
-                // Ignore frontier updates that go backwards.
+                let mut new_read_capability = match &policy {
+                    ReadPolicy::ValidFrom(frontier) => frontier.clone(),
+                    ReadPolicy::LagWriteFrontier(logic) => {
+                        logic(collection.write_frontier.frontier())
+                    }
+                };
+
                 if <_ as timely::order::PartialOrder>::less_equal(
                     &collection.implied_capability,
-                    &frontier,
+                    &new_read_capability,
                 ) {
-                    // Add new frontier, swap, subtract old frontier.
                     let mut update = ChangeBatch::new();
-                    update.extend(frontier.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut collection.implied_capability, &mut frontier);
-                    update.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                    // Record updates if something of substance changed.
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
                     if !update.is_empty() {
-                        updates.insert(id, update);
+                        read_capability_changes.insert(id, update);
                     }
-                } else {
-                    tracing::error!("COMPUTE::allow_compaction attempted frontier regression for id {:?}: {:?} to {:?}", id, collection.implied_capability, frontier);
                 }
+
+                collection.read_policy = policy;
+            } else {
+                tracing::error!("Reference to unregistered id: {:?}", id);
             }
         }
-
-        self.update_read_capabilities(&mut updates).await;
+        if !read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut read_capability_changes)
+                .await;
+        }
     }
 }
 
@@ -359,6 +374,41 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             self.collection(id)?;
         }
         Ok(())
+    }
+
+    /// Accept write frontier updates from the compute layer
+    pub(super) async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
+        let mut read_capability_changes = BTreeMap::default();
+        for (id, changes) in updates.iter() {
+            let collection = self
+                .collection_mut(*id)
+                .expect("Reference to absent collection");
+
+            collection
+                .write_frontier
+                .update_iter(changes.clone().drain());
+
+            if let super::ReadPolicy::LagWriteFrontier(logic) = &collection.read_policy {
+                let mut new_read_capability = logic(collection.write_frontier.frontier());
+                if <_ as timely::order::PartialOrder>::less_equal(
+                    &collection.implied_capability,
+                    &new_read_capability,
+                ) {
+                    // TODO: reuse change batch above?
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                    if !update.is_empty() {
+                        read_capability_changes.insert(*id, update);
+                    }
+                }
+            }
+        }
+        if !read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut read_capability_changes)
+                .await;
+        }
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
@@ -438,6 +488,8 @@ pub struct CollectionState<T> {
     pub(super) read_capabilities: MutableAntichain<T>,
     /// The implicit capability associated with collection creation.
     pub(super) implied_capability: Antichain<T>,
+    /// The policy to use to downgrade `self.implied_capability`.
+    pub(super) read_policy: ReadPolicy<T>,
 
     /// Storage identifiers on which this collection depends.
     pub(super) storage_dependencies: Vec<GlobalId>,
@@ -462,7 +514,8 @@ impl<T: Timestamp> CollectionState<T> {
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {
             read_capabilities,
-            implied_capability: since,
+            implied_capability: since.clone(),
+            read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),

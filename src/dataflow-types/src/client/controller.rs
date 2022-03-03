@@ -24,6 +24,7 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 
 use crate::client::{
@@ -103,16 +104,12 @@ impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
         if let Some(response) = response.as_ref() {
             match response {
                 Response::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
-                    for (id, changes) in updates.iter() {
-                        self.compute(*instance)
-                            // TODO: determine if this is an error, or perhaps just a late
-                            // response about a terminated instance.
-                            .expect("Reference to absent instance")
-                            .collection_mut(*id)
-                            .expect("Reference to absent collection")
-                            .write_frontier
-                            .update_iter(changes.clone().drain());
-                    }
+                    self.compute(*instance)
+                        // TODO: determine if this is an error, or perhaps just a late
+                        // response about a terminated instance.
+                        .expect("Reference to absent instance")
+                        .update_write_frontiers(updates)
+                        .await;
                 }
                 _ => {}
             }
@@ -130,4 +127,16 @@ impl<C> Controller<C> {
             compute: BTreeMap::default(),
         }
     }
+}
+
+/// Compaction policies for collections maintained by `Controller`.
+pub enum ReadPolicy<T = mz_repr::Timestamp> {
+    /// Maintain the collection as valid from this frontier onward.
+    ValidFrom(Antichain<T>),
+    /// Maintain the collection as valid from a function of the write frontier.
+    ///
+    /// This function will only be re-evaluated when the write frontier changes.
+    /// If the intended behavior is to change in response to external signals,
+    /// consider using the `StopAt` variant to manually pilot compaction.
+    LagWriteFrontier(Box<dyn Fn(AntichainRef<T>) -> Antichain<T>>),
 }
