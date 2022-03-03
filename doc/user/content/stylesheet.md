@@ -163,5 +163,3 @@ block2 Tab1
 Block2 Tab2
 {{< /tab >}}
 {{< /tabs >}}
-
-
