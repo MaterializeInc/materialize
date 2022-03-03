@@ -1753,6 +1753,8 @@ pub fn plan_create_sink(
     scx: &StatementContext,
     stmt: CreateSinkStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
+    let in_cluster = scx.resolve_cluster(&None)?;
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
@@ -1899,6 +1901,7 @@ pub fn plan_create_sink(
             connector_builder,
             envelope,
             depends_on,
+            in_cluster,
         },
         with_snapshot,
         if_not_exists,
@@ -2074,6 +2077,7 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
+    let in_cluster = scx.resolve_cluster(&None)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
     let mut depends_on = vec![on.id()];
     depends_on.extend(exprs_depend_on);
@@ -2085,6 +2089,7 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
             depends_on,
+            in_cluster,
         },
         options,
         if_not_exists,

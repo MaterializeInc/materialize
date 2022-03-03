@@ -390,6 +390,7 @@ pub struct Sink {
     pub connector_builder: SinkConnectorBuilder,
     pub envelope: SinkEnvelope,
     pub depends_on: Vec<GlobalId>,
+    pub in_cluster: String,
 }
 
 #[derive(Clone, Debug)]
@@ -407,6 +408,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
+    pub in_cluster: String,
 }
 
 #[derive(Clone, Debug)]

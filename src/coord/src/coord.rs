@@ -1930,10 +1930,7 @@ impl Coordinator {
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(
-                    self.sequence_create_index(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_index(plan).await, session);
             }
             Plan::CreateType(plan) => {
                 tx.send(self.sequence_create_type(plan).await, session);
@@ -2560,10 +2557,9 @@ impl Coordinator {
             }
         };
 
-        let instance_name = session.vars().cluster();
         let compute_instance_id = self
             .catalog
-            .resolve_compute_instance(&instance_name)
+            .resolve_compute_instance(&sink.in_cluster)
             .unwrap()
             .id;
 
@@ -2824,7 +2820,6 @@ impl Coordinator {
 
     async fn sequence_create_index(
         &mut self,
-        session: &mut Session,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
@@ -2834,8 +2829,10 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let instance_name = session.vars().cluster();
-        let compute_instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+        let compute_instance_id = self
+            .catalog
+            .resolve_compute_instance(&&index.in_cluster)?
+            .id;
 
         let id = self.catalog.allocate_id()?;
         let index = catalog::Index {

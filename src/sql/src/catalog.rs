@@ -23,7 +23,7 @@ use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, RelationDesc, ScalarType};
-use mz_sql_parser::ast::{Expr, Raw};
+use mz_sql_parser::ast::{Expr, Ident, Raw};
 use uuid::Uuid;
 
 use crate::func::Func;
@@ -105,6 +105,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
+
+    /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
+    /// compute instances within the catalog.
+    fn resolve_compute_instance_or_default(
+        &self,
+        item_name: &Option<Ident>,
+    ) -> Result<String, CatalogError>;
 
     /// Gets an item by its ID.
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
@@ -471,6 +478,13 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+        unimplemented!();
+    }
+
+    fn resolve_compute_instance_or_default(
+        &self,
+        _: &Option<Ident>,
+    ) -> Result<String, CatalogError> {
         unimplemented!();
     }
 

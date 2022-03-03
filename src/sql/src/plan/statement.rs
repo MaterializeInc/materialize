@@ -383,6 +383,10 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
+    pub fn resolve_cluster(&self, name: &Option<Ident>) -> Result<String, PlanError> {
+        Ok(self.catalog.resolve_compute_instance_or_default(name)?)
+    }
+
     pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
         self.catalog.get_item_by_id(id)
     }

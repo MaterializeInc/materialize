@@ -42,7 +42,7 @@ use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw};
+use mz_sql::ast::{Expr, Ident, Raw};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogTypeDetails, SessionCatalog,
@@ -412,6 +412,7 @@ impl CatalogState {
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
     conn_id: u32,
+    cluster: String,
     database: String,
     search_path: &'a [&'a str],
     user: String,
@@ -1247,6 +1248,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
+            cluster: session.vars().cluster().into(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
             user: session.user().into(),
@@ -1258,6 +1260,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: SYSTEM_CONN_ID,
+            cluster: "materialize".into(),
             database: "materialize".into(),
             search_path: &[],
             user,
@@ -2483,10 +2486,6 @@ impl Catalog {
         }
         relations.into_iter().collect()
     }
-
-    pub fn get_default_compute_instance(&self) -> Result<String, Error> {
-        self.storage().get_default_compute_instance()
-    }
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -2776,6 +2775,20 @@ impl SessionCatalog for ConnCatalog<'_> {
         Ok(self
             .catalog
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
+    }
+
+    fn resolve_compute_instance_or_default(
+        &self,
+        name: &Option<Ident>,
+    ) -> Result<String, SqlCatalogError> {
+        Ok(match name {
+            None => self.cluster.clone(),
+            Some(name) => self
+                .catalog
+                .resolve_compute_instance(name.as_str())?
+                .name
+                .clone(),
+        })
     }
 
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
