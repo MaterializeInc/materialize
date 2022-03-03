@@ -14,10 +14,17 @@
 
 #![deny(missing_docs)]
 
+use anyhow::anyhow;
 use anyhow::Context;
 use async_trait::async_trait;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
+use std::collections::HashMap;
 
-use mz_dataflow_types::client::{partitioned::Partitioned, Client, Command, Response};
+use mz_dataflow_types::client::{
+    partitioned::Partitioned, Client, Command, ComputeCommand, ComputeInstanceId, InstanceConfig,
+    Response,
+};
 use tracing::trace;
 
 /// A convenience type for compatibility.
@@ -58,34 +65,71 @@ impl Client for RemoteClient {
 }
 
 /// A [Client] backed by separate clients for storage and compute.
-pub struct SplitClient<S, C> {
+pub struct SplitClient<S> {
     storage_client: S,
-    compute_client: C,
+    compute_clients: HashMap<ComputeInstanceId, Box<dyn Client + Send + 'static>>,
 }
 
-impl<S: Client, C: Client> SplitClient<S, C> {
+impl<S: Client> SplitClient<S> {
     /// Construct a new split client
-    pub fn new(storage_client: S, compute_client: C) -> Self {
+    pub fn new(storage_client: S) -> Self {
         Self {
             storage_client,
-            compute_client,
+            compute_clients: Default::default(),
         }
     }
 }
 
 #[async_trait(?Send)]
-impl<S: Client, C: Client> Client for SplitClient<S, C> {
+impl<S: Client> Client for SplitClient<S> {
     async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         trace!("SplitClient: Sending dataflow command: {:?}", cmd);
         match cmd {
-            cmd @ Command::Compute(_, _) => self.compute_client.send(cmd),
-            cmd @ Command::Storage(_) => self.storage_client.send(cmd),
+            Command::Compute(
+                ComputeCommand::CreateInstance(InstanceConfig::Virtual, _logging),
+                _id,
+            ) => panic!("SplitClient cannot host a virtual instance."),
+            Command::Compute(
+                ComputeCommand::CreateInstance(InstanceConfig::Remote(addr), logging),
+                id,
+            ) => {
+                let mut client = RemoteClient::connect(&addr).await?;
+                client
+                    .send(Command::Compute(
+                        ComputeCommand::CreateInstance(InstanceConfig::Remote(addr), logging),
+                        id,
+                    ))
+                    .await?;
+                self.compute_clients.insert(id, Box::new(client));
+                Ok(())
+            }
+            Command::Compute(ComputeCommand::DropInstance, id) => {
+                if let Some(mut client) = self.compute_clients.remove(&id) {
+                    client
+                        .send(Command::Compute(ComputeCommand::DropInstance, id))
+                        .await
+                } else {
+                    Err(anyhow!("Unknown compute instance: {id:?}"))
+                }
+            }
+            Command::Compute(cmd, id) => {
+                let client = self
+                    .compute_clients
+                    .get_mut(&id)
+                    .ok_or(anyhow!("Unknown compute instance: {id:?}"))?;
+                client.send(Command::Compute(cmd, id)).await
+            }
+            cmd @ Command::Storage(_) => self.storage_client.send(cmd).await,
         }
-        .await
     }
     async fn recv(&mut self) -> Option<Response> {
+        // TODO: We currently don't have a good way to receive from many clients
+        let mut futures = FuturesUnordered::new();
+        for client in self.compute_clients.values_mut() {
+            futures.push(client.recv());
+        }
         tokio::select! {
-            response = self.compute_client.recv() => response,
+            response = futures.select_next_some() => response,
             response = self.storage_client.recv() => response,
         }
     }

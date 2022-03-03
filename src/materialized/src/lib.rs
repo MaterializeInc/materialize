@@ -32,6 +32,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 
 use mz_build_info::BuildInfo;
 use mz_coord::LoggingConfig;
+use mz_dataflow_types::client::InstanceConfig;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::option::OptionExt;
@@ -282,6 +283,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: Box::new(dataflow_client),
+        dataflow_instance: InstanceConfig::Virtual,
         logging: config.logging,
         storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
