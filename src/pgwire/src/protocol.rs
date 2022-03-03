@@ -1345,6 +1345,8 @@ where
                 FetchResult::Canceled
             } else if rows.current.is_some() {
                 FetchResult::Rows(rows.current.take())
+            } else if want_rows == 0 {
+                FetchResult::Rows(None)
             } else {
                 tokio::select! {
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
