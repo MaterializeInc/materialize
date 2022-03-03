@@ -357,6 +357,7 @@ pub mod sources {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
+    use crate::gen::postgres_source::PostgresSourceDetails;
     use mz_kafka_util::KafkaAddrs;
     use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
 
@@ -1410,6 +1411,7 @@ pub mod sources {
         pub conn: String,
         pub publication: String,
         pub slot_name: String,
+        pub details: PostgresSourceDetails,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
