@@ -5914,6 +5914,7 @@ impl VariadicFunc {
 
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
+        let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
             Coalesce | Greatest | Least => {
                 assert!(input_types.len() > 0);
@@ -5924,7 +5925,8 @@ impl VariadicFunc {
                     "coalesce/greatest/least inputs did not have uniform type: {:?}",
                     input_types
                 );
-                input_types.into_first().nullable(true)
+                let nullable = input_types.iter().all(|ty| ty.nullable);
+                input_types.into_first().nullable(nullable)
             }
             Concat => ScalarType::String.nullable(true),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
@@ -5977,7 +5979,7 @@ impl VariadicFunc {
                 custom_name: None,
             }
             .nullable(false),
-            SplitPart => ScalarType::String.nullable(true),
+            SplitPart => ScalarType::String.nullable(in_nullable),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
