@@ -106,6 +106,7 @@ use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
+use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
@@ -327,9 +328,11 @@ pub struct Coordinator {
     /// Tracks write frontiers for active exactly-once sinks.
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 
-    /// A map from pending peeks to the queue into which responses are sent, and
-    /// the IDs of workers who have responded.
-    pending_peeks: HashMap<u32, mpsc::UnboundedSender<PeekResponse>>,
+    /// A map from pending peek ids to the queue into which responses are sent, and
+    /// the connection id of the client that initiated the peek.
+    pending_peeks: HashMap<Uuid, (mpsc::UnboundedSender<PeekResponse>, u32)>,
+    /// A map from client connection ids to a set of all pending peeks for that client
+    client_pending_peeks: HashMap<u32, HashSet<Uuid>>,
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
@@ -858,17 +861,24 @@ impl Coordinator {
 
     async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            DataflowResponse::Compute(
-                ComputeResponse::PeekResponse(conn_id, response),
-                instance,
-            ) => {
+            DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                 assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We expect exactly one peek response, which we forward.
-                self.pending_peeks
-                    .remove(&conn_id)
-                    .expect("no more PeekResponses after closing peek channel")
+                let (rows_tx, conn_id) = self
+                    .pending_peeks
+                    .remove(&uuid)
+                    .expect("no more PeekResponses after closing peek channel");
+                rows_tx
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
+                let uuids = self
+                    .client_pending_peeks
+                    .get_mut(&conn_id)
+                    .expect("TODO think of good message");
+                uuids.remove(&uuid);
+                if uuids.is_empty() {
+                    self.client_pending_peeks.remove(&conn_id);
+                }
             }
             DataflowResponse::Compute(
                 ComputeResponse::TailResponse(sink_id, response),
@@ -1710,12 +1720,14 @@ impl Coordinator {
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
             // Allow dataflow to cancel any pending peeks.
-            self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
-                .unwrap()
-                .cancel_peek(conn_id)
-                .await
-                .unwrap();
+            if let Some(uuids) = self.client_pending_peeks.get(&conn_id) {
+                self.dataflow_client
+                    .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                    .unwrap()
+                    .cancel_peeks(uuids)
+                    .await
+                    .unwrap();
+            }
         }
     }
 
@@ -4683,6 +4695,7 @@ pub async fn serve(
                 source_since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
                 pending_peeks: HashMap::new(),
+                client_pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
@@ -4898,7 +4911,9 @@ pub mod fast_path_peek {
 
     use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use mz_dataflow_types::PeekResponseUnary;
+    use std::collections::HashSet;
     use std::{collections::HashMap, num::NonZeroUsize};
+    use uuid::Uuid;
 
     use crate::CoordError;
     use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
@@ -5054,14 +5069,7 @@ pub mod fast_path_peek {
             // If we must build the view, ship the dataflow.
             let (peek_command, drop_dataflow) = match fast_path {
                 Plan::PeekExisting(id, key, map_filter_project) => (
-                    (
-                        id,
-                        key,
-                        conn_id,
-                        timestamp,
-                        finishing.clone(),
-                        map_filter_project,
-                    ),
+                    (id, key, timestamp, finishing.clone(), map_filter_project),
                     None,
                 ),
                 Plan::PeekDataflow(PeekDataflowPlan {
@@ -5095,7 +5103,6 @@ pub mod fast_path_peek {
                         (
                             index_id, // transient identifier produced by `dataflow_plan`.
                             None,
-                            conn_id,
                             timestamp,
                             finishing.clone(),
                             map_filter_project,
@@ -5111,17 +5118,28 @@ pub mod fast_path_peek {
             // Endpoints for sending and receiving peek responses.
             let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
 
+            // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's a very
+            // small but unlikely change that it's not unique to completed peeks.
+            let mut uuid = Uuid::new_v4();
+            while self.pending_peeks.contains_key(&uuid) {
+                uuid = Uuid::new_v4();
+            }
+
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
-            self.pending_peeks.insert(conn_id, rows_tx);
-            let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
+            self.pending_peeks.insert(uuid, (rows_tx, conn_id));
+            self.client_pending_peeks
+                .entry(conn_id)
+                .or_insert(HashSet::new())
+                .insert(uuid);
+            let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
             self.dataflow_client
                 .compute(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .peek(
                     id,
                     key,
-                    conn_id,
+                    uuid,
                     timestamp,
                     finishing.clone(),
                     map_filter_project,

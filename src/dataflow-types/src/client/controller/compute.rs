@@ -22,11 +22,12 @@
 //! compaction of each of its outputs, ensuring that we can recover each dataflow to its current state in case of
 //! failure or other reconfiguration.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use uuid::Uuid;
 
 use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId, StorageCommand};
 use crate::logging::LoggingConfig;
@@ -266,7 +267,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         &mut self,
         id: GlobalId,
         key: Option<Row>,
-        conn_id: u32,
+        uuid: Uuid,
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
@@ -282,7 +283,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                 ComputeCommand::Peek {
                     id,
                     key,
-                    conn_id,
+                    uuid,
                     timestamp,
                     finishing,
                     map_filter_project,
@@ -292,11 +293,12 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .await
             .map_err(ComputeError::from)
     }
-    /// Cancels an existing peek request.
-    pub async fn cancel_peek(&mut self, conn_id: u32) -> Result<(), ComputeError> {
+    /// Cancels existing peek requests.
+    pub async fn cancel_peeks(&mut self, uuids: &HashSet<Uuid>) -> Result<(), ComputeError> {
+        let uuids = uuids.clone();
         self.client
             .send(Command::Compute(
-                ComputeCommand::CancelPeek { conn_id },
+                ComputeCommand::CancelPeeks { uuids },
                 self.instance,
             ))
             .await

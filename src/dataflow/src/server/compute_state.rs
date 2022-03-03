@@ -155,7 +155,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 id,
                 key,
                 timestamp,
-                conn_id,
+                uuid,
                 finishing,
                 map_filter_project,
             } => {
@@ -179,7 +179,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 let mut peek = PendingPeek {
                     id,
                     key,
-                    conn_id,
+                    uuid,
                     timestamp,
                     finishing,
                     trace_bundle,
@@ -196,14 +196,14 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                     self.compute_state.pending_peeks.push(peek);
                 }
             }
-            ComputeCommand::CancelPeek { conn_id } => {
+            ComputeCommand::CancelPeeks { uuids } => {
                 let pending_peeks_len = self.compute_state.pending_peeks.len();
                 let mut pending_peeks = std::mem::replace(
                     &mut self.compute_state.pending_peeks,
                     Vec::with_capacity(pending_peeks_len),
                 );
                 for peek in pending_peeks.drain(..) {
-                    if peek.conn_id == conn_id {
+                    if uuids.contains(&peek.uuid) {
                         self.send_peek_response(peek, PeekResponse::Canceled);
                     } else {
                         self.compute_state.pending_peeks.push(peek);
@@ -570,7 +570,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.send_compute_response(ComputeResponse::PeekResponse(peek.conn_id, response));
+        self.send_compute_response(ComputeResponse::PeekResponse(peek.uuid, response));
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
