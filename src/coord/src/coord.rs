@@ -5130,7 +5130,7 @@ pub mod fast_path_peek {
             self.pending_peeks.insert(uuid, (rows_tx, conn_id));
             self.client_pending_peeks
                 .entry(conn_id)
-                .or_insert_with(HashSet::new())
+                .or_insert_with(HashSet::new)
                 .insert(uuid);
             let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
             self.dataflow_client
