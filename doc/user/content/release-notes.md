@@ -65,7 +65,7 @@ given precision. For example `INTERVAL '1.2345649' SECOND(5)` will be
 rounded to `00:00:01.23457`, not `00:00:01.23456`. This matches the
 behavior of PostgreSQL.
 
-- Add the following aliases to Interval parsing: `yr`, `yrs`, `hr`, `hrs`, `min`, `mins`, `sec`, `secs`.
+- Add several new time units to [`interval`](/sql/types/interval) parsing: `yr`, `yrs`, `hr`, `hrs`, `min`, `mins`, `sec`, and `secs`.
 
 - Add the [`justify_days`](/sql/functions/justify-days), [`justify_hours`](/sql/functions/justify-hours), and [`justify_interval`](/sql/functions/justify-interval) functions.
 
