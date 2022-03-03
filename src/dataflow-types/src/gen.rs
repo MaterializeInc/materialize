@@ -11,8 +11,8 @@
 include!(concat!(env!("OUT_DIR"), "/mod.rs"));
 
 use crate::postgres_source::{PostgresColumn, PostgresTable};
-use mz_pgrepr::Type as PgType;
 use mz_postgres_util::{PgColumn, TableInfo};
+
 impl From<PgColumn> for PostgresColumn {
     fn from(c: PgColumn) -> PostgresColumn {
         PostgresColumn {
@@ -29,7 +29,6 @@ impl From<PostgresColumn> for PgColumn {
     fn from(c: PostgresColumn) -> PgColumn {
         PgColumn {
             name: c.name,
-            ty: PgType::from_oid_and_typmod(c.type_oid.try_into().unwrap(), c.type_mod).unwrap(),
             oid: c.type_oid.try_into().unwrap(),
             typmod: c.type_mod,
             nullable: c.nullable,

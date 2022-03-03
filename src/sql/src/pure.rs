@@ -35,6 +35,7 @@ use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
 };
+use mz_pgrepr::Type;
 use mz_repr::strconv;
 use mz_sql_parser::parser::parse_data_type;
 
@@ -298,7 +299,7 @@ pub fn purify(
 
                             let mut projection = vec![];
                             for (i, column) in table_info.schema.iter().enumerate() {
-                                let mut ty = column.ty.clone();
+                                let mut ty = Type::from_oid_and_typmod(column.oid, column.typmod)?;
                                 // Ignore precision constraints on date/time types until we support
                                 // it. This should be safe enough because our types are wide enough
                                 // to support the maximum possible precision.
