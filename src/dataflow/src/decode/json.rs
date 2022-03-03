@@ -140,54 +140,45 @@ pub fn decode_and_pack_value(
             packer.push_array(&[dims], values)?;
             Ok(())
         }
-        ScalarType::List { element_type, .. } => {
-            packer.push_list_with(|row| {
-                if let Some(elems) = json_field.as_array() {
-                    for elem in elems {
-                        decode_and_pack_value(row, row_arena, elem, element_type)?;
-                    }
+        ScalarType::List { element_type, .. } => packer.push_list_with(|row| {
+            if let Some(elems) = json_field.as_array() {
+                for elem in elems {
+                    decode_and_pack_value(row, row_arena, elem, element_type)?;
                 }
-                Ok::<_, anyhow::Error>(())
-            })?;
-            Ok(())
-        }
-        ScalarType::Record { fields, .. } => {
-            packer.push_list_with(|row| {
-                if let Some(json) = json_field.as_object() {
-                    for (field_name, field_type) in fields {
-                        if let Some(v) = json.get(field_name.as_str()) {
-                            decode_and_pack_value(row, row_arena, v, &field_type.scalar_type)?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }),
+        ScalarType::Record { fields, .. } => packer.push_list_with(|row| {
+            if let Some(json) = json_field.as_object() {
+                for (field_name, field_type) in fields {
+                    if let Some(v) = json.get(field_name.as_str()) {
+                        decode_and_pack_value(row, row_arena, v, &field_type.scalar_type)?;
+                    } else {
+                        if field_type.nullable {
+                            row.push(Datum::Null);
                         } else {
-                            if field_type.nullable {
-                                row.push(Datum::Null);
-                            } else {
-                                bail!(
-                                    "unable to find required record field {}",
-                                    field_name.as_str()
-                                );
-                            }
+                            bail!(
+                                "unable to find required record field {}",
+                                field_name.as_str()
+                            );
                         }
                     }
                 }
-                Ok::<_, anyhow::Error>(())
-            })?;
-            Ok(())
-        }
-        ScalarType::Map { value_type, .. } => {
-            packer.push_dict_with(|packer| {
-                if let Some(elems) = json_field.as_object() {
-                    // so that it does not go unstated: we must process map keys in ascending order
-                    // to satisfy the contract of `push_dict_with`. fortunately this is the default
-                    // behavior of serde_json (unless the `preserve_order` feature is used)
-                    for (name, value) in elems {
-                        packer.push(Datum::String(name));
-                        decode_and_pack_value(packer, row_arena, value, value_type)?;
-                    }
+            }
+            Ok::<_, anyhow::Error>(())
+        }),
+        ScalarType::Map { value_type, .. } => packer.push_dict_with(|packer| {
+            if let Some(elems) = json_field.as_object() {
+                // so that it does not go unstated: we must process map keys in ascending order
+                // to satisfy the contract of `push_dict_with`. fortunately this is the default
+                // behavior of serde_json (unless the `preserve_order` feature is used)
+                for (name, value) in elems {
+                    packer.push(Datum::String(name));
+                    decode_and_pack_value(packer, row_arena, value, value_type)?;
                 }
-                Ok::<_, anyhow::Error>(())
-            })?;
-            Ok(())
-        }
+            }
+            Ok::<_, anyhow::Error>(())
+        }),
         ScalarType::Int2Vector => {
             let mut values = vec![];
             if let Some(array) = json_field.as_array() {
