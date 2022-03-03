@@ -44,7 +44,7 @@ INCLUDE (
     OFFSET (AS <name>)? |
     PARTITION (AS <name>)? |
     TOPIC (AS <name>)? |
-    HEADERS \(headername...\)?
+    HEADERS (AS <name>)?
 )+
 ```
 as an example:
@@ -85,6 +85,8 @@ refactoring sources so that header's can be decoded in the decode stage.
 
 
 ## Alternatives
+
+- Don't implement phase 2, and leave transformations all in later views
 
 - (Original plan): In phase 1, we could still support only `bytea` header values, but pre-declare the specific header keys we want
 
