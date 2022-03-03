@@ -67,7 +67,7 @@ behavior of PostgreSQL.
 
 - Add the [`justify_days`](/sql/functions/justify-days), [`justify_hours`](/sql/functions/justify-hours), and [`justify_interval`](/sql/functions/justify-interval) functions.
 
-- Change the range of the `oid` type from [-231, 231 - 1] to [0, 232 - 1] to match PostgreSQL.
+- Change the range of the `oid` type from [-2<sup>31</sup>, 2<sup>31</sup> - 1] to [0, 2<sup>32</sup> - 1] to match PostgreSQL.
 
 - Fix a panic when materializing a source that has been renamed since it was last materialized {{% gh 10904 %}}.
 
