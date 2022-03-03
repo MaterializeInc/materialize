@@ -5119,8 +5119,8 @@ pub mod fast_path_peek {
             // Endpoints for sending and receiving peek responses.
             let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
 
-            // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's a very
-            // small but unlikely change that it's not unique to completed peeks.
+            // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
+            // small but unlikely chance that it's not unique to completed peeks.
             let mut uuid = Uuid::new_v4();
             while self.pending_peeks.contains_key(&uuid) {
                 uuid = Uuid::new_v4();
