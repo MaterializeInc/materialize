@@ -10,7 +10,7 @@
 //! A disk-backed cache for objects in blob storage.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Instant;
 
@@ -20,6 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec;
 use semver::Version;
 use tokio::runtime::Runtime as AsyncRuntime;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::error::Error;
 use crate::gen::persist::{ProtoBatchFormat, ProtoMeta};
@@ -60,6 +61,9 @@ pub struct BlobCache<B> {
     async_runtime: Arc<AsyncRuntime>,
     cache: BlobCacheInner,
     prev_meta_len: u64,
+    semaphore: Arc<Semaphore>,
+    unsealed_permits: Arc<Mutex<Vec<(Weak<BlobUnsealedBatch>, OwnedSemaphorePermit)>>>,
+    trace_permits: Arc<Mutex<Vec<(Weak<BlobTraceBatchPart>, OwnedSemaphorePermit)>>>,
 }
 
 impl<B> Clone for BlobCache<B> {
@@ -71,16 +75,21 @@ impl<B> Clone for BlobCache<B> {
             async_runtime: Arc::clone(&self.async_runtime),
             cache: self.cache.clone(),
             prev_meta_len: self.prev_meta_len,
+            semaphore: Arc::clone(&self.semaphore),
+            unsealed_permits: Arc::clone(&self.unsealed_permits),
+            trace_permits: Arc::clone(&self.trace_permits),
         }
     }
 }
 
-const MB: usize = 1024 * 1024;
+const KB: usize = 1024;
+const MB: usize = KB * 1024;
 const GB: usize = 1024 * MB;
 
 impl<B: BlobRead> BlobCache<B> {
     const META_KEY: &'static str = "META";
     const DEFAULT_CACHE_SIZE_LIMIT: usize = 2 * GB;
+    const DEFAULT_MAX_IN_FLIGHT_KB: usize = (15 * GB / KB);
 
     /// Returns a new, empty cache for the given [Blob] storage.
     pub fn new(
@@ -97,6 +106,9 @@ impl<B: BlobRead> BlobCache<B> {
             async_runtime,
             cache: BlobCacheInner::new(cache_size_limit.unwrap_or(Self::DEFAULT_CACHE_SIZE_LIMIT)),
             prev_meta_len: 0,
+            semaphore: Arc::new(Semaphore::new(Self::DEFAULT_MAX_IN_FLIGHT_KB)),
+            unsealed_permits: Arc::new(Mutex::new(Vec::new())),
+            trace_permits: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -112,14 +124,47 @@ impl<B: BlobRead> BlobCache<B> {
         ret
     }
 
+    /// Clear permits that are no longer needed.
+    fn clear_permits(&self) -> Result<(), Error> {
+        {
+            let mut unsealed_permits = self.unsealed_permits.lock()?;
+            unsealed_permits.retain(|(batch, _)| batch.upgrade().is_some());
+        }
+        {
+            let mut trace_permits = self.trace_permits.lock()?;
+            trace_permits.retain(|(batch, _)| batch.upgrade().is_some());
+        }
+
+        Ok(())
+    }
+
     /// Synchronously fetches the batch for the given key.
     fn fetch_unsealed_batch_sync(
         &self,
         key: &str,
         hint: CacheHint,
+        size_bytes: u64,
     ) -> Result<Arc<BlobUnsealedBatch>, Error> {
         let async_guard = self.async_runtime.enter();
 
+        self.clear_permits()?;
+        let semaphore = Arc::clone(&self.semaphore);
+        let size_kb = if size_bytes < u64::cast_from(KB) {
+            1
+        } else {
+            (size_bytes / u64::cast_from(KB))
+                .try_into()
+                .expect("unsealed batch size exceeded 2 TiB")
+        };
+
+        if usize::cast_from(size_kb) > Self::DEFAULT_MAX_IN_FLIGHT_KB {
+            return Err(Error::from(format!(
+                "unsealed batch too large {:?}",
+                size_bytes
+            )));
+        }
+
+        let permit = block_on(semaphore.acquire_many_owned(size_kb)).expect("wip");
         let bytes = block_on(self.blob.lock()?.get(key))?
             .ok_or_else(|| Error::from(format!("no blob for unsealed batch at key: {}", key)))?;
         let bytes_len = bytes.len();
@@ -138,6 +183,8 @@ impl<B: BlobRead> BlobCache<B> {
             self.cache
                 .maybe_add_unsealed(key.to_owned(), bytes_len, Arc::clone(&ret))?;
         }
+        let weak_ref = Arc::downgrade(&ret);
+        self.unsealed_permits.lock()?.push((weak_ref, permit));
 
         drop(async_guard);
         Ok(ret)
@@ -148,6 +195,7 @@ impl<B: BlobRead> BlobCache<B> {
     pub fn get_unsealed_batch_async(
         &self,
         key: &str,
+        size_bytes: u64,
         hint: CacheHint,
     ) -> PFuture<Arc<BlobUnsealedBatch>> {
         let (tx, rx) = PFuture::new();
@@ -177,7 +225,7 @@ impl<B: BlobRead> BlobCache<B> {
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
             let async_guard = cache.async_runtime.enter();
-            let res = cache.fetch_unsealed_batch_sync(&key, hint);
+            let res = cache.fetch_unsealed_batch_sync(&key, hint, size_bytes);
             tx.fill(res);
             drop(async_guard);
         });
@@ -189,9 +237,28 @@ impl<B: BlobRead> BlobCache<B> {
         &self,
         key: &str,
         hint: CacheHint,
+        size_bytes: u64,
     ) -> Result<Arc<BlobTraceBatchPart>, Error> {
         let async_guard = self.async_runtime.enter();
 
+        self.clear_permits()?;
+        let semaphore = Arc::clone(&self.semaphore);
+        let size_kb = if size_bytes < u64::cast_from(KB) {
+            1
+        } else {
+            (size_bytes / u64::cast_from(KB))
+                .try_into()
+                .expect("trace batch part size exceeded 2 TiB")
+        };
+
+        if usize::cast_from(size_kb) > Self::DEFAULT_MAX_IN_FLIGHT_KB {
+            return Err(Error::from(format!(
+                "trace batch part too large {:?}",
+                size_bytes
+            )));
+        }
+
+        let permit = block_on(semaphore.acquire_many_owned(size_kb)).expect("wip");
         let bytes = block_on(self.blob.lock()?.get(key))?
             .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
         let bytes_len = bytes.len();
@@ -210,6 +277,8 @@ impl<B: BlobRead> BlobCache<B> {
                 .maybe_add_trace(key.to_owned(), bytes_len, Arc::clone(&ret))?;
         }
 
+        let weak_ref = Arc::downgrade(&ret);
+        self.trace_permits.lock()?.push((weak_ref, permit));
         drop(async_guard);
         Ok(ret)
     }
@@ -219,6 +288,7 @@ impl<B: BlobRead> BlobCache<B> {
     pub fn get_trace_batch_async(
         &self,
         key: &str,
+        size_bytes: u64,
         hint: CacheHint,
     ) -> PFuture<Arc<BlobTraceBatchPart>> {
         let (tx, rx) = PFuture::new();
@@ -248,7 +318,7 @@ impl<B: BlobRead> BlobCache<B> {
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
             let async_guard = cache.async_runtime.enter();
-            let res = cache.fetch_trace_batch_sync(&key, hint);
+            let res = cache.fetch_trace_batch_sync(&key, hint, size_bytes);
             tx.fill(res);
             drop(async_guard);
         });

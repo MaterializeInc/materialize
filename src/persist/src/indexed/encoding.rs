@@ -212,7 +212,9 @@ impl UnsealedSnapshotMeta {
         let batches = self
             .batches
             .into_iter()
-            .map(|x| blob.get_unsealed_batch_async(&x.key, CacheHint::MaybeAdd))
+            .map(|x| {
+                blob.get_unsealed_batch_async(&x.key, x.size_bytes as u64, CacheHint::MaybeAdd)
+            })
             .collect();
         UnsealedSnapshot {
             ts_lower: self.ts_lower,
@@ -555,7 +557,7 @@ impl TraceBatchMeta {
         let mut batches = vec![];
         for (idx, key) in self.keys.iter().enumerate() {
             let batch = cache
-                .get_trace_batch_async(key, CacheHint::NeverAdd)
+                .get_trace_batch_async(key, 0, CacheHint::NeverAdd)
                 .recv()?;
             if batch.desc != self.desc {
                 return Err(format!(

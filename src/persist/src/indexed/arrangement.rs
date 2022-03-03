@@ -491,7 +491,7 @@ impl Arrangement {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.trace_ts_upper().less_equal(&batch.ts_upper));
         let updates = ColumnarRecordsVec::from_iter(
-            blob.get_unsealed_batch_async(&batch.key, CacheHint::NeverAdd)
+            blob.get_unsealed_batch_async(&batch.key, batch.size_bytes, CacheHint::NeverAdd)
                 .recv()?
                 .updates
                 .iter()
@@ -629,7 +629,11 @@ impl Arrangement {
             // enough that in real workloads large batches won't pollute the
             // cache.
             for key in meta.keys.iter() {
-                batches.push(blob.get_trace_batch_async(key, CacheHint::MaybeAdd));
+                batches.push(blob.get_trace_batch_async(
+                    key,
+                    meta.size_bytes / meta.keys.len() as u64,
+                    CacheHint::MaybeAdd,
+                ));
             }
         }
         TraceSnapshot {

@@ -253,14 +253,24 @@ impl<B: Blob> Maintainer<B> {
             // TODO: we can simplify this logic once empty trace batch parts are disallowed.
             while first_updates.is_empty() {
                 match first_batch_iter.next() {
-                    Some(key) => Self::load_trace_batch_part(&blob, key, &mut first_updates)?,
+                    Some(key) => Self::load_trace_batch_part(
+                        &blob,
+                        key,
+                        first.size_bytes / (first.keys.len() as u64),
+                        &mut first_updates,
+                    )?,
                     None => break,
                 }
             }
 
             while second_updates.is_empty() {
                 match second_batch_iter.next() {
-                    Some(key) => Self::load_trace_batch_part(&blob, key, &mut second_updates)?,
+                    Some(key) => Self::load_trace_batch_part(
+                        &blob,
+                        key,
+                        second.size_bytes / (second.keys.len() as u64),
+                        &mut second_updates,
+                    )?,
                     None => break,
                 }
             }
@@ -368,10 +378,11 @@ impl<B: Blob> Maintainer<B> {
     fn load_trace_batch_part(
         blob: &BlobCache<B>,
         key: &str,
+        size_hint: u64,
         updates: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
     ) -> Result<(), Error> {
         let batch_part = blob
-            .get_trace_batch_async(key, CacheHint::NeverAdd)
+            .get_trace_batch_async(key, size_hint, CacheHint::NeverAdd)
             .recv()?;
         updates.extend(batch_part.updates.iter().flat_map(|u| {
             u.iter()
@@ -643,7 +654,7 @@ mod tests {
         let mut batch_parts = vec![];
         for key in merged_keys {
             let batch_part = blob
-                .get_trace_batch_async(&key, CacheHint::MaybeAdd)
+                .get_trace_batch_async(&key, 0, CacheHint::MaybeAdd)
                 .recv()?;
             assert_eq!(&batch_part.desc, &expected_res.merged.desc);
             batch_parts.push(batch_part);
