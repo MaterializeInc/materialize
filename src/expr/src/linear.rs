@@ -1234,6 +1234,7 @@ pub mod plan {
 
     use std::collections::HashMap;
 
+    use dec::OrderedDecimal;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -1530,10 +1531,33 @@ pub mod plan {
                 }
             }
 
+            #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+            enum Bound {
+                TooSmall,
+                InRange(u64),
+                TooBig,
+            }
+
+            impl From<OrderedDecimal<Numeric>> for Bound {
+                fn from(numeric: OrderedDecimal<Numeric>) -> Bound {
+                    if numeric.0.is_negative() {
+                        Bound::TooSmall
+                    } else {
+                        // An `Ok` conversion is a valid upper bound, and an `Err` error
+                        // indicates a value above `u64::MAX`. The `ok()` method does the
+                        // conversion we want to an `Option<u64>`.
+                        match u64::try_from(numeric.0) {
+                            Ok(n) => Bound::InRange(n),
+                            Err(_) => Bound::TooBig,
+                        }
+                    }
+                }
+            }
+
             // Lower and upper bounds. If set, the value indicates the respective
             // bound. If not set, indicates "larger than `u64::MAX`".
-            let mut lower_bound = Some(time);
-            let mut upper_bound = None;
+            let mut lower_bound = Bound::InRange(time);
+            let mut upper_bound = Bound::TooBig;
 
             // Track whether we have seen a null in either bound, as this should
             // prevent the record from being produced at any time.
@@ -1543,7 +1567,7 @@ pub mod plan {
             // expressions.
             for l in self.lower_bounds.iter() {
                 // If the lower bound already exceeds a `u64`, we needn't check more.
-                if lower_bound.is_some() {
+                if lower_bound < Bound::TooBig {
                     match l.eval(datums, &arena) {
                         Err(e) => {
                             return Some(Err((e.into(), time, diff)))
@@ -1551,21 +1575,8 @@ pub mod plan {
                                 .chain(None.into_iter());
                         }
                         Ok(Datum::Numeric(d)) => {
-                            // If the number is negative, it cannot improve the initial
-                            // value of `Some(time)`.
-                            if !d.0.is_negative() {
-                                // An `Ok` conversion is a valid upper bound, and an `Err` error
-                                // indicates a value above `u64::MAX`. The `ok()` method does the
-                                // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
-                                // Update `lower_bound` to be the maximum with `v`, where a `None`
-                                // value is treated as larger than `Some(_)` values.
-                                lower_bound = match (lower_bound, v) {
-                                    (None, _) => None,
-                                    (_, None) => None,
-                                    (x, y) => x.max(y),
-                                };
-                            }
+                            // Update `lower_bound` to be the maximum with `d`.
+                            lower_bound = lower_bound.max(Bound::from(d));
                         }
                         Ok(Datum::Null) => {
                             null_eval = true;
@@ -1578,7 +1589,7 @@ pub mod plan {
             }
 
             // If the lower bound exceeds `u64::MAX` the update cannot appear in the output.
-            if lower_bound.is_none() {
+            if lower_bound == Bound::TooBig {
                 return None.into_iter().chain(None.into_iter());
             }
 
@@ -1594,29 +1605,9 @@ pub mod plan {
                                 .chain(None.into_iter());
                         }
                         Ok(Datum::Numeric(d)) => {
-                            // If the upper bound is negative, it is impossible to satisfy.
-                            // We set the upper bound to the lower bound to indicate this.
-                            if d.0.is_negative() {
-                                upper_bound = lower_bound;
-                            } else {
-                                // An `Ok` conversion is a valid upper bound, and an `Err` error
-                                // indicates a value above `u64::MAX`. The `ok()` method does the
-                                // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
-                                // Update `upper_bound` to be the minimum with `v`, where a `None`
-                                // value is treated as larger than `Some(_)` values.
-                                upper_bound = match (upper_bound, v) {
-                                    (None, x) => x,
-                                    (x, None) => x,
-                                    (x, y) => x.min(y),
-                                };
-                                // Force the upper bound to be at least the lower bound.
-                                // The `is_some()` test is required as `None < Some(_)`,
-                                // and we do not want to set `None` to `Some(_)`.
-                                if upper_bound.is_some() && upper_bound < lower_bound {
-                                    upper_bound = lower_bound;
-                                }
-                            }
+                            // Update `upper_bound` to be the minimum with `v`
+                            // but at least the lower bound.
+                            upper_bound = upper_bound.min(Bound::from(d)).max(lower_bound);
                         }
                         Ok(Datum::Null) => {
                             null_eval = true;
@@ -1635,14 +1626,14 @@ pub mod plan {
                     .packer()
                     .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
                 let (lower_opt, upper_opt) = match (lower_bound, upper_bound) {
-                    (Some(lower_bound), Some(upper_bound)) => (
+                    (Bound::InRange(lower_bound), Bound::InRange(upper_bound)) => (
                         Some(Ok((row_builder.clone(), lower_bound, diff))),
                         Some(Ok((row_builder.clone(), upper_bound, -diff))),
                     ),
-                    (Some(lower_bound), None) => {
+                    (Bound::InRange(lower_bound), Bound::TooBig) => {
                         (Some(Ok((row_builder.clone(), lower_bound, diff))), None)
                     }
-                    (None, Some(upper_bound)) => {
+                    (Bound::TooBig, Bound::InRange(_) | Bound::TooSmall) => {
                         unreachable!("prior loop ensures that lower_bound <= upper_bound")
                     }
                     _ => (None, None),
