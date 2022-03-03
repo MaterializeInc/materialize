@@ -13,27 +13,36 @@ It does not intend to describe the **current behavior** of the system.
 Various liberties are taken in the names of commands and types, in the interest of simplicity.
 Not all commands here may be found in the implementation, nor all implementation commands found here.
 
+# Background
+
+You may wish to consult the
+[VLDB](https://vldb.org/pvldb/vol13/p1793-mcsherry.pdf) and
+[CIDR](https://github.com/TimelyDataflow/differential-dataflow/blob/master/differentialdataflow.pdf)
+papers on differential dataflow, as well as the [DD
+library](https://github.com/TimelyDataflow/differential-dataflow).
+
 # Data Model
 
 ## Data
 
-A *datum* is a single piece of arbitrary typed data. For example, one might use
-a datum to represent a single row in an SQL database, or a single key-value
-pair in a key-value store.
+The term *piece of data*, in this document, means a single, opaque piece of
+arbitrary typed data. For example, one might use a piece of data to represent a
+single row in an SQL database, or a single key-value pair in a key-value store.
+
+A piece of data is often written as simply `data` in this document, but we
+emphasize that each piece of data is an opaque, atomic object rather than a
+composite type. When we describe an update to a row, that data includes the
+entire new row, not just the columns inside it which changed.
+
+We say "piece of data" instead of "datum" because "datum" has a different
+meaning in Materialize's internals: it refers to a cell within a row.
 
 ## Times
 
-TODO: it sounds like there's more than one `T`, but Materialize will likely
-have *some* primary/local/privileged/internal choice of `T`. We should come up
-with a name for this concept: "local time", "Materialize time", etc. If there
-are multiple times in a cluster, we should figure out how to name them, what
-object each `T` is associated with, and when can we compare one time to
-another.
-
-Each instance of Materialize has a single set of *times* `T`, together with a
-*join* (least upper bound) `join(t1, t2) => t3` which takes two elements of `T`
-and yields a third. `join` must be associative, commutative, and idempotent.
-The times in a Materialize instance therefore form a
+Each instance of Materialize has a single set of *Materialize times* `T`,
+together with a *join* (least upper bound) `join(t1, t2) => t3` which takes two
+elements of `T` and yields a third. `join` must be associative, commutative,
+and idempotent. The times in a Materialize instance therefore form a
 [join-semilattice](https://en.wikipedia.org/wiki/Semilattice).
 
 A *time* is an element of `T`. We define a partial order `<=t` over times in
@@ -41,9 +50,13 @@ the usual way for join semilattices: for any two times `t1` and `t2` in `T`,
 `t1 <=t t2` iff `join(t1, t2) = t2`. We also define a strict partial order over
 times `<t`, such that `t1 < t2` iff `t1 <= t2` and `t1 != t2`.
 
-As a concrete example, we might choose `T` to be the integers, with `max` as
-our join. The usual integer senses of `<=` and `<` then serve as `<=t` and
-`<t`, respectively.
+`T` contains a minimal time `t0` such that `t0 <= t` for all `t` in `T`. Times
+are therefore
+[well-founded](https://en.wikipedia.org/wiki/Well-founded_relation).
+
+As a concrete example, we might choose `T` to be the naturals, with `max` as
+our join and `t0 = 0`. The usual senses of `<=` and `<` then serve as
+`<=t` and `<t`, respectively.
 
 A *frontier* is a set of times in `T`. We use frontiers to specify a lower (or
 upper) bound on times in `T`. We say that a time `t` *is later than* a frontier
@@ -53,7 +66,7 @@ on, in the obvious ways. For integers, a frontier could be the singleton set `F
 = {5}`; the set of times before `F` are therefore `{1, 2, 3, 4}`, and the times
 after `F` are `{6, 7, ...}`.
 
-The maximum frontier is the empty set `{}`. No time is greater than `{}`.
+The latest frontier is the empty set `{}`. No time is later than `{}`.
 
 ## Collection Versions
 
@@ -63,73 +76,176 @@ of a collection at a single instant in time. For example, a collection version
 could store the state of a relation (e.g. table) in SQL, or the state of a
 collection/bucket/keyspace in a key-value store.
 
-The *multiplicity* (or *frequency*) of a datum in some collection version `c`
-is the number of times it appears in `c`. We can encode a collection version as
-a map of `{datum => multiplicity}`.
+The *multiplicity* (or *frequency*) of a piece of data in some collection
+version `c` is, informally speaking, the number of times it appears in `c`. We
+write this as `multiplicity(c, data)`. We can encode a collection version as a
+map of `{data => multiplicity}`.
+
+Multiplicities may be negative: partially ordered delivery of updates to
+collection versions requires commutativity. However, users generally don't see
+collection versions with negative multiplicities.
+
+The *empty* collection version `c-empty` is an empty multiset.
 
 ## Time-varying collections
 
 A *time-varying collection* (TVC) represents the entire history of a collection
 which changes over time. At any time, it has an effective value: a collection
-version. We can think of a TVC as a map of `{time => collection-version}` for
-all possible times.
+version. We model a TVC as a map of `{time => collection-version}` for all
+possible times.
 
-Because the set of times is (in general) very large, and because TVCs usually
-change incrementally, it is more efficient to represent a TVC as a set of
-*updates* which encode changes between collection versions. An *update* is a
-triple `[datum, time, diff]`. When `<=t` is a total order, `diff` is the change
-in multiplicity for `datum` between `time - 1` and `time`. When `<=t` is only
-partial, see the [VLDB](https://vldb.org/pvldb/vol13/p1793-mcsherry.pdf) and
-[CIDR](https://github.com/TimelyDataflow/differential-dataflow/blob/master/differentialdataflow.pdf)
-papers on differential dataflow, as well as the [DD
-library](https://github.com/TimelyDataflow/differential-dataflow).
+A *read* of a TVC `tvc` at time `t` means the collection version stored in
+`tvc` for `t`. We write this as `read(tvc, t) => collection-version`.
 
-TODO: define some notion of a read at a particular time? It feels like we need
-this to talk about pTVC correctness.
+Every TVC begins with the empty collection version: `read(tvc, t0) = c-empty`.
 
 ## Partial time-varying collections
 
 At any wall-clock time a TVC is (in general) unknowable. Some of its past
 changes have been forgotten, some information has yet to arrive, and its future
-is unwritten. A *partial time-varying collection* (pTVC) provides a correct
-view of a TVC during a specific range of times. TODO: something here about
-density of times and what that concept means for partially ordered
-times/frontiers?
+is unwritten. A *partial time-varying collection* (pTVC) is a partial
+representation of a corresponding TVC which is accurate for some range of
+times. We model this as a map of times to collection versions plus two
+frontiers: *since* and *upper*.
 
-We say that a collection version read from a pTVC is *correct* when it is
-exactly the same collection version as would be read from the pTVC's
+Informally, the `since` frontier tells us which versions have been lost to the
+past, and the `upper` frontier tells us which versions have yet to be learned.
+At times between `since` and `upper`, a pTVC should be identical to its
 corresponding TVC.
+
+A *read* of a pTVC `ptvc` at time `t` is the collection version in `ptvc` which
+corresponds to `t`. We write this as `read(ptvc, t) => collection-version`.
+
+We say that a read from a pTVC is *correct* when it is exactly the same
+collection version as would be read from the pTVC's corresponding TVC:
+`read(ptvc, t) = read(tvc, t)`.
+
+All pTVCs ensure an important correctness invariant. Consider a pTVC `ptvc`
+corresponding to some TVC `tvc`, and with `since` and `upper` frontiers. For
+all times `t` such that `t` is later than or equal to `since`, and `t` is also
+earlier than `upper`, reads of `ptvc` at `t` are correct: `read(ptvc, t) =
+read(tvc, t)`.
+
+## Update-set representations of TVCs and pTVCs
+
+Because the set of times is in general very large, and because TVCs usually
+change incrementally, it is usually more efficient to represent a TVC as a set
+of *updates* which encode changes between collection versions. An *update* is a
+triple `[data, time, diff]`. The `data` specifies what element of the
+collection version is changing, the `time` gives the time the change took
+place, and the `diff` is the change in multiplicity for that element.
+
+Given a collection version `c1` and an update `u = [data, time, diff]`, we can
+*apply* `u` to `c1` to produce a new collection version `c2`: `apply(c1, u)
+=> c2`. `c2` is exactly `c1`, but with `multiplicity(c2, data) =
+multiplicity(c1, data) + diff`.
+
+We can also apply a countable set of updates to a collection version by
+applying each update in turn. We write this `apply(collection, updates)`. Since
+`apply` is commutative, the order does not matter. In practice, these are
+computers: all sets are countable. If you're wondering about uncountable sets,
+the [Möbius
+inversion](https://en.wikipedia.org/wiki/M%C3%B6bius_inversion_formula) might
+be helpful.
+
+Given a time `t` and two collection versions `c1` and `c2`, we can find their
+*difference*: a minimal set of updates which, when applied to `c1`, yields
+`c2`.
+
+```
+diff(t, c1, c2) = { u = [data, t, diff] |
+                    (data in c1 or data in c2) and
+                    (diff = multiplicity(c2, data) - multiplicity(c1, data))
+                  }
+```
+
+### Isomorphism between update and time-function representations
+
+Imagine we have a TVC represented as a set of updates, and wish to read the
+collection version at time `t`. We can do this by applying all updates which
+occurred before or at `t` to the empty collection version. This lets us go from
+an update-set representation to a time-function representation.
+
+```
+read(updates, t) =
+  apply(c-empty, { u = [data, time, diff] | u in updates and time <=t t })
+```
+
+Similarly, given a time-function representation `tvc`, we can obtain an
+update-set representation by considering each point in time and finding the
+difference between the version at that time and the product of all updates from
+all prior times:
+
+```
+updates(tvc, t) = diff(t,
+                       apply(c-empty, prior-updates(tvc, t)),
+                       read(tvc, t))
+```
+
+The updates prior to `t` are simply the union of the updates for all times
+prior to `t`:
+
+```
+prior-updates(tvc, t) = ⋃ updates(tvc, prior-t) for all prior-t <t t
+```
+
+These mutually-recursive relations bottom out in the initial time `t0`, and the
+corresponding initial collection version `c-empty`. Using these definitions, we
+can inductively transform an entire time-function representation `tvc` into a
+set of updates for all times by taking the union over all times:
+
+```
+updates(tvc) = ⋃ updates(tvc, t) for all t in T
+```
+
+This may seem a bit abstract---the formalism is shaped this way because
+collection versions are only partially ordered. If we take our times `T` to be
+the (totally ordered) naturals, we obtain much simpler definitions. The update
+set for a given time `t` is simply the difference between the version at `t`
+and the version at `t-1`.
+
+```
+updates(tvc, t) = diff(t, read(tvc, t - 1), read(tvc, t))
+```
+
+----------- [ End of current rewrite / later text unchanged ] --------------
+
+## Partial time-varying collections
 
 We represent a pTVC as a triple of `[updates, since, upper]`, where `updates`
 is a set of updates (just like a TVC), and `since` and `upper` are two
 frontiers which define which times we can correctly read, and which times may
 be written in future versions of the pTVC.
 
-*   The `upper` frontier communicates that for times `time` not greater or equal to `upper`, the updates at `time` are complete.
+### Since frontier
 
-    The upper frontier provides the information about how a TVC may continue to evolve.
-    All future updates will necessarily have their `time` greater or equal to the `upper` frontier.
-    As the system operates, the `upper` frontiers advance when the contents of the collection are known with certainty for more times.
+Informally, updates at times not greater than the `since` frontier may have
+been consolidated with updates at other times. The updates are not
+discarded, but their times may have been advanced to allow cancelation and
+consolidation of updates to occur. This is analogous to "version vacuuming"
+in multiversioned databases. As the system operates, the `since` frontier
+may advance to allow compaction of updates. This happens subject to
+constraints, and only when correctness permits.
 
-    We think of `upper` as the "write frontier": times greater or equal to it may still be written to the TVC.
+We think of `since` as the "read frontier": times earlier than `since` cannot
+be correctly read.
 
-*   The `since` frontier communicates that for times `time` greater or equal to `since`, the accumulated collection at `time` will be correct.
+### Upper frontier
 
-    Informally, updates at times not greater than the `since` frontier may have been consolidated with updates at other times.
-    The updates are not discarded, but their times may have been advanced to allow cancelation and consolidation of updates to occur.
-    This is analogous to "version vacuuming" in multiversioned databases.
-    As the system operates, the `since` frontier may advance to allow compaction of updates.
-    This happens subject to constraints, and only when correctness permits.
+The upper frontier tells us how a pTVC may continue to
+evolve. All future updates will necessarily have their `time` greater or
+equal to the `upper` frontier. As the system operates, the `upper`
+frontier advances when the contents of the collection are known with
+certainty for more times.
 
-    We think of `since` as the "read frontier": times greater or equal to it may yet be correctly read from the TVC.
+We think of `upper` as the "write frontier": times later than or equal to it may
+still be written to the TVC. For some time `t` not later than or equal to
+`upper`, the updates at `t` are complete.
 
 These two frontiers mean that for any `time` greater or equal to `since`, but not greater or equal to `upper`, we can exactly reconstruct the collection at `time`.
 If `time` is not greater or equal to `since`, we may have permanently lost historical distinctions that allow us to know the contents at `time`.
 If `time` is greater or equal to `upper`, we may still receive changes to the collection that occur at `time`.
 The two frontiers never move backward, and often move forward as the system operates.
-
-At each moment, Materialize's representation of a TVC is as a set of update triples `(data, time, diff)` and the two frontiers `since` and `upper`.
-We call this pair of set of updates and `(since, upper)` frontiers a *partial TVC* or pTVC.
 
 ## Evolution
 
