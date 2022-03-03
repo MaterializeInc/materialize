@@ -43,7 +43,7 @@ _field_type_        | The data type of a field indicated by _field_name_.
 
 ### `list` properties
 
-Name | Use
+Field | Use
 -----|-----
 `element_type` | Creates a custom [`list`](../types/list) whose elements are of `element_type`.
 
