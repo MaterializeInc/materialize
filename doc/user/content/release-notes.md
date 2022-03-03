@@ -73,7 +73,7 @@ behavior of PostgreSQL.
 
 - Change the claimed PostgreSQL version returned by the `version()` function to 9.5 to match the values of the `server_version` and `server_version_num session` parameters.
 
-- Fix data loss bug of in [Postgres sources] introduced in version v0.20.0 {{% gh 10981 %}}.
+- Fix a data loss bug in [Postgres sources] introduced in version v0.20.0 {{% gh 10981 %}}.
 
 - More precisely infer the output type of numeric division and modulo operations as `NOT NULL` when the input arguments are `NOT NULL`.
 
