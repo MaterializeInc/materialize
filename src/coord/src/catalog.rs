@@ -905,8 +905,6 @@ impl Catalog {
             "dataflows only shipped to 1 instance currently"
         );
         for (id, name) in compute_instances.into_iter() {
-            let oid = catalog.allocate_oid()?;
-
             let id = id.try_into().expect("no negative compute_instance IDs");
 
             catalog.state.compute_instances_by_id.insert(
