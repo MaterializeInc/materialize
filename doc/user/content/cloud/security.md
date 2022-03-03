@@ -29,18 +29,18 @@ Allowing the static IP address enables the connection from your Materialize Clou
 
 The specific commands to allow the static IP address will vary depending on your operating system and firewall (e.g. `iptables`, `firewall-cmd`, UFW, AWS, Azure, and etc). Please refer to the appropriate documentation for your specific firewall.
 
-### Getting the Static IP Address
+### Getting the static IP address
 
-Once you’ve created a [deployment](../cloud-deployments/), to get the static IP address associated with your deployment you can follow these steps:
+Once you’ve created a [deployment](../cloud-deployments/), you can get its associated static IP address following these steps:
 
 1. Click on a deployment to see the individual deployment view.
 2. On the right-hand side, click on the copy button to copy the IP address.
 
-### Allowing the Static IP Address
+### Allowing the static IP address
 
-The following is a list of commands to allow the static IP address with some of the most common firewalls.
+The following is a list of commands to allow the static IP address with some of the most common firewalls:
 
-#### IPTABLES
+#### iptables
 ```
 sudo iptables -I INPUT -s <static IP> -j ACCEPT
 ```
@@ -65,7 +65,7 @@ sudo csf -a <static IP>
 
 #### AWS Security Groups
 
-If you are already using AWS Security Groups, you can add the static IP address to the security group to allow connections from your Materialize Cloud deployments.
+If you are already using AWS security groups, you can add the static IP address to the security group to allow connections from your Materialize Cloud deployments.
 
 To add the static IP address to your AWS Security Group, follow these steps:
 
@@ -75,17 +75,17 @@ To add the static IP address to your AWS Security Group, follow these steps:
 1. Click on the **Add rule** button.
 1. Select **Custom TCP** as the type.
 1. Specify the **Port range** depending on the source you want to connect to. For example, if you want to connect to a Kafka source, you would specify **Port range: 9092** or if you want to connect to a PostgreSQL source, you would specify **Port range: 5432**.
-1. Add the Materialize Cloud deployment’s static IP address followed by `/32` to the **Source** field.
+1. Add the Materialize Cloud deployment’s static IP address followed by `/32` to the **Source** field. The `/32` mask is used to only designate the speficic host, and not the entire subnet.
 1. Click on the **Save** button.
 
-For more information on AWS Security Groups, please refer to the AWS [VPC Security Groups documentaiton](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html).
+For more information on AWS security groups, please refer to the AWS [VPC security groups documentaiton](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html).
 
 
-#### Azure
+#### Azure Firewall
 
-For more information on how to allow the static IP address with Azure, please refer to the [Azure documentation](https://docs.microsoft.com/en-us/azure/virtual-network/ip-services/configure-public-ip-firewall)
+For the steps required to allow static IP addresses with Azure, please refer to the [Azure documentation](https://docs.microsoft.com/en-us/azure/virtual-network/ip-services/configure-public-ip-firewall).
 
 
-#### GCP
+#### GCP VPC firewall
 
-For more information on how to allow the static IP address with GCP, please refer to the [GCP documentation](https://cloud.google.com/vpc/docs/using-firewalls)
+For the steps required to allow static IP addresses with GCP, please refer to the [GCP documentation](https://cloud.google.com/vpc/docs/using-firewalls).

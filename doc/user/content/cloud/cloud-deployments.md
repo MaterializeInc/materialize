@@ -25,7 +25,7 @@ The Details card shows you basic information about your deployment:
 - Name
 - Status
 - Hostname
-- Static IP
+- Static IP address
 - Materialize version
 - Size
 - Cloud provider and region
