@@ -53,7 +53,7 @@ means that: an interval of 24 hours will not be equal to an interval
 of 1 day, you cannot subtract hours from days, and when ordering
 intervals `d days > h hours` for all `d` and `h` {{% gh 10708 %}}.
 
-To force a conversion from hours to days, use the new [`justify_hours`](/sql/functions/justify-hours) function.
+  To force a conversion from hours to days, use the new [`justify_hours`](/sql/functions/justify-hours) function.
 
 - **Breaking change.** Print all negative [`interval`]
 units as plural (e.g., `-1 days` will be printed instead of `-1 day`). This
