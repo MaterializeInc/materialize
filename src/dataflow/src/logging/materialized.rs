@@ -86,7 +86,6 @@ pub struct Peek {
     time: Timestamp,
     /// The ID of the peek.
     uuid: Uuid,
-    // TODO might be nice for logging purposes to have the connection id here too
 }
 
 impl Peek {

@@ -863,7 +863,8 @@ impl Coordinator {
         match message {
             DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                 assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
-                // We expect exactly one peek response, which we forward.
+                // We expect exactly one peek response, which we forward. Then we clean up the
+                // peek's state in the coordinator.
                 let (rows_tx, conn_id) = self
                     .pending_peeks
                     .remove(&uuid)
@@ -874,7 +875,7 @@ impl Coordinator {
                 let uuids = self
                     .client_pending_peeks
                     .get_mut(&conn_id)
-                    .expect("TODO think of good message");
+                    .expect(format!("no client state for connection {conn_id}").as_str());
                 uuids.remove(&uuid);
                 if uuids.is_empty() {
                     self.client_pending_peeks.remove(&conn_id);
