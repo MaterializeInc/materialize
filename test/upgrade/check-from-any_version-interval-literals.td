@@ -7,12 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
-# Many of the INTERVAL types return an incorrect value, see
-# Wrong result returned when SELECT-ing some INTERVAL types #7382
-# so currently this is test is mostly about being able to at least
-# read back the source table without erroring out.
-#
 
 > SELECT * FROM postgres_interval1;
 "1 year 2 months 3 days 14:42:07.8"
@@ -25,9 +19,6 @@
 
 > SELECT * FROM interval_minute;
 02:03:00
-
-> SELECT * FROM interval_hour;
-"5 days 03:00:00"
 
 > SELECT * FROM interval_day;
 "123 days"

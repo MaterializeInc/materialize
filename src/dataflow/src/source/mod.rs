@@ -9,11 +9,16 @@
 
 //! Types related to the creation of dataflow sources.
 
-use dataflow_types::{DataflowError, SourceErrorDetails};
 use mz_avro::types::Value;
-use repr::MessagePayload;
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::{DecodeError, SourceErrorDetails};
+use mz_persist::client::{StreamReadHandle, StreamWriteHandle};
+use mz_persist::operators::stream::Persist;
+use mz_persist_types::Codec;
+use mz_repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
@@ -21,26 +26,30 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
-    operators::{Capability, Event},
+    operators::{Capability, CapabilitySet, Event},
 };
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use dataflow_types::{
-    Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
+use mz_dataflow_types::{
+    sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset},
+    SourceError,
 };
-use expr::{PartitionId, SourceInstanceId};
-use log::error;
-use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use ore::now::NowFn;
+use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::now::NowFn;
+use mz_ore::task;
 use prometheus::core::{AtomicI64, AtomicU64};
+use tracing::{debug, error, trace};
 
-use repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::Scope;
+use timely::dataflow::operators::generic::{operator, OutputHandle};
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
@@ -52,8 +61,11 @@ use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
 use crate::source::timestamp::TimestampBindingRc;
+use crate::source::timestamp::TimestampBindingUpdater;
+use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 
 mod file;
+mod gen;
 mod kafka;
 mod kinesis;
 mod loki;
@@ -76,14 +88,12 @@ pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
 
 // Interval after which the source operator will yield control.
-static YIELD_INTERVAL_MS: u128 = 10;
+const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Shared configuration information for all source types.
 pub struct SourceConfig<'a, G> {
     /// The name to attach to the underlying timely operator.
     pub name: String,
-    /// The name of the SQL object this source corresponds to
-    pub sql_name: String,
     /// The name of the upstream resource this source corresponds to
     /// (For example, a Kafka topic)
     pub upstream_name: Option<String>,
@@ -98,8 +108,6 @@ pub struct SourceConfig<'a, G> {
     // Timestamping fields.
     /// Data-timestamping updates: information about (timestamp, source offset)
     pub timestamp_histories: Option<TimestampBindingRc>,
-    /// A source can use Real-Time consistency timestamping or BYO consistency information.
-    pub consistency: Consistency,
     /// Source Type
     /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
     /// downgraded)
@@ -114,10 +122,12 @@ pub struct SourceConfig<'a, G> {
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
     pub base_metrics: &'a SourceBaseMetrics,
+    /// An external ID to use for all AWS AssumeRole operations.
+    pub aws_external_id: AwsExternalId,
 }
 
-#[derive(Clone, Serialize, Debug, Deserialize)]
 /// A record produced by a source
+#[derive(Clone, Serialize, Debug, Deserialize)]
 pub struct SourceOutput<K, V>
 where
     K: Data,
@@ -127,37 +137,44 @@ where
     pub key: K,
     /// The record's value
     pub value: V,
-    /// The position in the source, if such a concept exists (e.g., Kafka offset, file line number)
-    pub position: Option<i64>,
+    /// The position in the partition described by the `partition` in the source
+    /// (e.g., Kafka offset, file line number, monotonic increasing
+    /// number, etc.)
+    pub position: i64,
     /// The time the record was created in the upstream systsem, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
+    /// The partition of this message, present iff the partition comes from Kafka
+    pub partition: PartitionId,
 }
 
-/// The data that we send from sources to the decode process
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
-pub(crate) struct SourceData {
-    /// The actual value
-    pub(crate) value: Option<Result<Row, DataflowError>>,
-    /// The source's reported position for this record
-    ///
-    /// e.g. kafka offset or file location
-    pub(crate) position: Option<i64>,
-
-    /// The time that the upstream source believes that the message was created
-    ///
-    /// Currently only applies to Kafka
-    pub(crate) upstream_time_millis: Option<i64>,
-}
-
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 /// The output of the decoding operator
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct DecodeResult {
     /// The decoded key
-    pub key: Option<Result<Row, DataflowError>>,
+    pub key: Option<Result<Row, DecodeError>>,
     /// The decoded value
-    pub value: Option<Result<Row, DataflowError>>,
+    pub value: Option<Result<Row, DecodeError>>,
     /// The index of the decoded value in the stream
-    pub position: Option<i64>,
+    pub position: i64,
+    /// The time the record was created in the upstream systsem, as milliseconds since the epoch
+    pub upstream_time_millis: Option<i64>,
+    /// The partition this record came from
+    pub partition: PartitionId,
+    /// If this is a Kafka stream, the appropriate metadata
+    // TODO(bwm): This should probably be statically different for different streams, or we should
+    // propagate whether metadata is requested into the decoder
+    pub metadata: Row,
+}
+
+/// Kafka-specific information about the event
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub struct KafkaMetadata {
+    /// The Partition within the Kafka Topic
+    pub partition: i32,
+    /// The message offset within the given partition
+    pub offset: i64,
+    /// The message timestamp, expressed as a Unix Milliseconds Timestamp
+    pub timestamp: i64,
 }
 
 impl<K, V> SourceOutput<K, V>
@@ -169,14 +186,16 @@ where
     pub fn new(
         key: K,
         value: V,
-        position: Option<i64>,
+        position: i64,
         upstream_time_millis: Option<i64>,
+        partition: PartitionId,
     ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
             position,
             upstream_time_millis,
+            partition,
         }
     }
 }
@@ -210,13 +229,7 @@ where
     where
         V: Hashable<Output = u64>,
     {
-        Exchange::new(|x: &Self| {
-            if let Some(position) = x.position {
-                position.hashed()
-            } else {
-                x.value.hashed()
-            }
-        })
+        Exchange::new(|x: &Self| x.position.hashed())
     }
 }
 
@@ -224,20 +237,21 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
+    capabilities: Rc<
+        RefCell<
+            Option<(
+                Capability<Timestamp>,
+                Capability<Timestamp>,
+                CapabilitySet<Timestamp>,
+            )>,
+        >,
+    >,
     activator: Activator,
-}
-
-impl SourceToken {
-    /// Re-activates the associated timely source operator.
-    pub fn activate(&self) {
-        self.activator.activate();
-    }
 }
 
 impl Drop for SourceToken {
     fn drop(&mut self) {
-        *self.capability.borrow_mut() = None;
+        *self.capabilities.borrow_mut() = None;
         self.activator.activate();
     }
 }
@@ -256,6 +270,16 @@ pub trait MaybeLength {
     fn len(&self) -> Option<usize>;
     /// Returns true if the object is empty
     fn is_empty(&self) -> bool;
+}
+
+impl MaybeLength for () {
+    fn len(&self) -> Option<usize> {
+        None
+    }
+
+    fn is_empty(&self) -> bool {
+        true
+    }
 }
 
 impl MaybeLength for Vec<u8> {
@@ -279,6 +303,29 @@ impl MaybeLength for Value {
     }
 }
 
+impl MaybeLength for MessagePayload {
+    fn len(&self) -> Option<usize> {
+        match self {
+            MessagePayload::Data(data) => Some(data.len()),
+            MessagePayload::EOF => None,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+impl<T: MaybeLength> MaybeLength for Option<T> {
+    fn len(&self) -> Option<usize> {
+        self.as_ref().and_then(|v| v.len())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_ref().map(|v| v.is_empty()).unwrap_or_default()
+    }
+}
+
 /// This trait defines the interface between Materialize and external sources, and
 /// must be implemented for every new kind of source.
 ///
@@ -286,6 +333,9 @@ impl MaybeLength for Value {
 /// a "partition" is baked into this trait and introduces some cognitive overhead as
 /// we are forced to treat things like file sources as "single-partition"
 pub(crate) trait SourceReader {
+    type Key: timely::Data + MaybeLength;
+    type Value: timely::Data + MaybeLength;
+
     /// Create a new source reader.
     ///
     /// This function returns the source reader and optionally, any "partition" it's
@@ -295,34 +345,27 @@ pub(crate) trait SourceReader {
         source_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
+        worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        aws_external_id: AwsExternalId,
+        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         logger: Option<Logger>,
         metrics: crate::source::metrics::SourceBaseMetrics,
-    ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
+    ) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
-
-    /// Instruct the source to start subscribing to `pid`.
-    ///
-    /// Many (most?) sources do not actually have partitions and for those kinds
-    /// of sources the default implementation is a panic (to make sure we don't
-    /// inadvertently call this at runtime).
-    fn add_partition(&mut self, _pid: PartitionId) {
-        panic!("add partiton not supported for source!");
-    }
 
     /// Returns the next message available from the source.
     ///
     /// Note that implementers are required to present messages in strictly ascending\
     /// offset order within each partition.
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error>;
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error>;
 }
 
-#[derive(Debug)]
-pub(crate) enum NextMessage {
-    Ready(SourceMessage),
+pub(crate) enum NextMessage<Key, Value> {
+    Ready(SourceMessage<Key, Value>),
     Pending,
     TransientDelay,
     Finished,
@@ -330,7 +373,7 @@ pub(crate) enum NextMessage {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage {
+pub struct SourceMessage<Key, Value> {
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -339,397 +382,63 @@ pub struct SourceMessage {
     ///
     /// Milliseconds since the unix epoch
     pub upstream_time_millis: Option<i64>,
-    /// Optional key
-    pub key: Option<Vec<u8>>,
-    /// Optional payload
-    pub payload: Option<MessagePayload>,
+    /// The message key
+    pub key: Key,
+    /// The message value
+    pub value: Value,
 }
 
-impl fmt::Debug for SourceMessage {
+impl fmt::Debug for SourceMessage<(), MessagePayload> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceMessage")
+            .field("partition", &self.partition)
+            .field("offset", &self.offset)
+            .field("upstream_time_millis", &self.upstream_time_millis)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
             .field("offset", &self.offset)
             .field("upstream_time_millis", &self.upstream_time_millis)
             .field("key[present]", &self.key.is_some())
-            .field("payload[present]", &self.payload.is_some())
+            .field("value[present]", &self.value.is_some())
             .finish()
     }
 }
 
-/// Distinguish between offset bindings that are final and agreed upon (Fixed)
-/// and still being negotiated (Tentative).
-#[derive(Copy, Clone, Debug)]
-enum TimestampUpperBound {
-    Fixed(MzOffset),
-    Tentative(MzOffset),
-}
-
-impl TimestampUpperBound {
-    fn inner(&self) -> MzOffset {
-        match self {
-            TimestampUpperBound::Fixed(o) => *o,
-            TimestampUpperBound::Tentative(o) => *o,
-        }
-    }
-
-    fn is_fixed(&self) -> bool {
-        match self {
-            TimestampUpperBound::Fixed(_) => true,
-            TimestampUpperBound::Tentative(_) => false,
-        }
-    }
-}
-
-/// Per-partition consistency information. This effectively acts a cache of
-/// timestamp binding information that needs to be refreshed every time
-/// the source operator is invoked.
-#[derive(Copy, Clone, Debug)]
-struct ConsInfo {
-    /// The timestamp we are currently aware of. This timestamp is open iff
-    /// offset < current_upper_bound  - 1 (aka there are more offsets we need to find)
-    /// and closed otherwise.
-    current_ts: Timestamp,
-    /// Current upper bound for the current timestamp. All offsets < upper_bound
-    /// are assigned to current_ts.
-    current_upper_bound: TimestampUpperBound,
-    /// The last processed offset
-    offset: MzOffset,
-}
-
-impl ConsInfo {
-    fn new(timestamp: Timestamp) -> Self {
-        Self {
-            current_ts: timestamp,
-            current_upper_bound: TimestampUpperBound::Fixed(MzOffset { offset: 0 }),
-            offset: MzOffset { offset: 0 },
-        }
-    }
-
-    /// Checks if the current binding is sufficient for this offset.
-    ///
-    /// This code assumes we will be ingesting offsets in order.
-    fn is_valid(&self, offset: MzOffset) -> bool {
-        if !self.current_upper_bound.is_fixed() || self.current_upper_bound.inner() > offset {
-            true
-        } else {
-            false
-        }
-    }
-
-    fn update_timestamp_fixed(&mut self, timestamp: Timestamp, upper: MzOffset) {
-        assert!(timestamp >= self.current_ts);
-        assert!(upper >= self.current_upper_bound.inner());
-
-        self.current_upper_bound = TimestampUpperBound::Fixed(upper);
-        self.current_ts = timestamp;
-    }
-
-    /// Store a new (time, offset) binding in the cache. If no such binding is
-    /// available, we will start proposing our own.
-    fn update_timestamp(&mut self, timestamp: Timestamp, offset: Option<MzOffset>) {
-        if offset.is_some() {
-            self.update_timestamp_fixed(timestamp, offset.expect("known to exist"));
-        } else {
-            // We only got a new timestamp, and no new upper bound. Let's declare the
-            // upper bound to be equal to the current maximum processed offset and go
-            // from there.
-            assert!(timestamp >= self.current_ts);
-            let old_upper = self.current_upper_bound.inner();
-            self.current_upper_bound = TimestampUpperBound::Tentative(old_upper);
-            self.current_ts = timestamp;
-        }
-    }
-
-    /// Update the last read offset.
-    fn update_offset(&mut self, offset: MzOffset) {
-        assert!(offset >= self.offset);
-
-        if self.current_upper_bound.is_fixed() {
-            assert!(offset < self.current_upper_bound.inner())
-        } else if offset > self.current_upper_bound.inner() {
-            self.current_upper_bound = TimestampUpperBound::Tentative(offset);
-        }
-
-        self.offset = offset;
-    }
-
-    /// Return the maximum timestamp for which we will not receive any more updates.
-    fn get_closed_timestamp(&self) -> Timestamp {
-        if self.current_ts == 0
-            || (self.current_upper_bound.is_fixed()
-                && self.current_upper_bound.inner().offset - 1 == self.offset.offset)
-        {
-            return self.current_ts;
-        }
-
-        self.current_ts - 1
-    }
-
-    /// The most recently read offset.
-    fn offset(&self) -> MzOffset {
-        self.offset
-    }
-
-    /// Return a (time, offset) binding if we think we have a new one to contribute.
-    fn proposal(&self) -> Option<(Timestamp, MzOffset)> {
-        // Need to be careful here to make sure we are not echoing a prior proposal.
-        if !self.current_upper_bound.is_fixed() && self.current_upper_bound.inner() == self.offset {
-            Some((self.current_ts, self.current_upper_bound.inner()))
-        } else {
-            None
-        }
-    }
-}
-
-/// Contains all necessary information that relates to consistency and timestamping.
-/// This information is (and should remain) source independent. This covers consistency
-/// information for sources that follow RT consistency and BYO consistency.
-pub struct ConsistencyInfo {
-    /// Last closed timestamp
-    last_closed_ts: u64,
-    /// Frequency at which we should downgrade capability (in milliseconds)
-    downgrade_capability_frequency: u64,
-    /// Per partition (a partition ID in Kafka is an i32), keep track of the last closed offset
-    /// and the last closed timestamp.
-    /// Note that we only keep track of partitions this worker is responsible for in this
-    /// hashmap.
-    partition_metadata: HashMap<PartitionId, ConsInfo>,
-    /// Source Type (Real-time or BYO)
-    source_type: Consistency,
-    /// Per-source Prometheus metrics.
-    source_metrics: SourceMetrics,
-    /// source global id
-    source_id: SourceInstanceId,
-    /// True if this worker is the active reader
-    active: bool,
-    /// id of worker
+/// Returns true if the given source id/worker id is responsible for handling the given
+/// partition.
+pub fn responsible_for(
+    source_id: &GlobalId,
     worker_id: usize,
-    /// total number of workers
     worker_count: usize,
-}
-
-impl ConsistencyInfo {
-    fn new(
-        active: bool,
-        metrics_name: String,
-        source_id: SourceInstanceId,
-        worker_id: usize,
-        worker_count: usize,
-        consistency: Consistency,
-        timestamp_frequency: Duration,
-        logger: Option<Logger>,
-        base_metrics: &SourceBaseMetrics,
-    ) -> ConsistencyInfo {
-        ConsistencyInfo {
-            last_closed_ts: 0,
-            // Safe conversion: statement.rs checks that value specified fits in u64
-            downgrade_capability_frequency: timestamp_frequency.as_millis().try_into().unwrap(),
-            partition_metadata: HashMap::new(),
-            source_type: consistency,
-            source_metrics: SourceMetrics::new(
-                &base_metrics,
-                &metrics_name,
-                source_id,
-                &worker_id.to_string(),
-                logger,
-            ),
-            source_id,
-            active,
-            worker_id,
-            worker_count,
+    pid: &PartitionId,
+) -> bool {
+    match pid {
+        PartitionId::None => {
+            // All workers are responsible for reading in Kafka sources. Other sources
+            // support single-threaded ingestion only. Note that in all cases we want all
+            // readers of the same source or same partition to reside on the same worker,
+            // and only load-balance responsibility across distinct sources.
+            (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
         }
-    }
+        PartitionId::Kafka(p) => {
+            // We want to distribute partitions across workers evenly, such that
+            // - different partitions for the same source are uniformly distributed across workers
+            // - the same partition id across different sources are uniformly distributed across workers
+            // - the same partition id across different instances of the same source is sent to
+            //   the same worker.
+            // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
+            // that to offset distributing partitions round robin across workers.
 
-    /// Returns true if this worker is responsible for handling this partition
-    fn responsible_for(&self, pid: &PartitionId) -> bool {
-        match pid {
-            PartitionId::None => self.active,
-            PartitionId::Kafka(p) => {
-                // We want to distribute partitions across workers evenly, such that
-                // - different partitions for the same source are uniformly distributed across workers
-                // - the same partition id across different sources are uniformly distributed across workers
-                // - the same partition id across different instances of the same source is sent to
-                //   the same worker.
-                // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
-                // that to offset distributing partitions round robin across workers.
-
-                // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
-                // overflow.
-                let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
-                (hash % self.worker_count as u64) == self.worker_id as u64
-            }
-        }
-    }
-
-    /// Returns true if we currently know of particular partition. We know (and have updated the
-    /// metadata for this partition) if there is an entry for it
-    fn knows_of(&self, pid: &PartitionId) -> bool {
-        self.partition_metadata.contains_key(pid)
-    }
-
-    /// Start tracking consistency information and metrics for `pid`.
-    ///
-    /// Need to call this together with `SourceReader::add_partition` before we
-    /// ingest from `pid`.
-    fn add_partition(&mut self, pid: &PartitionId) {
-        if self.partition_metadata.contains_key(pid) {
-            error!("Incorrectly attempting to add a partition twice for source: {} partition: {}. Ignoring",
-                   self.source_id,
-                   pid
-            );
-
-            return;
-        }
-
-        self.partition_metadata
-            .insert(pid.clone(), ConsInfo::new(self.last_closed_ts));
-        self.source_metrics.add_partition(pid);
-    }
-
-    /// Refreshes the source instance's knowledge of timestamp bindings.
-    ///
-    /// This function needs to be called at the start of every source operator
-    /// execution to ensure all source instances assign the same timestamps.
-    fn refresh(
-        &mut self,
-        source: &mut dyn SourceReader,
-        timestamp_bindings: &mut TimestampBindingRc,
-    ) {
-        // Pick up any new partitions that we don't know about but should.
-        for pid in timestamp_bindings.partitions() {
-            if !self.knows_of(&pid) && self.responsible_for(&pid) {
-                source.add_partition(pid.clone());
-                self.add_partition(&pid);
-            }
-
-            if !self.responsible_for(&pid) {
-                continue;
-            }
-            let cons_info = self
-                .partition_metadata
-                .get_mut(&pid)
-                .expect("partition known to exist");
-
-            if let Some((timestamp, max)) =
-                timestamp_bindings.get_binding(&pid, cons_info.offset() + 1)
-            {
-                cons_info.update_timestamp(timestamp, max);
-            }
-        }
-    }
-
-    fn downgrade_capability(
-        &mut self,
-        cap: &mut Capability<Timestamp>,
-        timestamp_bindings: &mut TimestampBindingRc,
-    ) {
-        //  We need to determine the maximum timestamp that is fully closed. This corresponds to the minimum of
-        //  * closed timestamps across all partitions we own
-        //  * maximum bound timestamps across all partitions we don't own (the `upper`)
-        let mut upper = Antichain::new();
-        timestamp_bindings.read_upper(&mut upper);
-
-        let mut min: Option<Timestamp> = if let Some(time) = upper.elements().get(0) {
-            Some(time.saturating_sub(1))
-        } else {
-            None
-        };
-        // Determine which timestamps have been closed. A timestamp is closed once we have processed
-        // all messages that we are going to process for this timestamp across all partitions that the
-        // worker knows about (i.e. the ones the worker has been assigned to read from).
-        // In practice, the following happens:
-        // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
-        // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
-        // in next_partition_ts
-
-        for (pid, cons_info) in self.partition_metadata.iter_mut() {
-            let closed_ts = cons_info.get_closed_timestamp();
-            let metrics = self
-                .source_metrics
-                .partition_metrics
-                .get_mut(&pid)
-                .expect("partition known to exist");
-
-            metrics.closed_ts.set(closed_ts);
-
-            min = match min.as_mut() {
-                Some(min) => Some(std::cmp::min(closed_ts, *min)),
-                None => Some(closed_ts),
-            };
-        }
-        let min = min.unwrap_or(0);
-
-        // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-        if min > self.last_closed_ts {
-            self.source_metrics.capability.set(min);
-            cap.downgrade(&(&min + 1));
-            self.last_closed_ts = min;
-
-            let new_compaction_frontier = Antichain::from_elem(min + 1);
-            timestamp_bindings.set_compaction_frontier(new_compaction_frontier.borrow());
-        }
-    }
-
-    /// Potentially propose new timestamp bindings to peers.
-    ///
-    /// Does nothing for BYO sources. This function needs to be called
-    /// at the end of source operator execution to make sure all source
-    /// instances assign the same timestamps.
-    fn propose(&self, timestamp_bindings: &mut TimestampBindingRc) {
-        if self.source_type == Consistency::RealTime {
-            for (pid, cons_info) in self.partition_metadata.iter() {
-                if let Some((time, offset)) = cons_info.proposal() {
-                    timestamp_bindings.add_binding(
-                        pid.clone(),
-                        time,
-                        MzOffset {
-                            offset: offset.offset + 1,
-                        },
-                        true,
-                    );
-                }
-            }
-        }
-    }
-
-    /// For a given offset, returns an option type returning the matching timestamp or None
-    /// if no timestamp can be assigned.
-    ///
-    /// The timestamp history contains a sequence of
-    /// (partition_count, timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
-    /// for which offset>=x.
-    fn find_matching_timestamp(
-        &mut self,
-        partition: &PartitionId,
-        offset: MzOffset,
-        timestamp_bindings: &TimestampBindingRc,
-    ) -> Option<Timestamp> {
-        // We either can take a fast path, where we simply re-use the currently
-        // available timestamp binding, or if one isn't available for `offset` in `partition`, we have to
-        // look it up from the set of timestamp histories
-
-        // We know we will only read from partitions already assigned to this
-        // worker.
-        let cons_info = self
-            .partition_metadata
-            .get_mut(partition)
-            .expect("known to exist");
-
-        if cons_info.is_valid(offset) {
-            // This is the fast path - we can reuse a timestamp binding
-            // we already know about.
-            cons_info.update_offset(offset);
-            Some(cons_info.current_ts)
-        } else {
-            if let Some((timestamp, max_offset)) = timestamp_bindings.get_binding(partition, offset)
-            {
-                cons_info.update_timestamp(timestamp, max_offset);
-                cons_info.update_offset(offset);
-                Some(timestamp)
-            } else {
-                None
-            }
+            // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
+            // overflow.
+            let hash = (source_id.hashed() >> 32) + *p as u64;
+            (hash % worker_count as u64) == worker_id as u64
         }
     }
 }
@@ -779,42 +488,38 @@ impl SourceMetrics {
         }
     }
 
-    /// Add metrics for `partition_id`
-    pub fn add_partition(&mut self, partition_id: &PartitionId) {
-        if self.partition_metrics.contains_key(partition_id) {
-            error!(
-                "incorrectly adding a duplicate partition metric in source: {} partition: {}",
-                self.source_id, partition_id
-            );
-            return;
-        }
-
-        let metric = PartitionMetrics::new(
-            &self.base_metrics,
-            &self.source_name,
-            self.source_id,
-            partition_id,
-        );
-        self.partition_metrics.insert(partition_id.clone(), metric);
-    }
-
     /// Log updates to which offsets / timestamps read up to.
-    pub fn record_partition_offsets(&mut self, offsets: HashMap<PartitionId, (MzOffset, u64)>) {
+    pub fn record_partition_offsets(
+        &mut self,
+        offsets: HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
+    ) {
         if self.logger.is_none() {
             return;
         }
 
-        for (partition, (offset, timestamp)) in offsets {
-            if let Some(metric) = self.partition_metrics.get_mut(&partition) {
-                metric.record_offset(
-                    &mut self.logger.as_mut().unwrap(),
-                    &self.source_name,
-                    self.source_id,
-                    &partition,
-                    offset.offset,
-                    timestamp as i64,
-                );
-            }
+        for (partition, (offset, timestamp, count)) in offsets {
+            let metric = self
+                .partition_metrics
+                .entry(partition.clone())
+                .or_insert_with(|| {
+                    PartitionMetrics::new(
+                        &self.base_metrics,
+                        &self.source_name,
+                        self.source_id,
+                        &partition,
+                    )
+                });
+
+            metric.messages_ingested.inc_by(count);
+
+            metric.record_offset(
+                &mut self.logger.as_mut().unwrap(),
+                &self.source_name,
+                self.source_id,
+                &partition,
+                offset.offset,
+                timestamp as i64,
+            );
         }
     }
 }
@@ -868,6 +573,9 @@ impl PartitionMetrics {
             offset: offset - self.last_offset,
             timestamp: timestamp - self.last_timestamp,
         });
+
+        self.offset_received.set(offset);
+        self.offset_ingested.set(offset);
         self.last_offset = offset;
         self.last_timestamp = timestamp;
     }
@@ -1077,30 +785,33 @@ where
     let (tx, mut rx) = mpsc::channel(64);
 
     if active {
-        tokio::spawn(async move {
-            let timestamper = Timestamper::new(tx, timestamp_frequency, now);
-            let source = connector.start(&timestamper);
-            tokio::pin!(source);
+        task::spawn(
+            || format!("source_simple_timestamper:{}", id.source_id),
+            async move {
+                let timestamper = Timestamper::new(tx, timestamp_frequency, now);
+                let source = connector.start(&timestamper);
+                tokio::pin!(source);
 
-            loop {
-                tokio::select! {
-                    res = timestamper.tick() => {
-                        if res.is_err() {
+                loop {
+                    tokio::select! {
+                        res = timestamper.tick() => {
+                            if res.is_err() {
+                                break;
+                            }
+                        }
+                        res = &mut source => {
+                            if let Err(err) = res {
+                                let _ = timestamper.error(err).await;
+                            }
                             break;
                         }
                     }
-                    res = &mut source => {
-                        if let Err(err) = res {
-                            let _ = timestamper.error(err).await;
-                        }
-                        break;
-                    }
                 }
-            }
-        });
+            },
+        );
     }
 
-    let (stream, capability) = source(scope, name.clone(), move |info| {
+    let (stream, _secondary_stream, capability) = source(scope, name.clone(), move |info| {
         let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
 
         let metrics_name = upstream_name.unwrap_or(name);
@@ -1112,14 +823,16 @@ where
             logger,
         );
 
-        if active {
-            metrics.add_partition(&PartitionId::None);
-        }
-
-        move |cap, output| {
+        move |cap,
+              _secondary_cap: &mut Capability<Timestamp>,
+              durability_cap: &mut CapabilitySet<Timestamp>,
+              output,
+              _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
                 return SourceStatus::Done;
             }
+
+            durability_cap.downgrade(Vec::<Timestamp>::new());
 
             let waker = futures::task::waker_ref(&activator);
             let mut context = Context::from_waker(&waker);
@@ -1136,6 +849,7 @@ where
                                     offset: time as i64,
                                 },
                                 time,
+                                1,
                             ),
                         );
                         metrics.record_partition_offsets(metric_updates);
@@ -1160,14 +874,25 @@ where
     )
 }
 
-/// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
-/// type of source that should be created
+/// Creates a source dataflow operator. The type of ExternalSourceConnector determines the type of
+/// source that should be created
+///
+/// If `persist_config` is `Some`, this will emit and persist a stream of timestamp bindings and
+/// use the persisted bindings on startup to seed initial source offsets and timestamp bindings.
+///
+/// The returned `Stream` of persisted timestamp bindings can be used to track the persistence
+/// frontier and should be used to seal up the backing collection to that frontier. This function
+/// does not do any sealing and it is the responsibility of the caller to eventually do that, for
+/// example using [`seal`](mz_persist::operators::stream::Seal::seal).
 pub(crate) fn create_source<G, S: 'static>(
     config: SourceConfig<G>,
     source_connector: &ExternalSourceConnector,
+    persist_config: Option<PersistentTimestampBindingsConfig<SourceTimestamp, AssignedTimestamp>>,
+    aws_external_id: AwsExternalId,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
+        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
+        timely::dataflow::Stream<G, ((SourceTimestamp, AssignedTimestamp), Timestamp, Diff)>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
@@ -1178,14 +903,12 @@ where
 {
     let SourceConfig {
         name,
-        sql_name,
         upstream_name,
         id,
         scope,
         mut timestamp_histories,
         worker_id,
         worker_count,
-        consistency,
         timestamp_frequency,
         active,
         encoding,
@@ -1193,26 +916,179 @@ where
         base_metrics,
         ..
     } = config;
+
+    // Errors that come up during the construction of the source operators. We cannot bubble them
+    // up via a Result because dataflow installation currently has to be infallible on the workers.
+    //
+    // We therefore collect errors in a vec and create a stream that we combine with the other
+    // error output streams.
+    //
+    // TODO: This is not ideal, especially because these system errors should not make it into the
+    // relational error collections. But we don't have another way of presenting them to users
+    // right now. We should fix this once we have clearer understanding of different types of
+    // errors. The errors here would likely be considered transitive or indefinite errors.
+    let mut construction_errs = Vec::new();
+
+    // If we have persisted data, we initialize the starting timestamp to the latest upper seal
+    // timestamp, such that we can start emitting data right at the time where it will become
+    // sealed when we next downgrade the capability. We do this to ensure that necessary
+    // retractions are considered valid on a future restore attempt.
+    let (source_persist, restored_bindings, mut ts_bindings_retractions, starting_ts) =
+        match persist_config {
+            Some(persist_config) => {
+                let source_persist =
+                    SourceReaderPersistence::new(name.clone(), persist_config.clone());
+
+                let timestamp_histories = timestamp_histories.as_mut().ok_or_else(|| {
+                    SourceError::new(
+                        id,
+                        SourceErrorDetails::Persistence("missing timestamp histories".to_owned()),
+                    )
+                });
+
+                let result = timestamp_histories.and_then(|timestamp_histories| {
+                let (mut valid_bindings, mut retractions) = source_persist.restore().map_err(|e| {
+                    SourceError::new(
+                        id,
+                        SourceErrorDetails::Persistence(format!(
+                            "restoring timestamp bindings: {}",
+                            e
+                        )),
+                    )
+                })?;
+
+                // Only retain bindings/retractions that this worker is responsible for. If we
+                // weren't doing this, we would get a corrupted bindings updates in the output,
+                // where diffs don't sum up to `1` or older bindings might overwrite newer ones.
+                valid_bindings.retain(|(source_ts, _assigned_ts)| {
+                    crate::source::responsible_for(
+                        &id.source_id,
+                        worker_id,
+                        worker_count,
+                        &source_ts.partition)
+                });
+                retractions.retain(|((source_ts, _assigned_ts), _diff)| {
+                    crate::source::responsible_for(
+                        &id.source_id,
+                        worker_id,
+                        worker_count,
+                        &source_ts.partition)
+                });
+
+                let starting_offsets = source_persist.get_starting_offsets(valid_bindings.iter());
+
+                debug!(
+                    "In {}, initial (restored) source offsets: {:?}. upper_seal_ts = {}",
+                    name,
+                    starting_offsets,
+                    source_persist.config.upper_seal_ts,
+                );
+
+                debug!(
+                    "In {}, initial (restored) timestamp bindings: valid_bindings: {:?}, retractions: {:?}",
+                    name,
+                    valid_bindings, retractions
+                );
+
+                for (pid, offset) in starting_offsets {
+                    timestamp_histories.add_partition(pid, Some(offset));
+                }
+
+                // We need to sort by offset and then timestamp because `add_binding()` will not allow
+                // adding bindings that go "backwards".
+                valid_bindings.sort_by(|a, b| (a.0.offset.offset, a.1).cmp(&(b.0.offset.offset, b.1)));
+
+                for (source_ts, assigned_ts) in valid_bindings.iter() {
+
+                    // The timestamp bindings are potentially pre-seeded by bindings that we
+                    // restored from the coordinator, if/when coordinator based timestamp
+                    // persistence is active.
+                    //
+                    // The bindings from persistence and the bindings from the coordinator are not
+                    // 100 % in sync because it can happen that one of them succeeds in writing
+                    // bindings right before a crash that prevents the other from writing. This is
+                    // ok, though, because we can just take the bindings which are "further in the
+                    // future".
+                    //
+                    // Side note: with persistence enabled for the source, we will anyways never
+                    // re-emit old data, because we start reading from the persisted offsets.
+                    let lower = Antichain::from_elem(assigned_ts.0);
+                    let upper = Antichain::new();
+                    // NOTE: We use get_bindings_in_range() and not the seemingly better
+                    // get_binding(). However, get_binding() does not only consult the actual
+                    // stored bindings but also checks the Proposer, and returns its output as a
+                    // binding if it doesn't have a stored binding. We only care about stored
+                    // bindings here.
+                    let existing_binding = timestamp_histories
+                        .get_bindings_in_range(lower.borrow(), upper.borrow()).into_iter()
+                        .filter(|(pid, _ts, offset)| *pid == source_ts.partition && *offset >= source_ts.offset).next();
+                    match existing_binding {
+                        None => {
+                            timestamp_histories.add_binding(
+                                source_ts.partition.clone(),
+                                assigned_ts.0,
+                                source_ts.offset,
+                            );
+                        },
+                        Some(existing_binding) => {
+                            debug!(
+                                "Filtered out timestamp binding {:?} from persistence because we already have {:?}.",
+                                (source_ts, assigned_ts),
+                                existing_binding
+                            );
+                        }
+                    }
+                }
+
+                Ok((Some(source_persist), Some(valid_bindings), Some(retractions), persist_config.upper_seal_ts))
+            });
+
+                match result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        construction_errs.push(e);
+                        (None, None, None, 0)
+                    }
+                }
+            }
+            None => (None, None, None, 0),
+        };
+
     let bytes_read_counter = base_metrics.bytes_read.clone();
-    let (stream, capability) = source(scope, name.clone(), move |info| {
+
+    let should_emit_timestamp_bindings = source_persist.is_some();
+
+    let (stream, ts_bindings_stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
 
-        // Create control plane information (Consistency-related information)
-        let mut consistency_info = ConsistencyInfo::new(
-            active,
-            upstream_name.unwrap_or_else(|| name.clone()),
-            id,
-            worker_id,
-            worker_count,
-            consistency,
-            timestamp_frequency,
-            logger.clone(),
-            &base_metrics,
-        );
+        // This source will need to be activated when the durability frontier changes.
+        if let Some(wrapper) = timestamp_histories.as_mut() {
+            let durability_activator = scope.activator_for(&info.address[..]);
+            wrapper
+                .wrapper
+                .borrow_mut()
+                .activators
+                .push(durability_activator);
+        }
 
-        // Create source information (this function is specific to a specific
-        // source
+        let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
+        let mut source_metrics = SourceMetrics::new(
+            base_metrics,
+            &metrics_name,
+            id,
+            &worker_id.to_string(),
+            logger.clone(),
+        );
+        let restored_offsets = timestamp_histories
+            .as_mut()
+            .map(|ts| ts.partitions())
+            .unwrap_or_default();
+        let mut partition_cursors: HashMap<_, _> = restored_offsets
+            .iter()
+            .cloned()
+            .flat_map(|(pid, offset)| Some((pid, offset?)))
+            .collect();
 
         let mut source_reader: Option<S> = if !active {
             None
@@ -1221,20 +1097,16 @@ where
                 name.clone(),
                 id,
                 worker_id,
+                worker_count,
                 scope.sync_activator_for(&info.address[..]),
                 source_connector.clone(),
+                aws_external_id.clone(),
+                restored_offsets,
                 encoding,
                 logger,
                 base_metrics.clone(),
             ) {
-                Ok((source_reader, partition)) => {
-                    if let Some(pid) = partition {
-                        consistency_info.add_partition(&pid);
-                    }
-
-                    Some(source_reader)
-                }
-
+                Ok(source_reader) => Some(source_reader),
                 Err(e) => {
                     error!("Failed to create source: {}", e);
                     None
@@ -1242,10 +1114,14 @@ where
             }
         };
 
-        // Stash messages we cannot yet timestamp here.
-        let mut buffer = None;
+        let mut timestamp_bindings_updater = if should_emit_timestamp_bindings {
+            let restored_bindings = restored_bindings.expect("missing restored bindings");
+            Some(TimestampBindingUpdater::new(restored_bindings))
+        } else {
+            None
+        };
 
-        move |cap, output| {
+        move |cap, bindings_cap, durability_cap, output, bindings_output| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
                 Some(source_reader) => source_reader,
@@ -1255,7 +1131,7 @@ where
             };
 
             // Check that we have a valid list of timestamp bindings.
-            let mut timestamp_histories = match &mut timestamp_histories {
+            let timestamp_histories = match &mut timestamp_histories {
                 Some(histories) => histories,
                 None => {
                     error!("Source missing list of timestamp bindings");
@@ -1263,10 +1139,33 @@ where
                 }
             };
 
-            // Refresh any consistency info from the worker that we need to
-            consistency_info.refresh(source_reader, &mut timestamp_histories);
-            // Downgrade capability (if possible)
-            consistency_info.downgrade_capability(cap, &mut timestamp_histories);
+            // Maintain a capability set that tracks the durability frontier.
+            durability_cap.downgrade(timestamp_histories.durability_frontier());
+
+            // NOTE: It's **very** important that we get out any necessary
+            // retractions/additions to the timestamp bindings before we downgrade beyond the
+            // previous upper seal frontier. Otherwise, it can happen that a needed retraction
+            // is not considered valid on a future restart attempt, and we will get an
+            // inconsistency between the persisted timestamp bindings and persisted data.
+            if let Some(ts_bindings_retractions) = ts_bindings_retractions.take() {
+                assert_eq!(
+                    *bindings_cap.time(),
+                    0,
+                    "did not emit retractions at the earliest possible time: source capability is already at {}", bindings_cap.time()
+                );
+
+                bindings_cap.downgrade(&starting_ts);
+
+                let mut session = bindings_output.session(&bindings_cap);
+
+                let retraction_ts = starting_ts;
+                let ts_bindings_retractions = ts_bindings_retractions
+                    .into_iter()
+                    .map(|(binding, diff)| (binding, retraction_ts, diff));
+
+                session.give_iterator(ts_bindings_retractions);
+            }
+
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
@@ -1276,83 +1175,75 @@ where
             let mut metric_updates = HashMap::new();
 
             // Record operator has been scheduled
-            consistency_info
-                .source_metrics
-                .operator_scheduled_counter
-                .inc();
+            source_metrics.operator_scheduled_counter.inc();
 
             let mut source_state = (SourceStatus::Alive, MessageProcessing::Active);
             while let (_, MessageProcessing::Active) = source_state {
-                // If we previously buffered something, try to ingest that first.
-                // Otherwise, try to pull a new message from the source.
-                source_state = if buffer.is_some() {
-                    let message = buffer.take().unwrap();
-                    handle_message(
-                        message,
-                        &mut consistency_info,
-                        &mut bytes_read,
-                        &cap,
-                        output,
-                        &mut metric_updates,
-                        &timer,
-                        &mut buffer,
-                        &timestamp_histories,
-                    )
-                } else {
-                    match source_reader.get_next_message() {
-                        Ok(NextMessage::Ready(message)) => handle_message(
+                source_state = match source_reader.get_next_message() {
+                    Ok(NextMessage::Ready(message)) => {
+                        partition_cursors.insert(message.partition.clone(), message.offset + 1);
+                        handle_message::<S>(
                             message,
-                            &mut consistency_info,
                             &mut bytes_read,
                             &cap,
                             output,
                             &mut metric_updates,
                             &timer,
-                            &mut buffer,
                             &timestamp_histories,
-                        ),
-                        Ok(NextMessage::TransientDelay) => {
-                            // There was a temporary hiccup in getting messages, check again asap.
-                            (SourceStatus::Alive, MessageProcessing::Yielded)
-                        }
-                        Ok(NextMessage::Pending) => {
-                            // There were no new messages, check again after a delay
-                            (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
-                        }
-                        Ok(NextMessage::Finished) => {
-                            if let Consistency::RealTime = consistency_info.source_type {
-                                (SourceStatus::Done, MessageProcessing::Stopped)
-                            } else {
-                                // The coord drives Doneness decisions for BYO, so we must still return Alive
-                                // on EOF
-                                (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
-                            }
-                        }
-                        Err(e) => {
-                            output.session(&cap).give(Err(e.to_string()));
-                            (SourceStatus::Done, MessageProcessing::Stopped)
-                        }
+                        )
                     }
-                }
+                    Ok(NextMessage::TransientDelay) => {
+                        // There was a temporary hiccup in getting messages, check again asap.
+                        (SourceStatus::Alive, MessageProcessing::Yielded)
+                    }
+                    Ok(NextMessage::Pending) => {
+                        // There were no new messages, check again after a delay
+                        (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
+                    }
+                    Ok(NextMessage::Finished) => (SourceStatus::Done, MessageProcessing::Stopped),
+                    Err(e) => {
+                        output.session(&cap).give(Err(e.to_string()));
+                        (SourceStatus::Done, MessageProcessing::Stopped)
+                    }
+                };
             }
 
             bytes_read_counter.inc_by(bytes_read as u64);
-            consistency_info
-                .source_metrics
-                .record_partition_offsets(metric_updates);
+            source_metrics.record_partition_offsets(metric_updates);
+
+            // Attempt to update the timestamp and finalize the currently pending bindings
+            let cur_ts = timestamp_histories.upper();
+            timestamp_histories.update_timestamp();
+            if timestamp_histories.upper() > cur_ts {
+                for (_, partition_metrics) in source_metrics.partition_metrics.iter_mut() {
+                    partition_metrics.closed_ts.set(cur_ts);
+                }
+            }
+
+            // Emit any new timestamp bindings that we might have since we last emitted.
+            maybe_emit_timestamp_bindings(
+                &name,
+                worker_id,
+                &mut timestamp_bindings_updater,
+                timestamp_histories,
+                bindings_cap,
+                bindings_output,
+            );
 
             // Downgrade capability (if possible) before exiting
-            consistency_info.downgrade_capability(cap, &mut timestamp_histories);
-            // Propose any new timestamp bindings we need to.
-            consistency_info.propose(&mut timestamp_histories);
+            timestamp_histories.downgrade(cap, &partition_cursors);
+            bindings_cap.downgrade(cap.time());
+            source_metrics.capability.set(*cap.time());
+            // Downgrade compaction frontier to track the current time.
+            timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
             match processing_status {
                 MessageProcessing::Yielded => activator.activate(),
-                MessageProcessing::YieldedWithDelay => activator.activate_after(
-                    Duration::from_millis(consistency_info.downgrade_capability_frequency),
-                ),
+                MessageProcessing::YieldedWithDelay => {
+                    activator.activate_after(timestamp_frequency)
+                }
                 _ => (),
             }
 
@@ -1361,15 +1252,265 @@ where
     });
 
     let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", move |r| {
-        r.map_err(|e| SourceError::new(sql_name.clone(), SourceErrorDetails::FileIO(e)))
+        r.map_err(|e| SourceError::new(id, SourceErrorDetails::FileIO(e)))
     });
 
+    let (ts_bindings_stream, ts_bindings_err_stream) = if let Some(source_persist) = source_persist
+    {
+        source_persist.render_persistence_operators(id, ts_bindings_stream)
+    } else {
+        (ts_bindings_stream, operator::empty(scope))
+    };
+
+    // Work around `to_stream()` requiring a `&mut scope`.
+    let mut scope = scope.clone();
+    let construction_errs_stream = construction_errs.to_stream(&mut scope);
+
+    // TODO: It is not ideal that persistence errors end up in the same differential error
+    // collection as other errors because they are transient/indefinite errors that we should be
+    // treating differently. We do not, however, at the current time have to infrastructure for
+    // treating these errors differently, so we're adding them to the same error collections.
+    let err_stream = err_stream
+        .concat(&construction_errs_stream)
+        .concat(&ts_bindings_err_stream);
+
     if active {
-        ((ok_stream, err_stream), Some(capability))
+        (
+            (ok_stream, ts_bindings_stream, err_stream),
+            Some(capability),
+        )
     } else {
         // Immediately drop the capability if worker is not an active reader for source
-        ((ok_stream, err_stream), None)
+        ((ok_stream, ts_bindings_stream, err_stream), None)
     }
+}
+
+/// Util for restoring persisted timestamps and rendering persistence operators.
+struct SourceReaderPersistence {
+    source_name: String,
+    config: PersistentTimestampBindingsConfig<SourceTimestamp, AssignedTimestamp>,
+}
+
+impl SourceReaderPersistence {
+    /// Creates a new [`SourceReaderPersistence`] from the given configuration. The configuration
+    /// determines the persistent collection that will be used by [`restore`](Self::restore) and
+    /// [`render_persistence_operators`](Self::render_persistence_operators), respectively.
+    fn new(
+        source_name: String,
+        config: PersistentTimestampBindingsConfig<SourceTimestamp, AssignedTimestamp>,
+    ) -> Self {
+        Self {
+            source_name,
+            config,
+        }
+    }
+
+    /// Restores timestamp bindings from the given `StreamReadHandle` by reading the differential
+    /// timestamp updates and materializing/consolidating them into a `Vec`. This basically sums up
+    /// the `diff` of the bindings and collects those bindings whose `diff` is `1`.
+    ///
+    /// This returns two `Vec`s. The first contains the valid bindings, the second one contains
+    /// retractions  for the bindings that are beyond the `upper_seal_ts` which must be
+    /// applied/emitted before emitting any new bindings updates.
+    ///
+    /// NOTE: Consolidated bindings with a `diff` other than `0` or `1` indicate a bug, and this
+    /// method panics if that case happens.
+    fn restore(
+        &self,
+    ) -> Result<
+        (
+            Vec<(SourceTimestamp, AssignedTimestamp)>,
+            Vec<((SourceTimestamp, AssignedTimestamp), Diff)>,
+        ),
+        mz_persist::error::Error,
+    > {
+        // Materialized version of bindings updates that are not beyond the common seal timestamp.
+        let mut valid_bindings: HashMap<_, Diff> = HashMap::new();
+
+        let mut retractions: HashMap<_, Diff> = HashMap::new();
+
+        let snapshot = self.config.read_handle.snapshot()?;
+        let buf = snapshot.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+        // NOTE: We "compact" all time resolution, by ignorning the timestamp. We don't need
+        // historical resolution and simply want the view as of the time at which the data was
+        // sealed. Thus, it represents the content of the timestamp histories at exactly that
+        // point.
+        for ((source_timestamp, assigned_timestamp), ts, diff) in buf.into_iter() {
+            if ts < self.config.upper_seal_ts {
+                *valid_bindings
+                    .entry((source_timestamp.clone(), assigned_timestamp))
+                    .or_default() += diff;
+            } else {
+                *retractions
+                    .entry((source_timestamp.clone(), assigned_timestamp))
+                    .or_default() += diff;
+            }
+        }
+
+        // We only want bindings that "exist". And panic on bindings that have a diff other than 0
+        // or 1.
+        let valid_bindings = valid_bindings
+            .drain()
+            .filter(|(binding, diff)| {
+                if *diff < 0 || *diff > 1 {
+                    panic!(
+                        "Binding with invalid diff. Binding {:?}, diff: {}.",
+                        binding, diff
+                    );
+                }
+                *diff == 1
+            })
+            .map(|(binding, _diff)| binding)
+            .collect::<Vec<_>>();
+
+        // For retractions, we just need the "consolidated" diff value for each binding/timestamp.
+        let retractions = retractions
+            .drain()
+            .filter(|(binding, diff)| {
+                if diff.abs() > 1 {
+                    panic!(
+                        "Binding with invalid diff. Binding {:?}, diff: {}.",
+                        binding, diff
+                    );
+                }
+                diff.abs() == 1
+            })
+            // retraction!
+            .map(|(binding, diff)| (binding, -diff))
+            .collect::<Vec<_>>();
+
+        Ok((valid_bindings, retractions))
+    }
+
+    fn get_starting_offsets<'a>(
+        &self,
+        bindings: impl Iterator<Item = &'a (SourceTimestamp, AssignedTimestamp)>,
+    ) -> HashMap<PartitionId, MzOffset> {
+        let mut starting_offsets = HashMap::new();
+        for (source_timestamp, _assigned_timestamp) in bindings {
+            starting_offsets
+                .entry(source_timestamp.partition.clone())
+                .and_modify(|current_offset| {
+                    if source_timestamp.offset > *current_offset {
+                        *current_offset = source_timestamp.offset;
+                    }
+                })
+                .or_insert_with(|| source_timestamp.offset);
+        }
+
+        starting_offsets
+    }
+
+    /// Renders operators that persist the given `ts_bindings_stream` to the configured persistent
+    /// collection.
+    ///
+    /// This does not seal the persistent collection, calling code must ensure that this happens
+    /// eventually.
+    fn render_persistence_operators<G>(
+        &self,
+        source_id: SourceInstanceId,
+        ts_bindings_stream: Stream<G, ((SourceTimestamp, AssignedTimestamp), Timestamp, Diff)>,
+    ) -> (
+        Stream<G, ((SourceTimestamp, AssignedTimestamp), Timestamp, Diff)>,
+        Stream<G, SourceError>,
+    )
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        let persist_operator_name = format!("{}-timestamp-bindings", self.source_name);
+
+        let (ts_bindings_stream, ts_bindings_persist_err) =
+            ts_bindings_stream.persist(&persist_operator_name, self.config.write_handle.clone());
+
+        // We're throwing away the differential information that we theoretically get from
+        // `persist()`. We have to do this because sources currently only emit a `Stream<_,
+        // SourceError>`. In practice, persist errors are non-retractable, currently.
+        let ts_bindings_persist_err = ts_bindings_persist_err.map(move |(error, _ts, _diff)| {
+            SourceError::new(source_id, SourceErrorDetails::Persistence(error))
+        });
+
+        (ts_bindings_stream, ts_bindings_persist_err)
+    }
+}
+
+/// Configuration for persistent timestamp bindings.
+///
+/// `ST` is the source timestamp, while `AT` is the timestamp that is assigned based on timestamp
+/// bindings.
+#[derive(Clone)]
+pub struct PersistentTimestampBindingsConfig<ST: Codec, AT: Codec> {
+    /// The timestamp up to which all involved streams have been sealed.
+    upper_seal_ts: u64,
+
+    /// [`StreamReadHandle`] for the collection that we should persist to.
+    read_handle: StreamReadHandle<ST, AT>,
+
+    /// [`StreamWriteHandle`] for the collection that we should persist to.
+    pub write_handle: StreamWriteHandle<ST, AT>,
+}
+
+impl<K: Codec, V: Codec> PersistentTimestampBindingsConfig<K, V> {
+    /// Creates a new [`PersistentTimestampBindingsConfig`] from the given parts.
+    pub fn new(
+        upper_seal_ts: u64,
+        read_handle: StreamReadHandle<K, V>,
+        write_handle: StreamWriteHandle<K, V>,
+    ) -> Self {
+        PersistentTimestampBindingsConfig {
+            upper_seal_ts,
+            read_handle,
+            write_handle,
+        }
+    }
+}
+
+/// Updates the given `timestamp_bindings_updater` with any changes from the given
+/// `timestamp_histories` and emits updates to `bindings_output` if there are in fact any changes.
+///
+/// The updates emitted from this can be used to re-construct the state of a `TimestampBindingRc`
+/// at any given time by reading and applying (and consolidating, if neccessary) the stream of
+/// changes.
+fn maybe_emit_timestamp_bindings(
+    source_name: &str,
+    worker_id: usize,
+    timestamp_bindings_updater: &mut Option<TimestampBindingUpdater>,
+    timestamp_histories: &mut TimestampBindingRc,
+    bindings_cap: &Capability<u64>,
+    bindings_output: &mut OutputHandle<
+        u64,
+        ((SourceTimestamp, AssignedTimestamp), u64, Diff),
+        Tee<u64, ((SourceTimestamp, AssignedTimestamp), u64, Diff)>,
+    >,
+) {
+    let timestamp_bindings_updater = match timestamp_bindings_updater.as_mut() {
+        Some(updater) => updater,
+        None => {
+            return;
+        }
+    };
+
+    let changes = timestamp_bindings_updater.update(timestamp_histories);
+
+    // Emit required changes downstream.
+    let to_emit = changes
+        .into_iter()
+        .map(|(binding, diff)| (binding, bindings_cap.time().clone(), diff));
+
+    // We're collecting into a Vec because we want to log and emit. This is a bit
+    // wasteful but we don't expect large numbers of bindings.
+    let mut to_emit = to_emit.collect::<Vec<_>>();
+
+    trace!(
+        "In {} (worker {}), emitting new timestamp bindings: {:?}, cap: {:?}",
+        source_name,
+        worker_id,
+        to_emit,
+        bindings_cap
+    );
+
+    let mut session = bindings_output.session(bindings_cap);
+    session.give_vec(&mut to_emit);
 }
 
 /// Take `message` and assign it the appropriate timestamps and push it into the
@@ -1377,87 +1518,61 @@ where
 ///
 /// TODO: This function is a bit of a mess rn but hopefully this function makes the
 /// existing mess more obvious and points towards ways to improve it.
-fn handle_message(
-    message: SourceMessage,
-    consistency_info: &mut ConsistencyInfo,
+fn handle_message<S: SourceReader>(
+    message: SourceMessage<S::Key, S::Value>,
     bytes_read: &mut usize,
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<Vec<u8>, MessagePayload>, String>,
-        Tee<Timestamp, Result<SourceOutput<Vec<u8>, MessagePayload>, String>>,
+        Result<SourceOutput<S::Key, S::Value>, String>,
+        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, String>>,
     >,
-    metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp)>,
+    metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     timer: &std::time::Instant,
-    buffer: &mut Option<SourceMessage>,
     timestamp_bindings: &TimestampBindingRc,
-) -> (SourceStatus, MessageProcessing)
-where
-{
+) -> (SourceStatus, MessageProcessing) {
     let partition = message.partition.clone();
     let offset = message.offset;
 
-    // Update ingestion metrics. Guaranteed to exist as the appropriate
-    // entry gets created in SourceReader or when a new partition
-    // is discovered
-    consistency_info
-        .source_metrics
-        .partition_metrics
-        .get_mut(&partition)
-        .unwrap_or_else(|| panic!("partition metrics do not exist for partition {}", partition))
-        .offset_received
-        .set(offset.offset);
-
     // Determine the timestamp to which we need to assign this message
-    let ts = consistency_info.find_matching_timestamp(&partition, offset, timestamp_bindings);
-    match ts {
-        None => {
-            // We have not yet decided on a timestamp for this message,
-            // we need to buffer the message
-            *buffer = Some(message);
-            (SourceStatus::Alive, MessageProcessing::Yielded)
+    let ts = timestamp_bindings.get_or_propose_binding(&partition, offset);
+    // Note: empty and null payload/keys are currently
+    // treated as the same thing.
+    let key = message.key;
+    let out = message.value;
+    // Entry for partition_metadata is guaranteed to exist as messages
+    // are only processed after we have updated the partition_metadata for a
+    // partition and created a partition queue for it.
+    if let Some(len) = key.len() {
+        *bytes_read += len;
+    }
+    if let Some(len) = out.len() {
+        *bytes_read += len;
+    }
+    let ts_cap = cap.delayed(&ts);
+
+    output.session(&ts_cap).give(Ok(SourceOutput::new(
+        key,
+        out,
+        offset.offset,
+        message.upstream_time_millis,
+        message.partition,
+    )));
+
+    match metric_updates.entry(partition) {
+        Entry::Occupied(mut entry) => {
+            entry.insert((offset, ts, entry.get().2 + 1));
         }
-        Some(ts) => {
-            // Note: empty and null payload/keys are currently
-            // treated as the same thing.
-            let key = message.key.unwrap_or_default();
-            let out = message.payload.unwrap_or_default();
-            // Entry for partition_metadata is guaranteed to exist as messages
-            // are only processed after we have updated the partition_metadata for a
-            // partition and created a partition queue for it.
-            *bytes_read += key.len();
-            *bytes_read += match &out {
-                MessagePayload::Data(bytes) => bytes.len(),
-                MessagePayload::EOF => 0,
-            };
-            let ts_cap = cap.delayed(&ts);
-
-            output.session(&ts_cap).give(Ok(SourceOutput::new(
-                key,
-                out,
-                Some(offset.offset),
-                message.upstream_time_millis,
-            )));
-
-            // Update ingestion metrics
-            // Entry is guaranteed to exist as it gets created when we initialise the partition
-            let partition_metrics = consistency_info
-                .source_metrics
-                .partition_metrics
-                .get_mut(&partition)
-                .unwrap();
-            partition_metrics.offset_ingested.set(offset.offset);
-            partition_metrics.messages_ingested.inc();
-
-            metric_updates.insert(partition, (offset, ts));
-
-            if timer.elapsed().as_millis() > YIELD_INTERVAL_MS {
-                // We didn't drain the entire queue, so indicate that we
-                // should run again but yield the CPU to other operators.
-                (SourceStatus::Alive, MessageProcessing::Yielded)
-            } else {
-                (SourceStatus::Alive, MessageProcessing::Active)
-            }
+        Entry::Vacant(entry) => {
+            entry.insert((offset, ts, 1));
         }
+    }
+
+    if timer.elapsed() > YIELD_INTERVAL {
+        // We didn't drain the entire queue, so indicate that we
+        // should run again but yield the CPU to other operators.
+        (SourceStatus::Alive, MessageProcessing::Yielded)
+    } else {
+        (SourceStatus::Alive, MessageProcessing::Active)
     }
 }

@@ -1,0 +1,14 @@
+[package]
+name = "mz-pgcopy"
+description = "Encoding/decoding of PostgreSQL COPY formats."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.58.0"
+publish = false
+
+[dependencies]
+bytes = "1.1.0"
+csv = "1.1.6"
+mz-pgrepr = { path = "../pgrepr" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }

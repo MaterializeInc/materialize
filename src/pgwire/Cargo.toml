@@ -1,31 +1,35 @@
 [package]
-name = "pgwire"
+name = "mz-pgwire"
 description = "A server for the PostgreSQL wire protocol."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
-async-trait = "0.1.51"
+anyhow = "1.0.55"
+async-trait = "0.1.52"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-coord = { path = "../coord" }
-dataflow-types = { path = "../dataflow-types" }
-expr = { path = "../expr" }
-futures = "0.3.17"
-itertools = "0.10.1"
+csv = "1.1.6"
+futures = "0.3.21"
+itertools = "0.10.3"
 lazy_static = "1.4.0"
-log = "0.4.13"
-openssl = { version = "0.10.36", features = ["vendored"] }
-ordered-float = { version = "2.8.0", features = ["serde"] }
-ore = { path = "../ore" }
-pgrepr = { path = "../pgrepr" }
+mz-coord = { path = "../coord" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-expr = { path = "../expr" }
+mz-frontegg-auth = { path = "../frontegg-auth" }
+mz-ore = { path = "../ore" }
+mz-pgcopy = { path = "../pgcopy" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }
+openssl = { version = "0.10.38", features = ["vendored"] }
+ordered-float = { version = "2.10.0", features = ["serde"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-repr = { path = "../repr" }
-sql = { path = "../sql" }
-tokio = "1.11.0"
-tokio-openssl = "0.6.2"
-tokio-stream = "0.1.7"
-tokio-util = { version = "0.6.8", features = ["codec"] }
+tokio = "1.17.0"
+tokio-openssl = "0.6.3"
+tokio-stream = "0.1.8"
+tokio-util = { version = "0.6.9", features = ["codec"] }
+tracing = "0.1.31"

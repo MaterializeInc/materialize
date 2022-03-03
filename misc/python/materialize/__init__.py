@@ -26,3 +26,9 @@ Consider writing additional Python code when:
 
 [materialized]: https://dev.materialize.com/api/rust/materialized/index.html
 """
+
+import os
+from pathlib import Path
+
+ROOT = Path(os.environ["MZ_ROOT"])
+"""The absolute path to the root of the Materialize repository."""

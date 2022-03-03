@@ -1,3 +1,4 @@
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -57,7 +58,7 @@ $ set-regex match=u\d+ replacement=UID
 | | implementation = Differential %1 %0.()
 
 ! SELECT * FROM u1234;
-unknown catalog item 'UID'
+contains:unknown catalog item 'UID'
 
 # Exclude FETCH from the retry logic
 
@@ -121,15 +122,55 @@ $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repea
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 
-> CREATE SINK kafka_ingest_repeat_sink FROM kafka_ingest_repeat_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'kafka-ingest-repeat'
+> SELECT * FROM kafka_ingest_repeat_input;
+fish
+fish
+
+# kafka-ingest repeat with ${kafka-ingest.iteration}
+
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
+{"f1": "${kafka-ingest.iteration}"}
+
+> SELECT * FROM kafka_ingest_repeat_input;
+0
+1
+fish
+fish
+
+# kafka-ingest with no explicit 'partition' argument should spread the records evenly across the partitions
+
+$ set kafka-ingest-no-partition-key={"type": "string"}
+$ set kafka-ingest-no-partition-value={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}
+
+$ kafka-create-topic topic=kafka-ingest-no-partition partitions=2
+
+$ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-schema=${kafka-ingest-no-partition-key} schema=${kafka-ingest-no-partition-value} publish=true
+"a" {"a": "a"}
+"b" {"a": "b"}
+"c" {"a": "c"}
+"d" {"a": "d"}
+"e" {"a": "e"}
+"f" {"a": "f"}
+"g" {"a": "g"}
+"h" {"a": "h"}
+
+> CREATE MATERIALIZED SOURCE kafka_ingest_no_partition
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
 
-$ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort-messages=true
-{"before":null,"after":{"row":{"f1":"fish"}}}
-{"before":null,"after":{"row":{"f1":"fish"}}}
+> SELECT COUNT(*) = 8 FROM kafka_ingest_no_partition;
+true
 
-# kafka-verify with regexp (the set-regexp from above is used
+> SELECT count(*)
+  FROM
+      mz_sources s JOIN mz_kafka_source_statistics stats ON s.id = split_part(stats.source_id, '/', 1),
+      jsonb_each(statistics->'topics') topics (topic, topic_statistics),
+      jsonb_each(topic_statistics->'partitions') partitions (partition, partition_statistics)
+  WHERE s.name = 'kafka_ingest_no_partition' AND (partition_statistics->'rxmsgs')::integer > 0
+2
+
+# kafka-verify with regexp (the set-regexp from above is used)
 
 > CREATE VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 

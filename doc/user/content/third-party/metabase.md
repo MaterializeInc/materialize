@@ -7,8 +7,29 @@ menu:
 ---
 
 You can use [Metabase] to create business intelligence dashboards using the
-real-time data streams in your Materialize instance. To get started, check out
-our [`metabase-materialize-driver`](https://github.com/MaterializeInc/metabase-materialize-driver).
+real-time data streams in your Materialize instance.
+
+{{< version-changed v0.11.0 >}}
+Materialize no longer requires a patched version of Metabase. Install the
+official release or use Metabase Cloud.
+{{< /version-changed >}}
+
+## Database connection details
+
+Use the following parameters to connect Metabase to your Materialize instance:
+
+Field             | Enter...
+----------------- | ----------------
+Database type     | **PostgreSQL**
+Name              | **Materialize**
+Host              | The hostname of the machine running Materialize.<br>Use **localhost** if Metabase and Materialize are running on the same machine.
+Port              | **6875**
+Database name     | Usually **materialize**.
+Database username | Usually **materialize**.
+Database password | Leave empty.
+
+If your Materialize instance requires clients to [authenticate with TLS](/cli/#tls-encryption), see the Metabase documentation about
+[Securing database connections using an SSL certificate][metabase-tls].
 
 ## What's missing?
 
@@ -16,9 +37,8 @@ our [`metabase-materialize-driver`](https://github.com/MaterializeInc/metabase-m
 Materialize does not offer production-level support for Metabase.
 {{< /warning >}}
 
-Our [`metabase-materialize-driver`](https://github.com/MaterializeInc/metabase-materialize-driver)
-uses a forked version of pgjdbc to connect to Materialize. While this should not have an affect
-for anyone using the driver, we still aim to connect to Metabase cleanly in the future. Track
-our progress in un-forking the pgjdbc code [here](https://github.com/MaterializeInc/materialize/issues/3727).
+Visualizing a table which contains a [`list`](/sql/types/list) or
+  [`record`](/sql/types/record) column will fail {{% gh 9374 9375 %}}.
 
 [Metabase]: https://www.metabase.com/
+[metabase-tls]: https://www.metabase.com/docs/latest/administration-guide/secure-database-connections-with-ssl-certificates.html

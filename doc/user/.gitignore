@@ -1,2 +1,4 @@
 /public
 /resources
+.hugo_build.lock
+config.deployment.toml

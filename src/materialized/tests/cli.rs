@@ -22,11 +22,24 @@ fn cmd() -> Command {
     cmd
 }
 
+/// This test seems a bit tautological, but it protects against Clap defaults
+/// changing and overwriting our custom version output.
+#[test]
+fn test_version() {
+    let expected_version = materialized::BUILD_INFO.human_version();
+    assert!(!expected_version.is_empty() && expected_version.starts_with('v'));
+    cmd()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("materialized {}\n", expected_version));
+}
+
 #[test]
 fn test_threads() {
     let assert_fail = |cmd: &mut Command| {
         cmd.assert().failure().stderr(predicate::str::starts_with(
-            "error: Invalid value for '--workers <N>': must be greater than zero",
+            "error: Invalid value \"0\" for '--workers <N>': must be greater than zero",
         ))
     };
     assert_fail(cmd().arg("-w0"));
@@ -37,7 +50,7 @@ fn test_threads() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            "error: Invalid value for '--workers <N>': invalid digit found in string",
+            "error: Invalid value \"-1\" for '--workers <N>': invalid digit found in string",
         ));
 
     cmd()
@@ -45,7 +58,7 @@ fn test_threads() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            "error: Invalid value for '--workers <N>': invalid digit found in string",
+            "error: Invalid UTF-8 was detected in one or more arguments",
         ));
 
     // NOTE: we don't test the successful case, where `MZ_WORKERS` or `-w` is

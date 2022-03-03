@@ -16,3 +16,4 @@ pub use add_partitions::build_add_partitions;
 pub use create_topic::build_create_topic;
 pub use ingest::build_ingest;
 pub use verify::build_verify;
+pub use verify::build_verify_schema;

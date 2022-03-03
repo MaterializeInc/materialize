@@ -27,20 +27,19 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fmt;
 use std::rc::Rc;
 use std::str::FromStr;
 
 use digest::Digest;
 use itertools::Itertools;
-use log::{debug, warn};
 use regex::Regex;
 use serde::{
     ser::{SerializeMap, SerializeSeq},
     Serialize, Serializer,
 };
 use serde_json::{self, Map, Value};
+use tracing::{debug, warn};
 use types::{DecimalValue, Value as AvroValue};
 
 use crate::error::Error as AvroError;
@@ -72,6 +71,8 @@ pub fn resolve_schemas(
     let mut resolver = SchemaResolver {
         named: Default::default(),
         indices: Default::default(),
+        human_readable_field_path: Vec::new(),
+        current_human_readable_path_start: 0,
         writer_to_reader_names,
         reader_to_writer_names,
         reader_to_resolved_names: Default::default(),
@@ -543,6 +544,12 @@ impl FullName {
     }
     pub fn base_name(&self) -> &str {
         &self.name
+    }
+    pub fn human_name(&self) -> String {
+        if self.namespace.is_empty() {
+            return self.name.clone();
+        }
+        return format!("{}.{}", self.namespace, self.name);
     }
 }
 
@@ -1355,13 +1362,20 @@ pub struct SchemaNode<'a> {
     pub name: Option<&'a FullName>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum SchemaPieceRefOrNamed<'a> {
     Piece(&'a SchemaPiece),
     Named(usize),
 }
 
 impl<'a> SchemaPieceRefOrNamed<'a> {
+    pub fn get_human_name(&self, root: &Schema) -> String {
+        match self {
+            Self::Piece(piece) => format!("{:?}", piece),
+            Self::Named(idx) => format!("{}", root.lookup(*idx).name),
+        }
+    }
+
     #[inline(always)]
     pub fn get_piece_and_name(self, root: &'a Schema) -> (&'a SchemaPiece, Option<&'a FullName>) {
         match self {
@@ -1374,7 +1388,7 @@ impl<'a> SchemaPieceRefOrNamed<'a> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct SchemaNodeOrNamed<'a> {
     pub root: &'a Schema,
     pub inner: SchemaPieceRefOrNamed<'a>,
@@ -1631,37 +1645,41 @@ impl<'a> SchemaNode<'a> {
             },
             (Null, SchemaPiece::Null) => AvroValue::Null,
             (Bool(b), SchemaPiece::Boolean) => AvroValue::Boolean(*b),
-            (Number(n), piece) => {
-                match piece {
-                    SchemaPiece::Int => {
-                        let i =
-                            n.as_i64()
-                                .and_then(|i| i32::try_from(i).ok())
-                                .ok_or_else(|| {
-                                    ParseSchemaError(format!("{} is not a 32-bit integer", n))
-                                })?;
-                        AvroValue::Int(i)
-                    }
-                    SchemaPiece::Long => {
-                        let i = n.as_i64().ok_or_else(|| {
-                            ParseSchemaError(format!("{} is not a 64-bit integer", n))
+            (Number(n), piece) => match piece {
+                SchemaPiece::Int => {
+                    let i = n
+                        .as_i64()
+                        .and_then(|i| i32::try_from(i).ok())
+                        .ok_or_else(|| {
+                            ParseSchemaError(format!("{} is not a 32-bit integer", n))
                         })?;
-                        AvroValue::Long(i)
-                    }
-                    SchemaPiece::Float => {
-                        // Unwrap is okay -- in standard json, (i.e., not using the `arbitrary_precision`
-                        // feature of serde), all numbers are representible as doubles.
-                        AvroValue::Float(n.as_f64().unwrap() as f32)
-                    }
-                    SchemaPiece::Double => AvroValue::Double(n.as_f64().unwrap()),
-                    _ => {
-                        return Err(ParseSchemaError(format!(
-                            "Unexpected number in default: {}",
-                            n
-                        )))
-                    }
+                    AvroValue::Int(i)
                 }
-            }
+                SchemaPiece::Long => {
+                    let i = n.as_i64().ok_or_else(|| {
+                        ParseSchemaError(format!("{} is not a 64-bit integer", n))
+                    })?;
+                    AvroValue::Long(i)
+                }
+                SchemaPiece::Float => {
+                    let f = n
+                        .as_f64()
+                        .ok_or_else(|| ParseSchemaError(format!("{} is not a 32-bit float", n)))?;
+                    AvroValue::Float(f as f32)
+                }
+                SchemaPiece::Double => {
+                    let f = n
+                        .as_f64()
+                        .ok_or_else(|| ParseSchemaError(format!("{} is not a 64-bit float", n)))?;
+                    AvroValue::Double(f)
+                }
+                _ => {
+                    return Err(ParseSchemaError(format!(
+                        "Unexpected number in default: {}",
+                        n
+                    )))
+                }
+            },
             (String(s), piece)
                 if s.eq_ignore_ascii_case("nan")
                     && (piece == &SchemaPiece::Float || piece == &SchemaPiece::Double) =>
@@ -1776,7 +1794,7 @@ impl<'a> SchemaSerContext<'a> {
     fn step(&'a self, next: SchemaPieceRefOrNamed<'a>) -> Self {
         Self {
             node: self.node.step_ref(next),
-            seen_named: self.seen_named.clone(),
+            seen_named: Rc::clone(&self.seen_named),
         }
     }
 }

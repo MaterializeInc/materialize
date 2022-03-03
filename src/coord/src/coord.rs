@@ -7,42 +7,87 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Coordination of installed views, available timestamps, compacted timestamps, and transactions.
+//! Coordination of installed views, available timestamps, compacted
+//! timestamps, and transactions.
 //!
-//! The command coordinator maintains a view of the installed
-//! views, and for each tracks the frontier of available times
-//! ([`upper`](arrangement_state::Frontiers::upper)) and the frontier
-//! of compacted times ([`since`](arrangement_state::Frontiers::since)).
-//! The upper frontier describes times that may not return immediately, as any
-//! timestamps in advance of the frontier are still open. The since frontier
-//! constrains those times for which the maintained view will be correct,
-//! as any timestamps in advance of the frontier must accumulate to the same
-//! value as would an un-compacted trace. The since frontier cannot be directly
-//! mutated, but instead can have multiple handles to it which forward changes
-//! from an internal MutableAntichain to the since.
+//! The command coordinator maintains a view of the installed views, and for
+//! each tracks the frontier of available times
+//! ([`upper`](arrangement_state::Frontiers::upper)) and the frontier of
+//! compacted times ([`since`](arrangement_state::Frontiers::since)). The upper
+//! frontier describes times that may not return immediately, as any timestamps
+//! in advance of the frontier are still open. The since frontier constrains
+//! those times for which the maintained view will be correct, as any
+//! timestamps in advance of the frontier must accumulate to the same value as
+//! would an un-compacted trace. The since frontier cannot be directly mutated,
+//! but instead can have multiple handles to it which forward changes from an
+//! internal MutableAntichain to the since.
 //!
-//! The [`Coordinator`] tracks various compaction frontiers
-//! so that indexes, compaction, and transactions can work
-//! together. [`determine_timestamp()`](Coordinator::determine_timestamp)
-//! returns the least valid since of its sources. Any new transactions
-//! should thus always be >= the current compaction frontier
-//! and so should never change the frontier when being added to
-//! [`txn_reads`](Coordinator::txn_reads). The compaction frontier may
-//! change when a transaction ends (if it was the oldest transaction and
-//! the index's since was advanced after the transaction started) or when
-//! [`update_upper()`](Coordinator::update_upper) is run (if there are no in
-//! progress transactions before the new since). When it does, it is added to
-//! [`since_updates`](Coordinator::since_updates) and will be processed during
-//! the next [`maintenance()`](Coordinator::maintenance) call.
+//! The [`Coordinator`] tracks various compaction frontiers so that source,
+//! indexes, compaction, and transactions can work together.
+//! [`determine_timestamp()`](Coordinator::determine_timestamp)
+//! returns the least valid since of its sources. Any new transactions should
+//! thus always be >= the current compaction frontier and so should never change
+//! the frontier when being added to [`txn_reads`](Coordinator::txn_reads). The
+//! compaction frontier may change when a transaction ends (if it was the oldest
+//! transaction and the since was advanced after the transaction started) or
+//! when [`update_upper()`](Coordinator::update_upper) is run (if there
+//! are no in progress transactions before the new since). When it does, it is
+//! added to [`index_since_updates`](Coordinator::index_since_updates) or
+//! [`source_since_updates`](Coordinator::source_since_updates) and will be
+//! processed during the next [`maintenance()`](Coordinator::maintenance) call.
+//!
+//! ## Frontiers another way
+//!
+//! If the above description of frontiers left you with questions, this
+//! repackaged explanation might help.
+//!
+//! - `since` is the least recent time (i.e. oldest time) that you can read
+//!   from sources and be guaranteed that the returned data is accurate as of
+//!   that time.
+//!
+//!   Reads at times less than `since` may return values that were not actually
+//!   seen at the specified time, but arrived later (i.e. the results are
+//!   compacted).
+//!
+//!   For correctness' sake, the coordinator never chooses to read at a time
+//!   less than an arrangement's `since`.
+//!
+//! - `upper` is the first time after the most recent time that you can read
+//!   from sources and receive an immediate response. Alternately, it is the
+//!   least time at which the data may still change (that is the reason we may
+//!   not be able to respond immediately).
+//!
+//!   Reads at times >= `upper` may not immediately return because the answer
+//!   isn't known yet. However, once the `upper` is > the specified read time,
+//!   the read can return.
+//!
+//!   For the sake of returned values' freshness, the coordinator prefers
+//!   performing reads at an arrangement's `upper`. However, because we more
+//!   strongly prefer correctness, the coordinator will choose timestamps
+//!   greater than an object's `upper` if it is also being accessed alongside
+//!   objects whose `since` times are >= its `upper`.
+//!
+//! This illustration attempts to show, with time moving left to right, the
+//! relationship between `since` and `upper`.
+//!
+//! - `#`: possibly inaccurate results
+//! - `-`: immediate, correct response
+//! - `?`: not yet known
+//! - `s`: since
+//! - `u`: upper
+//! - `|`: eligible for coordinator to select
+//!
+//! ```nofmt
+//! ####s----u?????
+//!     |||||||||||
+//! ```
+//!
 
 use std::cell::RefCell;
-use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryFrom;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
-use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -51,72 +96,82 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
-use futures::stream::{self, StreamExt};
+use futures::stream::StreamExt;
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use rand::Rng;
-use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
+use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::error;
 
-use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use dataflow::{TimestampBindingFeedback, WorkerFeedback};
-use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use dataflow_types::{
-    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
-    SinkConnector, SourceConnector, TailResponse, TailSinkConnector, TimestampSourceUpdate, Update,
+use mz_build_info::BuildInfo;
+use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
+use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
+use mz_dataflow_types::client::{
+    CreateSourceCommand, Response as DataflowResponse, StorageResponse,
 };
-use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
-use expr::{
-    EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr,
+use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
+use mz_dataflow_types::sources::{
+    AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
-use ore::metrics::MetricsRegistry;
-use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
-use ore::retry::Retry;
-use ore::str::StrExt;
-use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
-use repr::adt::numeric;
-use repr::{ColumnName, Datum, Diff, RelationDesc, Row, Timestamp};
-use sql::ast::display::AstDisplay;
-use sql::ast::{
-    ConnectorType, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
-    FetchStatement, Ident, ObjectType, Raw, Statement,
+use mz_dataflow_types::{
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary,
+    Update,
 };
-use sql::catalog::{Catalog as _, CatalogError};
-use sql::names::{DatabaseSpecifier, FullName};
-use sql::plan::{
+use mz_expr::{
+    permutation_for_arrangement, ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, RowSetFinishing,
+};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::retry::Retry;
+use mz_ore::soft_assert_eq;
+use mz_ore::task;
+use mz_ore::thread::JoinHandleExt;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::{Datum, Diff, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{
+    ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
+    FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
+};
+use mz_sql::catalog::{CatalogError, CatalogTypeDetails, SessionCatalog as _};
+use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan,
-    FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
-    Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
+    ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
+    MutationKind, Params, PeekPlan, PeekWhen, Plan, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
-use sql::plan::{StatementDesc, View};
-use transform::Optimizer;
+use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
+use mz_transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
-use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState, Table};
+use crate::catalog::{self, storage, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
 use crate::client::{Client, Handle};
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
+    Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::antichain::AntichainToken;
+use crate::coord::dataflow_builder::{DataflowBuilder, ExprPrepStyle};
 use crate::error::CoordError;
-use crate::persistcfg::PersistConfig;
+use crate::persistcfg::PersisterWithConfig;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
+    TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
-use crate::timestamp::{TimestampMessage, Timestamper};
+use crate::tail::PendingTail;
 use crate::util::ClientTransmitter;
 
 mod antichain;
@@ -127,18 +182,24 @@ mod prometheus;
 #[derive(Debug)]
 pub enum Message {
     Command(Command),
-    Worker(dataflow::Response),
-    AdvanceSourceTimestamp(AdvanceSourceTimestamp),
+    Worker(mz_dataflow_types::client::Response),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
     ScrapeMetrics,
-    Shutdown,
+    SendDiffs(SendDiffs),
+    WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
+    AdvanceLocalInputs,
 }
 
-#[derive(Debug)]
-pub struct AdvanceSourceTimestamp {
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct SendDiffs {
+    session: Session,
+    #[derivative(Debug = "ignore")]
+    tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
-    pub update: TimestampSourceUpdate,
+    pub diffs: Result<Vec<(Row, Diff)>, CoordError>,
+    pub kind: MutationKind,
 }
 
 #[derive(Derivative)]
@@ -147,8 +208,19 @@ pub struct StatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<sql::ast::Statement<Raw>, CoordError>,
+    pub result: Result<mz_sql::ast::Statement<Raw>, CoordError>,
     pub params: Params,
+}
+
+/// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
+/// could theoretically be used to queue any deferred plan.
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct DeferredPlan {
+    #[derivative(Debug = "ignore")]
+    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub session: Session,
+    pub plan: Plan,
 }
 
 #[derive(Derivative)]
@@ -178,31 +250,33 @@ pub struct LoggingConfig {
 }
 
 /// Configures a coordinator.
-pub struct Config<'a> {
-    pub workers: usize,
-    pub timely_worker: timely::WorkerConfig,
-    pub symbiosis_url: Option<&'a str>,
+pub struct Config {
+    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client + Send>,
     pub logging: Option<LoggingConfig>,
-    pub data_directory: &'a Path,
+    pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
     pub disable_user_indexes: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
+    pub aws_external_id: AwsExternalId,
     pub metrics_registry: MetricsRegistry,
-    /// Persistence subsystem configuration.
-    pub persist: PersistConfig,
+    pub persister: PersisterWithConfig,
+    pub now: NowFn,
 }
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
-    worker_guards: WorkerGuards<()>,
-    worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
+    /// A client to a running dataflow cluster.
+    dataflow_client:
+        mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
-    symbiosis: Option<symbiosis::Postgres>,
+    /// A runtime for the `persist` crate alongside its configuration.
+    persister: PersisterWithConfig,
+
     /// Maps (global Id of arrangement) -> (frontier information). This tracks the
     /// `upper` and computed `since` of the indexes. The `since` is the time at
     /// which we are willing to compact up to. `determine_timestamp()` uses this as
@@ -217,26 +291,35 @@ pub struct Coordinator {
     /// Channel to manange internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Channel to communicate source status updates to the timestamper thread.
-    ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
     metric_scraper: Scraper,
-    /// The last timestamp we assigned to a read.
-    read_lower_bound: Timestamp,
-    /// The timestamp that all local inputs have been advanced up to.
-    closed_up_to: Timestamp,
-    /// Whether or not the most recent operation was a read.
-    last_op_was_read: bool,
-    /// Whether we need to advance local inputs (i.e., did someone observe a timestamp).
-    // TODO(justin): this is a hack, and does not work right with TAIL.
-    need_advance: bool,
+
+    /// The last known timestamp that was considered "open" (i.e. where writes
+    /// may occur). However, this timestamp is _not_ open when
+    /// `read_writes_at_open_ts == true`; in this case, reads will occur at
+    /// `last_open_local_ts`, and the Coordinator must open a new timestamp
+    /// for writes.
+    ///
+    /// Indirectly, this value aims to represent the Coordinator's desired value
+    /// for `upper` for table frontiers, as long as we know it is open.
+    last_open_local_ts: Timestamp,
+    /// Whether or not we have written at the open timestamp.
+    writes_at_open_ts: bool,
+    /// Whether or not we have read the writes that have occurred at the open
+    /// timestamp. When this is `true`, it signals we need to open a new
+    /// timestamp to support future writes.
+    read_writes_at_open_ts: bool,
+
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: HashMap<u32, ConnMeta>,
-    now: NowFn,
 
     /// Holds pending compaction messages to be sent to the dataflow workers. When
     /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
-    since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
+    index_since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
+    /// Holds pending compaction messages to be sent to the dataflow workers. When
+    /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
+    source_since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
     /// Holds handles to ids that are advanced by update_upper.
     since_handles: HashMap<GlobalId, AntichainToken<Timestamp>>,
     /// Tracks active read transactions so that we don't compact any indexes beyond
@@ -246,24 +329,27 @@ pub struct Coordinator {
     /// Tracks write frontiers for active exactly-once sinks.
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 
-    /// A map from pending peeks to the queue into which responses are sent, and the
-    /// pending response count (initialized to the number of dataflow workers).
-    pending_peeks: HashMap<u32, (mpsc::UnboundedSender<PeekResponse>, usize)>,
-    /// A map from pending tails to the queue into which responses are sent.
-    ///
-    /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
-    pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
+    /// A map from pending peeks to the queue into which responses are sent, and
+    /// the IDs of workers who have responded.
+    pending_peeks: HashMap<u32, mpsc::UnboundedSender<PeekResponse>>,
+    /// A map from pending tails to the tail description.
+    pending_tails: HashMap<GlobalId, PendingTail>,
+
+    /// Serializes accesses to write critical sections.
+    write_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Holds plans deferred due to write lock.
+    write_lock_wait_group: VecDeque<DeferredPlan>,
 }
 
 /// Metadata about an active connection.
 struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
     /// cancellation requests. The coordinator sets the contained value to
-    /// `Cancelled::Cancelled` whenever it receives a cancellation request that
+    /// `Canceled::Canceled` whenever it receives a cancellation request that
     /// targets this connection. It is the client's responsibility to check this
     /// value when appropriate and to reset the value to
-    /// `Cancelled::NotCancelled` before starting a new operation.
-    cancel_tx: Arc<watch::Sender<Cancelled>>,
+    /// `Canceled::NotCanceled` before starting a new operation.
+    cancel_tx: Arc<watch::Sender<Canceled>>,
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
     /// requests are required to authenticate with the secret of the connection
@@ -272,62 +358,117 @@ struct ConnMeta {
 }
 
 struct TxnReads {
+    // True iff all statements run so far in the transaction are independent
+    // of the chosen logical timestamp (not the PlanContext walltime). This
+    // happens if both 1) there are no referenced sources or indexes and 2)
+    // `mz_logical_timestamp()` is not present.
+    timestamp_independent: bool,
     timedomain_ids: HashSet<GlobalId>,
     _handles: Vec<AntichainToken<Timestamp>>,
 }
 
+/// Enforces critical section invariants for functions that perform writes to
+/// tables, e.g. `INSERT`, `UPDATE`.
+///
+/// If the provided session doesn't currently hold the write lock, attempts to
+/// grant it. If the coord cannot immediately grant the write lock, defers
+/// executing the provided plan until the write lock is available, and exits the
+/// function.
+///
+/// # Parameters
+/// - `$coord: &mut Coord`
+/// - `$tx: ClientTransmitter<ExecuteResponse>`
+/// - `mut $session: Session`
+/// - `$plan_to_defer: Plan`
+///
+/// Note that making this a macro rather than a function lets us avoid taking
+/// ownership of e.g. session and lets us unilaterally enforce the return when
+/// deferring work.
+macro_rules! guard_write_critical_section {
+    ($coord:expr, $tx:expr, $session:expr, $plan_to_defer: expr) => {
+        if !$session.has_write_lock() {
+            if $coord.try_grant_session_write_lock(&mut $session).is_err() {
+                $coord.defer_write($tx, $session, $plan_to_defer);
+                return;
+            }
+        }
+    };
+}
+
 impl Coordinator {
-    fn num_workers(&self) -> usize {
-        self.worker_txs.len()
-    }
-
-    /// Assign a timestamp for a read.
-    fn get_read_ts(&mut self) -> Timestamp {
-        let ts = self.get_ts();
-        self.last_op_was_read = true;
-        self.read_lower_bound = ts;
-        ts
-    }
-
-    /// Assign a timestamp for a write. Writes following reads must ensure that they are assigned a
-    /// strictly larger timestamp to ensure they are not visible to any real-time earlier reads.
-    fn get_write_ts(&mut self) -> Timestamp {
-        let ts = if self.last_op_was_read {
-            self.last_op_was_read = false;
-            cmp::max(self.get_ts(), self.read_lower_bound + 1)
+    /// Assign a timestamp for a read from a local input. Reads following writes
+    /// must be at a time >= the write's timestamp; we choose "equal to" for
+    /// simplicity's sake and to open as few new timestamps as possible.
+    fn get_local_read_ts(&mut self) -> Timestamp {
+        if self.writes_at_open_ts {
+            // If you have pending writes, you will need to read those writes,
+            // which happened at the last known open time. This also means you
+            // will need to advance to those writes, i.e. close over
+            // `last_open_local_ts`.
+            self.read_writes_at_open_ts = true;
+            self.last_open_local_ts
         } else {
-            self.get_ts()
-        };
-        self.read_lower_bound = cmp::max(ts, self.closed_up_to);
-        self.read_lower_bound
-    }
-
-    /// Fetch a new timestamp.
-    fn get_ts(&mut self) -> Timestamp {
-        // Next time we have a chance, we will force all local inputs forward.
-        self.need_advance = true;
-        // This is a hack. In a perfect world we would represent time as having a "real" dimension
-        // and a "coordinator" dimension so that clients always observed linearizability from
-        // things the coordinator did without being related to the real dimension.
-        let ts = (self.now)();
-
-        if ts < self.read_lower_bound {
-            self.read_lower_bound
-        } else {
-            ts
+            // If there are no writes at the open timestamp, we know we can read
+            // at one unit of time less than the open time (which will always be
+            // closed).
+            self.last_open_local_ts - 1
         }
     }
 
-    fn now_datetime(&self) -> DateTime<Utc> {
-        to_datetime((self.now)())
+    /// Assign a timestamp for a write to a local input. Writes following reads
+    /// must ensure that they are assigned a strictly larger timestamp to ensure
+    /// they are not visible to any real-time earlier reads.
+    fn get_local_write_ts(&mut self) -> Timestamp {
+        // This assert is valid because:
+        // - Whenever a write precedes a read, the read sets
+        //   `read_writes_at_open_ts = true`, which will advance the
+        //   `last_open_local_ts`.
+        // - The Coordinator always has the opportunity to check the state of
+        //   `read_writes_at_open_ts` after a read, even in the case of
+        //   `ReadThenWrite` plans, which dictates when we advance the
+        //   timestamp.
+        // - Advancing the timestamp sets `read_writes_at_open_ts = false`.
+        assert!(
+            !self.read_writes_at_open_ts,
+            "do not perform writes at time where tables want to read"
+        );
+
+        self.writes_at_open_ts = true;
+
+        self.last_open_local_ts
     }
 
-    /// Generate a new frontiers object that forwards since changes to since_updates.
+    /// Opens a new timestamp for local inputs at which writes may occur, and
+    /// where reads should return quickly at a value 1 less.
+    fn open_new_local_ts(&mut self) {
+        // This is a hack. In a perfect world we would represent time as having a "real" dimension
+        // and a "coordinator" dimension so that clients always observed linearizability from
+        // things the coordinator did without being related to the real dimension.
+        let ts = (self.catalog.config().now)();
+
+        // We cannot depend on `self.catalog.config().now`'s value to increase
+        // (in addition to the normal considerations around clocks in computers,
+        // this feature enables us to drive the Coordinator's time when using a
+        // test harness). Instead, we must manually increment
+        // `last_open_local_ts` if `now` appears non-increasing.
+        self.last_open_local_ts = std::cmp::max(ts, self.last_open_local_ts + 1);
+
+        // Opening a new timestamp means that there cannot be new writes at the
+        // open timestamp.
+        self.writes_at_open_ts = false;
+        self.read_writes_at_open_ts = false;
+    }
+
+    fn now_datetime(&self) -> DateTime<Utc> {
+        to_datetime((self.catalog.config().now)())
+    }
+
+    /// Generate a new frontiers object that forwards since changes to `index_since_updates`.
     ///
     /// # Panics
     ///
     /// This function panics if called twice with the same `id`.
-    fn new_frontiers<I>(
+    fn new_index_frontiers<I>(
         &mut self,
         id: GlobalId,
         initial: I,
@@ -336,15 +477,34 @@ impl Coordinator {
     where
         I: IntoIterator<Item = Timestamp>,
     {
-        let since_updates = Rc::clone(&self.since_updates);
-        let (frontier, handle) = Frontiers::new(
-            self.num_workers(),
-            initial,
-            compaction_window_ms,
-            move |frontier| {
-                since_updates.borrow_mut().insert(id, frontier);
-            },
-        );
+        let index_since_updates = Rc::clone(&self.index_since_updates);
+        let (frontier, handle) = Frontiers::new(initial, compaction_window_ms, move |frontier| {
+            index_since_updates.borrow_mut().insert(id, frontier);
+        });
+        let prev = self.since_handles.insert(id, handle);
+        // Ensure we don't double-register ids.
+        assert!(prev.is_none());
+        frontier
+    }
+    ///
+    /// Generate a new frontiers object that forwards since changes to `source_since_updates`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if called twice with the same `id`.
+    fn new_source_frontiers<I>(
+        &mut self,
+        id: GlobalId,
+        initial: I,
+        compaction_window_ms: Option<Timestamp>,
+    ) -> Frontiers<Timestamp>
+    where
+        I: IntoIterator<Item = Timestamp>,
+    {
+        let storage_since_updates = Rc::clone(&self.source_since_updates);
+        let (frontier, handle) = Frontiers::new(initial, compaction_window_ms, move |frontier| {
+            storage_since_updates.borrow_mut().insert(id, frontier);
+        });
         let prev = self.since_handles.insert(id, handle);
         // Ensure we don't double-register ids.
         assert!(prev.is_none());
@@ -369,30 +529,106 @@ impl Coordinator {
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
-                    // Inform the timestamper about this source.
-                    self.update_timestamper(entry.id(), true);
-                    let frontiers =
-                        self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
+                CatalogItem::Source(source) => {
+                    let since_ts = self
+                        .persister
+                        .load_source_persist_desc(&source)
+                        .map_err(CoordError::Persistence)?
+                        .map(|p| p.since_ts)
+                        .unwrap_or(0);
+
+                    let frontiers = self.new_source_frontiers(
+                        entry.id(),
+                        [since_ts],
+                        self.logical_compaction_window_ms,
+                    );
                     self.sources.insert(entry.id(), frontiers);
+                    // Re-announce the source description.
+                    let source_description = self
+                        .catalog
+                        .state()
+                        .source_description_for(entry.id())
+                        .unwrap();
+
+                    let ts_bindings = self
+                        .catalog
+                        .load_timestamp_bindings(entry.id())
+                        .expect("loading timestamps from coordinator cannot fail");
+
+                    self.dataflow_client
+                        .storage()
+                        .create_sources(vec![CreateSourceCommand {
+                            id: entry.id(),
+                            desc: source_description,
+                            since: Antichain::from_elem(since_ts),
+                            ts_bindings,
+                        }])
+                        .await
+                        .unwrap();
+                }
+                CatalogItem::Table(table) => {
+                    self.persister
+                        .add_table(entry.id(), &table)
+                        .map_err(CoordError::Persistence)?;
+
+                    let since_ts = self
+                        .persister
+                        .table_details
+                        .get(&entry.id())
+                        .map(|td| td.since_ts)
+                        .unwrap_or(0);
+
+                    let frontiers = self.new_source_frontiers(
+                        entry.id(),
+                        [since_ts],
+                        self.logical_compaction_window_ms,
+                    );
+
+                    // NOTE: Tables are not sources, but to a large part of the system they look
+                    // like they are, e.g. they are rendered as a SourceConnector::Local.
+                    self.sources.insert(entry.id(), frontiers);
+                    // Re-announce the source description.
+                    let source_description = self
+                        .catalog
+                        .state()
+                        .source_description_for(entry.id())
+                        .unwrap();
+                    self.dataflow_client
+                        .storage()
+                        .create_sources(vec![CreateSourceCommand {
+                            id: entry.id(),
+                            desc: source_description,
+                            since: Antichain::from_elem(since_ts),
+                            ts_bindings: vec![],
+                        }])
+                        .await
+                        .unwrap();
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
-                        // `dataflow::Command::EnableLogging`. Just teach the
+                        // `dataflow_types::client::Command::EnableLogging`. Just teach the
                         // coordinator of their existence, without creating a
                         // dataflow for the index.
                         //
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
+                        let frontiers = self.new_index_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
-                        self.dataflow_builder()
-                            .build_index_dataflow(entry.id())
-                            .map(|df| self.ship_dataflow(df));
+                        let index_id = entry.id();
+                        if let Some((name, description)) =
+                            Self::prepare_index_build(self.catalog.state(), &index_id)
+                        {
+                            let df = self.dataflow_builder().build_index_dataflow(
+                                name,
+                                index_id,
+                                description,
+                            )?;
+                            self.ship_dataflow(df).await;
+                        }
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -412,13 +648,14 @@ impl Coordinator {
                     let connector = sink_connector::build(builder.clone(), entry.id())
                         .await
                         .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)?;
+                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)
+                        .await?;
                 }
                 _ => (), // Handled in prior loop.
             }
         }
 
-        self.send_builtin_table_updates(builtin_table_updates);
+        self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Announce primary and foreign key relationships.
         if self.logging_enabled {
@@ -446,7 +683,8 @@ impl Coordinator {
                             })
                         })
                         .collect(),
-                );
+                )
+                .await;
 
                 self.send_builtin_table_updates(
                     log.variant
@@ -476,7 +714,8 @@ impl Coordinator {
                             })
                         })
                         .collect(),
-                );
+                )
+                .await;
             }
         }
 
@@ -489,158 +728,183 @@ impl Coordinator {
     /// You must call `bootstrap` before calling this method.
     async fn serve(
         mut self,
-        internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
-        cmd_rx: mpsc::UnboundedReceiver<Command>,
-        feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
-        _timestamper_thread_handle: JoinOnDropHandle<()>,
+        mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
+        mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        let (drain_trigger, drain_tripwire) = oneshot::channel::<()>();
-
-        let cmd_stream = UnboundedReceiverStream::new(cmd_rx)
-            .map(Message::Command)
-            .chain(stream::once(future::ready(Message::Shutdown)));
-
-        let feedback_stream = UnboundedReceiverStream::new(feedback_rx).map(Message::Worker);
-
-        let metric_scraper_stream = self
-            .metric_scraper
-            .tick_stream()
-            .take_until(drain_tripwire)
-            .boxed();
-
-        let mut messages = ore::future::select_all_biased(vec![
-            // Order matters here. We want to drain internal commands
-            // (`internal_cmd_rx` and `feedback_stream`) before processing
-            // external commands (`cmd_stream`).
-            UnboundedReceiverStream::new(internal_cmd_rx).boxed(),
-            feedback_stream.boxed(),
-            metric_scraper_stream,
-            cmd_stream.boxed(),
-        ]);
-
-        while let Some(msg) = messages.next().await {
-            match msg {
-                Message::Command(cmd) => self.message_command(cmd),
-                Message::Worker(worker) => self.message_worker(worker),
-                Message::StatementReady(ready) => self.message_statement_ready(ready).await,
-                Message::SinkConnectorReady(ready) => self.message_sink_connector_ready(ready),
-                Message::AdvanceSourceTimestamp(advance) => {
-                    self.message_advance_source_timestamp(advance)
+        {
+            // An explicit SELECT or INSERT on a table will bump the table's timestamps,
+            // but there are cases where timestamps are not bumped but we expect the closed
+            // timestamps to advance (`AS OF now()`, TAILing views over RT sources and
+            // tables). To address these, spawn a task that forces table timestamps to
+            // close on a regular interval. This roughly tracks the behaivor of realtime
+            // sources that close off timestamps on an interval.
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "coordinator_serve", async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+                loop {
+                    interval.tick().await;
+                    // If sending fails, the main thread has shutdown.
+                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
+                        break;
+                    }
                 }
-                Message::ScrapeMetrics => self.message_scrape_metrics(),
-                Message::Shutdown => {
-                    self.message_shutdown();
-                    break;
-                }
-            }
-
-            if self.need_advance {
-                self.advance_local_inputs();
-            }
+            });
         }
 
-        // Cleanly drain any pending messages from the worker before shutting
-        // down.
-        drop(drain_trigger);
-        drop(self.internal_cmd_tx);
-        while messages.next().await.is_some() {}
+        let mut metric_scraper_stream = self.metric_scraper.tick_stream();
+
+        loop {
+            let msg = select! {
+                // Order matters here. We want to process internal commands
+                // before processing external commands.
+                biased;
+
+                Some(m) = internal_cmd_rx.recv() => m,
+                Some(m) = self.dataflow_client.recv() => Message::Worker(m),
+                Some(m) = metric_scraper_stream.next() => m,
+                m = cmd_rx.recv() => match m {
+                    None => break,
+                    Some(m) => Message::Command(m),
+                },
+            };
+
+            match msg {
+                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::Worker(worker) => self.message_worker(worker).await,
+                Message::StatementReady(ready) => self.message_statement_ready(ready).await,
+                Message::SinkConnectorReady(ready) => {
+                    self.message_sink_connector_ready(ready).await
+                }
+                Message::WriteLockGrant(write_lock_guard) => {
+                    // It's possible to have more incoming write lock grants
+                    // than pending writes because of cancellations.
+                    if let Some(mut ready) = self.write_lock_wait_group.pop_front() {
+                        ready.session.grant_write_lock(write_lock_guard);
+                        self.sequence_plan(ready.tx, ready.session, ready.plan)
+                            .await;
+                    }
+                    // N.B. if no deferred plans, write lock is released by drop
+                    // here.
+                }
+                Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
+                Message::ScrapeMetrics => self.message_scrape_metrics().await,
+                Message::AdvanceLocalInputs => {
+                    // Convince the coordinator it needs to open a new timestamp
+                    // and advance inputs.
+                    self.read_writes_at_open_ts = true;
+                }
+            }
+
+            if self.read_writes_at_open_ts {
+                self.advance_local_inputs().await;
+            }
+        }
     }
 
     // Advance all local inputs (tables) to the current wall clock or at least
     // a time greater than any previous table read (if wall clock has gone
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
-    fn advance_local_inputs(&mut self) {
-        let mut next_ts = self.get_ts();
-        self.need_advance = false;
-        if next_ts <= self.read_lower_bound {
-            next_ts = self.read_lower_bound + 1;
-        }
-        // These can occasionally be equal, so ignore the update in that case.
-        if next_ts > self.closed_up_to {
-            if let Some(persist_multi) = self.catalog.persist_multi_details() {
-                // Close out the timestamp for persisted tables.
-                //
-                // NB: Keep this method call outside the tokio::spawn. We're
-                // guaranteed by persist that writes and seals happen in order,
-                // but only if we synchronously wait for the (fast) registration
-                // of that work to return.
-                let seal_res = persist_multi
-                    .write_handle
-                    .seal(&persist_multi.all_table_ids, next_ts);
-                let _ = tokio::spawn(async move {
-                    if let Err(err) = seal_res.into_future().await {
+    async fn advance_local_inputs(&mut self) {
+        self.open_new_local_ts();
+
+        // Close the stream up to the newly opened timestamp.
+        let advance_to = self.last_open_local_ts;
+
+        // Ensure that the persister is aware of exactly the set of tables for
+        // which persistence is enabled.
+        soft_assert_eq!(
+            self.catalog
+                .entries()
+                .filter(|entry| matches!(
+                    entry.item(),
+                    CatalogItem::Table(catalog::Table {
+                        persist_name: Some(_),
+                        ..
+                    })
+                ))
+                .map(|entry| entry.id())
+                .collect::<Vec<_>>(),
+            self.persister
+                .table_details
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+        );
+
+        if let Some(table_writer) = &mut self.persister.table_writer {
+            // Close out the timestamp for persisted tables.
+            //
+            // NB: Keep this method call outside the tokio::spawn. We're
+            // guaranteed by persist that writes and seals happen in order,
+            // but only if we synchronously wait for the (fast) registration
+            // of that work to return.
+            let seal_fut = table_writer.seal(&self.persister.all_table_ids, advance_to);
+            let _ = task::spawn(
+                || format!("advance_local_inputs:{advance_to}"),
+                async move {
+                    if let Err(err) = seal_fut.await {
                         // TODO: Linearizability relies on this, bubble up the
                         // error instead.
                         //
                         // EDIT: On further consideration, I think it doesn't
                         // affect correctness if this fails, just availability
                         // of the table.
-                        log::error!("failed to seal persisted stream to ts {}: {}", next_ts, err);
+                        error!(
+                            "failed to seal persisted stream to ts {}: {}",
+                            advance_to, err
+                        );
                     }
-                });
-            }
-
-            self.broadcast(dataflow::Command::AdvanceAllLocalInputs {
-                advance_to: next_ts,
-            });
-            self.closed_up_to = next_ts;
+                },
+            );
         }
+
+        self.dataflow_client
+            .storage()
+            .advance_all_table_timestamps(advance_to)
+            .await
+            .unwrap();
     }
 
-    fn message_worker(
-        &mut self,
-        dataflow::Response {
-            worker_id: _,
-            message,
-        }: dataflow::Response,
-    ) {
+    async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            WorkerFeedback::PeekResponse(conn_id, response) => {
-                // We use an `if let` here because the peek could have been cancelled already.
-                if let Some((channel, countdown)) = self.pending_peeks.get_mut(&conn_id) {
-                    channel
-                        .send(response)
-                        .expect("Peek endpoint terminated prematurely");
-                    *countdown -= 1;
-                    if *countdown == 0 {
-                        self.pending_peeks.remove(&conn_id);
-                    }
-                }
+            DataflowResponse::Compute(
+                ComputeResponse::PeekResponse(conn_id, response),
+                instance,
+            ) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
+                // We expect exactly one peek response, which we forward.
+                self.pending_peeks
+                    .remove(&conn_id)
+                    .expect("no more PeekResponses after closing peek channel")
+                    .send(response)
+                    .expect("Peek endpoint terminated prematurely");
             }
-            WorkerFeedback::TailResponse(sink_id, response) => {
-                // We use an `if let` here because the peek could have been cancelled already.
+            DataflowResponse::Compute(
+                ComputeResponse::TailResponse(sink_id, response),
+                instance,
+            ) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
+                // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(channel) = self.pending_tails.get_mut(&sink_id) {
-                    match response {
-                        TailResponse::Rows(rows) => {
-                            // TODO(benesch): the lack of backpressure here can result in
-                            // unbounded memory usage.
-                            let result = channel.send(rows);
-                            if result.is_err() {
-                                // TODO(benesch): we should actually drop the sink if the
-                                // receiver has gone away. E.g. form a DROP SINK command?
-                            }
-                        }
-                        TailResponse::Complete => {
-                            // TODO: Indicate this explicitly.
-                            self.pending_tails.remove(&sink_id);
-                        }
-                        TailResponse::Dropped => {
-                            // TODO: Could perhaps do this earlier, in response to DROP SINK.
-                            self.pending_tails.remove(&sink_id);
-                        }
+                if let Some(pending_tail) = self.pending_tails.get_mut(&sink_id) {
+                    let remove = pending_tail.process_response(response);
+                    if remove {
+                        self.pending_tails.remove(&sink_id);
                     }
                 }
             }
-            WorkerFeedback::FrontierUppers(updates) => {
+            DataflowResponse::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
+                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
-                self.maintenance();
+                self.maintenance().await;
             }
-            WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, changes }) => {
+            DataflowResponse::Storage(StorageResponse::TimestampBindings(
+                TimestampBindingFeedback { bindings, changes },
+            )) => {
                 self.catalog
                     .insert_timestamp_bindings(
                         bindings
@@ -650,61 +914,61 @@ impl Coordinator {
                     .expect("inserting timestamp bindings cannot fail");
 
                 let mut durability_updates = Vec::new();
+                let mut timestamp_compactions = Vec::new();
                 for (source_id, mut changes) in changes {
                     if let Some(source_state) = self.sources.get_mut(&source_id) {
                         // Apply the updates the dataflow worker sent over, and check if there
                         // were any changes to the source's upper frontier.
-                        let changes: Vec<_> = source_state
-                            .durability
-                            .update_iter(changes.drain())
-                            .collect();
+                        let changes: Vec<_> =
+                            source_state.upper.update_iter(changes.drain()).collect();
 
                         if !changes.is_empty() {
                             // The source's durability frontier changed as a result of the updates sent over
                             // by the dataflow workers. Advance the durability frontier known to the dataflow worker
                             // to indicate that these bindings have been persisted.
                             durability_updates
-                                .push((source_id, source_state.durability.frontier().to_owned()));
+                                .push((source_id, source_state.upper.frontier().to_owned()));
+
+                            // Allow compaction to advance.
+                            if let Some(compaction_window_ms) = source_state.compaction_window_ms {
+                                if !source_state.upper.frontier().is_empty() {
+                                    self.since_handles
+                                        .get_mut(&source_id)
+                                        .unwrap()
+                                        .maybe_advance(source_state.upper.frontier().iter().map(
+                                            |time| {
+                                                compaction_window_ms
+                                                    * (time.saturating_sub(compaction_window_ms)
+                                                        / compaction_window_ms)
+                                            },
+                                        ));
+                                }
+                            }
                         }
 
                         // Let's also check to see if we can compact any of the bindings we've received.
-                        let compaction_ts = if <_ as PartialOrder>::less_equal(
-                            &source_state.since.borrow().frontier(),
-                            &source_state.durability.frontier(),
-                        ) {
-                            // In this case we have persisted ahead of the compaction frontier and can safely compact
-                            // up to it
-                            *source_state
-                                .since
-                                .borrow()
-                                .frontier()
-                                .first()
-                                .expect("known to exist")
-                        } else {
-                            // Otherwise, the compaction frontier is ahead of what we've persisted so far, but we can
-                            // still potentially compact up whatever we have persisted to this point.
-                            // Note that we have to subtract from the durability frontier because it functions as the
-                            // least upper bound of whats been persisted, and we decline to compact up to the empty
-                            // frontier.
-                            source_state
-                                .durability
-                                .frontier()
-                                .first()
-                                .unwrap_or(&0)
-                                .saturating_sub(1)
-                        };
+                        let compaction_ts = *source_state
+                            .since
+                            .borrow()
+                            .frontier()
+                            .first()
+                            .expect("known to exist");
 
-                        self.catalog
-                            .compact_timestamp_bindings(source_id, compaction_ts)
-                            .expect("compacting timestamp bindings cannot fail");
+                        timestamp_compactions.push((source_id, compaction_ts));
                     }
                 }
 
+                self.catalog
+                    .compact_timestamp_bindings(&timestamp_compactions)
+                    .expect("compacting timestamp bindings cannot fail");
+
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
-                    self.broadcast(dataflow::Command::DurabilityFrontierUpdates(
-                        durability_updates,
-                    ));
+                    self.dataflow_client
+                        .storage()
+                        .update_durability_frontiers(durability_updates)
+                        .await
+                        .unwrap();
                 }
             }
         }
@@ -723,12 +987,12 @@ impl Coordinator {
             .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
             .await
         {
-            Ok(plan) => self.sequence_plan(tx, session, plan),
+            Ok(plan) => self.sequence_plan(tx, session, plan).await,
             Err(e) => tx.send(Err(e), session),
         }
     }
 
-    fn message_sink_connector_ready(
+    async fn message_sink_connector_ready(
         &mut self,
         SinkConnectorReady {
             session,
@@ -750,7 +1014,8 @@ impl Coordinator {
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
                     self.handle_sink_connector_ready(id, oid, connector)
-                        .expect("marking sink ready should never fail");
+                        .await
+                        .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connector. Report to the client that
@@ -763,7 +1028,8 @@ impl Coordinator {
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_by_id(id).is_some() {
-                    self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                    self.catalog_transact(vec![catalog::Op::DropItem(id)], |_builder| Ok(()))
+                        .await
                         .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
@@ -775,27 +1041,47 @@ impl Coordinator {
         }
     }
 
-    fn message_shutdown(&mut self) {
-        self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
-        self.broadcast(dataflow::Command::Shutdown);
-    }
-
-    fn message_advance_source_timestamp(
+    fn message_send_diffs(
         &mut self,
-        AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
+        SendDiffs {
+            mut session,
+            tx,
+            id,
+            diffs,
+            kind,
+        }: SendDiffs,
     ) {
-        self.broadcast(dataflow::Command::AdvanceSourceTimestamp { id, update });
+        match diffs {
+            Ok(diffs) => {
+                tx.send(
+                    self.sequence_send_diffs(
+                        &mut session,
+                        SendDiffsPlan {
+                            id,
+                            updates: diffs,
+                            kind,
+                        },
+                    ),
+                    session,
+                );
+            }
+            Err(e) => {
+                tx.send(Err(e), session);
+            }
+        }
     }
 
-    fn message_scrape_metrics(&mut self) {
+    async fn message_scrape_metrics(&mut self) {
         let scraped_metrics = self.metric_scraper.scrape_once();
-        self.send_builtin_table_updates_at_offset(scraped_metrics);
+        self.send_builtin_table_updates_at_offset(scraped_metrics)
+            .await;
     }
 
-    fn message_command(&mut self, cmd: Command) {
+    async fn message_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
                 session,
+                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             } => {
@@ -807,16 +1093,33 @@ impl Coordinator {
                     return;
                 }
 
-                let catalog = self.catalog.for_session(&session);
-                if catalog.resolve_role(session.user()).is_err() {
-                    let _ = tx.send(Response {
-                        result: Err(CoordError::UnknownLoginRole(session.user().into())),
-                        session,
-                    });
-                    return;
+                if self
+                    .catalog
+                    .for_session(&session)
+                    .resolve_role(session.user())
+                    .is_err()
+                {
+                    if !create_user_if_not_exists {
+                        let _ = tx.send(Response {
+                            result: Err(CoordError::UnknownLoginRole(session.user().into())),
+                            session,
+                        });
+                        return;
+                    }
+                    let plan = CreateRolePlan {
+                        name: session.user().to_string(),
+                    };
+                    if let Err(err) = self.sequence_create_role(plan).await {
+                        let _ = tx.send(Response {
+                            result: Err(err),
+                            session,
+                        });
+                        return;
+                    }
                 }
 
                 let mut messages = vec![];
+                let catalog = self.catalog.for_session(&session);
                 if catalog
                     .resolve_database(catalog.default_database())
                     .is_err()
@@ -865,6 +1168,7 @@ impl Coordinator {
                 };
                 let stmt = portal.stmt.clone();
                 let params = portal.parameters.clone();
+
                 match stmt {
                     Some(stmt) => {
                         // Verify that this statetement type can be executed in the current
@@ -908,11 +1212,13 @@ impl Coordinator {
                                 Statement::Close(_)
                                 | Statement::Commit(_)
                                 | Statement::Copy(_)
+                                | Statement::Deallocate(_)
                                 | Statement::Declare(_)
                                 | Statement::Discard(_)
+                                | Statement::Execute(_)
                                 | Statement::Explain(_)
                                 | Statement::Fetch(_)
-                                | Statement::Insert(_)
+                                | Statement::Prepare(_)
                                 | Statement::Rollback(_)
                                 | Statement::Select(_)
                                 | Statement::SetTransaction(_)
@@ -926,9 +1232,24 @@ impl Coordinator {
                                 | Statement::ShowIndexes(_)
                                 | Statement::ShowObjects(_)
                                 | Statement::ShowVariable(_)
+                                | Statement::SetVariable(_)
                                 | Statement::StartTransaction(_)
-                                | Statement::Tail(_) => {
+                                | Statement::Tail(_)
+                                | Statement::Raise(_) => {
                                     // Always safe.
+                                }
+
+                                Statement::Insert(ref insert_statment)
+                                    if matches!(
+                                        insert_statment.source,
+                                        InsertSource::Query(Query {
+                                            body: SetExpr::Values(..),
+                                            ..
+                                        }) | InsertSource::DefaultValues
+                                    ) =>
+                                {
+                                    // Inserting from default? values statements
+                                    // is always safe.
                                 }
 
                                 // Statements below must by run singly (in Started).
@@ -947,7 +1268,7 @@ impl Coordinator {
                                 | Statement::Delete(_)
                                 | Statement::DropDatabase(_)
                                 | Statement::DropObjects(_)
-                                | Statement::SetVariable(_)
+                                | Statement::Insert(_)
                                 | Statement::Update(_) => {
                                     let _ = tx.send(Response {
                                         result: Err(CoordError::OperationProhibitsTransaction(
@@ -972,8 +1293,9 @@ impl Coordinator {
 
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
                         let catalog = self.catalog.for_session(&session);
-                        let purify_fut = sql::pure::purify(&catalog, stmt);
-                        tokio::spawn(async move {
+                        let purify_fut = mz_sql::pure::purify(&catalog, stmt);
+                        let conn_id = session.conn_id();
+                        task::spawn(|| format!("purify:{conn_id}"), async move {
                             let result = purify_fut.await.map_err(|e| e.into());
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
@@ -1020,7 +1342,7 @@ impl Coordinator {
                 conn_id,
                 secret_key,
             } => {
-                self.handle_cancel(conn_id, secret_key);
+                self.handle_cancel(conn_id, secret_key).await;
             }
 
             Command::DumpCatalog { session, tx } => {
@@ -1045,7 +1367,7 @@ impl Coordinator {
             }
 
             Command::Terminate { mut session } => {
-                self.handle_terminate(&mut session);
+                self.handle_terminate(&mut session).await;
             }
 
             Command::StartTransaction {
@@ -1055,7 +1377,7 @@ impl Coordinator {
             } => {
                 let now = self.now_datetime();
                 let session = match implicit {
-                    None => session.start_transaction(now),
+                    None => session.start_transaction(now, None),
                     Some(stmts) => session.start_transaction_implicit(now, stmts),
                 };
                 let _ = tx.send(Response {
@@ -1070,7 +1392,16 @@ impl Coordinator {
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx);
-                self.sequence_end_transaction(tx, session, action);
+                self.sequence_end_transaction(tx, session, action).await;
+            }
+
+            Command::VerifyPreparedStatement {
+                name,
+                mut session,
+                tx,
+            } => {
+                let result = self.handle_verify_prepared_statement(&mut session, &name);
+                let _ = tx.send(Response { result, session });
             }
         }
     }
@@ -1080,7 +1411,7 @@ impl Coordinator {
     /// 1. The `upper` frontier for each source, index and sink does not go backwards with
     /// upper updates
     /// 2. `upper` never contains any times with negative multiplicity.
-    /// 3. `upper` never contains any times with multiplicity greater than `n_workers`
+    /// 3. `upper` never contains any times with multiplicity greater than `1`.
     /// 4. No updates increase the sum of all multiplicities in `upper`.
     ///
     /// Note that invariants 2 - 4 require single dimensional time, and a fixed number of
@@ -1092,7 +1423,6 @@ impl Coordinator {
     fn validate_update_iter(
         upper: &mut MutableAntichain<Timestamp>,
         mut changes: ChangeBatch<Timestamp>,
-        num_workers: usize,
     ) -> Vec<(Timestamp, i64)> {
         let old_frontier = upper.frontier().to_owned();
 
@@ -1111,7 +1441,7 @@ impl Coordinator {
         for (t, _) in changes.into_inner() {
             let count = upper.count_for(&t);
             assert!(count >= 0);
-            assert!(count as usize <= num_workers);
+            assert!(count as usize <= 1);
         }
 
         assert!(<_ as PartialOrder>::less_equal(
@@ -1122,12 +1452,10 @@ impl Coordinator {
         frontier_changes
     }
 
-    /// Updates the upper frontier of a named view.
+    /// Updates the upper frontier of a maintained arrangement or sink.
     fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
-        let num_workers = self.num_workers();
         if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes =
-                Coordinator::validate_update_iter(&mut index_state.upper, changes, num_workers);
+            let changes = Self::validate_update_iter(&mut index_state.upper, changes);
 
             if !changes.is_empty() {
                 // Advance the compaction frontier to trail the new frontier.
@@ -1158,26 +1486,14 @@ impl Coordinator {
                     }
                 }
             }
-        } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes =
-                Coordinator::validate_update_iter(&mut source_state.upper, changes, num_workers);
-
-            if !changes.is_empty() {
-                if let Some(compaction_window_ms) = source_state.compaction_window_ms {
-                    if !source_state.upper.frontier().is_empty() {
-                        self.since_handles.get_mut(name).unwrap().maybe_advance(
-                            source_state.upper.frontier().iter().map(|time| {
-                                compaction_window_ms
-                                    * (time.saturating_sub(compaction_window_ms)
-                                        / compaction_window_ms)
-                            }),
-                        );
-                    }
-                }
-            }
+        } else if self.sources.get_mut(name).is_some() {
+            panic!(
+                "expected an update for an index or sink, instead got update for source {}",
+                name
+            );
         } else if let Some(sink_state) = self.sink_writes.get_mut(name) {
             // Only one dataflow worker should give updates for sinks
-            let changes = Coordinator::validate_update_iter(&mut sink_state.frontier, changes, 1);
+            let changes = Self::validate_update_iter(&mut sink_state.frontier, changes);
 
             if !changes.is_empty() {
                 sink_state.advance_source_handles();
@@ -1185,13 +1501,14 @@ impl Coordinator {
         }
     }
 
-    /// Forward the subset of since updates that belong to persisted tables'
-    /// primary indexes to the persisted tables themselves.
-    ///
-    /// TODO: In the future the coordinator should perhaps track a table's upper and
-    /// since frontiers directly as it currently does for sources.
-    fn persisted_table_allow_compaction(&self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
-        let mut table_since_updates = vec![];
+    /// Allows compaction of identified collections through the indicated frontiers.
+    fn persisted_table_allow_compaction(
+        &mut self,
+        since_updates: &[(GlobalId, Antichain<Timestamp>)],
+    ) {
+        // The updates of `since_updates` identified by a persistence-internal `stream_id`.
+        let mut persistence_since_updates = vec![];
+
         for (id, frontier) in since_updates.iter() {
             // HACK: Avoid the "failed to compact persisted tables" error log at
             // restart, by not trying to allow compaction on the minimum
@@ -1204,42 +1521,43 @@ impl Coordinator {
                 continue;
             }
 
-            // Not all ids will be present in the catalog however, those that are
-            // in the catalog must also have their dependencies in the catalog as
-            // well.
-            let item = self.catalog.try_get_by_id(*id).map(|e| e.item());
-            if let Some(CatalogItem::Index(catalog::Index { on, .. })) = item {
-                if let CatalogItem::Table(catalog::Table {
-                    persist: Some(persist),
-                    ..
-                }) = self.catalog.get_by_id(on).item()
-                {
-                    if self.catalog.default_index_for(*on) == Some(*id) {
-                        table_since_updates
-                            .push((persist.write_handle.stream_id(), frontier.clone()));
-                    }
-                }
+            if let Some(persist) = self.persister.table_details.get(id) {
+                persistence_since_updates.push((persist.stream_id, frontier.clone()));
             }
         }
 
-        if !table_since_updates.is_empty() {
-            let persist_multi = match self.catalog.persist_multi_details() {
+        // The persistence source that is backing a table on workers does not send frontier updates
+        // back to the coordinator. We update our internal bookkeeping here, because we also
+        // forward the compaction frontier here and therefore know that the since advances.
+        for (id, frontier) in since_updates {
+            let since_handle = self
+                .since_handles
+                .get_mut(&id)
+                .expect("missing since handle");
+
+            since_handle.maybe_advance(frontier.iter().cloned());
+        }
+
+        if !persistence_since_updates.is_empty() {
+            let persist_multi = match &mut self.persister.table_writer {
                 Some(multi) => multi,
                 None => {
-                    log::error!("internal error: persist_multi_details invariant violated");
+                    error!("internal error: persist_multi_details invariant violated");
                     return;
                 }
             };
 
-            let compaction_res = persist_multi
-                .write_handle
-                .allow_compaction(&table_since_updates);
-            let _ = tokio::spawn(async move {
-                if let Err(err) = compaction_res.into_future().await {
-                    // TODO: Do something smarter here
-                    log::error!("failed to compact persisted tables: {}", err);
-                }
-            });
+            let compaction_fut = persist_multi.allow_compaction(&persistence_since_updates);
+            let _ = task::spawn(
+                // TODO(guswynn): Add more relevant info here
+                || "compaction",
+                async move {
+                    if let Err(err) = compaction_fut.await {
+                        // TODO: Do something smarter here
+                        error!("failed to compact persisted tables: {}", err);
+                    }
+                },
+            );
         }
     }
 
@@ -1247,73 +1565,56 @@ impl Coordinator {
     ///
     /// Primarily, this involves sequencing compaction commands, which should be
     /// issued whenever available.
-    fn maintenance(&mut self) {
+    async fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
         // Don't try to compact to an empty frontier. There may be a good reason to do this
         // in principle, but not in any current Mz use case.
         // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-        let since_updates: Vec<_> = self
-            .since_updates
+
+        let index_since_updates: Vec<_> = self
+            .index_since_updates
             .borrow_mut()
             .drain()
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
 
-        if !since_updates.is_empty() {
-            self.persisted_table_allow_compaction(&since_updates);
-            self.broadcast(dataflow::Command::AllowCompaction(since_updates));
+        if !index_since_updates.is_empty() {
+            // Error value is ignored because this call attempts to modify ids
+            // for indexes that have not been installed. See above, presumably.
+            self.dataflow_client
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .allow_compaction(index_since_updates)
+                .await;
+        }
+
+        let source_since_updates: Vec<_> = self
+            .source_since_updates
+            .borrow_mut()
+            .drain()
+            .filter(|(_, frontier)| frontier != &Antichain::new())
+            .collect();
+
+        if !source_since_updates.is_empty() {
+            self.persisted_table_allow_compaction(&source_since_updates);
+            self.dataflow_client
+                .storage()
+                .allow_compaction(source_since_updates)
+                .await
+                .unwrap();
         }
     }
 
     async fn handle_statement(
         &mut self,
         session: &mut Session,
-        stmt: sql::ast::Statement<Raw>,
-        params: &sql::plan::Params,
-    ) -> Result<sql::plan::Plan, CoordError> {
+        stmt: mz_sql::ast::Statement<Raw>,
+        params: &mz_sql::plan::Params,
+    ) -> Result<mz_sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
-
-        // When symbiosis mode is enabled, use symbiosis planning for:
-        //  - CREATE TABLE
-        //  - CREATE SCHEMA
-        //  - DROP TABLE
-        //  - INSERT
-        // When these statements are routed through symbiosis, table information
-        // is created and maintained locally, which is required for other statements
-        // to be executed correctly.
-        if let Statement::CreateTable(CreateTableStatement { .. })
-        | Statement::DropObjects(DropObjectsStatement {
-            object_type: ObjectType::Table,
-            ..
-        })
-        | Statement::CreateSchema(CreateSchemaStatement { .. })
-        | Statement::Insert { .. } = &stmt
-        {
-            if let Some(ref mut postgres) = self.symbiosis {
-                let plan = postgres
-                    .execute(&pcx, &self.catalog.for_session(session), &stmt)
-                    .await?;
-                return Ok(plan);
-            }
-        }
-
-        match sql::plan::plan(
-            Some(&pcx),
-            &self.catalog.for_session(session),
-            stmt.clone(),
-            params,
-        ) {
-            Ok(plan) => Ok(plan),
-            Err(err) => match self.symbiosis {
-                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    let plan = postgres
-                        .execute(&pcx, &self.catalog.for_session(session), &stmt)
-                        .await?;
-                    Ok(plan)
-                }
-                _ => Err(err.into()),
-            },
-        }
+        let plan =
+            mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
+        Ok(plan)
     }
 
     fn handle_declare(
@@ -1321,18 +1622,11 @@ impl Coordinator {
         session: &mut Session,
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
-        // handle_describe cares about symbiosis mode here. Declared cursors are
-        // perhaps rare enough we can ignore that worry and just error instead.
-        let desc = describe(
-            &self.catalog.for_session(session),
-            stmt.clone(),
-            &param_types,
-            session,
-        )?;
+        let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
-        let result_formats = vec![pgrepr::Format::Text; desc.arity()];
+        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
         session.set_portal(name, desc, Some(stmt), params, result_formats)?;
         Ok(())
     }
@@ -1342,35 +1636,68 @@ impl Coordinator {
         session: &mut Session,
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
-        let desc = if let Some(stmt) = stmt.clone() {
-            match describe(
-                &self.catalog.for_session(session),
-                stmt.clone(),
-                &param_types,
+        let desc = self.describe(session, stmt.clone(), param_types)?;
+        session.set_prepared_statement(
+            name,
+            PreparedStatement::new(stmt, desc, self.catalog.transient_revision()),
+        );
+        Ok(())
+    }
+
+    fn describe(
+        &self,
+        session: &Session,
+        stmt: Option<Statement<Raw>>,
+        param_types: Vec<Option<ScalarType>>,
+    ) -> Result<StatementDesc, CoordError> {
+        if let Some(stmt) = stmt {
+            describe(&self.catalog, stmt, &param_types, session)
+        } else {
+            Ok(StatementDesc::new(None))
+        }
+    }
+
+    /// Verify a prepared statement is still valid.
+    fn handle_verify_prepared_statement(
+        &self,
+        session: &mut Session,
+        name: &str,
+    ) -> Result<(), CoordError> {
+        let ps = match session.get_prepared_statement_unverified(&name) {
+            Some(ps) => ps,
+            None => return Err(CoordError::UnknownPreparedStatement(name.to_string())),
+        };
+        if ps.catalog_revision != self.catalog.transient_revision() {
+            let desc = self.describe(
                 session,
-            ) {
-                Ok(desc) => desc,
-                // Describing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it. Note that Postgres
-                // only handles commands that do not return rows, so the
-                // `StatementDesc` is constructed accordingly.
-                Err(err) => match self.symbiosis {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => StatementDesc::new(None),
-                    _ => return Err(err),
-                },
+                ps.sql().cloned(),
+                ps.desc()
+                    .param_types
+                    .iter()
+                    .map(|ty| Some(ty.clone()))
+                    .collect(),
+            )?;
+            if &desc != ps.desc() {
+                Err(CoordError::ChangedPlan)
+            } else {
+                // If the descs are the same, we can bump our version to declare that ps is
+                // correct as of now.
+                let ps = session
+                    .get_prepared_statement_mut_unverified(name)
+                    .expect("known to exist");
+                ps.catalog_revision = self.catalog.transient_revision();
+                Ok(())
             }
         } else {
-            StatementDesc::new(None)
-        };
-        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
-        Ok(())
+            Ok(())
+        }
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -1379,30 +1706,36 @@ impl Coordinator {
                 return;
             }
 
-            // Cancel the peek. We use an `if let` because the peek could be completed
-            // and removed before the cancellation is received.
-            if let Some((channel, count)) = self.pending_peeks.get(&conn_id) {
-                for _ in 0..*count {
-                    channel
-                        .send(PeekResponse::Canceled)
-                        .expect("Peek channel closed prematurely");
-                }
+            // Cancel deferred writes. There is at most one pending write per session.
+            if let Some(idx) = self
+                .write_lock_wait_group
+                .iter()
+                .position(|ready| ready.session.conn_id() == conn_id)
+            {
+                let ready = self.write_lock_wait_group.remove(idx).unwrap();
+                ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
             }
-            // Allow dataflow to cancel any pending peeks.
-            self.broadcast(dataflow::Command::CancelPeek { conn_id });
 
             // Inform the target session (if it asks) about the cancellation.
-            let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
+            let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
+
+            // Allow dataflow to cancel any pending peeks.
+            self.dataflow_client
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .cancel_peek(conn_id)
+                .await
+                .unwrap();
         }
     }
 
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    fn handle_terminate(&mut self, session: &mut Session) {
-        self.clear_transaction(session);
+    async fn handle_terminate(&mut self, session: &mut Session) {
+        self.clear_transaction(session).await;
 
-        self.drop_temp_items(session.conn_id());
+        self.drop_temp_items(session.conn_id()).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
@@ -1411,9 +1744,9 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+    async fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
         let (drop_sinks, txn) = session.clear_transaction();
-        self.drop_sinks(drop_sinks);
+        self.drop_sinks(drop_sinks).await;
 
         // Allow compaction of sources from this transaction.
         self.txn_reads.remove(&session.conn_id());
@@ -1423,13 +1756,14 @@ impl Coordinator {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    fn drop_temp_items(&mut self, conn_id: u32) {
+    async fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
-        self.catalog_transact(ops)
+        self.catalog_transact(ops, |_builder| Ok(()))
+            .await
             .expect("unable to drop temporary items for conn_id");
     }
 
-    fn handle_sink_connector_ready(
+    async fn handle_sink_connector_ready(
         &mut self,
         id: GlobalId,
         oid: u32,
@@ -1443,6 +1777,10 @@ impl Coordinator {
             _ => unreachable!(),
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        let as_of = SinkAsOf {
+            frontier: self.determine_frontier(&[sink.from]),
+            strict: !sink.with_snapshot,
+        };
         let ops = vec![
             catalog::Op::DropItem(id),
             catalog::Op::CreateItem {
@@ -1452,19 +1790,23 @@ impl Coordinator {
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog_transact(ops)?;
-        let as_of = SinkAsOf {
-            frontier: self.determine_frontier(sink.from),
-            strict: !sink.with_snapshot,
-        };
-        let df = self.dataflow_builder().build_sink_dataflow(
-            name.to_string(),
-            id,
-            sink.from,
-            connector.clone(),
-            Some(sink.envelope),
-            as_of,
-        );
+        let df = self
+            .catalog_transact(ops, |mut builder| {
+                let sink_description = mz_dataflow_types::sinks::SinkDesc {
+                    from: sink.from,
+                    from_desc: builder
+                        .catalog
+                        .get_by_id(&sink.from)
+                        .desc()
+                        .unwrap()
+                        .clone(),
+                    connector: connector.clone(),
+                    envelope: Some(sink.envelope),
+                    as_of,
+                };
+                Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description)?)
+            })
+            .await?;
 
         // For some sinks, we need to block compaction of each timestamp binding
         // until all sinks that depend on a given source have finished writing out that timestamp.
@@ -1484,10 +1826,10 @@ impl Coordinator {
             let sink_writes = SinkWrites::new(tokens);
             self.sink_writes.insert(id, sink_writes);
         }
-        Ok(self.ship_dataflow(df))
+        Ok(self.ship_dataflow(df).await)
     }
 
-    fn sequence_plan(
+    async fn sequence_plan(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -1495,46 +1837,52 @@ impl Coordinator {
     ) {
         match plan {
             Plan::CreateDatabase(plan) => {
-                tx.send(self.sequence_create_database(plan), session);
+                tx.send(self.sequence_create_database(plan).await, session);
             }
             Plan::CreateSchema(plan) => {
-                tx.send(self.sequence_create_schema(plan), session);
+                tx.send(self.sequence_create_schema(plan).await, session);
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(plan), session);
+                tx.send(self.sequence_create_role(plan).await, session);
             }
             Plan::CreateTable(plan) => {
-                tx.send(self.sequence_create_table(&mut session, plan), session);
+                tx.send(self.sequence_create_table(&session, plan).await, session);
             }
             Plan::CreateSource(plan) => {
-                tx.send(self.sequence_create_source(&mut session, plan), session);
+                tx.send(
+                    self.sequence_create_source(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, plan, tx);
+                self.sequence_create_sink(session, plan, tx).await;
             }
             Plan::CreateView(plan) => {
-                tx.send(self.sequence_create_view(&mut session, plan), session);
+                tx.send(self.sequence_create_view(&session, plan).await, session);
             }
             Plan::CreateViews(plan) => {
-                tx.send(self.sequence_create_views(&mut session, plan), session);
+                tx.send(
+                    self.sequence_create_views(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan), session);
+                tx.send(self.sequence_create_index(plan).await, session);
             }
             Plan::CreateType(plan) => {
-                tx.send(self.sequence_create_type(plan), session);
+                tx.send(self.sequence_create_type(plan).await, session);
             }
             Plan::DropDatabase(plan) => {
-                tx.send(self.sequence_drop_database(plan), session);
+                tx.send(self.sequence_drop_database(plan).await, session);
             }
             Plan::DropSchema(plan) => {
-                tx.send(self.sequence_drop_schema(plan), session);
+                tx.send(self.sequence_drop_schema(plan).await, session);
             }
             Plan::DropRoles(plan) => {
-                tx.send(self.sequence_drop_roles(plan), session);
+                tx.send(self.sequence_drop_roles(plan).await, session);
             }
             Plan::DropItems(plan) => {
-                tx.send(self.sequence_drop_items(plan), session);
+                tx.send(self.sequence_drop_items(plan).await, session);
             }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
@@ -1548,10 +1896,10 @@ impl Coordinator {
             Plan::SetVariable(plan) => {
                 tx.send(self.sequence_set_variable(&mut session, plan), session);
             }
-            Plan::StartTransaction => {
+            Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(self.now_datetime());
+                let session = session.start_transaction(self.now_datetime(), plan.access);
                 tx.send(
                     Ok(ExecuteResponse::StartedTransaction { duplicated }),
                     session,
@@ -1564,13 +1912,13 @@ impl Coordinator {
                     Plan::AbortTransaction => EndTransactionAction::Rollback,
                     _ => unreachable!(),
                 };
-                self.sequence_end_transaction(tx, session, action);
+                self.sequence_end_transaction(tx, session, action).await;
             }
             Plan::Peek(plan) => {
-                tx.send(self.sequence_peek(&mut session, plan), session);
+                tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
             Plan::Tail(plan) => {
-                tx.send(self.sequence_tail(&mut session, plan), session);
+                tx.send(self.sequence_tail(&mut session, plan).await, session);
             }
             Plan::SendRows(plan) => {
                 tx.send(Ok(send_immediate_rows(plan.rows)), session);
@@ -1593,7 +1941,10 @@ impl Coordinator {
                 tx.send(self.sequence_send_diffs(&mut session, plan), session);
             }
             Plan::Insert(plan) => {
-                tx.send(self.sequence_insert(&mut session, plan), session);
+                self.sequence_insert(tx, session, plan).await;
+            }
+            Plan::ReadThenWrite(plan) => {
+                self.sequence_read_then_write(tx, session, plan).await;
             }
             Plan::AlterNoop(plan) => {
                 tx.send(
@@ -1602,7 +1953,7 @@ impl Coordinator {
                 );
             }
             Plan::AlterItemRename(plan) => {
-                tx.send(self.sequence_alter_item_rename(plan), session);
+                tx.send(self.sequence_alter_item_rename(plan).await, session);
             }
             Plan::AlterIndexSetOptions(plan) => {
                 tx.send(self.sequence_alter_index_set_options(plan), session);
@@ -1611,17 +1962,17 @@ impl Coordinator {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
             Plan::AlterIndexEnable(plan) => {
-                tx.send(self.sequence_alter_index_enable(plan), session);
+                tx.send(self.sequence_alter_index_enable(plan).await, session);
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(session.conn_id());
+                self.drop_temp_items(session.conn_id()).await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(session.conn_id());
+                    self.drop_temp_items(session.conn_id()).await;
                     let drop_sinks = session.reset();
-                    self.drop_sinks(drop_sinks);
+                    self.drop_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(CoordError::OperationProhibitsTransaction(
@@ -1658,10 +2009,81 @@ impl Coordinator {
                     tx.send(Err(CoordError::UnknownCursor(plan.name)), session);
                 }
             }
+            Plan::Prepare(plan) => {
+                if session
+                    .get_prepared_statement_unverified(&plan.name)
+                    .is_some()
+                {
+                    tx.send(Err(CoordError::PreparedStatementExists(plan.name)), session);
+                } else {
+                    session.set_prepared_statement(
+                        plan.name,
+                        PreparedStatement::new(
+                            Some(plan.stmt),
+                            plan.desc,
+                            self.catalog.transient_revision(),
+                        ),
+                    );
+                    tx.send(Ok(ExecuteResponse::Prepare), session);
+                }
+            }
+            Plan::Execute(plan) => {
+                let plan_name = plan.name.clone();
+                match self.sequence_execute(&mut session, plan) {
+                    Ok(portal_name) => {
+                        let internal_cmd_tx = self.internal_cmd_tx.clone();
+                        task::spawn(|| format!("execute:{plan_name}"), async move {
+                            internal_cmd_tx
+                                .send(Message::Command(Command::Execute {
+                                    portal_name,
+                                    session,
+                                    tx: tx.take(),
+                                }))
+                                .expect("sending to internal_cmd_tx cannot fail");
+                        });
+                    }
+                    Err(err) => tx.send(Err(err), session),
+                };
+            }
+            Plan::Deallocate(plan) => match plan.name {
+                Some(name) => {
+                    if session.remove_prepared_statement(&name) {
+                        tx.send(Ok(ExecuteResponse::Deallocate { all: false }), session);
+                    } else {
+                        tx.send(Err(CoordError::UnknownPreparedStatement(name)), session);
+                    }
+                }
+                None => {
+                    session.remove_all_prepared_statements();
+                    tx.send(Ok(ExecuteResponse::Deallocate { all: true }), session);
+                }
+            },
+            Plan::Raise(RaisePlan { severity }) => {
+                tx.send(Ok(ExecuteResponse::Raise { severity }), session);
+            }
         }
     }
 
-    fn sequence_create_database(
+    // Returns the name of the portal to execute.
+    fn sequence_execute(
+        &mut self,
+        session: &mut Session,
+        plan: ExecutePlan,
+    ) -> Result<String, CoordError> {
+        // Verify the stmt is still valid.
+        self.handle_verify_prepared_statement(session, &plan.name)?;
+        let ps = session.get_prepared_statement_unverified(&plan.name);
+        match ps {
+            Some(ps) => {
+                let sql = ps.sql().cloned();
+                let desc = ps.desc().clone();
+                session.create_new_portal(sql, desc, plan.params, Vec::new())
+            }
+            None => Err(CoordError::UnknownPreparedStatement(plan.name)),
+        }
+    }
+
+    async fn sequence_create_database(
         &mut self,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1678,7 +2100,7 @@ impl Coordinator {
                 oid: schema_oid,
             },
         ];
-        match self.catalog_transact(ops) {
+        match self.catalog_transact(ops, |_builder| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -1688,7 +2110,7 @@ impl Coordinator {
         }
     }
 
-    fn sequence_create_schema(
+    async fn sequence_create_schema(
         &mut self,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1698,7 +2120,7 @@ impl Coordinator {
             schema_name: plan.schema_name,
             oid,
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -1708,7 +2130,7 @@ impl Coordinator {
         }
     }
 
-    fn sequence_create_role(
+    async fn sequence_create_role(
         &mut self,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1717,11 +2139,12 @@ impl Coordinator {
             name: plan.name,
             oid,
         };
-        self.catalog_transact(vec![op])
+        self.catalog_transact(vec![op], |_builder| Ok(()))
+            .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    fn sequence_create_table(
+    async fn sequence_create_table(
         &mut self,
         session: &Session,
         plan: CreateTablePlan,
@@ -1740,17 +2163,15 @@ impl Coordinator {
         let table_id = self.catalog.allocate_id()?;
         let mut index_depends_on = table.depends_on.clone();
         index_depends_on.push(table_id);
-        let persist = self
-            .catalog
-            .persist_details(table_id, &name)
-            .map_err(|err| anyhow!("{}", err))?;
         let table = catalog::Table {
             create_sql: table.create_sql,
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
             depends_on: table.depends_on,
-            persist,
+            persist_name: self
+                .persister
+                .new_table_persist_name(table_id, &name.to_string()),
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
@@ -1770,24 +2191,77 @@ impl Coordinator {
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
-        match self.catalog_transact(vec![
-            catalog::Op::CreateItem {
-                id: table_id,
-                oid: table_oid,
-                name,
-                item: CatalogItem::Table(table),
-            },
-            catalog::Op::CreateItem {
-                id: index_id,
-                oid: index_oid,
-                name: index_name,
-                item: CatalogItem::Index(index),
-            },
-        ]) {
-            Ok(_) => {
-                self.dataflow_builder()
-                    .build_index_dataflow(index_id)
-                    .map(|df| self.ship_dataflow(df));
+        let df = self
+            .catalog_transact(
+                vec![
+                    catalog::Op::CreateItem {
+                        id: table_id,
+                        oid: table_oid,
+                        name,
+                        item: CatalogItem::Table(table.clone()),
+                    },
+                    catalog::Op::CreateItem {
+                        id: index_id,
+                        oid: index_oid,
+                        name: index_name,
+                        item: CatalogItem::Index(index),
+                    },
+                ],
+                |mut builder| {
+                    if let Some((name, description)) =
+                        Self::prepare_index_build(builder.catalog, &index_id)
+                    {
+                        let df = builder.build_index_dataflow(name, index_id, description)?;
+                        Ok(Some(df))
+                    } else {
+                        Ok(None)
+                    }
+                },
+            )
+            .await;
+        match df {
+            Ok(df) => {
+                // Determine the initial validity for the table.
+                self.persister
+                    .add_table(table_id, &table)
+                    .map_err(CoordError::Persistence)?;
+                let since_ts = self
+                    .persister
+                    .table_details
+                    .get(&table_id)
+                    .map(|td| td.since_ts)
+                    .unwrap_or(0);
+
+                // Announce the creation of the table source.
+                let source_description = self
+                    .catalog
+                    .state()
+                    .source_description_for(table_id)
+                    .unwrap();
+                self.dataflow_client
+                    .storage()
+                    .create_sources(vec![CreateSourceCommand {
+                        id: table_id,
+                        desc: source_description,
+                        since: Antichain::from_elem(since_ts),
+                        ts_bindings: vec![],
+                    }])
+                    .await
+                    .unwrap();
+                // Install the dataflow if so required.
+                if let Some(df) = df {
+                    let frontiers = self.new_source_frontiers(
+                        table_id,
+                        [since_ts],
+                        self.logical_compaction_window_ms,
+                    );
+
+                    // NOTE: Tables are not sources, but to a large part of the system they look
+                    // like they are, e.g. they are rendered as a SourceConnector::Local.
+                    self.sources.insert(table_id, frontiers);
+
+                    self.ship_dataflow(df).await;
+                }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -1798,34 +2272,93 @@ impl Coordinator {
         }
     }
 
-    fn sequence_create_source(
+    async fn sequence_create_source(
         &mut self,
         session: &mut Session,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        // TODO(petrosagg): remove this check once postgres sources are properly supported
-        if matches!(
-            plan,
-            CreateSourcePlan {
-                source: Source {
-                    connector: SourceConnector::External {
-                        connector: ExternalSourceConnector::Postgres(_),
-                        ..
-                    },
-                    ..
-                },
-                materialized: false,
-                ..
-            }
-        ) {
-            coord_bail!("Unmaterialized Postgres sources are not supported yet");
-        }
-
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
-        match self.catalog_transact(ops) {
-            Ok(()) => {
-                self.ship_sources(metadata);
+        match self
+            .catalog_transact(ops, move |mut builder| {
+                let mut dfs = Vec::new();
+                let mut source_ids = Vec::new();
+                for (source_id, idx_id) in metadata {
+                    source_ids.push(source_id);
+                    if let Some(index_id) = idx_id {
+                        if let Some((name, description)) =
+                            Self::prepare_index_build(builder.catalog, &index_id)
+                        {
+                            let df = builder.build_index_dataflow(name, index_id, description)?;
+                            dfs.push(df);
+                        }
+                    }
+                }
+                Ok((dfs, source_ids))
+            })
+            .await
+        {
+            Ok((dfs, source_ids)) => {
+                // Do everything to instantiate the source at the coordinator and
+                // inform the timestamper and dataflow workers of its existence before
+                // shipping any dataflows that depend on its existence.
+                let catalog_state = self.catalog.state();
+
+                // Ask persistence if it has a since timestamps for any
+                // of the new sources.
+                let since_timestamps = source_ids
+                    .iter()
+                    .map(|id| {
+                        let source = catalog_state.get_by_id(&id).source().ok_or_else(|| {
+                            CoordError::Internal(format!("ID {} unexpectedly not a source", id))
+                        })?;
+                        let since_ts = self
+                            .persister
+                            .load_source_persist_desc(&source)
+                            .map_err(CoordError::Persistence)?
+                            .map(|p| p.since_ts)
+                            .unwrap_or(0);
+                        Ok::<_, CoordError>(since_ts)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let descriptions = source_ids
+                    .iter()
+                    .map(|id| catalog_state.source_description_for(*id).unwrap())
+                    .collect::<Vec<_>>();
+
+                // Continue to do those things.
+                let mut source_descriptions = Vec::with_capacity(source_ids.len());
+                for ((source_id, since_ts), description) in source_ids
+                    .into_iter()
+                    .zip_eq(since_timestamps)
+                    .zip_eq(descriptions)
+                {
+                    let ts_bindings = self
+                        .catalog
+                        .load_timestamp_bindings(source_id)
+                        .expect("loading timestamps from coordinator cannot fail");
+
+                    let frontiers = self.new_source_frontiers(
+                        source_id,
+                        [since_ts],
+                        self.logical_compaction_window_ms,
+                    );
+                    self.sources.insert(source_id, frontiers);
+                    source_descriptions.push(CreateSourceCommand {
+                        id: source_id,
+                        desc: description,
+                        since: Antichain::from_elem(since_ts),
+                        ts_bindings,
+                    });
+                }
+
+                self.dataflow_client
+                    .storage()
+                    .create_sources(source_descriptions)
+                    .await
+                    .unwrap();
+                self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -1833,23 +2366,6 @@ impl Coordinator {
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
-        }
-    }
-
-    fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>)>) {
-        for (source_id, idx_id) in metadata {
-            // Do everything to instantiate the source at the coordinator and
-            // inform the timestamper and dataflow workers of its existence before
-            // shipping any dataflows that depend on its existence.
-            self.update_timestamper(source_id, true);
-            let frontiers =
-                self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
-            self.sources.insert(source_id, frontiers);
-            if let Some(index_id) = idx_id {
-                self.dataflow_builder()
-                    .build_index_dataflow(index_id)
-                    .map(|df| self.ship_dataflow(df));
-            }
         }
     }
 
@@ -1867,19 +2383,21 @@ impl Coordinator {
                 materialized,
                 ..
             } = plan;
-            let optimized_expr = self
-                .view_optimizer
-                .optimize(source.expr, self.catalog.enabled_indexes())?;
-            let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
-            let source = catalog::Source {
-                create_sql: source.create_sql,
-                optimized_expr,
-                connector: source.connector,
-                bare_desc: source.bare_desc,
-                desc: transformed_desc,
-            };
             let source_id = self.catalog.allocate_id()?;
             let source_oid = self.catalog.allocate_oid()?;
+
+            let persist_details = self.persister.new_serialized_source_persist_details(
+                source_id,
+                &source.connector,
+                &name.to_string(),
+            );
+
+            let source = catalog::Source {
+                create_sql: source.create_sql,
+                connector: source.connector,
+                persist_details,
+                desc: source.desc,
+            };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
@@ -1919,7 +2437,7 @@ impl Coordinator {
         Ok((metadata, ops))
     }
 
-    fn sequence_create_sink(
+    async fn sequence_create_sink(
         &mut self,
         session: Session,
         plan: CreateSinkPlan,
@@ -1967,7 +2485,35 @@ impl Coordinator {
                 depends_on: sink.depends_on,
             }),
         };
-        match self.catalog_transact(vec![op]) {
+
+        let transact_result = self
+            .catalog_transact(vec![op], |mut builder| -> Result<(), CoordError> {
+                // Insert a dummy dataflow to trigger validation before we try to actually create
+                // the external sink resources (e.g. Kafka Topics)
+                builder
+                    .build_sink_dataflow(
+                        "dummy".into(),
+                        id,
+                        mz_dataflow_types::sinks::SinkDesc {
+                            from: sink.from,
+                            from_desc: builder
+                                .catalog
+                                .get_by_id(&sink.from)
+                                .desc()
+                                .unwrap()
+                                .clone(),
+                            connector: SinkConnector::Tail(TailSinkConnector {}),
+                            envelope: Some(sink.envelope),
+                            as_of: SinkAsOf {
+                                frontier: Antichain::new(),
+                                strict: false,
+                            },
+                        },
+                    )
+                    .map(|_ok| ())
+            })
+            .await;
+        match transact_result {
             Ok(()) => (),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -1986,17 +2532,20 @@ impl Coordinator {
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        tokio::spawn(async move {
-            internal_cmd_tx
-                .send(Message::SinkConnectorReady(SinkConnectorReady {
-                    session,
-                    tx,
-                    id,
-                    oid,
-                    result: sink_connector::build(connector_builder, id).await,
-                }))
-                .expect("sending to internal_cmd_tx cannot fail");
-        });
+        task::spawn(
+            || format!("sink_connector_ready:{}", sink.from),
+            async move {
+                internal_cmd_tx
+                    .send(Message::SinkConnectorReady(SinkConnectorReady {
+                        session,
+                        tx,
+                        id,
+                        oid,
+                        result: sink_connector::build(connector_builder, id).await,
+                    }))
+                    .expect("sending to internal_cmd_tx cannot fail");
+            },
+        );
     }
 
     fn generate_view_ops(
@@ -2016,8 +2565,7 @@ impl Coordinator {
         }
         let view_id = self.catalog.allocate_id()?;
         let view_oid = self.catalog.allocate_oid()?;
-        // Optimize the expression so that we can form an accurately typed description.
-        let optimized_expr = self.prep_relation_expr(view.expr, ExprPrepStyle::Static)?;
+        let optimized_expr = self.view_optimizer.optimize(view.expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
@@ -2068,7 +2616,7 @@ impl Coordinator {
         Ok((ops, index_id))
     }
 
-    fn sequence_create_view(
+    async fn sequence_create_view(
         &mut self,
         session: &Session,
         plan: CreateViewPlan,
@@ -2077,17 +2625,28 @@ impl Coordinator {
         let (ops, index_id) = self.generate_view_ops(
             session,
             plan.name,
-            plan.view,
+            plan.view.clone(),
             plan.replace,
             plan.materialize,
         )?;
 
-        match self.catalog_transact(ops) {
-            Ok(()) => {
+        match self
+            .catalog_transact(ops, |mut builder| {
                 if let Some(index_id) = index_id {
-                    self.dataflow_builder()
-                        .build_index_dataflow(index_id)
-                        .map(|df| self.ship_dataflow(df));
+                    if let Some((name, description)) =
+                        Self::prepare_index_build(&builder.catalog, &index_id)
+                    {
+                        let df = builder.build_index_dataflow(name, index_id, description)?;
+                        return Ok(Some(df));
+                    }
+                }
+                Ok(None)
+            })
+            .await
+        {
+            Ok(df) => {
+                if let Some(df) = df {
+                    self.ship_dataflow(df).await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2099,7 +2658,7 @@ impl Coordinator {
         }
     }
 
-    fn sequence_create_views(
+    async fn sequence_create_views(
         &mut self,
         session: &mut Session,
         plan: CreateViewsPlan,
@@ -2116,15 +2675,23 @@ impl Coordinator {
             }
         }
 
-        match self.catalog_transact(ops) {
-            Ok(()) => {
+        match self
+            .catalog_transact(ops, |mut builder| {
                 let mut dfs = vec![];
                 for index_id in index_ids {
-                    self.dataflow_builder()
-                        .build_index_dataflow(index_id)
-                        .map(|df| dfs.push(df));
+                    if let Some((name, description)) =
+                        Self::prepare_index_build(builder.catalog, &index_id)
+                    {
+                        let df = builder.build_index_dataflow(name, index_id, description)?;
+                        dfs.push(df);
+                    }
                 }
-                self.ship_dataflows(dfs);
+                Ok(dfs)
+            })
+            .await
+        {
+            Ok(dfs) => {
+                self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -2132,20 +2699,17 @@ impl Coordinator {
         }
     }
 
-    fn sequence_create_index(
+    async fn sequence_create_index(
         &mut self,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
             name,
-            mut index,
+            index,
             options,
             if_not_exists,
         } = plan;
 
-        for key in &mut index.keys {
-            Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
-        }
         let id = self.catalog.allocate_id()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
@@ -2162,13 +2726,22 @@ impl Coordinator {
             name,
             item: CatalogItem::Index(index),
         };
-        match self.catalog_transact(vec![op]) {
-            Ok(()) => {
-                self.dataflow_builder().build_index_dataflow(id).map(|df| {
-                    self.ship_dataflow(df);
+        match self
+            .catalog_transact(vec![op], |mut builder| {
+                if let Some((name, description)) = Self::prepare_index_build(builder.catalog, &id) {
+                    let df = builder.build_index_dataflow(name, id, description)?;
+                    Ok(Some(df))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
+        {
+            Ok(df) => {
+                if let Some(df) = df {
+                    self.ship_dataflow(df).await;
                     self.set_index_options(id, options).expect("index enabled");
-                });
-
+                }
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2179,13 +2752,16 @@ impl Coordinator {
         }
     }
 
-    fn sequence_create_type(
+    async fn sequence_create_type(
         &mut self,
         plan: CreateTypePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
-            inner: plan.typ.inner.into(),
+            details: CatalogTypeDetails {
+                array_id: None,
+                typ: plan.typ.inner,
+            },
             depends_on: plan.typ.depends_on,
         };
         let id = self.catalog.allocate_id()?;
@@ -2196,43 +2772,49 @@ impl Coordinator {
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
     }
 
-    fn sequence_drop_database(
+    async fn sequence_drop_database(
         &mut self,
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(plan.name);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
-    fn sequence_drop_schema(
+    async fn sequence_drop_schema(
         &mut self,
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.name);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
-    fn sequence_drop_roles(&mut self, plan: DropRolesPlan) -> Result<ExecuteResponse, CoordError> {
+    async fn sequence_drop_roles(
+        &mut self,
+        plan: DropRolesPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
         let ops = plan
             .names
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
-    fn sequence_drop_items(&mut self, plan: DropItemsPlan) -> Result<ExecuteResponse, CoordError> {
+    async fn sequence_drop_items(
+        &mut self,
+        plan: DropItemsPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -2254,6 +2836,7 @@ impl Coordinator {
             session
                 .vars()
                 .iter()
+                .filter(|v| !v.experimental())
                 .map(|v| {
                     Row::pack_slice(&[
                         Datum::String(v.name()),
@@ -2280,16 +2863,32 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.vars_mut().set(&plan.name, &plan.value)?;
+        session
+            .vars_mut()
+            .set(&plan.name, &plan.value, plan.local)?;
         Ok(ExecuteResponse::SetVariable { name: plan.name })
     }
 
-    fn sequence_end_transaction(
+    async fn sequence_end_transaction(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         mut action: EndTransactionAction,
     ) {
+        if EndTransactionAction::Commit == action {
+            let txn = session
+                .transaction()
+                .inner()
+                .expect("must be in a transaction");
+            if let Transaction {
+                ops: TransactionOps::Writes(_),
+                ..
+            } = txn
+            {
+                guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
+            }
+        }
+
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
             (&action, session.transaction())
@@ -2300,36 +2899,49 @@ impl Coordinator {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
         };
-        let rx = self.sequence_end_transaction_inner(&mut session, &action);
-        match rx {
-            Ok(Some(rx)) => {
-                tokio::spawn(async move {
-                    // The rx returns a Result<(), CoordError>, so we can map the Ok(()) output to
-                    // `response`, which will also pass through whatever error we see to tx.
-                    let result = rx.await.map(|_| response);
-                    tx.send(result, session);
-                });
-            }
-            Ok(None) => {
-                tx.send(Ok(response), session);
-            }
-            Err(err) => {
-                tx.send(Err(err), session);
-            }
-        }
+
+        // Immediately do tasks that must be serialized in the coordinator.
+        let rx = self
+            .sequence_end_transaction_inner(&mut session, action)
+            .await;
+
+        // We can now wait for responses or errors and do any session/transaction
+        // finalization in a separate task.
+        let conn_id = session.conn_id();
+        task::spawn(
+            || format!("sequence_end_transaction:{conn_id}"),
+            async move {
+                let result = match rx {
+                    // If we have more work to do, do it
+                    Ok(fut) => fut.await,
+                    Err(e) => Err(e),
+                };
+
+                if result.is_err() {
+                    action = EndTransactionAction::Rollback;
+                }
+                session.vars_mut().end_transaction(action);
+
+                match result {
+                    Ok(()) => tx.send(Ok(response), session),
+                    Err(err) => tx.send(Err(err), session),
+                }
+            },
+        );
     }
 
-    fn sequence_end_transaction_inner(
+    async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
-        action: &EndTransactionAction,
-    ) -> Result<Option<impl Future<Output = Result<(), CoordError>>>, CoordError> {
-        let txn = self.clear_transaction(session);
+        action: EndTransactionAction,
+    ) -> Result<impl Future<Output = Result<(), CoordError>>, CoordError> {
+        let txn = self.clear_transaction(session).await;
 
         // Although the compaction frontier may have advanced, we do not need to
         // call `maintenance` here because it will soon be called after the next
         // `update_upper`.
 
+        let mut write_fut = None;
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 match ops {
@@ -2337,47 +2949,38 @@ impl Coordinator {
                         // Although the transaction has a wall_time in its pcx, we use a new
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
-                        let timestamp = self.get_write_ts();
+                        let timestamp = self.get_local_write_ts();
 
                         // Separate out which updates were to tables we are
                         // persisting. In practice, we don't enable/disable this
                         // with table-level granularity so it will be all of
                         // them or none of them, which is checked below.
-                        let mut persist_streams = Vec::new();
                         let mut persist_updates = Vec::new();
                         let mut volatile_updates = Vec::new();
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
-                            let catalog_entry =
-                                self.catalog.try_get_by_id(id).ok_or_else(|| {
-                                    CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                        id.to_string(),
-                                    ))
-                                })?;
-                            match catalog_entry.item() {
-                                CatalogItem::Table(Table {
-                                    persist: Some(persist),
-                                    ..
-                                }) => {
-                                    let updates: Vec<((Row, ()), Timestamp, Diff)> = rows
-                                        .into_iter()
-                                        .map(|(row, diff)| ((row, ()), timestamp, diff))
-                                        .collect();
-                                    persist_streams.push(&persist.write_handle);
-                                    persist_updates
-                                        .push((persist.write_handle.stream_id(), updates));
-                                }
-                                _ => {
-                                    let updates = rows
-                                        .into_iter()
-                                        .map(|(row, diff)| Update {
-                                            row,
-                                            diff,
-                                            timestamp,
-                                        })
-                                        .collect();
-                                    volatile_updates.push((id, updates));
-                                }
+                            let _ = self.catalog.try_get_by_id(id).ok_or_else(|| {
+                                CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                            })?;
+                            // This can be empty if, say, a DELETE's WHERE clause had 0 results.
+                            if rows.is_empty() {
+                                continue;
+                            }
+                            if let Some(persist) = self.persister.table_details.get(&id) {
+                                let updates = rows
+                                    .into_iter()
+                                    .map(|(row, diff)| ((row, ()), timestamp, diff));
+                                persist_updates.push((&persist.write_handle, updates));
+                            } else {
+                                let updates = rows
+                                    .into_iter()
+                                    .map(|(row, diff)| Update {
+                                        row,
+                                        diff,
+                                        timestamp,
+                                    })
+                                    .collect();
+                                volatile_updates.push((id, updates));
                             }
                         }
 
@@ -2390,7 +2993,7 @@ impl Coordinator {
                                 coord_bail!("transaction had mixed persistent and volatile writes");
                             }
                             let persist_multi =
-                                self.catalog.persist_multi_details().ok_or_else(|| {
+                                self.persister.table_writer.as_mut().ok_or_else(|| {
                                     anyhow!(
                                         "internal error: persist_multi_details invariant violated"
                                     )
@@ -2400,16 +3003,28 @@ impl Coordinator {
                             // writes and seals happen in order, but only if we
                             // synchronously wait for the (fast) registration of
                             // that work to return.
-                            let write_res =
-                                persist_multi.write_handle.write_atomic(persist_updates);
-                            let write_res = write_res.into_future().map(|res| match res {
-                                Ok(_) => Ok(()),
-                                Err(err) => Err(CoordError::Unstructured(anyhow!("{}", err))),
-                            });
-                            return Ok(Some(write_res));
+                            write_fut = Some(
+                                persist_multi
+                                    .write_atomic(|builder| {
+                                        for (handle, updates) in persist_updates {
+                                            builder.add_write(handle, updates)?;
+                                        }
+                                        Ok(())
+                                    })
+                                    .map(|res| match res {
+                                        Ok(_) => Ok(()),
+                                        Err(err) => {
+                                            Err(CoordError::Unstructured(anyhow!("{}", err)))
+                                        }
+                                    }),
+                            );
                         } else {
                             for (id, updates) in volatile_updates {
-                                self.broadcast(dataflow::Command::Insert { id, updates });
+                                self.dataflow_client
+                                    .storage()
+                                    .table_insert(id, updates)
+                                    .await
+                                    .unwrap();
                             }
                         }
                     }
@@ -2417,7 +3032,16 @@ impl Coordinator {
                 }
             }
         }
-        Ok(None)
+        Ok(async move {
+            if let Some(fut) = write_fut {
+                // Because we return an async block here, this await is not executed until
+                // the containing async block is executed, so this await doesn't block the
+                // coordinator task.
+                fut.await
+            } else {
+                Ok(())
+            }
+        })
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
@@ -2457,13 +3081,19 @@ impl Coordinator {
         Ok(timedomain_ids)
     }
 
-    fn sequence_peek(
+    /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
+    ///
+    /// Peeks are sequenced by assigning a timestamp for evaluation, and then determining and
+    /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
+    /// be a simple read out of an existing arrangement, or required a new dataflow to build
+    /// the results to return.
+    async fn sequence_peek(
         &mut self,
         session: &mut Session,
         plan: PeekPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let PeekPlan {
-            source,
+            mut source,
             when,
             finishing,
             copy_to,
@@ -2483,7 +3113,19 @@ impl Coordinator {
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
         let timestamp = if in_transaction && when == PeekWhen::Immediately {
-            let timestamp = session.get_transaction_timestamp(|| {
+            // Queries are independent of the logical timestamp iff there are no referenced
+            // sources or indexes and there is no reference to `mz_logical_timestamp()`.
+            let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
+
+            // If all previous statements were timestamp-independent and the current one is
+            // not, clear the transaction ops so it can get a new timestamp and timedomain.
+            if let Some(read_txn) = self.txn_reads.get(&conn_id) {
+                if read_txn.timestamp_independent && !timestamp_independent {
+                    session.clear_transaction_ops();
+                }
+            }
+
+            let timestamp = session.get_transaction_timestamp(|session| {
                 // Determine a timestamp that will be valid for anything in any schema
                 // referenced by the first query.
                 let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
@@ -2491,7 +3133,7 @@ impl Coordinator {
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
                 let (timestamp, timestamp_ids) =
-                    self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
+                    self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
                 // Add the used indexes to the recorded ids.
                 timedomain_ids.extend(&timestamp_ids);
                 let mut handles = vec![];
@@ -2501,6 +3143,7 @@ impl Coordinator {
                 self.txn_reads.insert(
                     conn_id,
                     TxnReads {
+                        timestamp_independent,
                         timedomain_ids: timedomain_ids.into_iter().collect(),
                         _handles: handles,
                     },
@@ -2527,13 +3170,8 @@ impl Coordinator {
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
             // after the transaction started.
-            //
-            // The call to `sorted` ensures the error message is deterministic.
-            if let Some(id) = stmt_ids
-                .difference(&read_txn.timedomain_ids)
-                .sorted()
-                .next()
-            {
+            let outside: Vec<_> = stmt_ids.difference(&read_txn.timedomain_ids).collect();
+            if !outside.is_empty() {
                 let mut names: Vec<_> = read_txn
                     .timedomain_ids
                     .iter()
@@ -2541,172 +3179,85 @@ impl Coordinator {
                     .filter_map(|id| self.catalog.try_get_by_id(*id))
                     .map(|item| item.name().to_string())
                     .collect();
+                let mut outside: Vec<_> = outside
+                    .into_iter()
+                    .filter_map(|id| self.catalog.try_get_by_id(*id))
+                    .map(|item| item.name().to_string())
+                    .collect();
                 // Sort so error messages are deterministic.
                 names.sort();
+                outside.sort();
                 return Err(CoordError::RelationOutsideTimeDomain {
-                    relation: self.catalog.get_by_id(&id).name().to_string(),
+                    relations: outside,
                     names,
                 });
             }
 
             timestamp
         } else {
-            self.determine_timestamp(&source_ids, when)?.0
+            self.determine_timestamp(session, &source_ids, when)?.0
         };
 
-        let source = self.prep_relation_expr(
-            source,
-            ExprPrepStyle::OneShot {
-                logical_time: timestamp,
+        let source = self.view_optimizer.optimize(source)?;
+
+        // We create a dataflow and optimize it, to determine if we can avoid building it.
+        // This can happen if the result optimizes to a constant, or to a `Get` expression
+        // around a maintained arrangement.
+        let typ = source.typ();
+        let key: Vec<MirScalarExpr> = typ
+            .default_key()
+            .iter()
+            .map(|k| MirScalarExpr::Column(*k))
+            .collect();
+        let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
+        // Two transient allocations. We could reclaim these if we don't use them, potentially.
+        // TODO: reclaim transient identifiers in fast path cases.
+        let view_id = self.allocate_transient_id()?;
+        let index_id = self.allocate_transient_id()?;
+        // The assembled dataflow contains a view and an index of that view.
+        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
+        dataflow.set_as_of(Antichain::from_elem(timestamp));
+        let mut builder = self.dataflow_builder();
+        builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
+        for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
+            builder.prep_relation_expr(
+                view,
+                ExprPrepStyle::OneShot {
+                    logical_time: Some(timestamp),
+                    session,
+                },
+            )?;
+        }
+        dataflow.export_index(
+            index_id,
+            IndexDesc {
+                on_id: view_id,
+                key: key.clone(),
             },
+            typ,
+        );
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+
+        // Finalization optimizes the dataflow as much as possible.
+        let dataflow_plan = self.finalize_dataflow(dataflow);
+
+        // At this point, `dataflow_plan` contains our best optimized dataflow.
+        // We will check the plan to see if there is a fast path to escape full dataflow construction.
+        let fast_path = fast_path_peek::create_plan(
+            dataflow_plan,
+            view_id,
+            index_id,
+            key,
+            permutation,
+            thinning.len(),
         )?;
 
-        // If this optimizes to a constant expression, we can immediately return the result.
-        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = &*source {
-            let rows = match rows {
-                Ok(rows) => rows,
-                Err(e) => return Err(e.clone().into()),
-            };
-            let mut results = Vec::new();
-            for &(ref row, count) in rows {
-                if count < 0 {
-                    Err(EvalError::InvalidParameterValue(format!(
-                        "Negative multiplicity in constant result: {}",
-                        count
-                    )))?
-                };
-                for _ in 0..count {
-                    results.push(row.clone());
-                }
-            }
-            finishing.finish(&mut results);
-            send_immediate_rows(results)
-        } else {
-            // Peeks describe a source of data and a timestamp at which to view its contents.
-            //
-            // We need to determine both an appropriate timestamp from the description, and
-            // also to ensure that there is a view in place to query, if the source of data
-            // for the peek is not a base relation.
-
-            // Choose a timestamp for all workers to use in the peek.
-            // We minimize over all participating views, to ensure that the query will not
-            // need to block on the arrival of further input data.
-            let (rows_tx, rows_rx) = mpsc::unbounded_channel();
-
-            // Extract any surrounding linear operators to determine if we can simply read
-            // out the contents from an existing arrangement.
-            let (mut map_filter_project, inner) =
-                expr::MapFilterProject::extract_from_expression(&source);
-            map_filter_project.optimize();
-
-            // We can use a fast path approach if our query corresponds to a read out of
-            // an existing materialization. This is the case if the expression is now a
-            // `MirRelationExpr::Get` and its target is something we have materialized.
-            // Otherwise, we will need to build a new dataflow.
-            let mut fast_path: Option<(_, Option<Row>)> = None;
-            if let MirRelationExpr::Get {
-                id: Id::Global(id),
-                typ: _,
-            } = inner
-            {
-                // Here we should check for an index whose keys are constrained to literal
-                // values by predicate constraints in `map_filter_project`. If we find such
-                // an index, we can use it with the literal to perform look-ups at workers,
-                // and in principle avoid even contacting all but one worker (future work).
-                if let Some(indexes) = self.catalog.enabled_indexes().get(id) {
-                    // Determine for each index identifier, an optional row literal as key.
-                    // We want to extract the "best" option, where we prefer indexes with
-                    // literals and long keys, then indexes at all, then exit correctly.
-                    fast_path = indexes
-                        .iter()
-                        .map(|(id, exprs)| {
-                            let literal_row = map_filter_project.literal_constraints(exprs);
-                            // Prefer non-trivial literal rows foremost, then long expressions,
-                            // then we don't really care at that point.
-                            (literal_row.is_some(), exprs.len(), literal_row, *id)
-                        })
-                        .max()
-                        .map(|(_some, _len, literal, id)| (id, literal));
-                }
-            }
-
-            // Unpack what we have learned with default values if we found nothing.
-            let (fast_path, index_id, literal_row) = if let Some((id, row)) = fast_path {
-                (true, id, row)
-            } else {
-                (false, self.allocate_transient_id()?, None)
-            };
-
-            if !fast_path {
-                // Slow path. We need to perform some computation, so build
-                // a new transient dataflow that will be dropped after the
-                // peek completes.
-                let typ = source.typ();
-                map_filter_project = expr::MapFilterProject::new(typ.arity());
-                let key: Vec<MirScalarExpr> = typ
-                    .default_key()
-                    .iter()
-                    .map(|k| MirScalarExpr::Column(*k))
-                    .collect();
-                let view_id = self.allocate_transient_id()?;
-                let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
-                dataflow.set_as_of(Antichain::from_elem(timestamp));
-                self.dataflow_builder()
-                    .import_view_into_dataflow(&view_id, &source, &mut dataflow);
-                dataflow.export_index(index_id, view_id, typ, key);
-                self.ship_dataflow(dataflow);
-            }
-
-            let mfp_plan = map_filter_project
-                .into_plan()
-                .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
-                .into_nontemporal()
-                .map_err(|_e| {
-                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(
-                        "Extracted plan has temporal constraints"
-                    ))
-                })?;
-
-            // Insert the pending peek, and initialize to expect the number of workers.
-            self.pending_peeks
-                .insert(session.conn_id(), (rows_tx, self.num_workers()));
-            self.broadcast(dataflow::Command::Peek {
-                id: index_id,
-                key: literal_row,
-                conn_id: session.conn_id(),
-                timestamp,
-                finishing: finishing.clone(),
-                map_filter_project: mfp_plan,
-            });
-
-            if !fast_path {
-                self.drop_indexes(vec![index_id]);
-            }
-
-            let rows_rx = UnboundedReceiverStream::new(rows_rx)
-                .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
-                    match (memo, resp) {
-                        (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
-                            memo.extend(rows);
-                            PeekResponse::Rows(memo)
-                        }
-                        (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                            PeekResponse::Error(e)
-                        }
-                        (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                            PeekResponse::Canceled
-                        }
-                    }
-                })
-                .map(move |mut resp| {
-                    if let PeekResponse::Rows(rows) = &mut resp {
-                        finishing.finish(rows)
-                    }
-                    resp
-                });
-
-            ExecuteResponse::SendingRows(Box::pin(rows_rx))
-        };
+        // Implement the peek, and capture the response.
+        let resp = self
+            .implement_fast_path_peek(fast_path, timestamp, finishing, conn_id, source.arity())
+            .await?;
 
         match copy_to {
             None => Ok(resp),
@@ -2717,19 +3268,17 @@ impl Coordinator {
         }
     }
 
-    fn sequence_tail(
+    async fn sequence_tail(
         &mut self,
         session: &mut Session,
         plan: TailPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let TailPlan {
-            id: source_id,
+            from,
             with_snapshot,
             ts,
             copy_to,
             emit_progress,
-            object_columns,
-            desc,
         } = plan;
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
@@ -2739,47 +3288,65 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Tail)?;
         }
 
-        // Determine the frontier of updates to tail *from*.
-        // Updates greater or equal to this frontier will be produced.
-        let frontier = if let Some(ts) = ts {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(
-                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?
-                    .0,
-            )
-        } else {
-            self.determine_frontier(source_id)
+        let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
+            // Determine the frontier of updates to tail *from*.
+            // Updates greater or equal to this frontier will be produced.
+            let frontier = if let Some(ts) = ts {
+                // If a timestamp was explicitly requested, use that.
+                let ts = coord.determine_timestamp(session, uses, PeekWhen::AtTimestamp(ts))?;
+                Antichain::from_elem(ts.0)
+            } else {
+                coord.determine_frontier(uses)
+            };
+
+            Ok::<_, CoordError>(SinkDesc {
+                from,
+                from_desc,
+                connector: SinkConnector::Tail(TailSinkConnector::default()),
+                envelope: None,
+                as_of: SinkAsOf {
+                    frontier,
+                    strict: !with_snapshot,
+                },
+            })
         };
-        let sink_name = format!(
-            "tail-source-{}",
-            self.catalog
-                .for_session(session)
-                .humanize_id(source_id)
-                .expect("Source id is known to exist in catalog")
-        );
-        let sink_id = self.catalog.allocate_id()?;
-        session.add_drop_sink(sink_id);
+
+        let dataflow = match from {
+            TailFrom::Id(from_id) => {
+                let from = self.catalog.get_by_id(&from_id);
+                let from_desc = from.desc().unwrap().clone();
+                let sink_id = self.catalog.allocate_id()?;
+                let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id])?;
+                let sink_name = format!("tail-{}", sink_id);
+                self.dataflow_builder()
+                    .build_sink_dataflow(sink_name, sink_id, sink_desc)?
+            }
+            TailFrom::Query {
+                expr,
+                desc,
+                depends_on,
+            } => {
+                let id = self.allocate_transient_id()?;
+                let expr = self.view_optimizer.optimize(expr)?;
+                let desc = RelationDesc::new(expr.typ(), desc.iter_names());
+                let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
+                let mut dataflow = DataflowDesc::new(format!("tail-{}", id), id);
+                let mut dataflow_builder = self.dataflow_builder();
+                dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
+                dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
+                dataflow
+            }
+        };
+
+        let (sink_id, sink_desc) = &dataflow.sink_exports[0];
+        session.add_drop_sink(*sink_id);
+        let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        self.pending_tails.insert(sink_id, tx);
-        let df = self.dataflow_builder().build_sink_dataflow(
-            sink_name,
-            sink_id,
-            source_id,
-            SinkConnector::Tail(TailSinkConnector {
-                emit_progress,
-                object_columns,
-                value_desc: desc,
-            }),
-            None,
-            SinkAsOf {
-                frontier,
-                strict: !with_snapshot,
-            },
-        );
-        self.ship_dataflow(df);
+        self.pending_tails
+            .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
+        self.ship_dataflow(dataflow).await;
 
         let resp = ExecuteResponse::Tailing { rx };
-
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
@@ -2798,6 +3365,7 @@ impl Coordinator {
     /// used is also returned.
     fn determine_timestamp(
         &mut self,
+        session: &Session,
         uses_ids: &[GlobalId],
         when: PeekWhen,
     ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
@@ -2826,9 +3394,39 @@ impl Coordinator {
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
-        let timestamp = match when {
+        let timestamp: Timestamp = match when {
             // Explicitly requested timestamps should be respected.
-            PeekWhen::AtTimestamp(timestamp) => timestamp,
+            PeekWhen::AtTimestamp(mut timestamp) => {
+                let temp_storage = RowArena::new();
+                self.dataflow_builder().prep_scalar_expr(
+                    &mut timestamp,
+                    ExprPrepStyle::OneShot {
+                        logical_time: None,
+                        session,
+                    },
+                )?;
+                let evaled = timestamp.eval(&[], &temp_storage)?;
+                let ty = timestamp.typ(&RelationType::empty());
+                match ty.scalar_type {
+                    ScalarType::Numeric { .. } => {
+                        let n = evaled.unwrap_numeric().0;
+                        u64::try_from(n)?
+                    }
+                    ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
+                    ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
+                    ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+                    ScalarType::TimestampTz => {
+                        evaled.unwrap_timestamptz().timestamp_millis().try_into()?
+                    }
+                    ScalarType::Timestamp => {
+                        evaled.unwrap_timestamp().timestamp_millis().try_into()?
+                    }
+                    _ => coord_bail!(
+                        "can't use {} as a timestamp for AS OF",
+                        self.catalog.for_session(session).humanize_column_type(&ty)
+                    ),
+                }
+            }
 
             // These two strategies vary in terms of which traces drive the
             // timestamp determination process: either the trace itself or the
@@ -2863,50 +3461,51 @@ impl Coordinator {
                     });
                 }
 
-                let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
-                    // If the view depends on any tables, we enforce
-                    // linearizability by choosing the latest input time.
-                    self.get_read_ts()
-                } else {
-                    let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
-                    // We peek at the largest element not in advance of `upper`, which
-                    // involves a subtraction. If `upper` contains a zero timestamp there
-                    // is no "prior" answer, and we do not want to peek at it as it risks
-                    // hanging awaiting the response to data that may never arrive.
-                    //
-                    // The .get(0) here breaks the antichain abstraction by assuming this antichain
-                    // has 0 or 1 elements in it. It happens to work because we use a timestamp
-                    // type that meets that assumption, but would break if we used a more general
-                    // timestamp.
-                    if let Some(candidate) = upper.elements().get(0) {
-                        if *candidate > 0 {
-                            candidate.saturating_sub(1)
-                        } else {
-                            let unstarted = index_ids
-                                .into_iter()
-                                .filter(|id| {
-                                    self.indexes
-                                        .upper_of(id)
-                                        .expect("id not found")
-                                        .less_equal(&0)
-                                })
-                                .collect::<Vec<_>>();
-                            return Err(CoordError::IncompleteTimestamp(unstarted));
-                        }
+                // Initialize candidate to the minimum correct time.
+                let mut candidate = Timestamp::minimum();
+                candidate.advance_by(since.borrow());
+
+                // Compute a timestamp to which we should advance the candidate (if it is in
+                // advance).
+                let advance_to: Timestamp =
+                    if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                        // If the view depends on any tables, we enforce linearizability by choosing
+                        // the latest input time.  If the candidate is already advanced past read_ts
+                        // due to the since work above (if joined with some other view), a peek will
+                        // be put into pending until something closes the table timestamp. That
+                        // occurs if a user does certain table operations, or otherwise by the
+                        // advance_local_inputs_loop task (and so the pending peek could wait up to 1
+                        // second before the table timestamp is closed). We do not need to worry about
+                        // telling the table linearizability stuff about this future timestamp because
+                        // by the time the read is served the table linearizability time will have
+                        // advanced already.
+                        self.get_local_read_ts()
                     } else {
-                        // A complete trace can be read in its final form with this time.
+                        let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
+                        // We peek at the largest element not in advance of `upper`, which
+                        // involves a subtraction. If `upper` contains a zero timestamp there
+                        // is no "prior" answer, and we do not want to peek at it as it risks
+                        // hanging awaiting the response to data that may never arrive.
                         //
-                        // This should only happen for literals that have no sources
-                        Timestamp::max_value()
-                    }
-                };
-                // If the candidate is not beyond the valid `since` frontier,
-                // force it to become so as best as we can. If `since` is empty
-                // this will be a no-op, as there is no valid time, but that should
-                // then be caught below.
-                if !since.less_equal(&candidate) {
-                    candidate.advance_by(since.borrow());
-                }
+                        // The .get(0) here breaks the antichain abstraction by assuming this antichain
+                        // has 0 or 1 elements in it. It happens to work because we use a timestamp
+                        // type that meets that assumption, but would break if we used a more general
+                        // timestamp.
+                        if let Some(candidate) = upper.elements().get(0) {
+                            if *candidate > Timestamp::minimum() {
+                                candidate.saturating_sub(1)
+                            } else {
+                                Timestamp::minimum()
+                            }
+                        } else {
+                            // A complete trace can be read in its final form with this time.
+                            //
+                            // This should only happen for literals that have no sources or sources that
+                            // are known to have completed (non-tailed files for example).
+                            Timestamp::MAX
+                        }
+                    };
+                candidate.join_assign(&advance_to);
                 candidate
             }
         };
@@ -2945,7 +3544,7 @@ impl Coordinator {
     /// `source_id`.
     ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(&mut self, source_id: GlobalId) -> Antichain<Timestamp> {
+    fn determine_frontier(&mut self, source_ids: &[GlobalId]) -> Antichain<Timestamp> {
         // This function differs from determine_timestamp because sinks/tail don't care
         // about indexes existing or timestamps being complete. If data don't exist
         // yet (upper = 0), it is not a problem for the sink to wait for it. If the
@@ -2958,7 +3557,7 @@ impl Coordinator {
         // nearest_indexes. We don't care about the indexes being incomplete because
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
-        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(&[source_id]);
+        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(source_ids);
         let mut since = self.indexes.least_valid_since(index_ids.iter().copied());
         since.join_assign(
             &self
@@ -2969,7 +3568,7 @@ impl Coordinator {
         let mut candidate = if index_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
             // If the sink depends on any tables, we enforce linearizability by choosing
             // the latest input time.
-            self.get_read_ts()
+            self.get_local_read_ts()
         } else if unmaterialized_source_ids.is_empty() && !index_ids.is_empty() {
             // If the sink does not need to create any indexes and requires at least 1
             // index, use the upper. For something like a static view, the indexes are
@@ -3006,16 +3605,54 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let ExplainPlan {
             raw_plan,
-            decorrelated_plan,
             row_set_finishing,
             stage,
             options,
         } = plan;
+        use std::time::Instant;
 
-        let explanation_string = match stage {
+        struct Timings {
+            decorrelation: Option<Duration>,
+            optimization: Option<Duration>,
+        }
+
+        let mut timings = Timings {
+            decorrelation: None,
+            optimization: None,
+        };
+
+        let decorrelate = |timings: &mut Timings, raw_plan: HirRelationExpr| -> MirRelationExpr {
+            let start = Instant::now();
+            let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
+                qgm_optimizations: session.vars().qgm_optimizations(),
+            });
+            timings.decorrelation = Some(start.elapsed());
+            decorrelated_plan
+        };
+
+        let optimize =
+            |timings: &mut Timings,
+             coord: &mut Self,
+             decorrelated_plan: MirRelationExpr|
+             -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
+                let start = Instant::now();
+                let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
+                let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
+                coord.dataflow_builder().import_view_into_dataflow(
+                    // TODO: If explaining a view, pipe the actual id of the view.
+                    &GlobalId::Explain,
+                    &optimized_plan,
+                    &mut dataflow,
+                )?;
+                mz_transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
+                timings.optimization = Some(start.elapsed());
+                Ok(dataflow)
+            };
+
+        let mut explanation_string = match stage {
             ExplainStage::RawPlan => {
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = sql::plan::Explanation::new(&raw_plan, &catalog);
+                let mut explanation = mz_sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -3024,42 +3661,93 @@ impl Coordinator {
                 }
                 explanation.to_string()
             }
+            ExplainStage::QueryGraph => {
+                // TODO add type information to the output graph
+                type Model = Result<mz_sql::query_model::Model, mz_sql::query_model::QGMError>;
+                let model = Model::from(raw_plan)?;
+                model.as_dot("")?
+            }
+            ExplainStage::OptimizedQueryGraph => {
+                // TODO add type information to the output graph
+                type Model = Result<mz_sql::query_model::Model, mz_sql::query_model::QGMError>;
+                let mut model = Model::from(raw_plan)?;
+                model.optimize();
+                model.as_dot("")?
+            }
             ExplainStage::DecorrelatedPlan => {
+                let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
+                    &mut timings,
+                    raw_plan,
+                ));
                 let catalog = self.catalog.for_session(session);
+                let formatter =
+                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
-                    dataflow_types::Explanation::new(&decorrelated_plan, &catalog);
+                    mz_dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
-                }
-                if options.typed {
-                    explanation.explain_types();
                 }
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
+                let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
-                let optimized_plan =
-                    self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
-                self.dataflow_builder().import_view_into_dataflow(
-                    // TODO: If explaining a view, pipe the actual id of the view.
-                    &GlobalId::Explain,
-                    &optimized_plan,
-                    &mut dataflow,
-                );
-                transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
+                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
-                let mut explanation =
-                    dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
+                let formatter =
+                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
+                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
+                    &dataflow, &catalog, &formatter,
+                );
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
-                if options.typed {
-                    explanation.explain_types();
+                explanation.to_string()
+            }
+            ExplainStage::PhysicalPlan => {
+                let decorrelated_plan = decorrelate(&mut timings, raw_plan);
+                self.validate_timeline(decorrelated_plan.global_uses())?;
+                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let dataflow_plan =
+                    mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                        .expect("Dataflow planning failed; unrecoverable error");
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
+                    &dataflow_plan,
+                    &catalog,
+                    &mz_dataflow_types::JsonViewFormatter {},
+                );
+                if let Some(row_set_finishing) = row_set_finishing {
+                    explanation.explain_row_set_finishing(row_set_finishing);
                 }
                 explanation.to_string()
             }
         };
+        if options.timing {
+            if let Some(decorrelation) = &timings.decorrelation {
+                explanation_string.push_str(&format!(
+                    "\nDecorrelation time: {}",
+                    Interval {
+                        months: 0,
+                        days: 0,
+                        micros: decorrelation.as_micros().try_into().unwrap(),
+                    }
+                ));
+            }
+            if let Some(optimization) = &timings.optimization {
+                explanation_string.push_str(&format!(
+                    "\nOptimization time: {}",
+                    Interval {
+                        months: 0,
+                        days: 0,
+                        micros: optimization.as_micros().try_into().unwrap(),
+                    }
+                ));
+            }
+            if timings.decorrelation.is_some() || timings.optimization.is_some() {
+                explanation_string.push_str("\n");
+            }
+        }
         let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
@@ -3067,71 +3755,162 @@ impl Coordinator {
     fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
-        plan: SendDiffsPlan,
+        mut plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        if self.catalog.config().disable_user_indexes {
+            self.catalog.ensure_default_index_enabled(plan.id)?;
+        }
+
+        let affected_rows = {
+            let mut affected_rows = Diff::from(0);
+            let mut all_positive_diffs = true;
+            // If all diffs are positive, the number of affected rows is just the
+            // sum of all unconsolidated diffs.
+            for (_, diff) in plan.updates.iter() {
+                if *diff < 0 {
+                    all_positive_diffs = false;
+                    break;
+                }
+
+                affected_rows += diff;
+            }
+
+            if !all_positive_diffs {
+                // Consolidate rows. This is useful e.g. for an UPDATE where the row
+                // doesn't change, and we need to reflect that in the number of
+                // affected rows.
+                differential_dataflow::consolidation::consolidate(&mut plan.updates);
+
+                affected_rows = 0;
+                // With retractions, the number of affected rows is not the number
+                // of rows we see, but the sum of the absolute value of their diffs,
+                // e.g. if one row is retracted and another is added, the total
+                // number of rows affected is 2.
+                for (_, diff) in plan.updates.iter() {
+                    affected_rows += diff.abs();
+                }
+            }
+
+            usize::try_from(affected_rows).expect("positive isize must fit")
+        };
+
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
             id: plan.id,
             rows: plan.updates,
         }]))?;
         Ok(match plan.kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
-            MutationKind::Insert => {
-                if self.catalog.config().disable_user_indexes {
-                    self.catalog.ensure_default_index_enabled(plan.id)?;
-                }
-
-                ExecuteResponse::Inserted(plan.affected_rows)
-            }
-            MutationKind::Update => ExecuteResponse::Updated(plan.affected_rows),
+            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
+            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
         })
     }
 
-    fn sequence_insert(
+    async fn sequence_insert(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
+        plan: InsertPlan,
+    ) {
+        let optimized_mir = if let MirRelationExpr::Constant { .. } = &plan.values {
+            // We don't perform any optimizations on an expression that is already
+            // a constant for writes, as we want to maximize bulk-insert throughput.
+            OptimizedMirRelationExpr(plan.values)
+        } else {
+            match self.view_optimizer.optimize(plan.values) {
+                Ok(m) => m,
+                Err(e) => {
+                    tx.send(Err(e.into()), session);
+                    return;
+                }
+            }
+        };
+
+        match optimized_mir.into_inner() {
+            constants @ MirRelationExpr::Constant { .. } => tx.send(
+                self.sequence_insert_constant(&mut session, plan.id, constants),
+                session,
+            ),
+            // All non-constant values must be planned as read-then-writes.
+            mut selection => {
+                let desc_arity = match self.catalog.try_get_by_id(plan.id) {
+                    Some(table) => table.desc().expect("desc called on table").arity(),
+                    None => {
+                        tx.send(
+                            Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                plan.id.to_string(),
+                            ))),
+                            session,
+                        );
+                        return;
+                    }
+                };
+
+                if selection.contains_temporal() {
+                    tx.send(
+                        Err(CoordError::Unsupported(
+                            "calls to mz_logical_timestamp in write statements are not supported",
+                        )),
+                        session,
+                    );
+                    return;
+                }
+
+                let finishing = RowSetFinishing {
+                    order_by: vec![],
+                    limit: None,
+                    offset: 0,
+                    project: (0..desc_arity).collect(),
+                };
+
+                let read_then_write_plan = ReadThenWritePlan {
+                    id: plan.id,
+                    selection,
+                    finishing,
+                    assignments: HashMap::new(),
+                    kind: MutationKind::Insert,
+                };
+
+                self.sequence_read_then_write(tx, session, read_then_write_plan)
+                    .await;
+            }
+        }
+    }
+
+    fn sequence_insert_constant(
         &mut self,
         session: &mut Session,
-        plan: InsertPlan,
+        id: GlobalId,
+        constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, CoordError> {
-        match self
-            .prep_relation_expr(plan.values, ExprPrepStyle::Write)?
-            .into_inner()
-        {
+        // Insert can be queued, so we need to re-verify the id exists.
+        let desc = match self.catalog.try_get_by_id(id) {
+            Some(table) => table.desc()?,
+            None => {
+                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                    id.to_string(),
+                )))
+            }
+        };
+
+        match constants {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
-                let desc = self.catalog.get_by_id(&plan.id).desc()?;
-                let mut affected_rows: usize = 0;
-                for (row, diff) in &rows {
-                    for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
-                        if datum == &Datum::Null && !typ.nullable {
-                            coord_bail!(
-                                "null value in column {} violates not-null constraint",
-                                name.unwrap_or(&ColumnName::from("unnamed column"))
-                                    .as_str()
-                                    .quoted()
-                            )
-                        }
+                for (row, _) in &rows {
+                    for (i, datum) in row.iter().enumerate() {
+                        desc.constraints_met(i, &datum)?;
                     }
-                    // repeat_rows could cause diff to be negative. In that (already non-standard
-                    // case), still report the total number of diffs, not the sum of diffs. We have
-                    // to send a u32 over the wire anyway, so it wouldn't make sense to even try to
-                    // sum them and send that.
-                    affected_rows += usize::try_from(diff.abs()).expect("positive isize must fit");
                 }
                 let diffs_plan = SendDiffsPlan {
-                    id: plan.id,
-                    affected_rows,
+                    id,
                     updates: rows,
                     kind: MutationKind::Insert,
                 };
                 self.sequence_send_diffs(session, diffs_plan)
             }
-            // If we couldn't optimize the INSERT statement to a constant, it
-            // must depend on another relation. We're not yet sophisticated
-            // enough to handle this.
-            _ => {
-                return Err(CoordError::Unsupported(
-                    "INSERT statements referencing other relations",
-                ))
-            }
+            o => panic!(
+                "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
+                o
+            ),
         }
     }
 
@@ -3143,15 +3922,153 @@ impl Coordinator {
         rows: Vec<Row>,
     ) -> Result<ExecuteResponse, CoordError> {
         let catalog = self.catalog.for_session(session);
-        let values = sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
-        let plan = InsertPlan {
-            id,
-            values: values.lower(),
-        };
-        self.sequence_insert(session, plan)
+        let values = mz_sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
+        let values = self.view_optimizer.optimize(values.lower())?;
+        // Copied rows must always be constants.
+        self.sequence_insert_constant(session, id, values.into_inner())
     }
 
-    fn sequence_alter_item_rename(
+    // ReadThenWrite is a plan whose writes depend on the results of a
+    // read. This works by doing a Peek then queuing a SendDiffs. No writes
+    // or read-then-writes can occur between the Peek and SendDiff otherwise a
+    // serializability violation could occur.
+    async fn sequence_read_then_write(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
+        plan: ReadThenWritePlan,
+    ) {
+        guard_write_critical_section!(self, tx, session, Plan::ReadThenWrite(plan));
+
+        let ReadThenWritePlan {
+            id,
+            kind,
+            selection,
+            assignments,
+            finishing,
+        } = plan;
+
+        // Read then writes can be queued, so re-verify the id exists.
+        let desc = match self.catalog.try_get_by_id(id) {
+            Some(table) => table.desc().expect("desc called on table").clone(),
+            None => {
+                tx.send(
+                    Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                        id.to_string(),
+                    ))),
+                    session,
+                );
+                return;
+            }
+        };
+
+        // Ensure selection targets are valid, i.e. user-defined tables, or
+        // objects local to the dataflow.
+        for id in selection.global_uses() {
+            let valid = match self.catalog.try_get_by_id(id) {
+                // TODO: Widen this check when supporting temporary tables.
+                Some(entry) if id.is_user() => entry.is_table(),
+                _ => false,
+            };
+            if !valid {
+                tx.send(Err(CoordError::InvalidTableMutationSelection), session);
+                return;
+            }
+        }
+
+        let ts = self.get_local_read_ts();
+        let ts = MirScalarExpr::literal_ok(
+            Datum::from(Numeric::from(ts)),
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            },
+        );
+        let peek_response = match self
+            .sequence_peek(
+                &mut session,
+                PeekPlan {
+                    source: selection,
+                    when: PeekWhen::AtTimestamp(ts),
+                    finishing,
+                    copy_to: None,
+                },
+            )
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
+            }
+        };
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
+            let arena = RowArena::new();
+            let diffs = match peek_response {
+                ExecuteResponse::SendingRows(batch) => match batch.await {
+                    PeekResponseUnary::Rows(rows) => {
+                        |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
+                            // Use 2x row len incase there's some assignments.
+                            let mut diffs = Vec::with_capacity(rows.len() * 2);
+                            let mut datum_vec = mz_repr::DatumVec::new();
+                            for row in rows {
+                                if !assignments.is_empty() {
+                                    assert!(
+                                        matches!(kind, MutationKind::Update),
+                                        "only updates support assignments"
+                                    );
+                                    let mut datums = datum_vec.borrow_with(&row);
+                                    let mut updates = vec![];
+                                    for (idx, expr) in &assignments {
+                                        let updated = match expr.eval(&datums, &arena) {
+                                            Ok(updated) => updated,
+                                            Err(e) => {
+                                                return Err(CoordError::Unstructured(anyhow!(e)))
+                                            }
+                                        };
+                                        desc.constraints_met(*idx, &updated)?;
+                                        updates.push((*idx, updated));
+                                    }
+                                    for (idx, new_value) in updates {
+                                        datums[idx] = new_value;
+                                    }
+                                    let updated = Row::pack_slice(&datums);
+                                    diffs.push((updated, 1));
+                                }
+                                match kind {
+                                    // Updates and deletes always remove the
+                                    // current row. Updates will also add an
+                                    // updated value.
+                                    MutationKind::Update | MutationKind::Delete => {
+                                        diffs.push((row, -1))
+                                    }
+                                    MutationKind::Insert => diffs.push((row, 1)),
+                                }
+                            }
+                            Ok(diffs)
+                        }(rows)
+                    }
+                    PeekResponseUnary::Canceled => {
+                        Err(CoordError::Unstructured(anyhow!("execution canceled")))
+                    }
+                    PeekResponseUnary::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
+                },
+                _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
+            };
+            internal_cmd_tx
+                .send(Message::SendDiffs(SendDiffs {
+                    session,
+                    tx,
+                    id,
+                    diffs,
+                    kind,
+                }))
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
+    }
+
+    async fn sequence_alter_item_rename(
         &mut self,
         plan: AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -3159,7 +4076,7 @@ impl Coordinator {
             id: plan.id,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -3190,7 +4107,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    fn sequence_alter_index_enable(
+    async fn sequence_alter_index_enable(
         &mut self,
         plan: AlterIndexEnablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -3198,19 +4115,35 @@ impl Coordinator {
 
         // If ops is not empty, index was disabled.
         if !ops.is_empty() {
-            self.catalog_transact(ops)?;
             let df = self
-                .dataflow_builder()
-                .build_index_dataflow(plan.id)
-                .expect("index enabled");
-            self.ship_dataflow(df);
+                .catalog_transact(ops, |mut builder| {
+                    let (name, description) = Self::prepare_index_build(builder.catalog, &plan.id)
+                        .expect("index enabled");
+                    let df = builder.build_index_dataflow(name, plan.id, description)?;
+                    Ok(df)
+                })
+                .await?;
+            self.ship_dataflow(df).await;
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
+    /// Perform a catalog transaction. The closure is passed a [`DataflowBuilder`]
+    /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
+    /// applied but before the transaction is committed). The closure can return
+    /// an error to abort the transaction, or otherwise return a value that is
+    /// returned by this function. This allows callers to error while building
+    /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
+    /// function successfully returns on any built `DataflowDesc`.
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
+    async fn catalog_transact<F, R>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<R, CoordError>
+    where
+        F: FnOnce(DataflowBuilder) -> Result<R, CoordError>,
+    {
         let mut sources_to_drop = vec![];
+        let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
@@ -3219,7 +4152,7 @@ impl Coordinator {
             if let catalog::Op::DropItem(id) = op {
                 match self.catalog.get_by_id(id).item() {
                     CatalogItem::Table(_) => {
-                        sources_to_drop.push(*id);
+                        tables_to_drop.push(*id);
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
@@ -3253,52 +4186,96 @@ impl Coordinator {
             }
         }
 
-        let builtin_table_updates = self.catalog.transact(ops)?;
-        self.send_builtin_table_updates(builtin_table_updates);
+        let indexes = &self.indexes;
+        let persister = &self.persister;
+        let storage = &self.dataflow_client;
 
-        if !sources_to_drop.is_empty() {
-            for &id in &sources_to_drop {
-                self.update_timestamper(id, false);
-                self.catalog.delete_timestamp_bindings(id)?;
-                self.sources.remove(&id);
-            }
-            self.broadcast(dataflow::Command::DropSources(sources_to_drop));
-        }
-        if !sinks_to_drop.is_empty() {
-            for id in sinks_to_drop.iter() {
-                self.sink_writes.remove(id);
-            }
-            self.broadcast(dataflow::Command::DropSinks(sinks_to_drop));
-        }
-        if !indexes_to_drop.is_empty() {
-            self.drop_indexes(indexes_to_drop);
-        }
+        let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
+            let builder = DataflowBuilder {
+                catalog,
+                indexes,
+                persister,
+                storage,
+            };
+            f(builder)
+        })?;
 
-        // We don't want to block the coordinator on an external postgres server, so
-        // move the drop slots to a separate task. This does mean that a failed drop
-        // slot won't bubble up to the user as an error message. However, even if it
-        // did (and how the code previously worked), mz has already dropped it from our
-        // catalog, and so we wouldn't be able to retry anyway.
-        if !replication_slots_to_drop.is_empty() {
-            tokio::spawn(async move {
-                for (conn, slot_names) in replication_slots_to_drop {
-                    // Try to drop the replication slots, but give up after a while.
-                    let _ = Retry::default()
-                        .retry(|_state| postgres_util::drop_replication_slots(&conn, &slot_names))
-                        .await;
+        // No error returns are allowed after this point. Enforce this at compile time
+        // by using this odd structure so we don't accidentally add a stray `?`.
+        let _: () = async {
+            self.send_builtin_table_updates(builtin_table_updates).await;
+
+            if !sources_to_drop.is_empty() {
+                for id in &sources_to_drop {
+                    self.sources.remove(id);
+                    self.since_handles.remove(id);
                 }
-            });
-        }
+                self.dataflow_client
+                    .storage()
+                    .drop_sources(sources_to_drop)
+                    .await
+                    .unwrap();
+            }
+            if !tables_to_drop.is_empty() {
+                // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
+                // in `self.sources` to make sure that it is taken into account when rendering
+                // dataflows that use it. We must make sure to remove that here.
+                for id in &tables_to_drop {
+                    self.sources.remove(id);
+                    self.persister.remove_table(*id);
+                    self.since_handles.remove(id);
+                }
+                self.dataflow_client
+                    .storage()
+                    .drop_sources(tables_to_drop)
+                    .await
+                    .unwrap();
+            }
+            if !sinks_to_drop.is_empty() {
+                for id in sinks_to_drop.iter() {
+                    self.sink_writes.remove(id);
+                }
+                self.dataflow_client
+                    .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                    .unwrap()
+                    .drop_sinks(sinks_to_drop)
+                    .await
+                    .unwrap();
+            }
+            if !indexes_to_drop.is_empty() {
+                self.drop_indexes(indexes_to_drop).await;
+            }
 
-        Ok(())
+            // We don't want to block the coordinator on an external postgres server, so
+            // move the drop slots to a separate task. This does mean that a failed drop
+            // slot won't bubble up to the user as an error message. However, even if it
+            // did (and how the code previously worked), mz has already dropped it from our
+            // catalog, and so we wouldn't be able to retry anyway.
+            if !replication_slots_to_drop.is_empty() {
+                // TODO(guswynn): see if there is more relevant info to add to this name
+                task::spawn(|| "drop_replication_slots", async move {
+                    for (conn, slot_names) in replication_slots_to_drop {
+                        // Try to drop the replication slots, but give up after a while.
+                        let _ = Retry::default()
+                            .retry_async(|_state| {
+                                mz_postgres_util::drop_replication_slots(&conn, &slot_names)
+                            })
+                            .await;
+                    }
+                });
+            }
+        }
+        .await;
+
+        Ok(result)
     }
 
-    fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
+    async fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
         // NB: This makes sure to send all records for the same id in the same
         // message so we can persist a record and its future retraction
         // atomically. Otherwise, we may end up with permanent orphans if a
         // restart/crash happens at the wrong time.
-        let timestamp_base = self.get_write_ts();
+        let timestamp_base = self.get_local_write_ts();
         let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
         for tu in updates.into_iter() {
             let timestamp = timestamp_base + tu.timestamp_offset;
@@ -3314,12 +4291,7 @@ impl Coordinator {
             // TODO: It'd be nice to unify this with the similar logic in
             // sequence_end_transaction, but it's not initially clear how to do
             // that.
-            let persist = self.catalog.try_get_by_id(id).and_then(|catalog_entry| {
-                match catalog_entry.item() {
-                    CatalogItem::Table(t) => t.persist.as_ref(),
-                    _ => None,
-                }
-            });
+            let persist = self.persister.table_details.get(&id);
             if let Some(persist) = persist {
                 let updates: Vec<((Row, ()), Timestamp, Diff)> = updates
                     .into_iter()
@@ -3334,37 +4306,53 @@ impl Coordinator {
                 // guaranteed by persist that writes and seals happen in order,
                 // but only if we synchronously wait for the (fast) registration
                 // of that work to return.
-                let write_res = persist.write_handle.write(&updates);
-                let _ = tokio::spawn(async move { write_res.into_future().await });
+                let write_fut = persist.write_handle.write(&updates);
+                let _ = task::spawn(|| "builtin_table_updates_write_fut:{id}", write_fut);
             } else {
-                self.broadcast(dataflow::Command::Insert { id, updates })
+                self.dataflow_client
+                    .storage()
+                    .table_insert(id, updates)
+                    .await
+                    .unwrap();
             }
         }
     }
 
-    fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+    async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         let timestamped = TimestampedUpdate {
             updates,
             timestamp_offset: 0,
         };
         self.send_builtin_table_updates_at_offset(vec![timestamped])
+            .await
     }
 
-    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
+    async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            self.broadcast(dataflow::Command::DropSinks(dataflow_names));
+            self.dataflow_client
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .drop_sinks(dataflow_names)
+                .await
+                .unwrap();
         }
     }
 
-    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
+    async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
         let mut trace_keys = Vec::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
                 trace_keys.push(id);
             }
+            self.since_handles.remove(&id);
         }
         if !trace_keys.is_empty() {
-            self.broadcast(dataflow::Command::DropIndexes(trace_keys))
+            self.dataflow_client
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .drop_indexes(trace_keys)
+                .await
+                .unwrap();
         }
     }
 
@@ -3397,78 +4385,27 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Prepares a relation expression for execution by preparing all contained
-    /// scalar expressions (see `prep_scalar_expr`), then optimizing the
-    /// relation expression.
-    fn prep_relation_expr(
-        &mut self,
-        mut expr: MirRelationExpr,
-        style: ExprPrepStyle,
-    ) -> Result<OptimizedMirRelationExpr, CoordError> {
-        if let ExprPrepStyle::Static = style {
-            let mut opt_expr = self
-                .view_optimizer
-                .optimize(expr, self.catalog.enabled_indexes())?;
-            opt_expr.0.try_visit_mut(&mut |e| {
-                // Carefully test filter expressions, which may represent temporal filters.
-                if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
-                    let mfp = expr::MapFilterProject::new(input.arity())
-                        .filter(predicates.iter().cloned());
-                    match mfp.into_plan() {
-                        Err(e) => coord_bail!("{:?}", e),
-                        Ok(_) => Ok(()),
-                    }
-                } else {
-                    e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
-                }
-            })?;
-            Ok(opt_expr)
-        } else {
-            expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
-            // TODO (wangandi): Is there anything that optimizes to a
-            // constant expression that originally contains a global get? Is
-            // there anything not containing a global get that cannot be
-            // optimized to a constant expression?
-            Ok(self
-                .view_optimizer
-                .optimize(expr, self.catalog.enabled_indexes())?)
-        }
-    }
-
-    /// Prepares a scalar expression for execution by replacing any placeholders
-    /// with their correct values.
-    ///
-    /// Specifically, calls to the special function `MzLogicalTimestamp` are
-    /// replaced if `style` is `OneShot { logical_timestamp }`. Calls are not
-    /// replaced for the `Explain` style nor for `Static` which should not
-    /// reach this point if we have correctly validated the use of placeholders.
-    fn prep_scalar_expr(expr: &mut MirScalarExpr, style: ExprPrepStyle) -> Result<(), CoordError> {
-        // Replace calls to `MzLogicalTimestamp` as described above.
-        let mut observes_ts = false;
-        expr.visit_mut(&mut |e| {
-            if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
-                observes_ts = true;
-                if let ExprPrepStyle::OneShot { logical_time } = style {
-                    let ts = numeric::Numeric::from(logical_time);
-                    *e = MirScalarExpr::literal_ok(Datum::from(ts), f.output_type().scalar_type);
-                }
-            }
-        });
-        if observes_ts && matches!(style, ExprPrepStyle::Static | ExprPrepStyle::Write) {
-            return Err(CoordError::Unsupported(
-                "calls to mz_logical_timestamp in in static or write queries",
-            ));
-        }
-        Ok(())
-    }
-
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
-        self.ship_dataflows(vec![dataflow])
+    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
+        self.ship_dataflows(vec![dataflow]).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
+    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
+        for dataflow in dataflows.into_iter() {
+            dataflow_plans.push(self.finalize_dataflow(dataflow));
+        }
+        self.dataflow_client
+            .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+            .unwrap()
+            .create_dataflows(dataflow_plans)
+            .await
+            .unwrap();
+    }
+
+    /// Finalizes a dataflow.
     ///
     /// Finalization includes optimization, but also validation of various
     /// invariants such as ensuring that the `as_of` frontier is in advance of
@@ -3483,122 +4420,74 @@ impl Coordinator {
     /// Panics if as_of is < the `since` frontiers.
     ///
     /// Panics if the dataflow descriptions contain an invalid plan.
-    fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+    fn finalize_dataflow(
+        &mut self,
+        mut dataflow: DataflowDesc,
+    ) -> mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
         // state if we do not correctly clean up the catalog.
 
-        // Each dataflow description will be planned into a `render::Plan` dataflow.
-        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for mut dataflow in dataflows.into_iter() {
-            // The identity for `join` is the minimum element.
-            let mut since = Antichain::from_elem(Timestamp::minimum());
+        // The identity for `join` is the minimum element.
+        let mut since = Antichain::from_elem(Timestamp::minimum());
 
-            // Populate "valid from" information for each source.
-            for (source_id, _description) in dataflow.source_imports.iter() {
-                // Extract `since` information about each source and apply here.
-                if let Some(source_since) = self.sources.since_of(source_id) {
-                    since.join_assign(&source_since);
-                }
+        // Populate "valid from" information for each source.
+        for (source_id, _description) in dataflow.source_imports.iter() {
+            // Extract `since` information about each source and apply here.
+            if let Some(source_since) = self.sources.since_of(source_id) {
+                since.join_assign(&source_since);
             }
-
-            // For each imported arrangement, lower bound `since` by its own frontier.
-            for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
-                since.join_assign(
-                    &self
-                        .indexes
-                        .since_of(global_id)
-                        .expect("global id missing at coordinator"),
-                );
-            }
-
-            // For each produced arrangement, start tracking the arrangement with
-            // a compaction frontier of at least `since`.
-            for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-                let frontiers = self.new_frontiers(
-                    *global_id,
-                    since.elements().to_vec(),
-                    self.logical_compaction_window_ms,
-                );
-                self.indexes.insert(*global_id, frontiers);
-            }
-
-            // TODO: Produce "valid from" information for each sink.
-            // For each sink, ... do nothing because we don't yield `since` for sinks.
-            // for (global_id, _description) in dataflow.sink_exports.iter() {
-            //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
-            //     self.sink_info[global_id].valid_from(&since);
-            // }
-
-            // Ensure that the dataflow's `as_of` is at least `since`.
-            if let Some(as_of) = &mut dataflow.as_of {
-                // It should not be possible to request an invalid time. SINK doesn't support
-                // AS OF. TAIL and Peek check that their AS OF is >= since.
-                assert!(
-                    <_ as PartialOrder>::less_equal(&since, as_of),
-                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
-                    dataflow.debug_name,
-                    as_of,
-                    since
-                );
-            } else {
-                // Bind the since frontier to the dataflow description.
-                dataflow.set_as_of(since);
-            }
-
-            // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
-            let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
-                .expect("Dataflow planning failed; unrecoverable error");
-            dataflow_plans.push(dataflow_plan);
         }
 
-        // Finalize the dataflow by broadcasting its construction to all workers.
-        self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans));
-    }
+        // For each imported arrangement, lower bound `since` by its own frontier.
+        for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
+            since.join_assign(
+                &self
+                    .indexes
+                    .since_of(global_id)
+                    .expect("global id missing at coordinator"),
+            );
+        }
 
-    fn broadcast(&self, cmd: dataflow::Command) {
-        for index in 1..self.worker_txs.len() {
-            self.worker_txs[index - 1]
-                .send(cmd.clone())
-                .expect("worker command receiver should not drop first")
-        }
-        if self.worker_txs.len() > 0 {
-            self.worker_txs[self.worker_txs.len() - 1]
-                .send(cmd)
-                .expect("worker command receiver should not drop first")
-        }
-        for handle in self.worker_guards.guards() {
-            handle.thread().unpark()
-        }
-    }
-
-    // Notify the timestamper thread that a source has been created or dropped.
-    fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
-        if create {
-            let bindings = self
-                .catalog
-                .load_timestamp_bindings(source_id)
-                .expect("loading timestamps from coordinator cannot fail");
-            if let Some(entry) = self.catalog.try_get_by_id(source_id) {
-                if let CatalogItem::Source(s) = entry.item() {
-                    self.ts_tx
-                        .send(TimestampMessage::Add(source_id, s.connector.clone()))
-                        .expect("Failed to send CREATE Instance notice to timestamper");
-                    self.broadcast(dataflow::Command::AddSourceTimestamping {
-                        id: source_id,
-                        connector: s.connector.clone(),
-                        bindings,
-                    });
-                }
-            }
+        // Ensure that the dataflow's `as_of` is at least `since`.
+        if let Some(as_of) = &mut dataflow.as_of {
+            // It should not be possible to request an invalid time. SINK doesn't support
+            // AS OF. TAIL and Peek check that their AS OF is >= since.
+            assert!(
+                <_ as PartialOrder>::less_equal(&since, as_of),
+                "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
+                dataflow.debug_name,
+                as_of,
+                since
+            );
         } else {
-            self.ts_tx
-                .send(TimestampMessage::Drop(source_id))
-                .expect("Failed to send DROP Instance notice to timestamper");
-            self.broadcast(dataflow::Command::DropSourceTimestamping { id: source_id });
+            // Bind the since frontier to the dataflow description.
+            dataflow.set_as_of(since);
         }
+
+        // Capture `as_of` to initialize the `since` frontiers of indexes.
+        let as_of = dataflow.as_of.clone().unwrap();
+
+        // For each produced arrangement, start tracking the arrangement with
+        // a compaction frontier of at least `since`.
+        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
+            let frontiers = self.new_index_frontiers(
+                *global_id,
+                as_of.elements().to_vec(),
+                self.logical_compaction_window_ms,
+            );
+            self.indexes.insert(*global_id, frontiers);
+        }
+
+        // TODO: Produce "valid from" information for each sink.
+        // For each sink, ... do nothing because we don't yield `since` for sinks.
+        // for (global_id, _description) in dataflow.sink_exports.iter() {
+        //     unimplemented!()
+        // }
+
+        mz_dataflow_types::Plan::finalize_dataflow(dataflow)
+            .expect("Dataflow planning failed; unrecoverable error")
     }
 
     fn allocate_transient_id(&mut self) -> Result<GlobalId, CoordError> {
@@ -3614,7 +4503,7 @@ impl Coordinator {
     /// be used to prevent users from doing things that are either meaningless
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
-    /// byo and realtime data).
+    /// cdcv2 and realtime data).
     fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<Option<Timeline>, CoordError> {
         let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
 
@@ -3672,6 +4561,41 @@ impl Coordinator {
         }
         Ok(timelines.into_iter().next())
     }
+
+    /// Attempts to immediately grant `session` access to the write lock or
+    /// errors if the lock is currently held.
+    fn try_grant_session_write_lock(
+        &self,
+        session: &mut Session,
+    ) -> Result<(), tokio::sync::TryLockError> {
+        Arc::clone(&self.write_lock).try_lock_owned().map(|p| {
+            session.grant_write_lock(p);
+        })
+    }
+
+    /// Defers executing `plan` until the write lock becomes available; waiting
+    /// occurs in a greenthread, so callers of this function likely want to
+    /// return after calling it.
+    fn defer_write(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        plan: Plan,
+    ) {
+        let conn_id = session.conn_id();
+        let plan = DeferredPlan { tx, session, plan };
+        self.write_lock_wait_group.push_back(plan);
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let write_lock = Arc::clone(&self.write_lock);
+        // TODO(guswynn): see if there is more relevant info to add to this name
+        task::spawn(|| format!("defer_write:{conn_id}"), async move {
+            let guard = write_lock.lock_owned().await;
+            internal_cmd_tx
+                .send(Message::WriteLockGrant(guard))
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
@@ -3683,152 +4607,104 @@ impl Coordinator {
 /// coordinator.
 pub async fn serve(
     Config {
-        workers,
-        timely_worker,
-        symbiosis_url,
+        dataflow_client,
         logging,
-        data_directory,
+        storage,
         timestamp_frequency,
         logical_compaction_window,
         experimental_mode,
         disable_user_indexes,
         safe_mode,
         build_info,
+        aws_external_id,
         metrics_registry,
-        persist,
-    }: Config<'_>,
+        persister,
+        now,
+    }: Config,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
-    let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
-        Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
-    } else {
-        None
-    };
-
-    let path = data_directory.join("catalog");
-    let (catalog, builtin_table_updates, persister) = Catalog::open(&catalog::Config {
-        path: &path,
+    let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
+        storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
         enable_logging: logging.is_some(),
         build_info,
-        num_workers: workers,
+        aws_external_id,
         timestamp_frequency,
-        now: system_time,
-        persist,
+        now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
         disable_user_indexes,
-    })?;
+        persister: &persister,
+    })
+    .await?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
 
-    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) =
-        (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
-    let worker_guards = dataflow::serve(dataflow::Config {
-        command_receivers: worker_rxs,
-        timely_worker,
-        experimental_mode,
-        now: system_time,
-        metrics_registry: metrics_registry.clone(),
-        persist: persister,
-        feedback_tx,
-    })
-    .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
-
     let metric_scraper = Scraper::new(logging.as_ref(), metrics_registry.clone())?;
-
-    // Spawn timestamper after any fallible operations so that if bootstrap fails we still
-    // tell it to shut down.
-    let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let mut timestamper = Timestamper::new(
-        Duration::from_millis(10),
-        internal_cmd_tx.clone(),
-        ts_rx,
-        &metrics_registry,
-    );
-    let executor = TokioHandle::current();
-    let timestamper_thread_handle = thread::Builder::new()
-        .name("timestamper".to_string())
-        .spawn(move || {
-            let _executor_guard = executor.enter();
-            timestamper.run();
-        })
-        .unwrap()
-        .join_on_drop();
 
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
-    let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
+    let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
         .spawn(move || {
-            let now = catalog.config().now;
             let mut coord = Coordinator {
-                worker_guards,
-                worker_txs,
+                dataflow_client: mz_dataflow_types::client::Controller::new(dataflow_client),
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
-                symbiosis,
+                persister,
                 indexes: ArrangementFrontiers::default(),
                 sources: ArrangementFrontiers::default(),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
                 logging_enabled: logging.is_some(),
                 internal_cmd_tx,
-                ts_tx: ts_tx.clone(),
                 metric_scraper,
-                closed_up_to: 1,
-                read_lower_bound: 1,
-                last_op_was_read: false,
-                need_advance: true,
+                last_open_local_ts: 1,
+                writes_at_open_ts: false,
+                read_writes_at_open_ts: false,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 txn_reads: HashMap::new(),
                 since_handles: HashMap::new(),
-                since_updates: Rc::new(RefCell::new(HashMap::new())),
+                index_since_updates: Rc::new(RefCell::new(HashMap::new())),
+                source_since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
-                now,
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
+                write_lock: Arc::new(tokio::sync::Mutex::new(())),
+                write_lock_wait_group: VecDeque::new(),
             };
-            if let Some(config) = &logging {
-                coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
-                    granularity_ns: config.granularity.as_nanos(),
-                    active_logs: BUILTINS
-                        .logs()
-                        .map(|src| (src.variant.clone(), src.index_id))
-                        .collect(),
-                    log_logging: config.log_logging,
-                }));
-            }
+            let logging = logging.map(|config| DataflowLoggingConfig {
+                granularity_ns: config.granularity.as_nanos(),
+                active_logs: BUILTINS
+                    .logs()
+                    .map(|src| (src.variant.clone(), src.index_id))
+                    .collect(),
+                log_logging: config.log_logging,
+            });
+            handle
+                .block_on(
+                    coord
+                        .dataflow_client
+                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
+                )
+                .unwrap();
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
-            if !ok {
-                // Tell the timestamper thread to shut down.
-                ts_tx.send(TimestampMessage::Shutdown).unwrap();
-                // Explicitly drop the timestamper handle here so we can wait for
-                // the thread to return.
-                drop(timestamper_thread_handle);
-                coord.broadcast(dataflow::Command::Shutdown);
-                return;
+            if ok {
+                handle.block_on(coord.serve(internal_cmd_rx, cmd_rx));
             }
-            handle.block_on(coord.serve(
-                internal_cmd_rx,
-                cmd_rx,
-                feedback_rx,
-                timestamper_thread_handle,
-            ))
         })
         .unwrap();
-    match bootstrap_rx.recv().unwrap() {
+    match bootstrap_rx.await.unwrap() {
         Ok(()) => {
             let handle = Handle {
                 cluster_id,
@@ -3843,163 +4719,11 @@ pub async fn serve(
     }
 }
 
-pub fn serve_debug(
-    catalog_path: &Path,
-    metrics_registry: MetricsRegistry,
-) -> (
-    JoinOnDropHandle<()>,
-    Client,
-    tokio::sync::mpsc::UnboundedSender<dataflow::Response>,
-    tokio::sync::mpsc::UnboundedReceiver<dataflow::Response>,
-    Arc<Mutex<u64>>,
-) {
-    lazy_static! {
-        static ref DEBUG_TIMESTAMP: Arc<Mutex<EpochMillis>> = Arc::new(Mutex::new(0));
-    }
-    pub fn get_debug_timestamp() -> EpochMillis {
-        *DEBUG_TIMESTAMP.lock().unwrap()
-    }
-
-    let (catalog, builtin_table_updates, persister) = catalog::Catalog::open(&catalog::Config {
-        path: catalog_path,
-        enable_logging: true,
-        experimental_mode: None,
-        safe_mode: false,
-        build_info: &DUMMY_BUILD_INFO,
-        num_workers: 0,
-        timestamp_frequency: Duration::from_millis(1),
-        now: get_debug_timestamp,
-        persist: PersistConfig::disabled(),
-        skip_migrations: false,
-        metrics_registry: &MetricsRegistry::new(),
-        disable_user_indexes: false,
-    })
-    .unwrap();
-
-    // We want to be able to control communication from dataflow to the
-    // coordinator, so setup an additional channel pair.
-    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
-    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
-
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
-    let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
-    let worker_guards = dataflow::serve(dataflow::Config {
-        command_receivers: vec![worker_rx],
-        timely_worker: timely::WorkerConfig::default(),
-        experimental_mode: true,
-        now: get_debug_timestamp,
-        metrics_registry: metrics_registry.clone(),
-        persist: persister,
-        feedback_tx,
-    })
-    .unwrap();
-
-    let executor = TokioHandle::current();
-    let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let timestamper_thread_handle = thread::Builder::new()
-        .name("timestamper".to_string())
-        .spawn(move || {
-            let _executor_guard = executor.enter();
-            loop {
-                match ts_rx.recv().unwrap() {
-                    TimestampMessage::Shutdown => break,
-
-                    // Allow local and file sources only. We don't need to do anything for these.
-                    TimestampMessage::Add(
-                        GlobalId::System(_),
-                        SourceConnector::Local {
-                            timeline: Timeline::EpochMilliseconds,
-                            persisted_name: None,
-                        },
-                    )
-                    | TimestampMessage::Add(
-                        GlobalId::User(_),
-                        SourceConnector::External {
-                            connector: ExternalSourceConnector::File(_),
-                            ..
-                        },
-                    ) => {}
-                    // Panic on anything else (like Kafka sources) until we support them.
-                    msg => panic!("unexpected {:?}", msg),
-                }
-            }
-        })
-        .unwrap()
-        .join_on_drop();
-
-    let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
-    let handle = TokioHandle::current();
-    let thread = thread::spawn(move || {
-        let mut coord = Coordinator {
-            worker_guards,
-            worker_txs: vec![worker_tx],
-            view_optimizer: Optimizer::logical_optimizer(),
-            catalog,
-            symbiosis: None,
-            indexes: ArrangementFrontiers::default(),
-            sources: ArrangementFrontiers::default(),
-            logical_compaction_window_ms: None,
-            logging_enabled: false,
-            internal_cmd_tx,
-            ts_tx,
-            metric_scraper: Scraper::new(None, metrics_registry).unwrap(),
-            closed_up_to: 1,
-            read_lower_bound: 1,
-            last_op_was_read: false,
-            need_advance: true,
-            transient_id_counter: 1,
-            active_conns: HashMap::new(),
-            txn_reads: HashMap::new(),
-            since_handles: HashMap::new(),
-            since_updates: Rc::new(RefCell::new(HashMap::new())),
-            sink_writes: HashMap::new(),
-            now: get_debug_timestamp,
-            pending_peeks: HashMap::new(),
-            pending_tails: HashMap::new(),
-        };
-        let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
-        bootstrap_tx.send(bootstrap).unwrap();
-        handle.block_on(coord.serve(
-            internal_cmd_rx,
-            cmd_rx,
-            feedback_rx,
-            timestamper_thread_handle,
-        ))
-    })
-    .join_on_drop();
-    bootstrap_rx.recv().unwrap().unwrap();
-    let client = Client::new(cmd_tx);
-    (
-        thread,
-        client,
-        inner_feedback_tx,
-        inner_feedback_rx,
-        DEBUG_TIMESTAMP.clone(),
-    )
-}
-
-/// The styles in which an expression can be prepared.
-#[derive(Clone, Copy, Debug)]
-enum ExprPrepStyle {
-    /// The expression is being prepared for output as part of an `EXPLAIN`
-    /// query.
-    Explain,
-    /// The expression is being prepared for installation in a static context,
-    /// like in a view.
-    Static,
-    /// The expression is being prepared to run once at the specified logical
-    /// time.
-    OneShot { logical_time: u64 },
-    /// The expression is being prepared to run in an INSERT or other write.
-    Write,
-}
-
 /// Constructs an [`ExecuteResponse`] that that will send some rows to the
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows(Box::pin(async { PeekResponse::Rows(rows) }))
+    ExecuteResponse::SendingRows(Box::pin(async { PeekResponseUnary::Rows(rows) }))
 }
 
 fn auto_generate_primary_idx(
@@ -4033,11 +4757,11 @@ pub fn index_sql(
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
-    use sql::ast::{Expr, Value};
+    use mz_sql::ast::{Expr, Value};
 
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
-        on_name: sql::normalize::unresolve(view_name),
+        on_name: mz_sql::normalize::unresolve(view_name),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
@@ -4071,10 +4795,10 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// supports describing FETCH statements which need access to bound portals
 /// through the session.
 pub fn describe(
-    catalog: &dyn sql::catalog::Catalog,
+    catalog: &Catalog,
     stmt: Statement<Raw>,
-    param_types: &[Option<pgrepr::Type>],
-    session: &mut Session,
+    param_types: &[Option<ScalarType>],
+    session: &Session,
 ) -> Result<StatementDesc, CoordError> {
     match stmt {
         // FETCH's description depends on the current session, which describe_statement
@@ -4085,12 +4809,15 @@ pub fn describe(
                 None => Err(CoordError::UnknownCursor(name.to_string())),
             }
         }
-        _ => Ok(sql::plan::describe(
-            &session.pcx(),
-            catalog,
-            stmt,
-            param_types,
-        )?),
+        _ => {
+            let catalog = &catalog.for_session(session);
+            Ok(mz_sql::plan::describe(
+                &session.pcx(),
+                catalog,
+                stmt,
+                param_types,
+            )?)
+        }
     }
 }
 
@@ -4132,8 +4859,8 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
             // isn't an obvious alternative; asking librdkafka about its =
             // defaults requires constructing a librdkafka client, and at that
             // point it's already too late.
-            let mut with_options = sql::normalize::options(with_options);
-            let with_options = sql::kafka_util::extract_config(&mut with_options)?;
+            let mut with_options = mz_sql::normalize::options(with_options);
+            let with_options = mz_sql::kafka_util::extract_config(&mut with_options)?;
             let security_protocol = with_options
                 .get("security.protocol")
                 .map(|v| v.as_str())
@@ -4155,4 +4882,296 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
         _ => (),
     }
     Ok(())
+}
+
+/// Logic and types for fast-path determination for dataflow execution.
+///
+/// This module determines if a dataflow can be short-cut, by returning constant values
+/// or by reading out of existing arrangements, and implements the appropriate plan.
+pub mod fast_path_peek {
+
+    use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
+    use mz_dataflow_types::PeekResponseUnary;
+    use std::{collections::HashMap, num::NonZeroUsize};
+
+    use crate::CoordError;
+    use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
+    use mz_repr::{Diff, Row};
+
+    #[derive(Debug)]
+    pub struct PeekDataflowPlan<T> {
+        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, T>,
+        id: GlobalId,
+        key: Vec<MirScalarExpr>,
+        permutation: HashMap<usize, usize>,
+        thinned_arity: usize,
+    }
+
+    /// Possible ways in which the coordinator could produce the result for a goal view.
+    #[derive(Debug)]
+    pub enum Plan<T = mz_repr::Timestamp> {
+        /// The view evaluates to a constant result that can be returned.
+        Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
+        /// The view can be read out of an existing arrangement.
+        PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
+        /// The view must be installed as a dataflow and then read.
+        PeekDataflow(PeekDataflowPlan<T>),
+    }
+
+    /// Determine if the dataflow plan can be implemented without an actual dataflow.
+    ///
+    /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
+    /// we can avoid building a dataflow (and either just return the results, or peek
+    /// out of the arrangement, respectively).
+    pub fn create_plan(
+        dataflow_plan: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+        index_key: Vec<MirScalarExpr>,
+        index_permutation: HashMap<usize, usize>,
+        index_thinned_arity: usize,
+    ) -> Result<Plan, CoordError> {
+        // At this point, `dataflow_plan` contains our best optimized dataflow.
+        // We will check the plan to see if there is a fast path to escape full dataflow construction.
+
+        // We need to restrict ourselves to settings where the inserted transient view is the first thing
+        // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
+        if dataflow_plan.objects_to_build.len() >= 1
+            && dataflow_plan.objects_to_build[0].id == view_id
+        {
+            match &dataflow_plan.objects_to_build[0].view {
+                // In the case of a constant, we can return the result now.
+                mz_dataflow_types::Plan::Constant { rows } => {
+                    return Ok(Plan::Constant(rows.clone()));
+                }
+                // In the case of a bare `Get`, we may be able to directly index an arrangement.
+                mz_dataflow_types::Plan::Get {
+                    id,
+                    keys: _,
+                    mfp,
+                    key_val,
+                } => {
+                    // Convert `mfp` to an executable, non-temporal plan.
+                    // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
+                    let map_filter_project = mfp
+                        .clone()
+                        .into_plan()
+                        .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
+                        .into_nontemporal()
+                        .map_err(|_e| {
+                            crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                                "OneShot plan has temporal constraints"
+                            ))
+                        })?;
+                    // We should only get excited if we can track down an index for `id`.
+                    // If `keys` is non-empty, that means we think one exists.
+                    for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                        if let Some((key, val)) = key_val {
+                            if Id::Global(desc.on_id) == *id && &desc.key == key {
+                                // Indicate an early exit with a specific index and key_val.
+                                return Ok(Plan::PeekExisting(
+                                    *index_id,
+                                    val.clone(),
+                                    map_filter_project,
+                                ));
+                            }
+                        } else if Id::Global(desc.on_id) == *id {
+                            // Indicate an early exit with a specific index and no key_val.
+                            return Ok(Plan::PeekExisting(*index_id, None, map_filter_project));
+                        }
+                    }
+                }
+                // nothing can be done for non-trivial expressions.
+                _ => {}
+            }
+        }
+        return Ok(Plan::PeekDataflow(PeekDataflowPlan {
+            desc: dataflow_plan,
+            id: index_id,
+            key: index_key,
+            permutation: index_permutation,
+            thinned_arity: index_thinned_arity,
+        }));
+    }
+
+    impl crate::coord::Coordinator {
+        /// Implements a peek plan produced by `create_plan` above.
+        pub async fn implement_fast_path_peek(
+            &mut self,
+            fast_path: Plan,
+            timestamp: mz_repr::Timestamp,
+            finishing: mz_expr::RowSetFinishing,
+            conn_id: u32,
+            source_arity: usize,
+        ) -> Result<crate::ExecuteResponse, CoordError> {
+            // If the dataflow optimizes to a constant expression, we can immediately return the result.
+            if let Plan::Constant(rows) = fast_path {
+                let mut rows = match rows {
+                    Ok(rows) => rows,
+                    Err(e) => return Err(e.into()),
+                };
+                // retain exactly those updates less or equal to `timestamp`.
+                for (_, time, diff) in rows.iter_mut() {
+                    use timely::PartialOrder;
+                    if time.less_equal(&timestamp) {
+                        // clobber the timestamp, so consolidation occurs.
+                        *time = timestamp.clone();
+                    } else {
+                        // zero the difference, to prevent a contribution.
+                        *diff = 0;
+                    }
+                }
+                // Consolidate down the results to get correct totals.
+                differential_dataflow::consolidation::consolidate_updates(&mut rows);
+
+                let mut results = Vec::new();
+                for (row, _time, count) in rows {
+                    if count < 0 {
+                        Err(EvalError::InvalidParameterValue(format!(
+                            "Negative multiplicity in constant result: {}",
+                            count
+                        )))?
+                    };
+                    if count > 0 {
+                        results.push((row, NonZeroUsize::new(count as usize).unwrap()));
+                    }
+                }
+                let results = finishing.finish(results);
+                return Ok(crate::coord::send_immediate_rows(results));
+            }
+
+            // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
+            // In both cases we will want to peek, and the main difference is that we might want to
+            // build a dataflow and drop it once the peek is issued. The peeks are also constructed
+            // differently.
+
+            // If we must build the view, ship the dataflow.
+            let (peek_command, drop_dataflow) = match fast_path {
+                Plan::PeekExisting(id, key, map_filter_project) => (
+                    (
+                        id,
+                        key,
+                        conn_id,
+                        timestamp,
+                        finishing.clone(),
+                        map_filter_project,
+                    ),
+                    None,
+                ),
+                Plan::PeekDataflow(PeekDataflowPlan {
+                    desc: dataflow,
+                    id: index_id,
+                    key: index_key,
+                    permutation: index_permutation,
+                    thinned_arity: index_thinned_arity,
+                }) => {
+                    // Very important: actually create the dataflow (here, so we can destructure).
+                    self.dataflow_client
+                        .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                        .unwrap()
+                        .create_dataflows(vec![dataflow])
+                        .await
+                        .unwrap();
+                    // Create an identity MFP operator.
+                    let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
+                    map_filter_project
+                        .permute(index_permutation, index_key.len() + index_thinned_arity);
+                    let map_filter_project = map_filter_project
+                        .into_plan()
+                        .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
+                        .into_nontemporal()
+                        .map_err(|_e| {
+                            crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                                "OneShot plan has temporal constraints"
+                            ))
+                        })?;
+                    (
+                        (
+                            index_id, // transient identifier produced by `dataflow_plan`.
+                            None,
+                            conn_id,
+                            timestamp,
+                            finishing.clone(),
+                            map_filter_project,
+                        ),
+                        Some(index_id),
+                    )
+                }
+                _ => {
+                    unreachable!()
+                }
+            };
+
+            // Endpoints for sending and receiving peek responses.
+            let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            // The peek is ready to go for both cases, fast and non-fast.
+            // Stash the response mechanism, and broadcast dataflow construction.
+            self.pending_peeks.insert(conn_id, rows_tx);
+            let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
+            self.dataflow_client
+                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .unwrap()
+                .peek(
+                    id,
+                    key,
+                    conn_id,
+                    timestamp,
+                    finishing.clone(),
+                    map_filter_project,
+                )
+                .await
+                .unwrap();
+
+            use futures::FutureExt;
+            use futures::StreamExt;
+            use mz_dataflow_types::PeekResponse;
+
+            // Prepare the receiver to return as a response.
+            let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
+                .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
+                    match (memo, resp) {
+                        (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
+                            memo.extend(rows);
+                            PeekResponse::Rows(memo)
+                        }
+                        (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
+                            PeekResponse::Error(e)
+                        }
+                        (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
+                            PeekResponse::Canceled
+                        }
+                    }
+                })
+                .map(move |resp| match resp {
+                    PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+                    PeekResponse::Canceled => PeekResponseUnary::Canceled,
+                    PeekResponse::Error(e) => PeekResponseUnary::Error(e),
+                });
+
+            // If it was created, drop the dataflow once the peek command is sent.
+            if let Some(index_id) = drop_dataflow {
+                self.drop_indexes(vec![index_id]).await;
+            }
+
+            Ok(crate::ExecuteResponse::SendingRows(Box::pin(rows_rx)))
+        }
+    }
+}
+
+#[cfg(test)]
+impl Coordinator {
+    #[allow(dead_code)]
+    async fn verify_ship_dataflow_no_error(&mut self) {
+        // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed
+        // to have a `Result` return because these functions are called after
+        // `catalog_transact`, after which no errors are allowed. This test exists to
+        // prevent us from incorrectly teaching those functions how to return errors
+        // (which has happened twice and is the motivation for this test).
+
+        let df = DataflowDesc::new("".into(), GlobalId::Explain);
+        let _: () = self.ship_dataflow(df.clone()).await;
+        let _: () = self.ship_dataflows(vec![df.clone()]).await;
+        let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);
+    }
 }

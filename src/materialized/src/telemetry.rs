@@ -12,12 +12,12 @@
 // WARNING: The code in this module must be tested manually. Please see
 // misc/python/cli/mock_telemetry_server.py for details.
 
-use log::{debug, log, Level};
 use serde::Deserialize;
 use tokio::time::{self, Duration};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 
 use crate::BUILD_INFO;
 
@@ -29,8 +29,10 @@ pub struct Config {
     pub interval: Duration,
     /// The ID of the Materialize cluster.
     pub cluster_id: Uuid,
+    /// The number of workers the dataflow server is hosting.
+    pub workers: usize,
     /// A client for the coordinator to introspect.
-    pub coord_client: coord::Client,
+    pub coord_client: mz_coord::Client,
 }
 
 /// Runs the telemetry reporting loop.
@@ -57,43 +59,56 @@ pub async fn report_loop(config: Config) {
             // We assume users running development builds are sophisticated, and
             // may be intentionally not running the latest release, so downgrade
             // the message from warn to info level.
-            let level = match BUILD_INFO.semver_version().pre.as_str() {
-                "dev" => Level::Info,
-                _ => Level::Warn,
+            //
+            // TODO: avoid duplicating the message if tokio-rs/tracing#372
+            // is resolved.
+            match BUILD_INFO.semver_version().pre.as_str() {
+                "dev" => {
+                    debug!(
+                        "a new version of materialized is available: {}",
+                        latest_version
+                    );
+                }
+                _ => {
+                    warn!(
+                        "a new version of materialized is available: {}",
+                        latest_version
+                    );
+                }
             };
-            log!(
-                level,
-                "a new version of materialized is available: {}",
-                latest_version
-            );
             reported_version = latest_version;
         }
     }
 }
 
-/// The query used to gather telemetry data.
+/// Generates the query used to gather telemetry data.
 //
 // If you add additional data to this query, please be sure to update the
 // telemetry docs in doc/user/cli/_index.md#telemetry accordingly, and be sure
 // the data is not identifiable.
-const TELEMETRY_QUERY: &str = "SELECT jsonb_build_object(
-    'version', mz_version(),
-    'status', jsonb_build_object(
-        'session_id', mz_internal.mz_session_id(),
-        'uptime_seconds', extract(epoch FROM mz_uptime()),
-        'num_workers', mz_workers(),
-        'sources', (
-            SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
-            FROM (SELECT connector_type, count(*) FROM mz_sources WHERE id LIKE 'u%' GROUP BY connector_type)
-        ),
-        'tables', jsonb_build_object('count', (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%')),
-        'views', jsonb_build_object('count', (SELECT count(*) FROM mz_views WHERE id LIKE 'u%')),
-        'sinks', (
-            SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
-            FROM (SELECT connector_type, count(*) FROM mz_sinks WHERE id LIKE 'u%' GROUP BY connector_type)
-        )
+fn make_telemetry_query(config: &Config) -> String {
+    format!("
+        SELECT jsonb_build_object(
+            'version', mz_version(),
+            'status', jsonb_build_object(
+                'session_id', mz_internal.mz_session_id(),
+                'uptime_seconds', extract(epoch FROM mz_uptime()),
+                'num_workers', {workers},
+                'sources', (
+                    SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
+                    FROM (SELECT connector_type, count(*) FROM mz_sources WHERE id LIKE 'u%' GROUP BY connector_type)
+                ),
+                'tables', jsonb_build_object('count', (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%')),
+                'views', jsonb_build_object('count', (SELECT count(*) FROM mz_views WHERE id LIKE 'u%')),
+                'sinks', (
+                    SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
+                    FROM (SELECT connector_type, count(*) FROM mz_sinks WHERE id LIKE 'u%' GROUP BY connector_type)
+                )
+            )
+        )",
+        workers = config.workers
     )
-)";
+}
 
 /// The response returned by the telemetry server.
 #[derive(Deserialize)]
@@ -105,10 +120,10 @@ async fn report_one(config: &Config) -> Result<semver::Version, anyhow::Error> {
     let response: V1VersionResponse = Retry::default()
         .initial_backoff(Duration::from_secs(1))
         .max_duration(config.interval)
-        .retry(|_state| async {
+        .retry_async(|_state| async {
             let query_result = config
                 .coord_client
-                .system_execute_one(&TELEMETRY_QUERY)
+                .system_execute_one(&make_telemetry_query(config))
                 .await?;
             let response = mz_http_proxy::reqwest::client()
                 .post(format!(

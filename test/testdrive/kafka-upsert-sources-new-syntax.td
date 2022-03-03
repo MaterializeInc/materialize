@@ -95,7 +95,7 @@ fish          fish     1000
 birdmore      geese    56
 mämmalmore    moose    42
 
-$ kafka-create-topic topic=textbytes
+$ kafka-create-topic topic=textbytes partitions=1
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 fish:fish
@@ -167,59 +167,72 @@ b\xc3\xadrdmore  géese            6
 mammal1          mouse            9
 mammalmore       herd             10
 
-$ kafka-create-topic topic=textproto
+$ file-append path=test.proto
+syntax = "proto3";
+
+message Test {
+    string f = 1;
+}
+
+$ protobuf-compile-descriptors inputs=test.proto output=test.pb
+
+$ kafka-create-topic topic=textproto partitions=1
 
 > CREATE MATERIALIZED SOURCE textproto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textproto-${testdrive.seed}'
   KEY FORMAT TEXT
-  VALUE FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+  VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE bytesproto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textproto-${testdrive.seed}'
   KEY FORMAT BYTES
-  VALUE FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+  VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
   ENVELOPE UPSERT
 
-$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=:
-fish:{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
-bìrd1:{"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
-birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+$ kafka-ingest topic=textproto
+  format=protobuf descriptor-file=test.pb message=Test
+  key-format=bytes key-terminator=:
+fish:{"f": "one"}
+bìrd1:{"f": "two"}
+birdmore: {}
 
 > SELECT * FROM bytesproto
-fish 1 1 ONE my-string 1
-b\xc3\xacrd1 2 2 ONE something-valid 2
-birdmore 2 2 ONE something-valid 3
+fish         one 1
+b\xc3\xacrd1 two 2
+birdmore     "" 3
 
 > SELECT * FROM textproto
-fish 1 1 ONE my-string 1
-bìrd1 2 2 ONE something-valid 2
-birdmore 2 2 ONE something-valid 3
+fish      one  1
+bìrd1     two  2
+birdmore  ""   3
 
-$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=:
-mammal1: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+$ kafka-ingest topic=textproto
+  format=protobuf descriptor-file=test.pb message=Test
+  key-format=bytes key-terminator=:
+mammal1: {"f": "three"}
 bìrd1:
-birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "stuff"}
-mämmalmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
-bìrd1:{"int": 2, "bad_int": 1, "bin": "ONE", "st": "something-valid"}
+birdmore: {"f": "four"}
+mämmalmore: {"f": "five"}
+bìrd1: {"f": "six"}
 mammal1:
-mammalmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+mammalmore: {"f": "seven"}
 
 > SELECT * FROM bytesproto
-fish 1 1 ONE my-string 1
-birdmore 2 2 ONE stuff 6
-m\xc3\xa4mmalmore 2 2 ONE something-valid 7
-b\xc3\xacrd1 2 1 ONE something-valid 8
-mammalmore 2 2 ONE something-valid 10
+fish              one    1
+birdmore          four   6
+m\xc3\xa4mmalmore five   7
+b\xc3\xacrd1      six    8
+mammalmore        seven  10
 
 > SELECT * FROM textproto
-fish 1 1 ONE my-string 1
-birdmore 2 2 ONE stuff 6
-mämmalmore 2 2 ONE something-valid 7
-bìrd1 2 1 ONE something-valid 8
-mammalmore 2 2 ONE something-valid 10
+fish        one    1
+birdmore    four   6
+mämmalmore  five   7
+bìrd1       six    8
+mammalmore  seven  10
 
-$ kafka-create-topic topic=nullkey
+$ kafka-create-topic topic=nullkey partitions=1
 
 # A null key should result in an error decoding that row but not a panic
 $ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
@@ -243,7 +256,7 @@ key0          text  mz_offset
 birdmore      geese 5
 mammalmore    moose 6
 
-$ kafka-create-topic topic=realtimeavroavro
+$ kafka-create-topic topic=realtimeavroavro partitions=1
 
 # test multi-field avro key
 $ set keyschema2={
@@ -487,3 +500,37 @@ melon  2
 k1        k2
 -----------
 librairie 10
+
+> CREATE MATERIALIZED SOURCE include_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  WITH (start_offset=1)
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE PARTITION, OFFSET
+  ENVELOPE UPSERT
+
+> SELECT * FROM include_metadata
+f3        f1        f1           f2   partition  offset
+-------------------------------------------------------
+<null>    yin       dog          243   0         15
+air       qi        chicken      47    0         13
+earth     dao       rhinoceros   211   0         12
+
+> CREATE MATERIALIZED SOURCE include_metadata_ts
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  WITH (start_offset=1)
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE PARTITION, OFFSET, TIMESTAMP as ts
+  ENVELOPE UPSERT
+
+> SELECT "offset" FROM include_metadata_ts WHERE ts > '2021-01-01'
+offset
+------
+15
+13
+12
+
+> SELECT "offset" FROM include_metadata_ts WHERE ts < '2021-01-01'
+offset
+------

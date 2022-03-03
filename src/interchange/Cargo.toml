@@ -1,47 +1,49 @@
 [package]
-name = "interchange"
+name = "mz-interchange"
 description = "Translations for various data serialization formats."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.58.0"
 publish = false
 
 [[bench]]
-name = "interchange-bench"
+name = "mz-interchange-bench"
 path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.44"
-avro-derive = { path = "../avro-derive" }
+anyhow = "1.0.55"
 base64 = "0.13.0"
 byteorder = "1.4.3"
-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-dec = "0.4.5"
+dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.17"
+futures = "0.3.21"
 hex = "0.4.3"
-itertools = "0.10.1"
+itertools = "0.10.3"
 lazy_static = "1.4.0"
-log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz-avro-derive = { path = "../avro-derive" }
+mz-ccsr = { path = "../ccsr" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
 num-traits = "0.2.14"
-ordered-float = { version = "2.8.0", features = ["serde"] }
-ore = { path = "../ore" }
-protobuf = "2.23.0"
-repr = { path = "../repr" }
-serde = { version = "1.0.130", features = ["derive"] }
-serde-protobuf = "0.8.2"
-serde-value = "0.7.0"
-serde_json = "1.0.68"
-sha2 = "0.9.8"
-smallvec = "1.5.1"
+ordered-float = { version = "2.10.0", features = ["serde"] }
+prost = "0.9.0"
+prost-reflect = "0.6.1"
+regex = "1.5.4"
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.79"
+sha2 = "0.10.2"
+smallvec = "1.8.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = { version = "1.17.0", features = ["fs"] }
+tracing = "0.1.31"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde"] }
 
 [dev-dependencies]
-criterion = "0.3.5"
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 
 [build-dependencies]
-protoc = { path = "../protoc" }
+prost-build = "0.9.1"

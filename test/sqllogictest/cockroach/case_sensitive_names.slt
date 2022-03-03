@@ -78,7 +78,7 @@ SELECT * FROM "A"
 # statement error pgcode 42P01 catalog item '"A"' does not exist
 # TRUNCATE "A"
 
-statement error pgcode 42P01 table "A" does not exist
+statement error pgcode 42P01 unknown catalog item 'A'
 DROP TABLE "A"
 
 statement ok
@@ -150,7 +150,7 @@ SELECT * FROM B
 # statement error pgcode 42P01 catalog item 'b' does not exist
 # TRUNCATE B
 
-statement error pgcode 42P01 table "b" does not exist
+statement error pgcode 42P01 unknown catalog item 'b'
 DROP TABLE B
 
 statement ok

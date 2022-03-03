@@ -12,7 +12,7 @@
 // TODO(frank): evaluate for redundancy with projection hoisting.
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Fuses Project operators with parent operators when possible.
 #[derive(Debug)]
@@ -24,10 +24,7 @@ impl crate::Transform for Project {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)))
     }
 }
 
@@ -45,31 +42,6 @@ impl Project {
             }
             if outputs.iter().enumerate().all(|(a, b)| a == *b) && outputs.len() == input.arity() {
                 *relation = input.take_dangerous();
-            }
-        }
-
-        // Any reduce will absorb any project. Also, this happens often.
-        if let MirRelationExpr::Reduce {
-            input,
-            group_key,
-            aggregates,
-            monotonic: _,
-            expected_group_size: _,
-        } = relation
-        {
-            if let MirRelationExpr::Project {
-                input: inner,
-                outputs,
-            } = &mut **input
-            {
-                // Rewrite the group key using `inner` columns.
-                for key in group_key.iter_mut() {
-                    key.permute(&outputs[..]);
-                }
-                for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.permute(&outputs[..]);
-                }
-                *input = Box::new(inner.take_dangerous());
             }
         }
     }

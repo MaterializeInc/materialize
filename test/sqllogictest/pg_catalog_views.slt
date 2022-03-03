@@ -1,0 +1,23 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE VIEW test_view1 AS SELECT 1
+
+statement ok
+CREATE VIEW test_view2 AS SELECT 2
+
+query TTT colnames
+SELECT * FROM pg_catalog.pg_views WHERE viewname LIKE 'test_%'
+----
+schemaname  viewname    viewowner
+public      test_view1  NULL
+public      test_view2  NULL

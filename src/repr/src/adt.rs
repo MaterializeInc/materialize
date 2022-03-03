@@ -24,5 +24,5 @@ pub mod interval;
 pub mod jsonb;
 pub mod numeric;
 pub mod regex;
-mod util;
+pub mod system;
 pub mod varchar;

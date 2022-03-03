@@ -9,10 +9,9 @@
 
 use futures::executor::block_on;
 
-use dataflow_types::{DataflowError, DecodeError};
-use interchange::avro::{Decoder, EnvelopeType};
-use repr::Datum;
-use repr::Row;
+use mz_dataflow_types::DecodeError;
+use mz_interchange::avro::Decoder;
+use mz_repr::Row;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {
@@ -24,9 +23,7 @@ impl AvroDecoderState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         value_schema: &str,
-        schema_registry_config: Option<ccsr::ClientConfig>,
-        envelope: EnvelopeType,
-        reject_non_inserts: bool,
+        schema_registry_config: Option<mz_ccsr::ClientConfig>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
@@ -34,34 +31,23 @@ impl AvroDecoderState {
             decoder: Decoder::new(
                 value_schema,
                 schema_registry_config,
-                envelope,
                 debug_name,
                 confluent_wire_format,
-                reject_non_inserts,
             )?,
             events_success: 0,
         })
     }
 
-    pub fn decode(
-        &mut self,
-        bytes: &mut &[u8],
-        coord: Option<i64>,
-        upstream_time_millis: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
-        match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
-            Ok(mut row) => {
+    pub fn decode(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
+        match block_on(self.decoder.decode(bytes)) {
+            Ok(row) => {
                 self.events_success += 1;
-                if push_metadata {
-                    row.push(Datum::from(coord))
-                }
                 Ok(Some(row))
             }
-            Err(err) => Err(DataflowError::DecodeError(DecodeError::Text(format!(
+            Err(err) => Err(DecodeError::Text(format!(
                 "avro deserialization error: {:#}",
                 err
-            )))),
+            ))),
         }
     }
 }

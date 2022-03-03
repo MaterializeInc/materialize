@@ -15,32 +15,45 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::EventLink;
-use timely::dataflow::operators::capture::Replay;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
+use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
-use crate::render::datum_vec::DatumVec;
-use repr::{Datum, Row, Timestamp};
+use crate::replay::MzReplay;
+use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 
-/// Constructs the logging dataflows and returns a logger and trace handles.
+/// Constructs the logging dataflow for differential logs.
+///
+/// Params
+/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `config`: Logging configuration
+/// * `linked`: The source to read log events from.
+/// * `activator`: A handle to acknowledge activations.
+///
+/// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
+/// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    config: &dataflow_types::logging::LoggingConfig,
+    config: &mz_dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
-) -> HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
+    activator: RcActivator,
+) -> HashMap<LogVariant, KeysValsHandle> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let logs = Some(linked).replay_core(
+        let logs = Some(linked).mz_replay(
             scope,
-            Some(Duration::from_nanos(config.granularity_ns as u64)),
+            "differential logs",
+            Duration::from_nanos(config.granularity_ns as u64),
+            activator,
         );
 
         let mut demux =
@@ -73,34 +86,52 @@ pub fn construct<A: Allocate>(
                         match datum {
                             DifferentialEvent::Batch(event) => {
                                 arrangement_batches_session
-                                    .give(&cap, ((event.operator, worker), time_ms, 1));
+                                    .give(&cap, ((event.operator, worker), time_ms, Diff::from(1)));
                                 arrangement_records_session.give(
                                     &cap,
-                                    ((event.operator, worker), time_ms, event.length as isize),
+                                    (
+                                        (event.operator, worker),
+                                        time_ms,
+                                        Diff::try_from(event.length).unwrap(),
+                                    ),
                                 );
                             }
                             DifferentialEvent::Merge(event) => {
                                 if let Some(done) = event.complete {
-                                    arrangement_batches_session
-                                        .give(&cap, ((event.operator, worker), time_ms, -1));
-                                    let diff = (done as isize)
-                                        - ((event.length1 + event.length2) as isize);
+                                    arrangement_batches_session.give(
+                                        &cap,
+                                        ((event.operator, worker), time_ms, Diff::from(-1)),
+                                    );
+                                    let diff = Diff::try_from(done).unwrap()
+                                        - Diff::try_from(event.length1 + event.length2).unwrap();
                                     arrangement_records_session
                                         .give(&cap, ((event.operator, worker), time_ms, diff));
                                 }
                             }
                             DifferentialEvent::Drop(event) => {
-                                arrangement_batches_session
-                                    .give(&cap, ((event.operator, worker), time_ms, -1));
+                                arrangement_batches_session.give(
+                                    &cap,
+                                    ((event.operator, worker), time_ms, Diff::from(-1)),
+                                );
                                 arrangement_records_session.give(
                                     &cap,
-                                    ((event.operator, worker), time_ms, -(event.length as isize)),
+                                    (
+                                        (event.operator, worker),
+                                        time_ms,
+                                        -Diff::try_from(event.length).unwrap(),
+                                    ),
                                 );
                             }
                             DifferentialEvent::MergeShortfall(_) => {}
                             DifferentialEvent::TraceShare(event) => {
-                                sharing_session
-                                    .give(&cap, ((event.operator, worker), time_ms, event.diff));
+                                sharing_session.give(
+                                    &cap,
+                                    (
+                                        (event.operator, worker),
+                                        time_ms,
+                                        Diff::try_from(event.diff).unwrap(),
+                                    ),
+                                );
                             }
                         }
                     }
@@ -143,21 +174,29 @@ pub fn construct<A: Allocate>(
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
-                let key_clone = key.clone();
+                let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
+                    &key.iter()
+                        .cloned()
+                        .map(MirScalarExpr::Column)
+                        .collect::<Vec<_>>(),
+                    variant.desc().arity(),
+                );
                 let trace = collection
                     .map({
-                        let mut row_packer = Row::default();
+                        let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
                         move |row| {
                             let datums = datums.borrow_with(&row);
-                            row_packer.extend(key.iter().map(|k| datums[*k]));
-                            ::std::mem::drop(datums);
-                            (row_packer.finish_and_reuse(), row)
+                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                            let row_key = row_buf.clone();
+                            row_buf.packer().extend(value.iter().map(|c| datums[*c]));
+                            let row_val = row_buf.clone();
+                            (row_key, row_val)
                         }
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant, (key_clone, trace));
+                result.insert(variant, trace);
             }
         }
         result

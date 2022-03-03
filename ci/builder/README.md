@@ -4,10 +4,9 @@ This directory contains the configuration to build a Docker image called the "CI
 builder." The image contains the dependencies required to build, test, and
 deploy all of the code in this repository.
 
-All CI jobs run their commands inside of this image. The version of the image to
-use is checked into the repository. This makes it trivial to update or add
-software to CI: just push a new version of the image to Docker Hub, then land a
-PR that points CI at the new version of the image.
+All CI jobs run their commands inside of this image. The definition of the image
+is also stored in this repository. This makes it trivial to update or add
+software to CI: just modify the `Dockerfile` defining the image.
 
 Crucially, old commits that might be incompatible with the new software will
 continue to use the old versions of the software, because they reference the old
@@ -26,8 +25,10 @@ The `stable` argument indicates what channel of Rust to include in the image,
 either `stable` or `nightly`. Some CI commands need a nightly version of Rust
 because they depend on unstable features.
 
-You can test the image locally by modifying the [stable.stamp] file in this
-directory to have the contents "latest". Then run
+Beware that building the image takes at least ten minutes, even on a beefy
+machine.
+
+Then run:
 
 ```shell
 $ bin/ci-builder run stable
@@ -40,67 +41,63 @@ your latest changes. You can also run a command other than Bash directly:
 $ bin/ci-builder run stable echo "hello from abroad"
 ```
 
-When you're happy with your changes, push them to Docker Hub:
+When you're happy with your changes, open a PR. CI will build and push the
+image to Docker Hub so that no one else needs to build the image from scratch.
+
+## Acquiring root within the image
+
+When debugging issues with the image, it is occasionally useful to acquire root.
+You can't run `sudo` because the image does not have `sudo` installed.
+
+Instead, you can use the `root-shell` command. While running the image in one
+shell, open a new shell and run:
 
 ```shell
-$ bin/ci-builder push stable
+$ bin/ci-builder root-shell stable
 ```
 
-(If you're feeling lucky, you can skip the build/test phase and push directly to
-Docker Hub. CI will verify that everything is working, after all.)
+That command will open a new root shell into the most recently launched
+ci-builder image. It will also run `apt-get update` so that you can use `apt
+install` to install any additional software you might need.
 
-Don't worry about pushing a broken image to Docker Hub; you can push with
-abandon. Those images won't get used unless you land a change to stamp.stamp
-that references the new tag. The script is careful to make tags sufficiently
-unique that you don't need to worry about overwriting existing tags on Docker
-Hub.
-
-After a successful push, the script will update stable.stamp with the new tag of
-the image. Commit the resulting diff, *including* the changes to the Dockerfile
-that were incorporated into the built image, and open a PR!
+When using the root shell, beware that if you create files as root on any
+shared volumes, those files will be owned by root *on your host machine*.
 
 ## Upgrading the Rust version
 
-1. Update the [`rust-toolchain.toml`] file with the desired version.
+1. Update each [Cargo.toml] file with the desired version. On macOS, from the root
+   directory, run:
 
-2. Run:
+   ```
+   find . -type f -name Cargo.toml -exec sed -i '' 's/rust-version = ".*"/rust-version = "THE_NEW_VERSION"/' {} \;
+   ```
 
-   ```shell
-   bin/ci-builder push stable
+   The equivalent on GNU/Linux is:
+   ```
+   find . -type f -name Cargo.toml -exec sed -i 's/rust-version = ".*"/rust-version = "THE_NEW_VERSION"/' {} \;
+   ```
+
+2. Update your local stable Rust installation so that it can build with the new minimum version:
+
+   ```
+   rustup update
    ```
 
 3. Run `bin/check` and `bin/lint` to see if there are any new Clippy lints or
    rustfmt style adjustments in this release. If so, fix them.
 
-4. Commit all outstanding changes and open a PR. Be sure to include the
-   auto-generated update to [stable.stamp].
+4. (optional) [Rebuild the image](#modifying-the-image)
+5. Commit all outstanding changes and open a PR.
 
 You may also need to upgrade the nightly version of the image, if it has become
 sufficiently out-of-date that it can no longer compile our codebase. That
-process is even easier:
-
-1. Run:
-
-   ```shell
-   $ bin/ci-builder push nightly
-   ```
-
-2. Commit the outstanding change to [nightly.stamp] and open a PR.
+process is even easier: update the `NIGHTLY_RUST_DATE` at the top of
+bin/ci-builder to the current date.
 
 Sometimes nightly versions are missing components that we depend on, like Clippy
 or miri. If that happens, you'll get a somewhat cryptic error message, like
 "unknown component: miri." The trick is to find a nightly version that has all
-the required compoents using the [component history tracker][rust-toolstate].
-When you've found a date where all required components are present for the
-x86\_64-unknown-linux-gnu target, you can request the nightly toolchain from
-that date like so:
-
-```shell
-$ bin/ci-builder push nightly-2001-02-03
-```
+the required components using the [component history tracker][rust-toolstate].
 
 [bin/ci-builder]: /bin/ci-builder
-[rust-toolchain]: /rust-toolchain.toml
-[stable.stamp]: stable.stamp
-[nightly.stamp]: nightly.stamp
 [rust-toolstate]: https://rust-lang.github.io/rustup-components-history/

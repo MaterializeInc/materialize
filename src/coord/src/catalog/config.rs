@@ -7,19 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::path::Path;
 use std::time::Duration;
 
-use build_info::BuildInfo;
-use ore::metrics::MetricsRegistry;
+use mz_build_info::BuildInfo;
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_ore::metrics::MetricsRegistry;
 
-use crate::persistcfg::PersistConfig;
+use crate::catalog::storage;
+use crate::persistcfg::PersisterWithConfig;
 
 /// Configures a catalog.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Config<'a> {
-    /// The path to the catalog on disk.
-    pub path: &'a Path,
+    /// The connection to the SQLite database.
+    pub storage: storage::Connection,
     /// Whether to enable experimental mode.
     pub experimental_mode: Option<bool>,
     /// Whether to enable safe mode.
@@ -28,18 +29,20 @@ pub struct Config<'a> {
     pub enable_logging: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// The number of workers in use by the server.
-    pub num_workers: usize,
+    /// An [External ID][] to use for all AWS AssumeRole operations.
+    ///
+    /// [External ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
+    pub aws_external_id: AwsExternalId,
     /// Timestamp frequency to use for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function to generate wall clock now; can be mocked.
-    pub now: ore::now::NowFn,
-    /// Persistence subsystem configuration.
-    pub persist: PersistConfig,
-    // Whether or not to skip catalog migrations
+    pub now: mz_ore::now::NowFn,
+    /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
-    // The registry that catalog uses to report metrics.
+    /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
-    // Whether or not to prevent user indexes from being considered for use
+    /// Whether or not to prevent user indexes from being considered for use.
     pub disable_user_indexes: bool,
+    /// A runtime for the `persist` crate alongside its configuration.
+    pub persister: &'a PersisterWithConfig,
 }

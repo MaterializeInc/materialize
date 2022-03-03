@@ -12,9 +12,9 @@ menu:
 
 {{< diagram "func-extract.svg" >}}
 
-Parameter | Type | Description
-----------|------|------------
-_val_ | [`date`](../../types/date), [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz) | The value from which you want to extract a component.
+Parameter | Type                                                                                                                                                                                    | Description
+----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
+_val_ | [`date`](../../types/date), [`time`](../../types/time), [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz), [`interval`](../../types/interval) | The value from which you want to extract a component.
 
 ### Arguments
 
@@ -42,30 +42,28 @@ decade  |  `DEC`, `DECS`, `DECADE`, `DECADES`
 
 ### Return value
 
-`EXTRACT` returns a [`float`](../../types/float) value.
+`EXTRACT` returns a [`numeric`](../../types/numeric) value.
 
 ## Examples
 
 ### Extract second from timestamptz
 
 ```sql
-SELECT EXTRACT(S FROM TIMESTAMP '2006-01-02 15:04:05.06')
-AS sec_extr;
+SELECT EXTRACT(S FROM TIMESTAMP '2006-01-02 15:04:05.06');
 ```
 ```nofmt
- sec_extr
-----------
-     5.06
+ extract
+---------
+    5.06
 ```
 
 ### Extract century from date
 
 ```sql
-SELECT EXTRACT(CENTURIES FROM DATE '2006-01-02')
-AS sec_extr;
+SELECT EXTRACT(CENTURIES FROM DATE '2006-01-02');
 ```
 ```nofmt
- sec_extr
-----------
+ extract
+---------
       21
 ```

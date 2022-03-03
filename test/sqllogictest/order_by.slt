@@ -95,14 +95,10 @@ SELECT a, a AS c FROM foo ORDER BY c
 1  1
 2  2
 
-# Columns from the underlying table and columns introduced in the select list
-# can be freely matched in ORDER BY expressions.
-query I
+# Columns introduced in the select list are not available when using an
+# arbitrary ORDER BY expression.
+query error column "c" does not exist
 SELECT a + 1 AS c FROM foo ORDER BY a + c
-----
-1
-2
-3
 
 # When a name from the underlying table is shadowed, using the shadowed name in
 # the ORDER BY should refer to the column in the select list...
@@ -113,9 +109,17 @@ one
 two
 zero
 
-# ...unless the shadowed name is ambiguous.
-query error column name "a" is ambiguous
+# ...unless the shadowed name is ambiguous...
+query error column reference "a" is ambiguous
 SELECT 1 AS a, b AS a FROM foo ORDER BY a
+
+# ..or the ORDER BY is an arbitrary expression.
+query T
+SELECT b AS a FROM foo ORDER BY -a
+----
+two
+one
+zero
 
 statement ok
 CREATE TABLE bar (a int)

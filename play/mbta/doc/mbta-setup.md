@@ -19,7 +19,7 @@ Get an API key from https://api-v3.mbta.com/ . This will enable you to send 1000
 ## Automatic setup (Docker)
 
 To start working with the streams automatically using Docker, run
-`API_KEY=<insert_api_key_here> ./mzcompose run start-live-data`.
+`./mzcompose run start-live-data API-KEY`.
 
 By default, the streams that get fired up correspond to the ones in
 [examples/all-frequent-routes-config-weekend.csv](../examples/all-frequent-routes-config-weekend.csv),
@@ -70,8 +70,8 @@ https://api-v3.mbta.com/docs/swagger/index.html
 
 ### Automatic Archiving
 
-If you run the `start-live-data` workflow with the environment variable
-`ARCHIVE_AT_SHUTDOWN=1`, the Docker container will automatically archive the
+If you run the `start-live-data` workflow with the flag `--archive-at-shutdown`,
+the Docker container will automatically archive the
 files containing the data pulled from the MBTA streams at shutdown in case you
 want to replay the data or give the data to someone else so they can replay the
 stream. By default, Docker waits 10 seconds for the container to stop before
@@ -85,7 +85,7 @@ Archives can be found at `workspace-<current_date_and_time>.tar.gz` file
 in the directory `play/mbta/archive`.
 
 To replay an archive, run
-`ARCHIVE_PATH=<insert_path_archive> ./mzcompose run replay`. Do not uncompress the archive.
+`./mzcompose run replay ARCHIVE-PATH`. Do not uncompress the archive.
 
 ## Automatic setup (Bash)
 

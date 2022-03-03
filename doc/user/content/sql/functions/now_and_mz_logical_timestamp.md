@@ -8,10 +8,10 @@ menu:
 
 In Materialize, `now()` doesn't represent the system time, as it does in most systems; it represents the time with timezone when the query was executed. It cannot be used when creating views.
 
-`mz_logical_timestamp()` comes closer to what `now()` typically indicates. It represents the logical time at which the query executes, based on the system time defined by the system on which `materialized` is installed. Its typical uses are:
+`mz_logical_timestamp()` comes closer to what `now()` typically indicates. It represents the logical time at which a query executes. Its typical uses are:
 
 * Internal debugging
-* Defining [temporal filters](https://materialize.com/temporal-filters/)
+* Defining [temporal filters](/guides/temporal-filters/)
 
 ## Internal debugging
 
@@ -19,9 +19,9 @@ In Materialize, `now()` doesn't represent the system time, as it does in most sy
 
 ## Temporal filters
 
-You can use `mz_logical_timestamp()` to define temporal filters for materialized view, or computations for fixed windows of time.
+You can use `mz_logical_timestamp()` to define temporal filters for materialized view, which implement various windowing idioms.
 
-For more information, see [Temporal Filters: Enabling Windowed Queries in Materialize](https://materialize.com/temporal-filters/).
+For more information, see [Temporal Filters](/guides/temporal-filters/).
 
 ## Restrictions
 
@@ -30,7 +30,7 @@ You can only use `mz_logical_timestamp()` to establish a temporal filter in one 
 * WHERE clauses, where `mz_logical_timestamp()` must be directly compared to [`numeric`](/sql/types/numeric) expressions not containing `mz_logical_timestamp()`
 * A conjunction (AND), where `mz_logical_timestamp()` must be directly compared to [`numeric`](/sql/types/numeric) expressions not containing `mz_logical_timestamp()`.
 
-At the moment, you can't use the `!=` operator with `mz_logical_timestamp` (we're working on it).
+  At the moment, you can't use the `!=` operator with `mz_logical_timestamp` (we're working on it).
 
 ## Example
 
@@ -40,21 +40,23 @@ At the moment, you can't use the `!=` operator with `mz_logical_timestamp` (we'r
 For this example, you'll need to create a sample data source and create a materialized view from it for later reference.
 
 ```sql
---Create table
+--Create a table of timestamped events.
 CREATE TABLE events (
     content text,
-    insert_ts numeric,
-    delete_ts numeric
+    insert_ms numeric,
+    delete_ms numeric
 );
---Create materialized view
+
+--Create a materialized view of events valid at a given logical time.
 CREATE MATERIALIZED VIEW valid AS
-SELECT content, insert_ts, delete_ts
+SELECT content, insert_ms, delete_ms
 FROM events
-WHERE mz_logical_timestamp() >= insert_ts
-  AND mz_logical_timestamp() < delete_ts;
+WHERE mz_logical_timestamp() >= insert_ms
+  AND mz_logical_timestamp() < delete_ms;
 ```
 
-Next, you'll populate the table with timestamp data. The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_logical_timestamp()`.
+Next, you'll populate the table with timestamp data.
+The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_logical_timestamp()`.
 
 ```sql
 INSERT INTO events VALUES (
@@ -80,7 +82,7 @@ Then, before 100,000 ms (or 1.67 minutes) elapse, run the following query to see
 SELECT *, mz_logical_timestamp() FROM valid;
 ```
 ```nofmt
-content |   insert_ts   |   delete_ts   | mz_logical_timestamp
+ content |   insert_ms   |   delete_ms   | mz_logical_timestamp
 ---------+---------------+---------------+----------------------
  hello   | 1620853325858 | 1620853425858 |        1620853337180
  goodbye | 1620853325862 | 1620853525862 |        1620853337180
@@ -88,7 +90,7 @@ content |   insert_ts   |   delete_ts   | mz_logical_timestamp
 (3 rows)
 ```
 
-If you run the query again after 1.67 minutes, you'll see only two results, because the first result has aged out of the view.
+If you run this query again after 1.67 minutes from the first insertion, you'll see only two results, because the first result no longer satisfies the predicate.
 
 ### Query using now()
 

@@ -7,51 +7,181 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Disabled due to persistent OOMs when linking
-# - id: coverage
-#   label: Code coverage
-#   timeout_in_minutes: 240
-#   command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
+steps:
+  - block: Nightly test selection
+    prompt: |
+      What tests would you like to run? As a convenience, leaving all tests
+      unchecked will run all tests.
+    blocked_state: running
+    fields:
+      - select: Tests
+        key: tests
+        options:
+          - { value: coverage }
+          - { value: kafka-matrix }
+          - { value: kafka-multi-broker }
+          - { value: redpanda-testdrive }
+          - { value: redpanda-testdrive-aarch64 }
+          - { value: upgrade }
+          - { value: limits }
+          - { value: cluster-testdrive }
+          - { value: proxy }
+          - { value: testdrive-workers-1 }
+          - { value: testdrive-workers-32 }
+          - { value: testdrive-partitions-5 }
+          - { value: persistence-testdrive }
+          - { value: feature-benchmark }
+          - { value: feature-benchmark-persistence }
+          - { value: aws-config }
+        multiple: true
+        required: false
+    if: build.source == "ui"
 
-- id: sqlsmith
-  label: SQLsmith fuzzing
-  timeout_in_minutes: 240
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: smith
-        run: ci
+  - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.nightly.trim_pipeline
+    if: build.source == "ui"
+    agents:
+      queue: linux
 
-- id: pubnub
-  label: "pubnub source"
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: testdrive
-        run: ci-pubnub
+  - wait: ~
+    if: build.source == "ui"
 
-- id: kafka-matrix
-  label: Kafka smoke test against previous Kafka versions
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: kafka-matrix
-        run: kafka-matrix
+  - id: feature-benchmark
+    label: "Feature benchmark against latest release"
+    timeout_in_minutes: 120
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args:
+            - --other-tag
+            - latest
 
-- id: kafka-multi-broker
-  label: Kafka multi-broker test
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: kafka-multi-broker
-        run: kafka-multi-broker
+  - id: feature-benchmark-persistence
+    label: "Feature benchmark against latest release with persistence"
+    timeout_in_minutes: 120
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args:
+            - --other-tag
+            - latest
+            - --this-options
+            - "--persistent-user-tables --persistent-kafka-sources"
+            - --other-options
+            - "--persistent-user-tables --persistent-kafka-sources"
 
-- id: testdrive-redpanda
-  label: ":racing_car: testdrive :panda_face:"
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: testdrive
-        run: testdrive-redpanda
+  - id: coverage
+    label: Code coverage
+    timeout_in_minutes: 240
+    command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
+    skip: Disabled due to persistent OOMs when linking
 
-- id: upgrade
-  label: "Upgrade testing"
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: upgrade
-        run: upgrade
+  - id: kafka-matrix
+    label: Kafka smoke test against previous Kafka versions
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-matrix
+
+  - id: kafka-multi-broker
+    label: Kafka multi-broker test
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-multi-broker
+
+  - id: redpanda-testdrive
+    label: ":panda_face: :racing_car: testdrive"
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: testdrive-redpanda-ci
+
+  - id: redpanda-testdrive-aarch64
+    label: ":panda_face: :racing_car: testdrive aarch64"
+    agents:
+      queue: aarch64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: testdrive-redpanda-ci
+
+  - id: upgrade
+    label: "Upgrade testing"
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upgrade
+
+  - id: limits
+    label: "Product limits test"
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: limits
+    timeout_in_minutes: 50
+
+  - id: cluster-testdrive
+    label: "Full testdrive against Cluster"
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: nightly
+    timeout_in_minutes: 30
+
+  - id: cluster-compute-storage-testdrive
+    label: "Full testdrive against Cluster with segragated compute/storage"
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: nightly-compute-storage
+    timeout_in_minutes: 30
+
+  - id: proxy
+    label: ":squid: proxy"
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: proxy
+          args: [--aws-region=us-east-2]
+
+  - id: testdrive-workers-1
+    label: ":racing_car: testdrive with --workers 1"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          args: [--aws-region=us-east-2, --workers=1]
+
+  - id: testdrive-workers-32
+    label: ":racing_car: testdrive with --workers 32"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          args: [--aws-region=us-east-2, --workers=32]
+    agents:
+      queue: x86_64-large
+
+  - id: testdrive-partitions-5
+    label: ":racing_car: testdrive with --kafka-default-partitions 5"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          args: [--aws-region=us-east-2, --kafka-default-partitions=5]
+
+  - id: persistence-testdrive
+    label: ":racing_car: testdrive with --persistent-user-tables"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          args: [--aws-region=us-east-2, --persistent-user-tables]
+
+  - id: aws-config
+    label: "AWS credentials and role assumption"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: aws-config

@@ -16,14 +16,23 @@ from pathlib import Path
 import boto3
 import humanize
 
-from materialize import git
+from materialize import ROOT, cargo, git
+from materialize.xcompile import Arch
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 
 
-def apt_materialized_path(version: str) -> str:
-    return f"pool/generic/m/ma/materialized-{version}.deb"
+def materialized_rust_version() -> str:
+    rust_version = cargo.Workspace(ROOT).crates["materialized"].rust_version
+    assert (
+        rust_version is not None
+    ), "materialized crate missing rust version configuration"
+    return rust_version
+
+
+def apt_materialized_path(arch: Arch, version: str) -> str:
+    return f"pool/generic/m/ma/materialized_{version}_{arch.go_str()}.deb"
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
@@ -47,22 +56,34 @@ def upload_tarball(tarball: Path, platform: str, version: str) -> None:
         Bucket=BINARIES_BUCKET,
         Key=s3_object,
     )
+    if "aarch64" in platform:
+        upload_redirect(
+            f"materialized-{version}-{platform.replace('aarch64', 'arm64')}.tar.gz",
+            f"/{s3_object}",
+        )
 
 
-def set_latest_redirect(platform: str, version: str) -> None:
+def upload_redirect(key: str, to: str) -> None:
     with tempfile.NamedTemporaryFile() as empty:
         boto3.client("s3").upload_fileobj(
             Fileobj=empty,
             Bucket=BINARIES_BUCKET,
-            Key=f"materialized-latest-{platform}.tar.gz",
-            ExtraArgs={
-                "WebsiteRedirectLocation": f"/materialized-{version}-{platform}.tar.gz",
-            },
+            Key=key,
+            ExtraArgs={"WebsiteRedirectLocation": to},
         )
 
 
+def upload_latest_redirect(platform: str, version: str) -> None:
+    upload_redirect(
+        f"materialized-latest-{platform}.tar.gz",
+        f"/materialized-{version}-{platform}.tar.gz",
+    )
+    if "aarch64" in platform:
+        upload_latest_redirect(platform.replace("aarch64", "arm64"), version)
+
+
 def deploy_tarball(platform: str, materialized: Path) -> None:
-    tar_path = Path("materialized.tar.gz")
+    tar_path = Path(f"materialized-{platform}.tar.gz")
     with tarfile.open(str(tar_path), "x:gz") as f:
         f.addfile(_tardir("materialized"))
         f.addfile(_tardir("materialized/bin"))
@@ -81,4 +102,4 @@ def deploy_tarball(platform: str, materialized: Path) -> None:
     else:
         commit_sha = git.rev_parse("HEAD")
         upload_tarball(tar_path, platform, commit_sha)
-        set_latest_redirect(platform, commit_sha)
+        upload_latest_redirect(platform, commit_sha)

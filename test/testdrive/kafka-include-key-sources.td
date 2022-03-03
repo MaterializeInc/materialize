@@ -24,21 +24,46 @@ $ set schema={
     ]
   }
 
-$ kafka-create-topic topic=avro-data
-$ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1
+$ kafka-create-topic topic=avro-data partitions=1
+$ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1 publish=true
 {"id": 1} {"id": 2, "b": 3}
 
 ! CREATE SOURCE missing_key_format
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
-INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
+contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
 ! CREATE SOURCE missing_key_format
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS key_col
-INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
+contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
+
+# "Bare" format works when the key format is in a registry
+> CREATE MATERIALIZED SOURCE bareformatconfluent
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE KEY AS named
+  ENVELOPE UPSERT
+
+> SELECT * from bareformatconfluent
+named         id       b
+------------------------
+1             2        3
+
+! CREATE SOURCE not_supported
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE TOPIC
+contains:INCLUDE TOPIC not yet supported
+
+! CREATE SOURCE not_supported
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE TIMESTAMP as myts, TOPIC
+contains:INCLUDE TOPIC not yet supported
 
 > CREATE MATERIALIZED SOURCE avro_data_conflict
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
@@ -47,7 +72,7 @@ INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
   INCLUDE KEY
 
 ! SELECT id, b FROM avro_data_conflict
-column name "id" is ambiguous
+contains:column reference "id" is ambiguous
 
 > SELECT * FROM avro_data_conflict
 id id b
@@ -64,6 +89,16 @@ id id b
 key_id id b
 ------------
 1 2 3
+
+> CREATE MATERIALIZED SOURCE include_partition
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE PARTITION
+
+> SELECT * FROM include_partition
+id b partition
+--------------
+2 3 0
 
 > CREATE MATERIALIZED SOURCE avro_data_as
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
@@ -147,10 +182,10 @@ named_id named_geo a
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE debezium
-Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.
+contains:Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.
 
 # formats: TEXT and REGEX
-$ kafka-create-topic topic=textsrc
+$ kafka-create-topic topic=textsrc partitions=1
 
 $ kafka-ingest topic=textsrc format=bytes key-format=bytes key-terminator=:
 one,1:horse,apple
@@ -206,35 +241,56 @@ id_name id animal
 one     1  horse
 two     2  bee
 
-$ kafka-create-topic topic=proto
+$ file-append path=test.proto
+syntax = "proto3";
 
-$ kafka-ingest topic=proto key-format=protobuf key-message=simpleid format=protobuf message=measurement timestamp=1
-{"id": "a"} {"resource": "CPU", "measured_value": 10}
+message Key {
+    string id = 1;
+}
+
+message KeyComplex {
+    int32 id1 = 1;
+    int32 id2 = 2;
+}
+
+message Value {
+    int32 measurement = 1;
+}
+
+$ protobuf-compile-descriptors inputs=test.proto output=test.proto
+
+$ kafka-create-topic topic=proto partitions=1
+
+$ kafka-ingest topic=proto
+  key-format=protobuf key-descriptor-file=test.proto key-message=Key
+  format=protobuf descriptor-file=test.proto message=Value
+{"id": "a"} {"measurement": 10}
 
 > CREATE MATERIALIZED SOURCE input_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-${testdrive.seed}'
-  KEY FORMAT PROTOBUF MESSAGE '.SimpleId' USING SCHEMA  '${testdrive.protobuf-descriptors}'
-  VALUE FORMAT PROTOBUF MESSAGE '.Measurement' USING SCHEMA '${testdrive.protobuf-descriptors}'
+  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   INCLUDE KEY
 
 > SELECT * FROM input_proto
-id resource measured_value mz_offset
-------------------------------------
-a  CPU      10             1
+id  measurement  mz_offset
+--------------------------
+a   10           1
 
+$ kafka-create-topic topic=proto-structured partitions=1
 
-$ kafka-create-topic topic=proto-structured
-
-$ kafka-ingest topic=proto-structured key-format=protobuf key-message=measurement format=protobuf message=simpleid timestamp=1
-{"resource": "CPU", "measured_value": 10} {"id": "a"}
+$ kafka-ingest topic=proto-structured
+  key-format=protobuf key-descriptor-file=test.proto key-message=KeyComplex
+  format=protobuf descriptor-file=test.proto message=Value
+{"id1": 1, "id2": 2} {"measurement": 10}
 
 > CREATE MATERIALIZED SOURCE input_proto_structured
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-structured-${testdrive.seed}'
-  KEY FORMAT PROTOBUF MESSAGE '.Measurement' USING SCHEMA '${testdrive.protobuf-descriptors}'
-  VALUE FORMAT PROTOBUF MESSAGE '.SimpleId' USING SCHEMA  '${testdrive.protobuf-descriptors}'
-  INCLUDE KEY AS measurement
+  KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  INCLUDE KEY AS key
 
-> SELECT (measurement).resource as r, (measurement).measured_value as v, id FROM input_proto_structured
-r    v   id
------------
-CPU  10  a
+> SELECT key::text, (key).id1, (key).id2, measurement, mz_offset FROM input_proto_structured
+key    id1  id2  measurement  mz_offset
+---------------------------------------
+(1,2)  1    2    10           1

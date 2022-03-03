@@ -12,66 +12,75 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryFrom;
-use std::fs;
-use std::io::{self, Write};
-use std::iter;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use aws_arn::ARN;
+use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
-use lazy_static::lazy_static;
-use log::{debug, error};
 use regex::Regex;
 use reqwest::Url;
+use tracing::{debug, warn};
 
-use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec,
-    Consistency, CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkFormat, KafkaSourceConnector,
-    KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
-    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
-    SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
+use mz_dataflow_types::{
+    sinks::{
+        AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
+        KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
+    },
+    sources::{
+        encoding::{
+            included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding,
+            DataEncoding, ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+        },
+        provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
+        DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
+        KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
+        PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
+        UnplannedSourceEnvelope, UpsertStyle,
+    },
 };
-use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
-use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
-use interchange::envelopes;
-use ore::collections::CollectionExt;
-use ore::str::StrExt;
-use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::{CreateSourceFormat, CsvColumns, KeyConstraint};
+use mz_expr::GlobalId;
+use mz_interchange::avro::{self, AvroSchemaGenerator};
+use mz_interchange::envelopes;
+use mz_ore::collections::CollectionExt;
+use mz_ore::str::StrExt;
+use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ColumnOption,
     Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
-    CreateSourceConnector, CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement,
+    CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
-    CreateViewsStatement, CsrConnector, CsrSeed, DataType, DbzMode, DropDatabaseStatement,
-    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
-    ObjectType, ProtobufSchema, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
+    CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsvColumns,
+    DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, ProtobufSchema, Raw,
+    SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, UnresolvedObjectName, Value,
     ViewDefinition, WithOption,
 };
-use crate::catalog::{CatalogItem, CatalogItemType};
+use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
-use crate::names::{DatabaseSpecifier, FullName, SchemaName};
+use crate::names::{
+    resolve_names_data_type, DatabaseSpecifier, FullName, ResolvedDataType, SchemaName,
+};
 use crate::normalize;
+use crate::normalize::ident;
 use crate::plan::error::PlanError;
-use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
-use crate::plan::query::{resolve_names_data_type, QueryLifetime};
+use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    self, plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption,
-    IndexOptionName, Params, Plan, Sink, Source, Table, Type, TypeInner, View,
+    plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
+    Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -151,9 +160,6 @@ pub fn plan_create_table(
     if !with_options.is_empty() {
         bail_unsupported!("WITH options");
     }
-    if !constraints.is_empty() {
-        bail_unsupported!("CREATE TABLE with constraints")
-    }
 
     let names: Vec<_> = columns
         .iter()
@@ -161,10 +167,7 @@ pub fn plan_create_table(
         .collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
-        bail!(
-            "cannot CREATE TABLE: column {} specified more than once",
-            dup.as_str().quoted()
-        );
+        bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
     // Build initial relation type that handles declared data types
@@ -172,10 +175,11 @@ pub fn plan_create_table(
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
     let mut depends_on = Vec::new();
+    let mut keys = Vec::new();
 
-    for c in columns {
+    for (i, c) in columns.into_iter().enumerate() {
         let (aug_data_type, ids) = resolve_names_data_type(scx, c.data_type.clone())?;
-        let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
+        let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {
@@ -188,6 +192,12 @@ pub fn plan_create_table(
                     depends_on.extend(expr_depends_on);
                     default = expr.clone();
                 }
+                ColumnOption::Unique { is_primary } => {
+                    keys.push(vec![i]);
+                    if *is_primary {
+                        nullable = false;
+                    }
+                }
                 other => {
                     bail_unsupported!(format!("CREATE TABLE with column constraint: {}", other))
                 }
@@ -198,7 +208,48 @@ pub fn plan_create_table(
         depends_on.extend(ids);
     }
 
-    let typ = RelationType::new(column_types);
+    for constraint in constraints {
+        match constraint {
+            TableConstraint::Unique {
+                name: _,
+                columns,
+                is_primary,
+            } => {
+                let mut key = vec![];
+                for column in columns {
+                    let column = normalize::column_name(column.clone());
+                    match names.iter().position(|name| *name == column) {
+                        None => bail!("unknown column in constraint: {}", column),
+                        Some(i) => {
+                            key.push(i);
+                            if *is_primary {
+                                column_types[i].nullable = false;
+                            }
+                        }
+                    }
+                }
+                keys.push(key);
+            }
+            TableConstraint::ForeignKey { .. } => {
+                // Foreign key constraints are not presently enforced. We allow
+                // them in experimental mode for sqllogictest's sake.
+                scx.require_experimental_mode("CREATE TABLE with a foreign key")?
+            }
+            TableConstraint::Check { .. } => {
+                // Check constraints are not presently enforced. We allow them
+                // in experimental mode for sqllogictest's sake.
+                scx.require_experimental_mode("CREATE TABLE with a check constraint")?
+            }
+        }
+    }
+
+    if !keys.is_empty() {
+        // Unique constraints are not presently enforced. We allow them in
+        // experimental mode for sqllogictest's sake.
+        scx.require_experimental_mode("CREATE TABLE with a primary key or unique constraint")?;
+    }
+
+    let typ = RelationType::new(column_types).with_keys(keys);
 
     let temporary = *temporary;
     let name = if temporary {
@@ -206,7 +257,7 @@ pub fn plan_create_table(
     } else {
         scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
     };
-    let desc = RelationDesc::new(typ, names.into_iter().map(Some));
+    let desc = RelationDesc::new(typ, names);
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
     let table = Table {
@@ -230,158 +281,6 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
-// Flatten one Debezium entry ("before" or "after")
-// into its corresponding data fields, plus an extra column for the diff.
-fn plan_dbz_flatten_one(
-    input: HirRelationExpr,
-    bare_column: usize,
-    diff: i64,
-    n_flattened_cols: usize,
-) -> HirRelationExpr {
-    HirRelationExpr::Map {
-        input: Box::new(HirRelationExpr::Filter {
-            input: Box::new(input),
-            predicates: vec![HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not(func::Not),
-                expr: Box::new(HirScalarExpr::CallUnary {
-                    func: UnaryFunc::IsNull(func::IsNull),
-                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: bare_column,
-                    })),
-                }),
-            }],
-        }),
-        scalars: (0..n_flattened_cols)
-            .into_iter()
-            .map(|idx| HirScalarExpr::CallUnary {
-                func: UnaryFunc::RecordGet(idx),
-                expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: bare_column,
-                })),
-            })
-            .chain(iter::once(HirScalarExpr::Literal(
-                Row::pack(iter::once(Datum::Int64(diff))),
-                ColumnType {
-                    nullable: false,
-                    scalar_type: ScalarType::Int64,
-                },
-            )))
-            .collect(),
-    }
-}
-
-fn plan_dbz_flatten(
-    bare_desc: &RelationDesc,
-    input: HirRelationExpr,
-) -> Result<(HirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
-    // This looks horrible, but it is basically pretty simple:
-    // It aims to flatten rows of the shape
-    // (before, after)
-    // into rows whose columns are the individual fields of the before or after record,
-    // plus a "diff" column whose value is -1 for before, and +1 for after.
-    //
-    // They will then be joined with `repeat(diff)` to get the correct stream out.
-    let before_idx = bare_desc
-        .iter_names()
-        .position(|maybe_name| match maybe_name {
-            Some(name) => name.as_str() == "before",
-            None => false,
-        })
-        .ok_or_else(|| anyhow!("Debezium-formatted data must contain a `before` field."))?;
-    let after_idx = bare_desc
-        .iter_names()
-        .position(|maybe_name| match maybe_name {
-            Some(name) => name.as_str() == "after",
-            None => false,
-        })
-        .ok_or_else(|| anyhow!("Debezium-formatted data must contain an `after` field."))?;
-    let before_flattened_cols = match &bare_desc.typ().column_types[before_idx].scalar_type {
-        ScalarType::Record { fields, .. } => fields.clone(),
-        _ => unreachable!(), // This was verified in `Encoding::desc`
-    };
-    let after_flattened_cols = match &bare_desc.typ().column_types[after_idx].scalar_type {
-        ScalarType::Record { fields, .. } => fields.clone(),
-        _ => unreachable!(), // This was verified in `Encoding::desc`
-    };
-    assert!(before_flattened_cols == after_flattened_cols);
-    let n_flattened_cols = before_flattened_cols.len();
-    let old_arity = input.arity();
-    let before_expr = plan_dbz_flatten_one(input.clone(), before_idx, -1, n_flattened_cols);
-    let after_expr = plan_dbz_flatten_one(input, after_idx, 1, n_flattened_cols);
-    let new_arity = before_expr.arity();
-    assert!(new_arity == after_expr.arity());
-    let before_expr = before_expr.project((old_arity..new_arity).collect());
-    let after_expr = after_expr.project((old_arity..new_arity).collect());
-    let united_expr = HirRelationExpr::Union {
-        base: Box::new(before_expr),
-        inputs: vec![after_expr],
-    };
-    let mut col_names = before_flattened_cols
-        .into_iter()
-        .map(|(name, _)| Some(name))
-        .collect::<Vec<_>>();
-    col_names.push(Some("diff".into()));
-    Ok((united_expr, col_names))
-}
-
-fn plan_source_envelope(
-    bare_desc: &RelationDesc,
-    envelope: &SourceEnvelope,
-    post_transform_key: Option<Vec<usize>>,
-) -> Result<(MirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
-    let get_expr = HirRelationExpr::Get {
-        id: expr::Id::LocalBareSource,
-        typ: bare_desc.typ().clone(),
-    };
-    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_, _) = envelope {
-        // Debezium sources produce a diff in their last column.
-        // Thus we need to select all rows but the last, which we repeat by.
-        // I.e., for a source with four columns, we do
-        // SELECT a.column1, a.column2, a.column3 FROM a, repeat(a.column4)
-        //
-        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner,
-        // rather than writing out the expr by hand? Then we would get some nice things; for
-        // example, automatic tracking of column names.
-        //
-        // For this simple case, it probably doesn't matter
-
-        let (flattened, mut column_names) = plan_dbz_flatten(bare_desc, get_expr)?;
-
-        let diff_col = flattened.arity() - 1;
-        let expr = HirRelationExpr::Join {
-            left: Box::new(flattened),
-            right: Box::new(HirRelationExpr::CallTable {
-                func: TableFunc::Repeat,
-                exprs: vec![HirScalarExpr::Column(ColumnRef {
-                    level: 1,
-                    column: diff_col,
-                })],
-            }),
-            on: HirScalarExpr::literal_true(),
-            kind: JoinKind::Inner { lateral: true },
-        }
-        .project((0..diff_col).collect());
-        let expr = if let Some(post_transform_key) = post_transform_key {
-            expr.declare_keys(vec![post_transform_key])
-        } else {
-            expr
-        };
-        column_names.pop();
-        (expr, column_names)
-    } else {
-        (
-            get_expr,
-            bare_desc.iter_names().map(|name| name.cloned()).collect(),
-        )
-    };
-
-    let mir_expr = hir_expr.lower();
-
-    Ok((mir_expr, column_names))
-}
-
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Raw>,
@@ -396,13 +295,11 @@ pub fn plan_create_source(
         materialized,
         format,
         key_constraint,
-        key_envelope,
+        include_metadata,
     } = &stmt;
 
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options);
-
-    let mut consistency = Consistency::RealTime;
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val {
@@ -414,22 +311,13 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
-    if !matches!(connector, CreateSourceConnector::Kafka { .. }) && key_envelope.is_present() {
-        bail_unsupported!("INCLUDE KEY with non-Kafka sources");
+    if !matches!(connector, CreateSourceConnector::Kafka { .. }) && !include_metadata.is_empty() {
+        bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connector, encoding, key_envelope) = match connector {
+    let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
-
-            consistency = match with_options.remove("consistency_topic") {
-                None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(BringYourOwn {
-                    broker: broker.clone(),
-                    topic,
-                }),
-                Some(_) => bail!("consistency_topic must be a string"),
-            };
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
                 None => None,
@@ -437,9 +325,6 @@ pub fn plan_create_source(
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
-            if with_options.contains_key("start_offset") && consistency != Consistency::RealTime {
-                bail!("`start_offset` is not yet implemented for non-realtime consistency sources.")
-            }
             let parse_offset = |s: &str| match s.parse::<i64>() {
                 Ok(n) if n >= 0 => Ok(n),
                 _ => bail!("start_offset must be a nonnegative integer"),
@@ -467,27 +352,68 @@ pub fn plan_create_source(
             }
 
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            let key_envelope = get_key_envelope(key_envelope, envelope, &encoding)?;
 
-            let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
+            let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
                 topic: topic.clone(),
                 config_options,
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
-                key_envelope: key_envelope.clone(),
-            });
+                include_timestamp: None,
+                include_partition: None,
+                include_topic: None,
+                include_offset: None,
+            };
 
-            if consistency != Consistency::RealTime
-                && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
+            let unwrap_name = |alias: Option<Ident>, default, pos| {
+                Some(IncludedColumnPos {
+                    name: alias
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| String::from(default)),
+                    pos,
+                })
+            };
+
+            if !include_metadata.is_empty()
+                && matches!(envelope, Envelope::Debezium(DbzMode::Plain))
             {
-                // TODO: does it make sense to support BYO with upsert? It doesn't seem obvious that
-                // the timestamp topic will support the upsert semantics of the value topic
-                bail!("BYO consistency only supported for plain Debezium Kafka sources");
+                for kind in include_metadata {
+                    if !matches!(kind.ty, SourceIncludeMetadataType::Key) {
+                        bail!(
+                            "INCLUDE {} with Debezium requires UPSERT semantics",
+                            kind.ty
+                        );
+                    }
+                }
             }
 
-            (connector, encoding, key_envelope)
+            for (pos, item) in include_metadata.iter().cloned().enumerate() {
+                match item.ty {
+                    SourceIncludeMetadataType::Timestamp => {
+                        connector.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
+                    }
+                    SourceIncludeMetadataType::Partition => {
+                        connector.include_partition = unwrap_name(item.alias, "partition", pos);
+                    }
+                    SourceIncludeMetadataType::Topic => {
+                        // TODO(bwm): This requires deeper thought, the current structure of the
+                        // code requires us to clone the topic name around all over the place
+                        // whether or not anyone ever uses it. Considering we expect the
+                        // overwhelming majority of people will *not* want topics in dataflows that
+                        // is an unnacceptable cost.
+                        bail_unsupported!("INCLUDE TOPIC");
+                    }
+                    SourceIncludeMetadataType::Offset => {
+                        connector.include_offset = unwrap_name(item.alias, "offset", pos);
+                    }
+                    SourceIncludeMetadataType::Key => {} // handled below
+                }
+            }
+
+            let connector = ExternalSourceConnector::Kafka(connector);
+
+            (connector, encoding)
         }
         CreateSourceConnector::Kinesis { arn, .. } => {
             let arn: ARN = arn
@@ -505,13 +431,11 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws_info = normalize::aws_connect_info(&mut with_options, Some(region.into()))?;
-            let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
-                stream_name,
-                aws_info,
-            });
+            let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let connector =
+                ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
         CreateSourceConnector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
@@ -519,38 +443,37 @@ pub fn plan_create_source(
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
             };
-            consistency = match with_options.remove("consistency_topic") {
-                None => Consistency::RealTime,
-                Some(_) => bail!("BYO consistency not supported for file sources"),
-            };
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
                 compression: match compression {
-                    Compression::Gzip => dataflow_types::Compression::Gzip,
-                    Compression::None => dataflow_types::Compression::None,
+                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
+                    Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
                 tail,
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            (connector, encoding, KeyEnvelope::None)
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("File sources do not support key decoding");
+            }
+            (connector, encoding)
         }
         CreateSourceConnector::S3 {
             key_sources,
             pattern,
             compression,
         } => {
-            let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
+            let aws = normalize::aws_config(&mut with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
-                    sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        dataflow_types::S3KeySource::Scan {
+                    mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
+                        mz_dataflow_types::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
-                    sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        dataflow_types::S3KeySource::SqsNotifications {
+                    mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
+                        mz_dataflow_types::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -568,14 +491,17 @@ pub fn plan_create_source(
                             .build()
                     })
                     .transpose()?,
-                aws_info,
+                aws,
                 compression: match compression {
-                    Compression::Gzip => dataflow_types::Compression::Gzip,
-                    Compression::None => dataflow_types::Compression::None,
+                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
+                    Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            (connector, encoding, KeyEnvelope::None)
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("S3 sources do not support key decoding");
+            }
+            (connector, encoding)
         }
         CreateSourceConnector::Postgres {
             conn,
@@ -593,7 +519,7 @@ pub fn plan_create_source(
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
         CreateSourceConnector::PubNub {
             subscribe_key,
@@ -607,11 +533,7 @@ pub fn plan_create_source(
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (
-                connector,
-                SourceDataEncoding::Single(DataEncoding::Text),
-                KeyEnvelope::None,
-            )
+            (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
         CreateSourceConnector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
@@ -619,22 +541,10 @@ pub fn plan_create_source(
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
             };
-            consistency = match with_options.remove("consistency_topic") {
-                None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(BringYourOwn {
-                    broker: path.clone(),
-                    topic,
-                }),
-                Some(_) => bail!("consistency_topic must be a string"),
-            };
-
-            if consistency != Consistency::RealTime {
-                bail!("BYO consistency is not supported for Avro OCF sources");
-            }
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
-                compression: dataflow_types::Compression::None,
+                compression: mz_dataflow_types::sources::Compression::None,
                 tail,
             });
             if !matches!(format, CreateSourceFormat::None) {
@@ -650,105 +560,145 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
                 reader_schema,
             }));
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
     };
+    let (key_desc, value_desc) = encoding.desc()?;
 
-    // TODO (materialize#2537): cleanup format validation
-    // Avro format validation is different for the Debezium envelope
-    // vs the Upsert envelope.
-    //
-    // For the Debezium envelope, the key schema is not meant to be
-    // used to decode records; it is meant to be a subset of the
-    // value schema so we can identify what the primary key is.
-    //
-    // When using the Upsert envelope, we delete the key schema
-    // from the value encoding because the key schema is not
-    // necessarily a subset of the value schema. Also, we shift
-    // the key schema, if it exists, over to the value schema position
-    // in the Upsert envelope's key_format so it can be validated like
-    // a schema used to decode records.
+    let key_envelope = get_key_envelope(include_metadata, envelope, &encoding)?;
 
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
-        sql_parser::ast::Envelope::None => SourceEnvelope::None,
-        sql_parser::ast::Envelope::Debezium(mode) => {
-            let is_avro = match encoding.value_ref() {
-                DataEncoding::Avro(_) => true,
-                DataEncoding::AvroOcf(_) => true,
-                _ => false,
-            };
-            if !is_avro {
-                bail!("non-Avro Debezium sources are not supported");
-            }
-            let dedup_strat = match with_options.remove("deduplication") {
-                None => match mode {
-                    sql_parser::ast::DbzMode::Plain => DebeziumDeduplicationStrategy::Ordered,
-                    sql_parser::ast::DbzMode::Upsert => DebeziumDeduplicationStrategy::None,
-                },
-                Some(Value::String(s)) => {
-                    match s.as_str() {
-                        "none" => DebeziumDeduplicationStrategy::None,
-                        "full" => DebeziumDeduplicationStrategy::Full,
-                        "ordered" => DebeziumDeduplicationStrategy::Ordered,
+        // TODO: fixup key envelope
+        mz_sql_parser::ast::Envelope::None => {
+            UnplannedSourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
+        }
+        mz_sql_parser::ast::Envelope::Debezium(mode) => {
+            //TODO check that key envelope is not set
+            let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
+
+            match mode {
+                DbzMode::Upsert => {
+                    UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
+                }
+                DbzMode::Plain => {
+                    let dedup_projection = typecheck_debezium_dedup(&value_desc);
+
+                    let dedup_mode = match with_options.remove("deduplication") {
+                        None => match dedup_projection {
+                            Ok(_) => Cow::from("ordered"),
+                            Err(_) => Cow::from("none"),
+                        },
+                        Some(Value::String(s)) => Cow::from(s),
+                        _ => bail!("deduplication option must be a string"),
+                    };
+
+                    match dedup_mode.as_ref() {
+                        "ordered" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
+                            before_idx,
+                            after_idx,
+                            mode: DebeziumMode::Ordered(dedup_projection?),
+                        }),
+                        "full" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
+                            before_idx,
+                            after_idx,
+                            mode: DebeziumMode::Full(dedup_projection?),
+                        }),
+                        "none" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
+                            before_idx,
+                            after_idx,
+                            mode: DebeziumMode::None,
+                        }),
                         "full_in_range" => {
-                            match (
-                                with_options.remove("deduplication_start"),
-                                with_options.remove("deduplication_end"),
-                            ) {
-                                (Some(Value::String(start)), Some(Value::String(end))) => {
-                                    let deduplication_pad_start = match with_options.remove("deduplication_pad_start") {
-                                        Some(Value::String(start)) => Some(start),
-                                        Some(v) => bail!("Expected string for deduplication_pad_start, got: {:?}", v),
-                                        None => None
-                                    };
-                                    DebeziumDeduplicationStrategy::full_in_range(
-                                        &start,
-                                        &end,
-                                        deduplication_pad_start.as_deref(),
-                                    )
-                                    .map_err(|e| {
-                                        anyhow!("Unable to create deduplication strategy: {}", e)
-                                    })?
+                            let parse_datetime = |s: &str| {
+                                let formats = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
+                                for format in formats {
+                                    if let Ok(dt) = NaiveDateTime::parse_from_str(s, format) {
+                                        return Ok(dt);
+                                    }
                                 }
-                                (_, _) => bail!(
+                                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    return Ok(d.and_hms(0, 0, 0));
+                                }
+
+                                bail!(
+                                    "UTC DateTime specifier '{}' should match \
+                                    'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS' \
+                                    or 'YYYY-MM-DD HH:MM:SS.FF",
+                                    s
+                                )
+                            };
+
+                            let dedup_start = match with_options.remove("deduplication_start") {
+                                None => None,
+                                Some(Value::String(start)) => Some(parse_datetime(&start)?),
+                                _ => bail!("deduplication_start option must be a string"),
+                            };
+
+                            let dedup_end = match with_options.remove("deduplication_end") {
+                                None => None,
+                                Some(Value::String(end)) => Some(parse_datetime(&end)?),
+                                _ => bail!("deduplication_end option must be a string"),
+                            };
+
+                            match dedup_start.zip(dedup_end) {
+                                Some((start, end)) => {
+                                    if start >= end {
+                                        bail!(
+                                            "Debezium deduplication start {} is not before end {}",
+                                            start,
+                                            end
+                                        );
+                                    }
+
+                                    let pad_start =
+                                        match with_options.remove("deduplication_pad_start") {
+                                            None => None,
+                                            Some(Value::String(pad_start)) => {
+                                                Some(parse_datetime(&pad_start)?)
+                                            }
+                                            _ => bail!(
+                                                "deduplication_pad_start option must be a string"
+                                            ),
+                                        };
+
+                                    UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
+                                        before_idx,
+                                        after_idx,
+                                        mode: DebeziumMode::FullInRange {
+                                            start,
+                                            end,
+                                            pad_start,
+                                            projection: dedup_projection?,
+                                        }
+                                    })
+                                }
+                                _ => bail!(
                                     "deduplication full_in_range requires both \
                                  'deduplication_start' and 'deduplication_end' parameters"
                                 ),
                             }
                         }
                         _ => bail!(
-                            "deduplication must be one of 'ordered' 'full', or 'full_in_range'."
+                            "deduplication must be one of 'none', 'ordered', 'full' or 'full_in_range'."
                         ),
                     }
                 }
-                _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
-            };
-            let mode = match mode {
-                sql_parser::ast::DbzMode::Plain => DebeziumMode::Plain,
-                sql_parser::ast::DbzMode::Upsert => DebeziumMode::Upsert,
-            };
-            if mode == DebeziumMode::Upsert && dedup_strat != DebeziumDeduplicationStrategy::None {
-                bail!("Debezium deduplication does not make sense with upsert sources");
             }
-            SourceEnvelope::Debezium(dedup_strat, mode)
         }
-        sql_parser::ast::Envelope::Upsert => match connector {
-            // Currently the get_encoding function rewrites Formats with either a CSR config to be a
-            // KeyValueDecoding, no other formats make sense.
-            //
-            // TODO(bwm): move key/value canonicalization entirely into the purify step, and turn
-            // this and the related code in `get_encoding` into internal errors.
-            CreateSourceConnector::Kafka { .. } => match format {
-                CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
-                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr { .. })) => {
-                    SourceEnvelope::Upsert
-                }
-                _ => bail_unsupported!(format!("upsert requires a key/value format: {:?}", format)),
-            },
-            _ => bail_unsupported!("upsert envelope for non-Kafka sources"),
-        },
-        sql_parser::ast::Envelope::CdcV2 => {
+        mz_sql_parser::ast::Envelope::Upsert => {
+            if encoding.key_ref().is_none() {
+                bail_unsupported!(format!("upsert requires a key/value format: {:?}", format));
+            }
+            //TODO(petrosagg): remove this check. it will be a breaking change
+            let key_envelope = match encoding.key_ref() {
+                Some(DataEncoding::Avro(_)) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
+                _ => key_envelope.unwrap_or(KeyEnvelope::LegacyUpsert),
+            };
+            UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
+        }
+        mz_sql_parser::ast::Envelope::CdcV2 => {
+            //TODO check that key envelope is not set
             if let CreateSourceConnector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
@@ -758,65 +708,54 @@ pub fn plan_create_source(
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
-            SourceEnvelope::CdcV2
+            UnplannedSourceEnvelope::CdcV2
         }
     };
 
-    if matches!(envelope, SourceEnvelope::Upsert) {
-        match &encoding {
-            SourceDataEncoding::Single(_) => {
-                bail_unsupported!("upsert envelopes must have a key")
-            }
-            SourceDataEncoding::KeyValue { .. } => (),
-        }
-    }
+    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset) syntax is implemented
+    let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
+    let metadata_columns = external_connector.metadata_columns(include_defaults);
+    let metadata_column_types = external_connector.metadata_column_types(include_defaults);
+    let metadata_desc = included_column_desc(metadata_columns.clone());
+    let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
-    let mut bare_desc = encoding.desc(&envelope, &key_envelope)?;
+    // Append default metadata columns if column aliases were provided but do not include them.
+    //
+    // This is a confusing hack due to two combined facts:
+    //
+    // * we used to not allow users to refer to/alias the metadata columns because they were
+    //   specified in render, instead of here in plan
+    // * we don't follow postgres semantics and allow a shorter rename list than total column list
+    //
+    // TODO: probably we should just migrate to pg semantics and allow specifying fewer columns than
+    // actually exist?
+    let tmp_col;
+    let col_names = if include_defaults
+        && !col_names.is_empty()
+        && metadata_columns.len() + col_names.len() == desc.arity()
+    {
+        let mut tmp = Vec::with_capacity(desc.arity());
+        tmp.extend(col_names.iter().cloned());
+        tmp.push(Ident::from(
+            external_connector.default_metadata_column_name().unwrap(),
+        ));
+        tmp_col = tmp;
+        &tmp_col
+    } else {
+        col_names
+    };
+
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
+
     if ignore_source_keys {
-        bare_desc = bare_desc.without_keys();
+        desc = desc.without_keys();
     }
 
-    let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {
-        if let SourceDataEncoding::KeyValue {
-            key: DataEncoding::Avro(AvroEncoding { schema, .. }),
-            ..
-        } = &encoding
-        {
-            if ignore_source_keys {
-                None
-            } else {
-                match &bare_desc.typ().column_types[0].scalar_type {
-                    ScalarType::Record { fields, .. } => {
-                        let row_desc = RelationDesc::from_names_and_types(
-                            fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
-                        );
-                        let key_schema_indices = match avro::validate_key_schema(&schema, &row_desc)
-                        {
-                            Err(e) => bail!("Cannot use key due to error: {}", e),
-                            Ok(indices) => Some(indices),
-                        };
-                        key_schema_indices
-                    }
-                    _ => {
-                        error!("Not using key: expected `before` record in first column");
-                        None
-                    }
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    bare_desc =
-        plan_utils::maybe_rename_columns(format!("source {}", name), bare_desc, &col_names)?;
+    desc = plan_utils::maybe_rename_columns(format!("source {}", name), desc, &col_names)?;
 
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
@@ -835,34 +774,21 @@ pub fn plan_create_source(
         let key_indices = key_columns
             .iter()
             .map(|col| -> anyhow::Result<usize> {
-                let name_idx = bare_desc
+                let name_idx = desc
                     .get_by_name(col)
                     .map(|(idx, _type)| idx)
                     .ok_or_else(|| anyhow!("No such column in source key constraint: {}", col))?;
-                if bare_desc.get_unambiguous_name(name_idx).is_none() {
+                if desc.get_unambiguous_name(name_idx).is_none() {
                     bail!("Ambiguous column in source key constraint: {}", col);
                 }
                 Ok(name_idx)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        if !bare_desc.typ().keys.is_empty() {
-            return Err(key_constraint_err(&bare_desc, &key_columns));
+        if !desc.typ().keys.is_empty() {
+            return Err(key_constraint_err(&desc, &key_columns));
         } else {
-            bare_desc = bare_desc.with_key(key_indices);
-        }
-    }
-
-    // TODO(benesch): the available metadata columns should not depend
-    // on the format.
-    //
-    // TODO(brennan): They should not depend on the envelope either. Figure out a way to
-    // make all of this more tasteful.
-    if !matches!(encoding.value_ref(), DataEncoding::Avro { .. })
-        && !matches!(envelope, SourceEnvelope::Debezium(_, _))
-    {
-        for (name, ty) in external_connector.metadata_columns() {
-            bare_desc = bare_desc.with_named_column(name, ty);
+            desc = desc.with_key(key_indices);
         }
     }
 
@@ -878,40 +804,37 @@ pub fn plan_create_source(
             v => bail!("unsupported timeline value {}", v.to_ast_string()),
         }
     } else {
-        match (&consistency, &envelope) {
-            (_, SourceEnvelope::CdcV2) => match with_options.remove("epoch_ms_timeline") {
+        match envelope {
+            SourceEnvelope::CdcV2 => match with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
                 Some(Value::Boolean(true)) => Timeline::EpochMilliseconds,
                 Some(v) => bail!("unsupported epoch_ms_timeline value {}", v),
             },
-            (Consistency::RealTime, _) => Timeline::EpochMilliseconds,
-            (Consistency::BringYourOwn(byo), _) => Timeline::Counter(byo.clone()),
+            _ => Timeline::EpochMilliseconds,
         }
     };
 
-    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key)?;
+    let expr = HirRelationExpr::Get {
+        id: mz_expr::Id::LocalBareSource,
+        typ: desc.typ().clone(),
+    }
+    .lower();
+
     let source = Source {
         create_sql,
         connector: SourceConnector::External {
             connector: external_connector,
             encoding,
             envelope,
-            key_envelope,
-            consistency,
+            metadata_columns: metadata_column_types,
             ts_frequency,
             timeline,
         },
         expr,
-        bare_desc,
-        column_names,
+        desc,
     };
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE SOURCE: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
 
     Ok(Plan::CreateSource(CreateSourcePlan {
         name,
@@ -921,7 +844,150 @@ pub fn plan_create_source(
     }))
 }
 
-fn get_encoding<T: sql_parser::ast::AstInfo>(
+fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), anyhow::Error> {
+    let (before_idx, before_ty) = value_desc
+        .get_by_name(&"before".into())
+        .ok_or_else(|| anyhow!("'before' column missing from debezium input"))?;
+    let (after_idx, after_ty) = value_desc
+        .get_by_name(&"after".into())
+        .ok_or_else(|| anyhow!("'after' column missing from debezium input"))?;
+    if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
+        bail!("'before' column must be of type record");
+    }
+    if before_ty != after_ty {
+        bail!("'before' type differs from 'after' column");
+    }
+    Ok((before_idx, after_idx))
+}
+
+fn typecheck_debezium_dedup(
+    value_desc: &RelationDesc,
+) -> Result<DebeziumDedupProjection, anyhow::Error> {
+    let (source_idx, source_ty) = value_desc
+        .get_by_name(&"source".into())
+        .ok_or_else(|| anyhow!("'source' column missing from debezium input"))?;
+
+    let source_fields = match &source_ty.scalar_type {
+        ScalarType::Record { fields, .. } => fields,
+        _ => bail!("'source' column must be of type record"),
+    };
+
+    let snapshot = source_fields
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.0.as_str() == "snapshot");
+    let snapshot_idx = match snapshot {
+        Some((idx, (_, ty))) => match &ty.scalar_type {
+            ScalarType::String | ScalarType::Bool => idx,
+            _ => bail!("'snapshot' column must be a string or boolean"),
+        },
+        None => bail!("'snapshot' field missing from source record"),
+    };
+
+    let mut mysql = (None, None, None);
+    let mut postgres = (None, None);
+    let mut sqlserver = (None, None);
+
+    for (idx, (name, ty)) in source_fields.iter().enumerate() {
+        match name.as_str() {
+            "file" => {
+                mysql.0 = match &ty.scalar_type {
+                    ScalarType::String => Some(idx),
+                    t => bail!(r#""source"."file" must be of type string, found {:?}"#, t),
+                }
+            }
+            "pos" => {
+                mysql.1 = match &ty.scalar_type {
+                    ScalarType::Int64 => Some(idx),
+                    t => bail!(r#""source"."pos" must be of type bigint, found {:?}"#, t),
+                }
+            }
+            "row" => {
+                mysql.2 = match &ty.scalar_type {
+                    ScalarType::Int32 => Some(idx),
+                    t => bail!(r#""source"."file" must be of type int, found {:?}"#, t),
+                }
+            }
+            "sequence" => {
+                postgres.0 = match &ty.scalar_type {
+                    ScalarType::String => Some(idx),
+                    t => bail!(
+                        r#""source"."sequence" must be of type string, found {:?}"#,
+                        t
+                    ),
+                }
+            }
+            "lsn" => {
+                postgres.1 = match &ty.scalar_type {
+                    ScalarType::Int64 => Some(idx),
+                    t => bail!(r#""source"."lsn" must be of type bigint, found {:?}"#, t),
+                }
+            }
+            "change_lsn" => {
+                sqlserver.0 = match &ty.scalar_type {
+                    ScalarType::String => Some(idx),
+                    t => bail!(
+                        r#""source"."change_lsn" must be of type string, found {:?}"#,
+                        t
+                    ),
+                }
+            }
+            "event_serial_no" => {
+                sqlserver.1 = match &ty.scalar_type {
+                    ScalarType::Int64 => Some(idx),
+                    t => bail!(
+                        r#""source"."event_serial_no" must be of type bigint, found {:?}"#,
+                        t
+                    ),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let source_projection = if let (Some(file), Some(pos), Some(row)) = mysql {
+        DebeziumSourceProjection::MySql { file, pos, row }
+    } else if let (Some(change_lsn), Some(event_serial_no)) = sqlserver {
+        DebeziumSourceProjection::SqlServer {
+            change_lsn,
+            event_serial_no,
+        }
+    } else if let (sequence, Some(lsn)) = postgres {
+        DebeziumSourceProjection::Postgres { sequence, lsn }
+    } else {
+        bail!("unknown type of upstream database")
+    };
+
+    let (transaction_idx, transaction_ty) = value_desc
+        .get_by_name(&"transaction".into())
+        .ok_or_else(|| anyhow!("'transaction' column missing from debezium input"))?;
+
+    let tx_fields = match &transaction_ty.scalar_type {
+        ScalarType::Record { fields, .. } => fields,
+        _ => bail!("'transaction' column must be of type record"),
+    };
+
+    let total_order = tx_fields
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.0.as_str() == "total_order");
+    let total_order_idx = match total_order {
+        Some((idx, (_, ty))) => match &ty.scalar_type {
+            ScalarType::Int64 => idx,
+            _ => bail!("'total_order' column must be an bigint"),
+        },
+        None => bail!("'total_order' field missing from tx record"),
+    };
+    Ok(DebeziumDedupProjection {
+        source_idx,
+        snapshot_idx,
+        source_projection,
+        transaction_idx,
+        total_order_idx,
+    })
+}
+
+fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
     format: &CreateSourceFormat<Raw>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<T>>,
@@ -954,7 +1020,7 @@ fn get_encoding<T: sql_parser::ast::AstInfo>(
     Ok(encoding)
 }
 
-fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
+fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
     format: &Format<Raw>,
     with_options: &Vec<SqlOption<T>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
@@ -971,7 +1037,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
                 AvroSchema::InlineSchema {
-                    schema: sql_parser::ast::Schema::Inline(schema),
+                    schema: mz_sql_parser::ast::Schema::Inline(schema),
                     with_options,
                 } => {
                     with_options! {
@@ -990,28 +1056,29 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                     }
                 }
                 AvroSchema::InlineSchema {
-                    schema: sql_parser::ast::Schema::File(_),
+                    schema: mz_sql_parser::ast::Schema::File(_),
                     ..
                 } => {
                     unreachable!("File schema should already have been inlined")
                 }
                 AvroSchema::Csr {
                     csr_connector:
-                        CsrConnector {
+                        CsrConnectorAvro {
                             url,
                             seed,
                             with_options: ccsr_options,
                         },
                 } => {
-                    let url: Url = url.parse()?;
-                    let kafka_options =
-                        kafka_util::extract_config(&mut normalize::options(with_options))?;
+                    let mut ccsr_with_options = normalize::options(&ccsr_options);
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
-                        url,
-                        &kafka_options,
-                        normalize::options(&ccsr_options),
+                        url.parse()?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        &mut ccsr_with_options,
                     )?;
-
+                    normalize::ensure_empty_options(
+                        &ccsr_with_options,
+                        "CONFLUENT SCHEMA REGISTRY",
+                    )?;
                     if let Some(seed) = seed {
                         Schema {
                             key_schema: seed.key_schema.clone(),
@@ -1020,7 +1087,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                             confluent_wire_format: true,
                         }
                     } else {
-                        unreachable!("CSR seed resolution should already have been called")
+                        unreachable!("CSR seed resolution should already have been called: Avro")
                     }
                 }
             };
@@ -1048,31 +1115,47 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
-                csr_connector: CsrConnector { seed, .. },
+                csr_connector:
+                    CsrConnectorProto {
+                        url,
+                        seed,
+                        with_options: ccsr_options,
+                    },
             } => {
-                if let Some(CsrSeed {
-                    key_schema,
-                    value_schema,
-                }) = seed
+                if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
+                    seed
                 {
-                    let descriptors = compile_proto(&value_schema)?;
+                    let mut ccsr_with_options = normalize::options(&ccsr_options);
+
+                    // We validate here instead of in purification, to match the behavior of avro
+                    let _ccsr_config = kafka_util::generate_ccsr_client_config(
+                        url.parse()?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        &mut ccsr_with_options,
+                    )?;
+                    normalize::ensure_empty_options(
+                        &ccsr_with_options,
+                        "CONFLUENT SCHEMA REGISTRY",
+                    )?;
+
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
-                        descriptors,
-                        message_name: None,
+                        descriptors: strconv::parse_bytes(&value.schema)?,
+                        message_name: value.message_name.clone(),
+                        confluent_wire_format: true,
                     });
-                    if let Some(key_schema) = key_schema {
+                    if let Some(key) = key {
                         return Ok(SourceDataEncoding::KeyValue {
                             key: DataEncoding::Protobuf(ProtobufEncoding {
-                                descriptors: compile_proto(&key_schema)?,
-                                message_name: None,
+                                descriptors: strconv::parse_bytes(&key.schema)?,
+                                message_name: key.message_name.clone(),
+                                confluent_wire_format: true,
                             }),
                             value,
                         });
-                    } else {
-                        value
                     }
+                    value
                 } else {
-                    unreachable!("CSR seed resolution should already have been called")
+                    unreachable!("CSR seed resolution should already have been called: Proto")
                 }
             }
             ProtobufSchema::InlineSchema {
@@ -1080,21 +1163,24 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 schema,
             } => {
                 let descriptors = match schema {
-                    sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-                    sql_parser::ast::Schema::File(_) => {
+                    mz_sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
+                    mz_sql_parser::ast::Schema::File(_) => {
                         unreachable!("File schema should already have been inlined")
                     }
                 };
 
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
-                    message_name: Some(message_name.to_owned()),
+                    message_name: message_name.to_owned(),
+                    confluent_wire_format: false,
                 })
             }
         },
         Format::Regex(regex) => {
             let regex = Regex::new(&regex)?;
-            DataEncoding::Regex(RegexEncoding { regex })
+            DataEncoding::Regex(RegexEncoding {
+                regex: mz_repr::adt::regex::Regex(regex),
+            })
         }
         Format::Csv { columns, delimiter } => {
             let columns = match columns {
@@ -1121,77 +1207,28 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
     }))
 }
 
-fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
-    // Write schema string to a file to compile it.
-    let schema_bytes = strconv::parse_bytes(schema)?;
-    let include_dir = tempfile::tempdir()?.into_path();
-    let mut file = tempfile::NamedTempFile::new_in(&include_dir)?;
-    file.write_all(&schema_bytes)?;
-    file.flush()?;
-
-    // Destroy and recreate the build directory, in case any inputs have
-    // been deleted since the last invocation.
-    let out_dir = tempfile::tempdir()?.into_path();
-    match fs::remove_dir_all(&out_dir) {
-        Ok(()) => (),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-        Err(e) => {
-            return Err(anyhow::Error::new(e))
-                .with_context(|| format!("removing existing out directory {}", out_dir.display()))
-        }
-    }
-    fs::create_dir(&out_dir)
-        .with_context(|| format!("creating out directory {}", out_dir.display()))?;
-
-    // Compile schema string.
-    match protoc::Protoc::new()
-        .include(&include_dir)
-        .input(file.path())
-        .compile_into(&out_dir)
-    {
-        Ok(()) => (),
-        Err(e) => {
-            lazy_static! {
-                static ref MISSING_IMPORT_ERROR: Regex = Regex::new(
-                    r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#
-                )
-                .expect("known valid");
-            }
-
-            // Make protobuf import errors more user-friendly.
-            if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
-                bail!(
-                    "unsupported protobuf schema reference {}",
-                    &captures["reference"]
-                )
-            } else {
-                return Err(e);
-            }
-        }
-    }
-
-    Ok(fs::read(out_dir.join("file_descriptor_set.pb").as_path())?)
-}
-
+/// Extract the key envelope, if it is requested
 fn get_key_envelope(
-    key_envelope: &CreateSourceKeyEnvelope,
+    included_items: &[SourceIncludeMetadata],
     envelope: &Envelope,
     encoding: &SourceDataEncoding,
-) -> Result<KeyEnvelope, anyhow::Error> {
-    if key_envelope.is_present() && matches!(envelope, Envelope::Debezium { .. }) {
+) -> Result<Option<KeyEnvelope>, anyhow::Error> {
+    let key_definition = included_items
+        .iter()
+        .find(|i| i.ty == SourceIncludeMetadataType::Key);
+    if matches!(envelope, Envelope::Debezium { .. }) && key_definition.is_some() {
         bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
     }
-    Ok(match key_envelope {
-        CreateSourceKeyEnvelope::None if matches!(envelope, Envelope::Upsert { .. }) => {
-            KeyEnvelope::LegacyUpsert
-        }
-        CreateSourceKeyEnvelope::None => KeyEnvelope::None,
-        CreateSourceKeyEnvelope::Named(name) => KeyEnvelope::Named(name.clone().into_string()),
-        CreateSourceKeyEnvelope::Included => {
-            // If the key is requested but comes from an unnamed type then it gets the name "key"
-            //
-            // Otherwise it gets the names of the columns in the type
-            if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
+    if let Some(kd) = key_definition {
+        Ok(Some(match (&kd.alias, encoding) {
+            (Some(name), SourceDataEncoding::KeyValue { .. }) => {
+                KeyEnvelope::Named(name.as_str().to_string())
+            }
+            (None, _) if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
+            (None, SourceDataEncoding::KeyValue { key, .. }) => {
+                // If the key is requested but comes from an unnamed type then it gets the name "key"
+                //
+                // Otherwise it gets the names of the columns in the type
                 let is_composite = match key {
                     DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
                         bail!("{} sources cannot use INCLUDE KEY", key.op_name())
@@ -1208,11 +1245,20 @@ fn get_key_envelope(
                 } else {
                     KeyEnvelope::Named("key".to_string())
                 }
-            } else {
-                bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
             }
-        }
-    })
+            (_, SourceDataEncoding::Single(_)) => {
+                // `kd.alias` == `None` means `INCLUDE KEY`
+                // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
+                // These both make sense with the same error message
+                bail!(
+                    "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, \
+                        got bare FORMAT"
+                );
+            }
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn describe_create_view(
@@ -1254,10 +1300,11 @@ pub fn plan_view(
         finishing,
         depends_on,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+
     expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     expr.finish(finishing);
-    let relation_expr = expr.lower();
+    let relation_expr = expr.optimize_and_lower(&scx.into());
 
     let name = if temporary {
         scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
@@ -1266,11 +1313,16 @@ pub fn plan_view(
     };
 
     desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, &columns)?;
+    let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+
+    if let Some(dup) = names.iter().duplicates().next() {
+        bail!("column {} specified more than once", dup.as_str().quoted());
+    }
 
     let view = View {
         create_sql,
         expr: relation_expr,
-        column_names: desc.iter_names().map(|n| n.cloned()).collect(),
+        column_names: names,
         temporary,
         depends_on,
     };
@@ -1378,10 +1430,32 @@ fn kafka_sink_builder(
     };
     let config_options = kafka_util::extract_config(with_options)?;
 
+    let avro_key_fullname = match with_options.remove("avro_key_fullname") {
+        Some(Value::String(s)) => Some(s),
+        None => None,
+        Some(_) => bail!("avro_key_fullname must be a string"),
+    };
+
+    if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
+        bail!("Cannot specify avro_key_fullname without a corresponding KEY field");
+    }
+
+    let avro_value_fullname = match with_options.remove("avro_value_fullname") {
+        Some(Value::String(s)) => Some(s),
+        None => None,
+        Some(_) => bail!("avro_value_fullname must be a string"),
+    };
+
+    if key_desc_and_indices.is_some()
+        && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
+    {
+        bail!("Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names");
+    }
+
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
             csr_connector:
-                CsrConnector {
+                CsrConnectorAvro {
                     url,
                     seed,
                     with_options,
@@ -1390,17 +1464,20 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
+            let mut ccsr_with_options = normalize::options(&with_options);
+
             let schema_registry_url = url.parse::<Url>()?;
-            let ccsr_with_options = normalize::options(&with_options);
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 schema_registry_url.clone(),
                 &config_options,
-                ccsr_with_options,
+                &mut ccsr_with_options,
             )?;
 
             let include_transaction =
                 reuse_topic || consistency_topic.is_some() || consistency.is_some();
             let schema_generator = AvroSchemaGenerator::new(
+                avro_key_fullname.as_deref(),
+                avro_value_fullname.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
@@ -1411,6 +1488,8 @@ fn kafka_sink_builder(
             let key_schema = schema_generator
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
+
+            normalize::ensure_empty_options(&ccsr_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             KafkaSinkFormat::Avro {
                 schema_registry_url,
@@ -1483,6 +1562,30 @@ fn kafka_sink_builder(
         );
     }
 
+    let retention_duration = match with_options.remove("retention_ms") {
+        None => None,
+        Some(Value::Number(n)) => match n.parse::<i64>()? {
+            -1 => Some(None),
+            millis @ 0.. => Some(Some(Duration::from_millis(millis as u64))),
+            _ => bail!("retention ms for sink topics must be greater than or equal to -1"),
+        },
+        Some(_) => bail!("retention ms for sink topics must be an integer"),
+    };
+
+    let retention_bytes = match with_options.remove("retention_bytes") {
+        None => None,
+        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(_) => bail!("retention bytes for sink topics must be an integer"),
+    };
+
+    if retention_bytes.unwrap_or(0) < -1 {
+        bail!("retention bytes for sink topics must be greater than or equal to -1");
+    }
+    let retention = KafkaSinkConnectorRetention {
+        duration: retention_duration,
+        bytes: retention_bytes,
+    };
+
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
@@ -1502,6 +1605,7 @@ fn kafka_sink_builder(
         value_desc,
         reuse_topic,
         transitive_source_dependencies,
+        retention,
     }))
 }
 
@@ -1527,7 +1631,7 @@ fn get_kafka_sink_consistency_config(
         }) => match topic_format {
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connector:
-                    CsrConnector {
+                    CsrConnectorAvro {
                         url,
                         seed,
                         with_options,
@@ -1537,11 +1641,11 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = url.parse::<Url>()?;
-                let ccsr_with_options = normalize::options(&with_options);
+                let mut ccsr_with_options = normalize::options(&with_options);
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     config_options,
-                    ccsr_with_options,
+                    &mut ccsr_with_options,
                 )?;
 
                 Some((
@@ -1655,10 +1759,12 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        None | Some(Envelope::Debezium(sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
+        None | Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => {
+            SinkEnvelope::Debezium
+        }
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
-        Some(Envelope::Debezium(sql_parser::ast::DbzMode::Upsert)) => {
+        Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Upsert)) => {
             bail_unsupported!("UPSERT doesn't make sense for sinks")
         }
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
@@ -1677,17 +1783,18 @@ pub fn plan_create_sink(
     let key_indices = match &connector {
         CreateSinkConnector::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
-                let key = key
+                let key_columns = key
+                    .key_columns
                     .into_iter()
                     .map(normalize::column_name)
                     .collect::<Vec<_>>();
                 let mut uniq = HashSet::new();
-                for col in key.iter() {
+                for col in key_columns.iter() {
                     if !uniq.insert(col) {
                         bail!("Repeated column name in sink key: {}", col);
                     }
                 }
-                let indices = key
+                let indices = key_columns
                     .iter()
                     .map(|col| -> anyhow::Result<usize> {
                         let name_idx = desc
@@ -1704,8 +1811,15 @@ pub fn plan_create_sink(
                     desc.typ().keys.iter().any(|key_columns| {
                         key_columns.iter().all(|column| indices.contains(column))
                     });
-                if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                    return Err(invalid_upsert_key_err(&desc, &key));
+                if key.not_enforced && envelope == SinkEnvelope::Upsert {
+                    // TODO: We should report a warning notice back to the user via the pgwire
+                    // protocol. See https://github.com/MaterializeInc/materialize/issues/9333.
+                    warn!(
+                        "Verification of upsert key disabled for sink '{}' via 'NOT ENFORCED'. This is potentially dangerous and can lead to crashing materialize when the specified key is not in fact a unique key of the sinked view.",
+                        name
+                    );
+                } else if !is_valid_key && envelope == SinkEnvelope::Upsert {
+                    return Err(invalid_upsert_key_err(&desc, &key_columns));
                 }
                 Some(indices)
             } else {
@@ -1767,12 +1881,7 @@ pub fn plan_create_sink(
         }
     };
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE SINK: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
@@ -1804,7 +1913,7 @@ fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]
             .map(|key_columns| {
                 let columns_string = key_columns
                     .iter()
-                    .map(|col| desc.get_name(*col).expect("known to exist").as_str())
+                    .map(|col| desc.get_name(*col).as_str())
                     .join(", ");
                 format!("({})", columns_string)
             })
@@ -1824,7 +1933,7 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> anyhow::
         .map(|key_columns| {
             key_columns
                 .iter()
-                .map(|col| desc.get_name(*col).expect("known to exist").as_str())
+                .map(|col| desc.get_name(*col).as_str())
                 .join(", ")
         })
         .join(", ");
@@ -1934,7 +2043,7 @@ pub fn plan_create_index(
             let index_name_col_suffix = keys
                 .iter()
                 .map(|k| match k {
-                    expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
+                    mz_expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
                         Some(col_name) => col_name.to_string(),
                         None => format!("{}", i + 1),
                     },
@@ -1986,73 +2095,95 @@ pub fn plan_create_type(
     stmt: CreateTypeStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
-    let CreateTypeStatement {
-        name,
-        as_type,
-        with_options,
-    } = stmt;
-
-    let mut with_options = normalize::option_objects(&with_options);
-
-    let option_keys = match as_type {
-        CreateTypeAs::List => vec!["element_type"],
-        CreateTypeAs::Map => vec!["key_type", "value_type"],
-    };
-
-    let mut ids = vec![];
-    for key in option_keys {
-        let item_name = match with_options.remove(&key.to_string()) {
-            Some(SqlOption::DataType { data_type, .. }) => match data_type {
-                DataType::Other { name, typ_mod } => {
-                    if !typ_mod.is_empty() {
-                        bail!(
-                            "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
-                            {}, you must use the default type",
-                            as_type.to_string().quoted(),
-                            key,
-                            name
-                        )
-                    }
-                    name
+    let CreateTypeStatement { name, as_type, .. } = stmt;
+    fn ensure_valid_data_type(
+        scx: &StatementContext,
+        data_type: ResolvedDataType,
+        as_type: &CreateTypeAs<Raw>,
+        key: &str,
+    ) -> Result<(), anyhow::Error> {
+        let item = match data_type {
+            ResolvedDataType::Named {
+                name,
+                id,
+                modifiers,
+                print_id: _,
+            } => {
+                if !modifiers.is_empty() {
+                    bail!(
+                        "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
+                                {}, you must use the default type",
+                        as_type.to_string().quoted(),
+                        key,
+                        name
+                    );
                 }
-                d => bail!(
-                    "CREATE TYPE ... AS {}option {} can only use named data types, but \
-                    found unnamed data type {}. Use CREATE TYPE to create a named type first",
-                    as_type.to_string().quoted(),
-                    key,
-                    d.to_ast_string(),
-                ),
-            },
-            Some(_) => bail!("{} must be a data type", key),
-            None => bail!("{} parameter required", key),
+                scx.catalog.get_item_by_id(&id)
+            }
+            d => bail!(
+                "CREATE TYPE ... AS {}option {} can only use named data types, but \
+                        found unnamed data type {}. Use CREATE TYPE to create a named type first",
+                as_type.to_string().quoted(),
+                key,
+                d.to_ast_string(),
+            ),
         };
-        let item = scx
-            .catalog
-            .resolve_item(&normalize::unresolved_object_name(
-                item_name.name().clone(),
-            )?)?;
-        let item_id = item.id();
-        if scx
-            .catalog
-            .try_get_lossy_scalar_type_by_id(&item_id)
-            .is_none()
-        {
-            bail!(
+
+        match scx.catalog.get_item_by_id(&item.id()).type_details() {
+            None => bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
                 item.name(),
                 item.item_type()
-            );
+            ),
+            Some(CatalogTypeDetails {
+                typ: CatalogType::Char,
+                ..
+            }) if matches!(as_type, CreateTypeAs::List { .. }) => {
+                bail_unsupported!("char list")
+            }
+            _ => {}
         }
-        ids.push(item_id);
+
+        Ok(())
     }
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE TYPE: {}",
-            with_options.keys().join(",")
-        )
-    }
+    let mut ids = vec![];
+    let mut record_field_names = vec![];
+    match &as_type {
+        CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
+            let mut with_options = normalize::option_objects(&with_options);
+            let option_keys = match as_type {
+                CreateTypeAs::List { .. } => vec!["element_type"],
+                CreateTypeAs::Map { .. } => vec!["key_type", "value_type"],
+                _ => vec![],
+            };
+
+            for key in option_keys {
+                match with_options.remove(&key.to_string()) {
+                    Some(SqlOption::DataType { data_type, .. }) => {
+                        let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
+                        ensure_valid_data_type(scx, data_type, &as_type, key)?;
+                        ids.extend(dt_ids);
+                    }
+                    Some(_) => bail!("{} must be a data type", key),
+                    None => bail!("{} parameter required", key),
+                };
+            }
+
+            normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
+        }
+        CreateTypeAs::Record { ref column_defs } => {
+            for column_def in column_defs {
+                let key = ident(column_def.name.clone());
+                let (data_type, dt_ids) =
+                    resolve_names_data_type(scx, column_def.data_type.clone())?;
+                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
+                ids.extend(dt_ids);
+                record_field_names.push(ColumnName::from(key.clone()));
+            }
+        }
+    };
 
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     if scx.catalog.item_exists(&name) {
@@ -2060,25 +2191,32 @@ pub fn plan_create_type(
     }
 
     let inner = match as_type {
-        CreateTypeAs::List => TypeInner::List {
+        CreateTypeAs::List { .. } => CatalogType::List {
             element_id: *ids.get(0).expect("custom type to have element id"),
         },
-        CreateTypeAs::Map => {
+        CreateTypeAs::Map { .. } => {
             let key_id = *ids.get(0).expect("key");
-            match scx.catalog.try_get_lossy_scalar_type_by_id(&key_id) {
-                Some(ScalarType::String) => {}
-                Some(t) => bail!(
-                    "key_type must be text, got {}",
-                    scx.humanize_scalar_type(&t)
-                ),
+            let entry = scx.catalog.get_item_by_id(&key_id);
+            match entry.type_details() {
+                Some(CatalogTypeDetails {
+                    typ: CatalogType::String,
+                    ..
+                }) => {}
+                Some(_) => bail!("key_type must be text, got {}", entry.name()),
                 None => unreachable!("already guaranteed id correlates to a type"),
             }
 
-            TypeInner::Map {
+            CatalogType::Map {
                 key_id,
                 value_id: *ids.get(1).expect("value"),
             }
         }
+        CreateTypeAs::Record { .. } => CatalogType::Record {
+            fields: record_field_names
+                .into_iter()
+                .zip_eq(ids.iter().cloned())
+                .collect_vec(),
+        },
     };
 
     Ok(Plan::CreateType(CreateTypePlan {
@@ -2145,10 +2283,23 @@ pub fn describe_drop_database(
 
 pub fn plan_drop_database(
     scx: &StatementContext,
-    DropDatabaseStatement { name, if_exists }: DropDatabaseStatement,
+    DropDatabaseStatement {
+        name,
+        if_exists,
+        restrict,
+    }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
-        Ok(database) => database.name().into(),
+        Ok(database) => {
+            let name = String::from(database.name());
+            if restrict && database.has_schemas() {
+                bail!(
+                    "database '{}' cannot be dropped with RESTRICT while it contains schemas",
+                    database.name(),
+                );
+            }
+            name
+        }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
@@ -2215,8 +2366,7 @@ pub fn plan_drop_schema(
                     schema.name()
                 );
             }
-            let mut items = scx.catalog.list_items(schema.name());
-            if !cascade && items.next().is_some() {
+            if !cascade && schema.has_items() {
                 bail!(
                     "schema '{}' cannot be dropped without CASCADE while it contains objects",
                     schema.name(),
@@ -2363,7 +2513,7 @@ fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, an
         None => (),
         Some("off") => out.push(IndexOption::LogicalCompactionWindow(None)),
         Some(s) => {
-            let window = Some(repr::util::parse_duration(s)?);
+            let window = Some(mz_repr::util::parse_duration(s)?);
             out.push(IndexOption::LogicalCompactionWindow(window))
         }
     };

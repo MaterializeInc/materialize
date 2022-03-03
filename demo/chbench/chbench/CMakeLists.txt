@@ -3,6 +3,9 @@ project(chbenchmark)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
+# Work around https://gitlab.kitware.com/cmake/cmake/-/issues/17223.
+set(PostgreSQL_TYPE_INCLUDE_DIR /usr/include/postgresql/)
+
 find_package(Threads REQUIRED)
 find_package(ODBC REQUIRED)
 find_package(PostgreSQL REQUIRED)

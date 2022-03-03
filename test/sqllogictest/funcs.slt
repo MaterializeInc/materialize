@@ -106,30 +106,26 @@ SELECT date_trunc('millennium', TIMESTAMP '2000-11-26 15:56:46.241150')
 ----
 1001-01-01 00:00:00
 
-# TODO: PostgreSQL displays timestamps with 0 or negative year as (1 - year) BC, while we do not.
 # TODO: Currently we do not parse BC/AD and it's erroneously considered a named time zone, so INTERVAL is used.
-# This test should return:  0011-01-01 00:00:00 BC
 # Expects the decade to be rounded down for BC.
 query T
 SELECT date_trunc('decade', TIMESTAMP '0001-01-01 00:00:00.000000' - INTERVAL '2'YEAR)
 ----
--0010-01-01 00:00:00
+0011-01-01 00:00:00 BC
 
-# This test should return:  0100-01-01 00:00:00 BC
 # Expects the century to be rounded down for BC.
 query T
 SELECT date_trunc('century', TIMESTAMP '0001-01-01 00:00:00.000000' - INTERVAL '1'SECOND)
 ----
--0099-01-01 00:00:00
+0100-01-01 00:00:00 BC
 
-# This test should return:  1000-01-01 00:00:00 BC
 # Expects the millennium to be rounded down for BC.
 query T
 SELECT date_trunc('millennium', TIMESTAMP '0001-01-01 00:00:00.000000' - INTERVAL '1'SECOND)
 ----
--0999-01-01 00:00:00
+1000-01-01 00:00:00 BC
 
-query error unknown units 'bad'
+query error unit 'bad' not recognized
 SELECT date_trunc('bad', TIMESTAMP '2019-11-26 15:56:46.241150')
 
 query T
@@ -142,7 +138,7 @@ SELECT date_trunc('day', TIMESTAMPTZ '1999-12-31 16:16:01+02:30')
 ----
 1999-12-31 00:00:00+00
 
-query error unknown units 'bad'
+query error unit 'bad' not recognized
 SELECT date_trunc('bad', TIMESTAMPTZ '1999-12-31 16:16:01+02:30')
 
 statement ok
@@ -164,7 +160,7 @@ SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc
 statement ok
 INSERT INTO date_trunc_fields VALUES ('bad')
 
-query error unknown units 'bad'
+query error unit 'bad' not recognized
 SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc_fields
 
 mode standard
@@ -377,6 +373,64 @@ query T
 SELECT coalesce(1, 1 / 0, a) FROM v
 ----
 1
+
+# Test greatest.
+query I
+SELECT greatest(1)
+----
+1
+
+query I
+SELECT greatest(1, 2)
+----
+2
+
+query I
+SELECT greatest(3, 1)
+----
+3
+
+query I
+SELECT greatest(NULL)
+----
+NULL
+
+query I
+SELECT greatest(1, NULL, -1)
+----
+1
+
+query error greatest types integer and text cannot be matched
+SELECT greatest(1::int, 2::text)
+
+# Test least.
+query I
+SELECT least(1)
+----
+1
+
+query I
+SELECT least(1, 2)
+----
+1
+
+query I
+SELECT least(3, 1)
+----
+1
+
+query I
+SELECT least(NULL)
+----
+NULL
+
+query I
+SELECT least(1, NULL, -1)
+----
+-1
+
+query error least types integer and text cannot be matched
+SELECT least(1::int, 2::text)
 
 # Tests issue #2355, that type information for Maps are correctly constructed
 # before being passed to expressions for optimization.
@@ -771,6 +825,36 @@ SELECT tanh(NULL)
 NULL
 
 query R
+SELECT asin(NULL)
+----
+NULL
+
+query R
+SELECT asinh(NULL)
+----
+NULL
+
+query R
+SELECT acos(NULL)
+----
+NULL
+
+query R
+SELECT acosh(NULL)
+----
+NULL
+
+query R
+SELECT atan(NULL)
+----
+NULL
+
+query R
+SELECT atanh(NULL)
+----
+NULL
+
+query R
 SELECT cot(NULL)
 ----
 NULL
@@ -806,6 +890,36 @@ SELECT tanh('NaN'::double)
 NaN
 
 query R
+SELECT asin('NaN'::double)
+----
+NaN
+
+query R
+SELECT asinh('NaN'::double)
+----
+NaN
+
+query R
+SELECT acos('NaN'::double)
+----
+NaN
+
+query R
+SELECT acosh('NaN'::double)
+----
+NaN
+
+query R
+SELECT atan('NaN'::double)
+----
+NaN
+
+query R
+SELECT atanh('NaN'::double)
+----
+NaN
+
+query R
 SELECT cot('NaN'::double)
 ----
 NaN
@@ -837,6 +951,34 @@ SELECT tan(0::double)
 
 query R
 SELECT tanh(0::double)
+----
+0.000
+
+query R
+SELECT asin(0::double)
+----
+0.000
+
+query R
+SELECT asinh(0::double)
+----
+0.000
+
+query R
+SELECT acos(0::double)
+----
+1.571
+
+query error function acosh is defined for numbers greater than or equal to 1
+SELECT acosh(0::double)
+
+query R
+SELECT atan(0::double)
+----
+0.000
+
+query R
+SELECT atanh(0::double)
 ----
 0.000
 
@@ -881,6 +1023,36 @@ SELECT tanh(1::double)
 0.762
 
 query R
+SELECT asin(1::double)
+----
+1.571
+
+query R
+SELECT asinh(1::double)
+----
+0.881
+
+query R
+SELECT acos(1::double)
+----
+0.000
+
+query R
+SELECT acosh(1::double)
+----
+0.000
+
+query R
+SELECT atan(1::double)
+----
+0.785
+
+query R
+SELECT atanh(1::double)
+----
+inf
+
+query R
 SELECT cot(1.01::double)
 ----
 0.628
@@ -888,16 +1060,32 @@ SELECT cot(1.01::double)
 query error function sin is only defined for finite arguments
 SELECT sin('inf'::double)
 
+query error function asin is defined for numbers between -1 and 1 inclusive
+SELECT asin('inf'::double)
+
 query R
 SELECT sinh('inf'::double)
+----
+inf
+
+query R
+SELECT asinh('inf'::double)
 ----
 inf
 
 query error function cos is only defined for finite arguments
 SELECT cos('inf'::double)
 
+query error function acos is defined for numbers between -1 and 1 inclusive
+SELECT acos('inf'::double)
+
 query R
 SELECT cosh('inf'::double)
+----
+inf
+
+query R
+SELECT acosh('inf'::double)
 ----
 inf
 
@@ -905,9 +1093,17 @@ query error function tan is only defined for finite arguments
 SELECT tan('inf'::double)
 
 query R
+SELECT atan('inf'::double)
+----
+1.571
+
+query R
 SELECT tanh('inf'::double)
 ----
 1.000
+
+query error function atanh is defined for numbers between -1 and 1 inclusive
+SELECT atanh('inf'::double)
 
 query error function cot is only defined for finite arguments
 SELECT cot('inf'::double)
@@ -915,26 +1111,48 @@ SELECT cot('inf'::double)
 query error function sin is only defined for finite arguments
 SELECT sin('-inf'::double)
 
+query error function asin is defined for numbers between -1 and 1 inclusive
+SELECT asin('-inf'::double)
+
 query R
 SELECT sinh('-inf'::double)
+----
+-inf
+
+query R
+SELECT asinh('-inf'::double)
 ----
 -inf
 
 query error function cos is only defined for finite arguments
 SELECT cos('-inf'::double)
 
+query error function acos is defined for numbers between -1 and 1 inclusive
+SELECT acos('-inf'::double)
+
 query R
 SELECT cosh('-inf'::double)
 ----
 inf
 
+query error function acosh is defined for numbers greater than or equal to 1
+SELECT acosh('-inf'::double)
+
 query error function tan is only defined for finite arguments
 SELECT tan('-inf'::double)
+
+query R
+SELECT atan('-inf'::double)
+----
+-1.571
 
 query R
 SELECT tanh('-inf'::double)
 ----
 -1.000
+
+query error atanh is defined for numbers between -1 and 1 inclusive
+SELECT atanh('-inf'::double)
 
 # Use the more reasonable number representation, as the standard mode
 # causes all sorts of weird representation issues with exp and log:
@@ -1115,5 +1333,10 @@ SELECT mz_internal.mz_error_if_null(NULL, 'mz_errored')
 
 query I
 SELECT mz_internal.mz_error_if_null(1, '')
+----
+1
+
+query I
+SELECT pg_backend_pid()
 ----
 1

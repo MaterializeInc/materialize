@@ -25,16 +25,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lazy_static::lazy_static;
-use postgres_types::{Kind, Type};
 
-use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
-use expr::GlobalId;
-use repr::{RelationDesc, ScalarType};
+use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use mz_expr::GlobalId;
+use mz_repr::{RelationDesc, ScalarType};
+use mz_sql::catalog::{CatalogType, CatalogTypeDetails};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
 pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
+pub const INFORMATION_SCHEMA: &str = "information_schema";
 
 pub enum Builtin {
     Log(&'static BuiltinLog),
@@ -50,7 +51,7 @@ impl Builtin {
             Builtin::Log(log) => log.name,
             Builtin::Table(table) => table.name,
             Builtin::View(view) => view.name,
-            Builtin::Type(typ) => typ.name(),
+            Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
         }
     }
@@ -103,30 +104,18 @@ pub struct BuiltinView {
 }
 
 pub struct BuiltinType {
+    pub name: &'static str,
     pub schema: &'static str,
     pub id: GlobalId,
-    pgtype: &'static Type,
-}
-
-impl BuiltinType {
-    pub fn name(&self) -> &str {
-        self.pgtype.name()
-    }
-
-    pub fn oid(&self) -> u32 {
-        self.pgtype.oid()
-    }
-
-    pub fn kind(&self) -> &Kind {
-        self.pgtype.kind()
-    }
+    pub oid: u32,
+    pub details: CatalogTypeDetails,
 }
 
 pub struct BuiltinFunc {
     pub schema: &'static str,
     pub name: &'static str,
     pub id: GlobalId,
-    pub inner: &'static sql::func::Func,
+    pub inner: &'static mz_sql::func::Func,
 }
 
 pub struct BuiltinRole {
@@ -166,305 +155,670 @@ pub struct BuiltinRole {
 // Builtin types cannot be created, updated, or deleted. Their OIDs
 // are static, unlike other objects, to match the type OIDs defined by Postgres.
 pub const TYPE_BOOL: BuiltinType = BuiltinType {
+    name: "bool",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1000),
-    pgtype: &postgres_types::Type::BOOL,
+    oid: 16,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Bool,
+        array_id: Some(GlobalId::System(1008)),
+    },
 };
 
 pub const TYPE_BYTEA: BuiltinType = BuiltinType {
+    name: "bytea",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1001),
-    pgtype: &postgres_types::Type::BYTEA,
+    oid: 17,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Bytes,
+        array_id: Some(GlobalId::System(1009)),
+    },
 };
 
 pub const TYPE_INT8: BuiltinType = BuiltinType {
+    name: "int8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1002),
-    pgtype: &postgres_types::Type::INT8,
+    oid: 20,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int64,
+        array_id: Some(GlobalId::System(1012)),
+    },
 };
 
 pub const TYPE_INT4: BuiltinType = BuiltinType {
+    name: "int4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1003),
-    pgtype: &postgres_types::Type::INT4,
+    oid: 23,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int32,
+        array_id: Some(GlobalId::System(1010)),
+    },
 };
 
 pub const TYPE_TEXT: BuiltinType = BuiltinType {
+    name: "text",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1004),
-    pgtype: &postgres_types::Type::TEXT,
+    oid: 25,
+    details: CatalogTypeDetails {
+        typ: CatalogType::String,
+        array_id: Some(GlobalId::System(1011)),
+    },
 };
 
 pub const TYPE_OID: BuiltinType = BuiltinType {
+    name: "oid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1005),
-    pgtype: &postgres_types::Type::OID,
+    oid: 26,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Oid,
+        array_id: Some(GlobalId::System(1015)),
+    },
 };
 
 pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
+    name: "float4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1006),
-    pgtype: &postgres_types::Type::FLOAT4,
+    oid: 700,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Float32,
+        array_id: Some(GlobalId::System(1013)),
+    },
 };
 
 pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
+    name: "float8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1007),
-    pgtype: &postgres_types::Type::FLOAT8,
+    oid: 701,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Float64,
+        array_id: Some(GlobalId::System(1014)),
+    },
 };
 
 pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
+    name: "_bool",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1008),
-    pgtype: &postgres_types::Type::BOOL_ARRAY,
+    oid: 1000,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1000),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
+    name: "_bytea",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1009),
-    pgtype: &postgres_types::Type::BYTEA_ARRAY,
+    oid: 1001,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1001),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
+    name: "_int4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1010),
-    pgtype: &postgres_types::Type::INT4_ARRAY,
+    oid: 1007,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1003),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
+    name: "_text",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1011),
-    pgtype: &postgres_types::Type::TEXT_ARRAY,
+    oid: 1009,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1004),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
+    name: "_int8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1012),
-    pgtype: &postgres_types::Type::INT8_ARRAY,
+    oid: 1016,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1002),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
+    name: "_float4",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1013),
-    pgtype: &postgres_types::Type::FLOAT4_ARRAY,
+    oid: 1021,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1006),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
+    name: "_float8",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1014),
-    pgtype: &postgres_types::Type::FLOAT8_ARRAY,
+    oid: 1022,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1007),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
+    name: "_oid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1015),
-    pgtype: &postgres_types::Type::OID_ARRAY,
+    oid: 1028,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1005),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_DATE: BuiltinType = BuiltinType {
+    name: "date",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1016),
-    pgtype: &postgres_types::Type::DATE,
+    oid: 1082,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Date,
+        array_id: Some(GlobalId::System(1020)),
+    },
 };
 
 pub const TYPE_TIME: BuiltinType = BuiltinType {
+    name: "time",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1017),
-    pgtype: &postgres_types::Type::TIME,
+    oid: 1083,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Time,
+        array_id: Some(GlobalId::System(1021)),
+    },
 };
 
 pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
+    name: "timestamp",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1018),
-    pgtype: &postgres_types::Type::TIMESTAMP,
+    oid: 1114,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Timestamp,
+        array_id: Some(GlobalId::System(1019)),
+    },
 };
 
 pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
+    name: "_timestamp",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1019),
-    pgtype: &postgres_types::Type::TIMESTAMP_ARRAY,
+    oid: 1115,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1018),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
+    name: "_date",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1020),
-    pgtype: &postgres_types::Type::DATE_ARRAY,
+    oid: 1182,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1016),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
+    name: "_time",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1021),
-    pgtype: &postgres_types::Type::TIME_ARRAY,
+    oid: 1183,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1017),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
+    name: "timestamptz",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1022),
-    pgtype: &postgres_types::Type::TIMESTAMPTZ,
+    oid: 1184,
+    details: CatalogTypeDetails {
+        typ: CatalogType::TimestampTz,
+        array_id: Some(GlobalId::System(1023)),
+    },
 };
 
 pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
+    name: "_timestamptz",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1023),
-    pgtype: &postgres_types::Type::TIMESTAMPTZ_ARRAY,
+    oid: 1185,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1022),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
+    name: "interval",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1024),
-    pgtype: &postgres_types::Type::INTERVAL,
+    oid: 1186,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Interval,
+        array_id: Some(GlobalId::System(1025)),
+    },
 };
 
 pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
+    name: "_interval",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1025),
-    pgtype: &postgres_types::Type::INTERVAL_ARRAY,
+    oid: 1187,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1024),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
+    name: "numeric",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1026),
-    pgtype: &postgres_types::Type::NUMERIC,
+    oid: 1700,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Numeric,
+        array_id: Some(GlobalId::System(1027)),
+    },
 };
 
 pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
+    name: "_numeric",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1027),
-    pgtype: &postgres_types::Type::NUMERIC_ARRAY,
+    oid: 1231,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1026),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_RECORD: BuiltinType = BuiltinType {
+    name: "record",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1028),
-    pgtype: &postgres_types::Type::RECORD,
+    oid: 2249,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: Some(GlobalId::System(1029)),
+    },
 };
 
 pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
+    name: "_record",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1029),
-    pgtype: &postgres_types::Type::RECORD_ARRAY,
+    oid: 2287,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1028),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_UUID: BuiltinType = BuiltinType {
+    name: "uuid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1030),
-    pgtype: &postgres_types::Type::UUID,
+    oid: 2950,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Uuid,
+        array_id: Some(GlobalId::System(1031)),
+    },
 };
 
 pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
+    name: "_uuid",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1031),
-    pgtype: &postgres_types::Type::UUID_ARRAY,
+    oid: 2951,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1030),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_JSONB: BuiltinType = BuiltinType {
+    name: "jsonb",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1032),
-    pgtype: &postgres_types::Type::JSONB,
+    oid: 3802,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Jsonb,
+        array_id: Some(GlobalId::System(1033)),
+    },
 };
 
 pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
+    name: "_jsonb",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1033),
-    pgtype: &postgres_types::Type::JSONB_ARRAY,
+    oid: 3807,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1032),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANY: BuiltinType = BuiltinType {
+    name: "any",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1034),
-    pgtype: &postgres_types::Type::ANY,
+    oid: 2276,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANYARRAY: BuiltinType = BuiltinType {
+    name: "anyarray",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1035),
-    pgtype: &postgres_types::Type::ANYARRAY,
+    oid: 2277,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANYELEMENT: BuiltinType = BuiltinType {
+    name: "anyelement",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1036),
-    pgtype: &postgres_types::Type::ANYELEMENT,
+    oid: 2283,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
+    name: "anynonarray",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1037),
-    pgtype: &postgres_types::Type::ANYNONARRAY,
+    oid: 2776,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
 };
 
 pub const TYPE_CHAR: BuiltinType = BuiltinType {
+    name: "char",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1038),
-    pgtype: &postgres_types::Type::CHAR,
+    oid: 18,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Char1,
+        array_id: Some(GlobalId::System(1043)),
+    },
 };
 
 pub const TYPE_VARCHAR: BuiltinType = BuiltinType {
+    name: "varchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1039),
-    pgtype: &postgres_types::Type::VARCHAR,
+    oid: 1043,
+    details: CatalogTypeDetails {
+        typ: CatalogType::VarChar,
+        array_id: Some(GlobalId::System(1044)),
+    },
 };
 
 pub const TYPE_INT2: BuiltinType = BuiltinType {
+    name: "int2",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1040),
-    pgtype: &postgres_types::Type::INT2,
+    oid: 21,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int16,
+        array_id: Some(GlobalId::System(1041)),
+    },
 };
 
 pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
+    name: "_int2",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1041),
-    pgtype: &postgres_types::Type::INT2_ARRAY,
+    oid: 1005,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1040),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
+    name: "bpchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1042),
-    pgtype: &postgres_types::Type::BPCHAR,
+    oid: 1042,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Char,
+        array_id: Some(GlobalId::System(1045)),
+    },
 };
 
 pub const TYPE_CHAR_ARRAY: BuiltinType = BuiltinType {
+    name: "_char",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1043),
-    pgtype: &postgres_types::Type::CHAR_ARRAY,
+    oid: 1002,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1038),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_VARCHAR_ARRAY: BuiltinType = BuiltinType {
+    name: "_varchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1044),
-    pgtype: &postgres_types::Type::VARCHAR_ARRAY,
+    oid: 1015,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1039),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
+    name: "_bpchar",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1045),
-    pgtype: &postgres_types::Type::BPCHAR_ARRAY,
+    oid: 1014,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1042),
+        },
+        array_id: None,
+    },
 };
 
 pub const TYPE_REGPROC: BuiltinType = BuiltinType {
+    name: "regproc",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1046),
-    pgtype: &postgres_types::Type::REGPROC,
+    oid: 24,
+    details: CatalogTypeDetails {
+        typ: CatalogType::RegProc,
+        array_id: Some(GlobalId::System(1047)),
+    },
 };
 
 pub const TYPE_REGPROC_ARRAY: BuiltinType = BuiltinType {
+    name: "_regproc",
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1047),
-    pgtype: &postgres_types::Type::REGPROC_ARRAY,
+    oid: 1008,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1046),
+        },
+        array_id: None,
+    },
 };
 
-lazy_static! {
-    pub static ref TYPE_LIST: BuiltinType = BuiltinType {
-        schema: PG_CATALOG_SCHEMA,
-        id: GlobalId::System(1998),
-        pgtype: &pgrepr::LIST,
-    };
-    pub static ref TYPE_MAP: BuiltinType = BuiltinType {
-        schema: PG_CATALOG_SCHEMA,
-        id: GlobalId::System(1999),
-        pgtype: &pgrepr::MAP,
-    };
-}
+pub const TYPE_REGTYPE: BuiltinType = BuiltinType {
+    name: "regtype",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1048),
+    oid: 2206,
+    details: CatalogTypeDetails {
+        typ: CatalogType::RegType,
+        array_id: Some(GlobalId::System(1049)),
+    },
+};
+
+pub const TYPE_REGTYPE_ARRAY: BuiltinType = BuiltinType {
+    name: "_regtype",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1049),
+    oid: 2211,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1048),
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_REGCLASS: BuiltinType = BuiltinType {
+    name: "regclass",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1050),
+    oid: 2205,
+    details: CatalogTypeDetails {
+        typ: CatalogType::RegClass,
+        array_id: Some(GlobalId::System(1051)),
+    },
+};
+
+pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
+    name: "_regclass",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1051),
+    oid: 2210,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1050),
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_INT2_VECTOR: BuiltinType = BuiltinType {
+    name: "int2vector",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1052),
+    oid: 22,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int2Vector,
+        array_id: Some(GlobalId::System(1053)),
+    },
+};
+
+pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType = BuiltinType {
+    name: "_int2vector",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1053),
+    oid: 1006,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1052),
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_LIST: BuiltinType = BuiltinType {
+    name: "list",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1998),
+    oid: mz_pgrepr::oid::TYPE_LIST_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
+pub const TYPE_MAP: BuiltinType = BuiltinType {
+    name: "map",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1999),
+    oid: mz_pgrepr::oid::TYPE_MAP_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
 
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
@@ -594,22 +948,6 @@ pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3037),
 };
 
-pub const MZ_KAFKA_CONSUMER_PARTITIONS: BuiltinLog = BuiltinLog {
-    name: "mz_kafka_consumer_partitions",
-    schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
-    id: GlobalId::System(3030),
-    index_id: GlobalId::System(3031),
-};
-
-pub const MZ_KAFKA_BROKER_RTT: BuiltinLog = BuiltinLog {
-    name: "mz_kafka_broker_rtt",
-    schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
-    id: GlobalId::System(3032),
-    index_id: GlobalId::System(3033),
-};
-
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_reachability_internal",
     schema: MZ_CATALOG_SCHEMA,
@@ -626,16 +964,24 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3039),
 };
 
-// Next id BuiltinLog: 3040
+pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_source_statistics",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
+    id: GlobalId::System(3040),
+    index_id: GlobalId::System(3041),
+};
+
+// Next id BuiltinLog: 3042
 
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_keys",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("global_id", ScalarType::String.nullable(false))
-            .with_named_column("column", ScalarType::Int64.nullable(false))
-            .with_named_column("key_group", ScalarType::Int64.nullable(false)),
+            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("column", ScalarType::Int64.nullable(false))
+            .with_column("key_group", ScalarType::Int64.nullable(false)),
         id: GlobalId::System(4001),
         index_id: GlobalId::System(4002),
         persistent: false,
@@ -644,11 +990,11 @@ lazy_static! {
         name: "mz_view_foreign_keys",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("child_id", ScalarType::String.nullable(false))
-            .with_named_column("child_column", ScalarType::Int64.nullable(false))
-            .with_named_column("parent_id", ScalarType::String.nullable(false))
-            .with_named_column("parent_column", ScalarType::Int64.nullable(false))
-            .with_named_column("key_group", ScalarType::Int64.nullable(false))
+            .with_column("child_id", ScalarType::String.nullable(false))
+            .with_column("child_column", ScalarType::Int64.nullable(false))
+            .with_column("parent_id", ScalarType::String.nullable(false))
+            .with_column("parent_column", ScalarType::Int64.nullable(false))
+            .with_column("key_group", ScalarType::Int64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
         id: GlobalId::System(4003),
         index_id: GlobalId::System(4004),
@@ -658,9 +1004,9 @@ lazy_static! {
         name: "mz_kafka_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("sink_id", ScalarType::String.nullable(false))
-            .with_named_column("topic", ScalarType::String.nullable(false))
-            .with_named_column("consistency_topic", ScalarType::String.nullable(true))
+            .with_column("sink_id", ScalarType::String.nullable(false))
+            .with_column("topic", ScalarType::String.nullable(false))
+            .with_column("consistency_topic", ScalarType::String.nullable(true))
             .with_key(vec![0]),
         id: GlobalId::System(4005),
         index_id: GlobalId::System(4006),
@@ -670,8 +1016,8 @@ lazy_static! {
         name: "mz_avro_ocf_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("sink_id", ScalarType::String.nullable(false))
-            .with_named_column("path", ScalarType::Bytes.nullable(false))
+            .with_column("sink_id", ScalarType::String.nullable(false))
+            .with_column("path", ScalarType::Bytes.nullable(false))
             .with_key(vec![0]),
         id: GlobalId::System(4007),
         index_id: GlobalId::System(4008),
@@ -681,9 +1027,9 @@ lazy_static! {
         name: "mz_databases",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::Int64.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4009),
         index_id: GlobalId::System(4010),
         persistent: false,
@@ -692,10 +1038,10 @@ lazy_static! {
         name: "mz_schemas",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::Int64.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("database_id", ScalarType::Int64.nullable(true))
-            .with_named_column("name", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("database_id", ScalarType::Int64.nullable(true))
+            .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4011),
         index_id: GlobalId::System(4012),
         persistent: false,
@@ -704,12 +1050,13 @@ lazy_static! {
         name: "mz_columns",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("position", ScalarType::Int64.nullable(false))
-            .with_named_column("nullable", ScalarType::Bool.nullable(false))
-            .with_named_column("type", ScalarType::String.nullable(false))
-            .with_named_column("default", ScalarType::String.nullable(true)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("position", ScalarType::Int64.nullable(false))
+            .with_column("nullable", ScalarType::Bool.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false))
+            .with_column("default", ScalarType::String.nullable(true))
+            .with_column("type_oid", ScalarType::Oid.nullable(false)),
         id: GlobalId::System(4013),
         index_id: GlobalId::System(4014),
         persistent: false,
@@ -718,12 +1065,12 @@ lazy_static! {
         name: "mz_indexes",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("on_id", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false))
-            .with_named_column("enabled", ScalarType::Bool.nullable(false)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("on_id", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false))
+            .with_column("enabled", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4015),
         index_id: GlobalId::System(4016),
         persistent: false,
@@ -732,11 +1079,11 @@ lazy_static! {
         name: "mz_index_columns",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("index_id", ScalarType::String.nullable(false))
-            .with_named_column("index_position", ScalarType::Int64.nullable(false))
-            .with_named_column("on_position", ScalarType::Int64.nullable(true))
-            .with_named_column("on_expression", ScalarType::String.nullable(true))
-            .with_named_column("nullable", ScalarType::Bool.nullable(false)),
+            .with_column("index_id", ScalarType::String.nullable(false))
+            .with_column("index_position", ScalarType::Int64.nullable(false))
+            .with_column("on_position", ScalarType::Int64.nullable(true))
+            .with_column("on_expression", ScalarType::String.nullable(true))
+            .with_column("nullable", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4017),
         index_id: GlobalId::System(4018),
         persistent: false,
@@ -745,11 +1092,11 @@ lazy_static! {
         name: "mz_tables",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("persisted_name", ScalarType::String.nullable(true)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("persisted_name", ScalarType::String.nullable(true)),
         id: GlobalId::System(4019),
         index_id: GlobalId::System(4020),
         persistent: false,
@@ -758,12 +1105,13 @@ lazy_static! {
         name: "mz_sources",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("connector_type", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("connector_type", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false))
+            .with_column("persisted_name", ScalarType::String.nullable(true)),
         id: GlobalId::System(4021),
         index_id: GlobalId::System(4022),
         persistent: false,
@@ -772,12 +1120,12 @@ lazy_static! {
         name: "mz_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("connector_type", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("connector_type", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4023),
         index_id: GlobalId::System(4024),
         persistent: false,
@@ -786,11 +1134,11 @@ lazy_static! {
         name: "mz_views",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4025),
         index_id: GlobalId::System(4026),
         persistent: false,
@@ -799,10 +1147,10 @@ lazy_static! {
         name: "mz_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4027),
         index_id: GlobalId::System(4028),
         persistent: false,
@@ -811,8 +1159,8 @@ lazy_static! {
         name: "mz_array_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("type_id", ScalarType::String.nullable(false))
-            .with_named_column("element_id", ScalarType::String.nullable(false)),
+            .with_column("type_id", ScalarType::String.nullable(false))
+            .with_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4029),
             index_id: GlobalId::System(4030),
             persistent: false,
@@ -821,7 +1169,7 @@ lazy_static! {
         name: "mz_base_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("type_id", ScalarType::String.nullable(false)),
+            .with_column("type_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4031),
             index_id: GlobalId::System(4032),
             persistent: false,
@@ -830,8 +1178,8 @@ lazy_static! {
         name: "mz_list_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("type_id", ScalarType::String.nullable(false))
-            .with_named_column("element_id", ScalarType::String.nullable(false)),
+            .with_column("type_id", ScalarType::String.nullable(false))
+            .with_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4033),
             index_id: GlobalId::System(4034),
             persistent: false,
@@ -840,9 +1188,9 @@ lazy_static! {
         name: "mz_map_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("type_id", ScalarType::String.nullable(false))
-            .with_named_column("key_id", ScalarType::String.nullable(false))
-            .with_named_column("value_id", ScalarType::String.nullable(false)),
+            .with_column("type_id", ScalarType::String.nullable(false))
+            .with_column("key_id", ScalarType::String.nullable(false))
+            .with_column("value_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4035),
             index_id: GlobalId::System(4036),
             persistent: false,
@@ -851,9 +1199,9 @@ lazy_static! {
         name: "mz_roles",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::Int64.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4037),
         index_id: GlobalId::System(4038),
         persistent: false,
@@ -862,7 +1210,7 @@ lazy_static! {
         name: "mz_pseudo_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("type_id", ScalarType::String.nullable(false)),
+            .with_column("type_id", ScalarType::String.nullable(false)),
         id: GlobalId::System(4039),
         index_id: GlobalId::System(4040),
         persistent: false,
@@ -871,12 +1219,14 @@ lazy_static! {
         name: "mz_functions",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_named_column("id", ScalarType::String.nullable(false))
-            .with_named_column("oid", ScalarType::Oid.nullable(false))
-            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("arg_ids", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
-            .with_named_column("variadic_id", ScalarType::String.nullable(true)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("arg_ids", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
+            .with_column("variadic_id", ScalarType::String.nullable(true))
+            .with_column("ret_id", ScalarType::String.nullable(true))
+            .with_column("ret_set", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4041),
         index_id: GlobalId::System(4042),
         persistent: false,
@@ -885,17 +1235,17 @@ lazy_static! {
         name: "mz_metrics",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-                .with_named_column("metric", ScalarType::String.nullable(false))
-                .with_named_column("time", ScalarType::TimestampTz.nullable(false))
-                .with_named_column("labels", ScalarType::Jsonb.nullable(false))
-                .with_named_column("value", ScalarType::Float64.nullable(false))
+                .with_column("metric", ScalarType::String.nullable(false))
+                .with_column("time", ScalarType::TimestampTz.nullable(false))
+                .with_column("labels", ScalarType::Jsonb.nullable(false))
+                .with_column("value", ScalarType::Float64.nullable(false))
                 .with_key(vec![0, 1, 2]),
         // NB: Until the end of our persisted system tables experiment, give
         // persist team a heads up if you change this id, please!
         id: GlobalId::System(4043),
         index_id: GlobalId::System(4044),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable_persistent_system_tables_test) also has to be true
+        // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
         persistent: true,
     };
@@ -903,9 +1253,9 @@ lazy_static! {
         name: "mz_metrics_meta",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-                .with_named_column("metric", ScalarType::String.nullable(false))
-                .with_named_column("type", ScalarType::String.nullable(false))
-                .with_named_column("help", ScalarType::String.nullable(false))
+                .with_column("metric", ScalarType::String.nullable(false))
+                .with_column("type", ScalarType::String.nullable(false))
+                .with_column("help", ScalarType::String.nullable(false))
                 .with_key(vec![0]),
         id: GlobalId::System(4045),
         index_id: GlobalId::System(4046),
@@ -915,18 +1265,18 @@ lazy_static! {
         name: "mz_metric_histograms",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-                .with_named_column("metric", ScalarType::String.nullable(false))
-                .with_named_column("time", ScalarType::Timestamp.nullable(false))
-                .with_named_column("labels", ScalarType::Jsonb.nullable(false))
-                .with_named_column("bound", ScalarType::Float64.nullable(false))
-                .with_named_column("count", ScalarType::Int64.nullable(false))
+                .with_column("metric", ScalarType::String.nullable(false))
+                .with_column("time", ScalarType::Timestamp.nullable(false))
+                .with_column("labels", ScalarType::Jsonb.nullable(false))
+                .with_column("bound", ScalarType::Float64.nullable(false))
+                .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
         // NB: Until the end of our persisted system tables experiment, give
         // persist team a heads up if you change this id, please!
         id: GlobalId::System(4047),
         index_id: GlobalId::System(4048),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable_persistent_system_tables_test) also has to be true
+        // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
         persistent: true,
     };
@@ -1212,6 +1562,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
     NULL::pg_catalog.oid AS relowner,
+    0::pg_catalog.oid AS relam,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
         WHEN mz_objects.type = 'source' THEN 'r'
@@ -1244,10 +1595,14 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     name: "pg_index",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_index AS SELECT
-    mz_indexes.oid as indexrelid,
-    mz_objects.oid as indrelid
+    mz_indexes.oid AS indexrelid,
+    mz_objects.oid AS indrelid,
+    false::pg_catalog.bool AS indisprimary,
+    pg_catalog.array_agg(mz_index_columns.on_position ORDER BY mz_index_columns.index_position) AS indkey
 FROM mz_catalog.mz_indexes
-JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id",
+JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
+JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
+GROUP BY mz_indexes.oid, mz_objects.oid",
     id: GlobalId::System(5017),
     needs_logs: false,
 };
@@ -1320,17 +1675,17 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_attribute AS SELECT
     mz_objects.oid as attrelid,
     mz_columns.name as attname,
-    mz_types.oid AS atttypid,
+    mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
     position as attnum,
     -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
+    ''::pg_catalog.\"char\" as attidentity,
     FALSE as attisdropped
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
-JOIN mz_catalog.mz_types ON mz_columns.type = mz_types.name
-JOIN pg_catalog.pg_type ON pg_type.oid = mz_types.oid",
+JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
     id: GlobalId::System(5020),
@@ -1341,9 +1696,12 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_proc AS SELECT
-    oid,
-    name AS proname
-FROM mz_catalog.mz_functions",
+    mz_functions.oid,
+    mz_functions.name AS proname,
+    mz_schemas.oid AS pronamespace,
+    NULL::pg_catalog.text AS proargdefaults
+FROM mz_catalog.mz_functions
+JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id",
     id: GlobalId::System(5021),
     needs_logs: false,
 };
@@ -1394,9 +1752,10 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_settings AS SELECT
-    NULL::pg_catalog.text AS name,
-    NULL::pg_catalog.text AS setting
-    WHERE false",
+    *
+FROM (VALUES
+    ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
+) AS _ (name, setting)",
     id: GlobalId::System(5026),
     needs_logs: false,
 };
@@ -1542,7 +1901,136 @@ GROUP BY operator, worker",
     needs_logs: true,
 };
 
-// Next id BuiltinView: 5034
+// NOTE: If you add real data to this implementation, then please update
+// the related `pg_` function implementations (like `pg_get_constraintdef`)
+pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
+    name: "pg_constraint",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_constraint AS SELECT
+    NULL::pg_catalog.oid as oid,
+    NULL::pg_catalog.text as conname,
+    NULL::pg_catalog.oid as connamespace,
+    NULL::pg_catalog.\"char\" as contype,
+    NULL::pg_catalog.bool as condeferrable,
+    NULL::pg_catalog.bool as condeferred,
+    NULL::pg_catalog.bool as convalidated,
+    NULL::pg_catalog.oid as conrelid,
+    NULL::pg_catalog.oid as contypid,
+    NULL::pg_catalog.oid as conindid,
+    NULL::pg_catalog.oid as conparentid,
+    NULL::pg_catalog.oid as confrelid,
+    NULL::pg_catalog.\"char\" as confupdtype,
+    NULL::pg_catalog.\"char\" as confdeltype,
+    NULL::pg_catalog.\"char\" as confmatchtype,
+    NULL::pg_catalog.bool as conislocal,
+    NULL::pg_catalog.int4 as coninhcount,
+    NULL::pg_catalog.bool as connoinherit,
+    NULL::pg_catalog.int2[] as conkey,
+    NULL::pg_catalog.int2[] as confkey,
+    NULL::pg_catalog.oid[] as conpfeqop,
+    NULL::pg_catalog.oid[] as conppeqop,
+    NULL::pg_catalog.oid[] as conffeqop,
+    NULL::pg_catalog.oid[] as conexclop,
+    NULL::pg_catalog.text as conbin
+    WHERE false",
+    id: GlobalId::System(5034),
+    needs_logs: false,
+};
+
+pub const PG_TABLES: BuiltinView = BuiltinView {
+    name: "pg_tables",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_tables AS
+SELECT n.nspname AS schemaname,
+    c.relname AS tablename,
+    pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
+FROM pg_catalog.pg_class c
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = ANY (ARRAY['r','p'])",
+    id: GlobalId::System(5035),
+    needs_logs: false,
+};
+
+pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
+    name: "pg_am",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_am AS
+SELECT NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS amname,
+    NULL::pg_catalog.regproc AS amhandler,
+    NULL::pg_catalog.\"char\" AS amtype
+WHERE false",
+    id: GlobalId::System(5036),
+    needs_logs: false,
+};
+
+pub const PG_ROLES: BuiltinView = BuiltinView {
+    name: "pg_roles",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_roles AS SELECT
+    name AS rolname,
+    '********'::pg_catalog.text AS rolpassword,
+    oid AS oid
+FROM mz_catalog.mz_roles",
+    id: GlobalId::System(5037),
+    needs_logs: false,
+};
+
+pub const PG_VIEWS: BuiltinView = BuiltinView {
+    name: "pg_views",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_views AS SELECT
+    s.name AS schemaname,
+    v.name AS viewname,
+    NULL::pg_catalog.oid AS viewowner
+FROM mz_catalog.mz_views v
+LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
+    id: GlobalId::System(5038),
+    needs_logs: false,
+};
+
+pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
+    name: "columns",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW columns AS
+SELECT
+    d.name as table_catalog,
+    s.name AS table_schema,
+    o.name AS table_name,
+    c.name AS column_name,
+    c.position AS ordinal_position,
+    c.type AS data_type,
+    NULL::pg_catalog.int4 AS character_maximum_length,
+    NULL::pg_catalog.int4 AS numeric_precision,
+    NULL::pg_catalog.int4 AS numeric_scale
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
+JOIN mz_catalog.mz_databases d on s.database_id = d.id",
+    id: GlobalId::System(5039),
+    needs_logs: false,
+};
+
+pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
+    name: "tables",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW tables AS SELECT
+    d.name as table_catalog,
+    s.name AS table_schema,
+    r.name AS table_name,
+    CASE r.type
+        WHEN 'table' THEN 'BASE TABLE'
+        ELSE pg_catalog.upper(r.type)
+    END AS table_type
+FROM mz_catalog.mz_relations r
+JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
+JOIN mz_catalog.mz_databases d on s.database_id = d.id",
+    id: GlobalId::System(5040),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5041
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -1586,8 +2074,12 @@ lazy_static! {
             Builtin::Type(&TYPE_OID_ARRAY),
             Builtin::Type(&TYPE_RECORD),
             Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_REGCLASS),
+            Builtin::Type(&TYPE_REGCLASS_ARRAY),
             Builtin::Type(&TYPE_REGPROC),
             Builtin::Type(&TYPE_REGPROC_ARRAY),
+            Builtin::Type(&TYPE_REGTYPE),
+            Builtin::Type(&TYPE_REGTYPE_ARRAY),
             Builtin::Type(&TYPE_INT2),
             Builtin::Type(&TYPE_INT2_ARRAY),
             Builtin::Type(&TYPE_TEXT),
@@ -1602,6 +2094,8 @@ lazy_static! {
             Builtin::Type(&TYPE_UUID_ARRAY),
             Builtin::Type(&TYPE_VARCHAR),
             Builtin::Type(&TYPE_VARCHAR_ARRAY),
+            Builtin::Type(&TYPE_INT2_VECTOR),
+            Builtin::Type(&TYPE_INT2_VECTOR_ARRAY),
             Builtin::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),
@@ -1609,8 +2103,7 @@ lazy_static! {
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
             Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-            Builtin::Log(&MZ_KAFKA_BROKER_RTT),
-            Builtin::Log(&MZ_KAFKA_CONSUMER_PARTITIONS),
+            Builtin::Log(&MZ_KAFKA_SOURCE_STATISTICS),
             Builtin::Log(&MZ_MATERIALIZATIONS),
             Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
             Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
@@ -1679,15 +2172,23 @@ lazy_static! {
             Builtin::View(&PG_ENUM),
             Builtin::View(&PG_ATTRDEF),
             Builtin::View(&PG_SETTINGS),
+            Builtin::View(&PG_CONSTRAINT),
+            Builtin::View(&PG_TABLES),
+            Builtin::View(&PG_ACCESS_METHODS),
+            Builtin::View(&PG_ROLES),
+            Builtin::View(&PG_VIEWS),
+            Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
+            Builtin::View(&INFORMATION_SCHEMA_TABLES),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
         let mut func_global_id_counter = 2000;
 
         for (schema, funcs) in &[
-            (PG_CATALOG_SCHEMA, &*sql::func::PG_CATALOG_BUILTINS),
-            (MZ_CATALOG_SCHEMA, &*sql::func::MZ_CATALOG_BUILTINS),
-            (MZ_INTERNAL_SCHEMA, &*sql::func::MZ_INTERNAL_BUILTINS),
+            (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
+            (INFORMATION_SCHEMA, &*mz_sql::func::INFORMATION_SCHEMA_BUILTINS),
+            (MZ_CATALOG_SCHEMA, &*mz_sql::func::MZ_CATALOG_BUILTINS),
+            (MZ_INTERNAL_SCHEMA, &*mz_sql::func::MZ_INTERNAL_BUILTINS),
         ] {
             for (name, func) in funcs.iter() {
                 builtins.push(Builtin::Func(BuiltinFunc {
@@ -1757,91 +2258,243 @@ impl BUILTINS {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::env;
 
     use tokio_postgres::NoTls;
 
+    use mz_ore::task;
+    use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
+
     use super::*;
 
-    // Connect to a running Postgres server and verify that our builtin functions
-    // match it, in addition to some other things. Ignored because we don't have a
-    // postgres server running during normal tests.
+    // Connect to a running Postgres server and verify that our builtin
+    // types and functions match it, in addition to some other things.
     #[tokio::test]
-    #[ignore]
-    async fn verify_function_sanity() -> Result<(), anyhow::Error> {
+    async fn compare_builtins_postgres() -> Result<(), anyhow::Error> {
         // Verify that all builtin functions:
         // - have a unique OID
         // - if they have a postgres counterpart (same oid) then they have matching name
         // Note: Use Postgres 13 when testing because older version don't have all
         // functions.
+        let (client, connection) = tokio_postgres::connect(
+            &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
+            NoTls,
+        )
+        .await?;
 
-        let (client, connection) =
-            tokio_postgres::connect("host=localhost user=postgres", NoTls).await?;
-
-        tokio::spawn(async move {
+        task::spawn(|| "compare_builtin_postgres", async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                panic!("connection error: {}", e);
             }
         });
 
-        let rows = client
-            .query("SELECT oid, proname, proargtypes FROM pg_proc", &[])
-            .await?;
-
         struct PgProc {
             name: String,
+            schema: String,
             arg_oids: Vec<u32>,
+            ret_oid: Option<u32>,
+            ret_set: bool,
         }
 
-        let mut pg_proc = HashMap::new();
-        for row in rows {
-            let oid: u32 = row.get("oid");
-            pg_proc.insert(
-                oid,
-                PgProc {
+        struct PgType {
+            name: String,
+            ty: String,
+            elem: u32,
+            array: u32,
+        }
+
+        let pg_proc: HashMap<_, _> = client
+            .query(
+                "SELECT
+                    p.oid,
+                    proname,
+                    nspname,
+                    proargtypes,
+                    prorettype,
+                    proretset
+                FROM pg_proc p
+                JOIN pg_namespace n ON p.pronamespace = n.oid",
+                &[],
+            )
+            .await?
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_proc = PgProc {
                     name: row.get("proname"),
+                    schema: row.get("nspname"),
                     arg_oids: row.get("proargtypes"),
-                },
-            );
-        }
+                    ret_oid: row.get("prorettype"),
+                    ret_set: row.get("proretset"),
+                };
+                (oid, pg_proc)
+            })
+            .collect();
 
-        let mut oids = HashSet::new();
+        let pg_proc_by_name: HashMap<_, _> = pg_proc
+            .iter()
+            .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
+            .collect();
+
+        let pg_type: HashMap<_, _> = client
+            .query(
+                "SELECT oid, typname, typtype::text, typelem, typarray FROM pg_type",
+                &[],
+            )
+            .await?
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_type = PgType {
+                    name: row.get("typname"),
+                    ty: row.get("typtype"),
+                    elem: row.get("typelem"),
+                    array: row.get("typarray"),
+                };
+                (oid, pg_type)
+            })
+            .collect();
+
+        let mut proc_oids = HashSet::new();
+        let mut type_oids = HashSet::new();
 
         for builtin in BUILTINS.values() {
-            if let Builtin::Func(func) = builtin {
-                for imp in func.inner.func_impls() {
-                    // Verify that all function OIDs are unique.
+            match builtin {
+                Builtin::Type(ty) => {
+                    // Verify that all type OIDs are unique.
                     assert!(
-                        oids.insert(imp.oid) == true,
+                        type_oids.insert(ty.oid),
                         "{} reused oid {}",
-                        func.name,
-                        imp.oid
+                        ty.name,
+                        ty.oid
                     );
 
-                    if imp.oid > 16_000 {
-                        // High OIDS are reserved in materialize and don't have postgres counterparts.
+                    if ty.oid >= FIRST_MATERIALIZE_OID {
+                        // High OIDs are reserved in Materialize and don't have
+                        // PostgreSQL counterparts.
                         continue;
                     }
 
-                    // For functions that have a postgres counterpart, verify that the name and
-                    // oid match.
-                    let pg_fn = pg_proc.get(&imp.oid).unwrap_or_else(|| {
-                        panic!("pg_proc missing function {}: oid {}", func.name, imp.oid)
+                    // For types that have a PostgreSQL counterpart, verify that
+                    // the name and oid match.
+                    let pg_ty = pg_type.get(&ty.oid).unwrap_or_else(|| {
+                        panic!("pg_proc missing type {}: oid {}", ty.name, ty.oid)
                     });
                     assert_eq!(
-                        func.name, pg_fn.name,
-                        "funcs with oid {} don't match names: {} in mz, {} in pg",
-                        imp.oid, func.name, pg_fn.name
+                        ty.name, pg_ty.name,
+                        "oid {} has name {} in postgres; expected {}",
+                        ty.oid, pg_ty.name, ty.name,
                     );
 
-                    // Complain, but don't fail, if argument oids don't match.
-                    // TODO: make these match.
-                    if imp.arg_oids != pg_fn.arg_oids {
-                        println!(
-                            "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
-                            imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
-                        );
+                    // Ensure the type matches.
+                    match ty.details.typ {
+                        CatalogType::Array { element_id } => {
+                            let elem_ty = match BUILTINS.get(&element_id) {
+                                Some(Builtin::Type(ty)) => ty,
+                                _ => panic!("{} is unexpectedly not a type", element_id),
+                            };
+                            assert_eq!(
+                                pg_ty.elem, elem_ty.oid,
+                                "type {} has mismatched element OIDs",
+                                ty.name
+                            )
+                        }
+                        CatalogType::Pseudo => {
+                            assert_eq!(
+                                pg_ty.ty, "p",
+                                "type {} is not a pseudo type as expected",
+                                ty.name
+                            )
+                        }
+                        _ => {
+                            assert_eq!(
+                                pg_ty.ty, "b",
+                                "type {} is not a base type as expected",
+                                ty.name
+                            )
+                        }
+                    }
+
+                    // Ensure the array type reference is correct.
+                    match ty.details.array_id {
+                        Some(array_id) => {
+                            let array_ty = match BUILTINS.get(&array_id) {
+                                Some(Builtin::Type(ty)) => ty,
+                                _ => panic!("{} is unexpectedly not a type", array_id),
+                            };
+                            assert_eq!(
+                                pg_ty.array, array_ty.oid,
+                                "type {} has mismatched array OIDs",
+                                ty.name,
+                            );
+                        }
+                        None => assert_eq!(
+                            pg_ty.array, 0,
+                            "type {} does not have an array type in mz but does in pg",
+                            ty.name,
+                        ),
                     }
                 }
+                Builtin::Func(func) => {
+                    for imp in func.inner.func_impls() {
+                        // Verify that all function OIDs are unique.
+                        assert!(
+                            proc_oids.insert(imp.oid),
+                            "{} reused oid {}",
+                            func.name,
+                            imp.oid
+                        );
+
+                        if imp.oid >= FIRST_MATERIALIZE_OID {
+                            // High OIDs are reserved in Materialize and don't have
+                            // postgres counterparts.
+                            continue;
+                        }
+
+                        // For functions that have a postgres counterpart, verify that the name and
+                        // oid match.
+                        let pg_fn = if imp.oid >= FIRST_UNPINNED_OID {
+                            pg_proc_by_name
+                                .get(&(func.schema, func.name))
+                                .unwrap_or_else(|| {
+                                    panic!("pg_proc missing function {}.{}", func.schema, func.name)
+                                })
+                        } else {
+                            pg_proc.get(&imp.oid).unwrap_or_else(|| {
+                                panic!("pg_proc missing function {}: oid {}", func.name, imp.oid)
+                            })
+                        };
+                        assert_eq!(
+                            func.name, pg_fn.name,
+                            "funcs with oid {} don't match names: {} in mz, {} in pg",
+                            imp.oid, func.name, pg_fn.name
+                        );
+
+                        // Complain, but don't fail, if argument oids don't match.
+                        // TODO: make these match.
+                        if imp.arg_oids != pg_fn.arg_oids {
+                            println!(
+                                "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
+                                imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
+                            );
+                        }
+
+                        if imp.return_oid != pg_fn.ret_oid {
+                            println!(
+                                "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
+                                imp.oid, func.name, imp.return_oid, pg_fn.ret_oid
+                            );
+                        }
+
+                        if imp.return_is_set != pg_fn.ret_set {
+                            println!(
+                                "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
+                                imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
+                            );
+                        }
+                    }
+                }
+                _ => (),
             }
         }
 

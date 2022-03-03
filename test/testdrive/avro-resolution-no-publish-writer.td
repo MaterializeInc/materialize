@@ -30,4 +30,4 @@ $ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schem
 {"f1": 123}
 
 ! SELECT * FROM resolution_no_publish_writer;
-Attempted to resolve
+contains:to resolve

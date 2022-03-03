@@ -34,20 +34,23 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use ::tracing::info;
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
-use clap::AppSettings;
-use coord::PersistConfig;
+use clap::{AppSettings, Parser};
+use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::info;
-use ore::cgroup::{detect_memory_limit, MemoryLimit};
-use ore::metric;
-use ore::metrics::ThirdPartyMetric;
-use ore::metrics::{raw::IntCounterVec, MetricsRegistry};
-use structopt::StructOpt;
+use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::FronteggAuthentication;
+use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::metric;
+use mz_ore::metrics::ThirdPartyMetric;
+use mz_ore::metrics::{raw::IntCounterVec, MetricsRegistry};
 use sysinfo::{ProcessorExt, SystemExt};
+use uuid::Uuid;
 
 use self::tracing::MetricsRecorderLayer;
 use materialized::TlsMode;
@@ -60,29 +63,27 @@ type OptionalDuration = Option<Duration>;
 fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
     match s {
         "off" => Ok(None),
-        _ => Ok(Some(repr::util::parse_duration(s)?)),
+        _ => Ok(Some(mz_repr::util::parse_duration(s)?)),
     }
 }
 
 /// The streaming SQL materialized view engine.
-#[derive(StructOpt)]
-#[structopt(settings = &[AppSettings::NextLineHelp, AppSettings::UnifiedHelpMessage], usage = "materialized [OPTION]...")]
+#[derive(Parser)]
+#[clap(next_line_help = true, args_override_self = true, global_setting = AppSettings::NoAutoVersion)]
 struct Args {
     // === Special modes. ===
     /// Print version information and exit.
     ///
     /// Specify twice to additionally print version information for selected
     /// dependencies.
-    #[structopt(short, long, parse(from_occurrences))]
+    #[clap(short, long, parse(from_occurrences))]
     version: usize,
     /// Allow running this dev (unoptimized) build.
     #[cfg(debug_assertions)]
-    #[structopt(long)]
+    #[clap(long, env = "MZ_DEV")]
     dev: bool,
-    // TODO(benesch): add an environment variable once we upgrade to clap v3.
-    // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     /// [DANGEROUS] Enable experimental features.
-    #[structopt(long)]
+    #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
     /// Whether to run in safe mode.
     ///
@@ -91,10 +92,10 @@ struct Args {
     ///
     /// This option is intended for use by the cloud product
     /// (cloud.materialize.com), but may be useful in other contexts as well.
-    #[structopt(long, hidden = true)]
+    #[clap(long, hide = true)]
     safe: bool,
 
-    #[structopt(long)]
+    #[clap(long, env = "MZ_DISABLE_USER_INDEXES")]
     disable_user_indexes: bool,
 
     /// The address on which metrics visible to "third parties" get exposed.
@@ -105,16 +106,16 @@ struct Args {
     /// This address is never served TLS-encrypted or authenticated, and while only "non-sensitive"
     /// metrics are served from it, care should be taken to not expose the listen address to the
     /// public internet or other unauthorized parties.
-    #[structopt(
+    #[clap(
         long,
-        hidden = true,
+        hide = true,
         value_name = "HOST:PORT",
         env = "MZ_THIRD_PARTY_METRICS_ADDR"
     )]
     third_party_metrics_listen_addr: Option<SocketAddr>,
 
     /// Enable persistent user tables. Has to be used with --experimental.
-    #[structopt(long, hidden = true)]
+    #[clap(long, hide = true)]
     persistent_user_tables: bool,
 
     /// Disable persistence of all system tables.
@@ -124,18 +125,53 @@ struct Args {
     /// This test is enabled by default to allow us to collect data from a
     /// variety of deployments, but setting this flag to true to opt out of the
     /// test is always safe.
-    #[structopt(long)]
+    #[clap(long)]
     disable_persistent_system_tables_test: bool,
+
+    /// An S3 location used to persist data, specified as s3://<bucket>/<path>.
+    ///
+    /// The `<path>` is a prefix prepended to all S3 object keys used for
+    /// persistence and allowed to be empty.
+    ///
+    /// Additional configuration can be specified by appending url-like query
+    /// parameters: `?<key1>=<val1>&<key2>=<val2>...`
+    ///
+    /// Supported additional configurations are:
+    ///
+    /// - `aws_role_arn=arn:aws:...`
+    ///
+    /// Ignored if persistence is disabled. Ignored if --persist_storage_enabled
+    /// is false.
+    ///
+    /// If unset, files stored under `--data-directory/-D` are used instead. If
+    /// set, S3 credentials and region must be available in the process or
+    /// environment: for details see
+    /// https://github.com/rusoto/rusoto/blob/rusoto-v0.47.0/AWS-CREDENTIALS.md.
+    #[clap(long, hide = true, default_value_t)]
+    persist_storage: String,
+
+    /// Enable the --persist_storage flag. Has to be used with --experimental.
+    #[structopt(long, hide = true)]
+    persist_storage_enabled: bool,
+
+    /// Enable persistent Kafka source. Has to be used with --experimental.
+    #[structopt(long, hide = true)]
+    persistent_kafka_sources: bool,
+
+    /// Maximum allowed size of the in-memory persist storage cache, in bytes. Has
+    /// to be used with --experimental.
+    #[structopt(long, hide = true)]
+    persist_cache_size_limit: Option<usize>,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
-    #[structopt(short, long, env = "MZ_WORKERS", value_name = "N", default_value)]
+    #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
     workers: WorkerCount,
     /// Log Timely logging itself.
-    #[structopt(long, hidden = true)]
+    #[clap(long, hide = true)]
     debug_introspection: bool,
     /// Retain prometheus metrics for this amount of time.
-    #[structopt(short, long, hidden = true, parse(try_from_str = repr::util::parse_duration), default_value = "5min")]
+    #[clap(short, long, hide = true, parse(try_from_str = mz_repr::util::parse_duration), default_value = "5min")]
     retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
@@ -146,25 +182,25 @@ struct Args {
     /// Materialize's dataflow engine.
     ///
     /// Set to "off" to disable introspection.
-    #[structopt(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
+    #[clap(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
     introspection_frequency: OptionalDuration,
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
-    #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
+    #[clap(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
     /// Default frequency with which to advance timestamps
-    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
+    #[clap(long, env = "MZ_TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
     /// Default frequency with which to scrape prometheus metrics
-    #[structopt(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hidden = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
+    #[clap(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hide = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
     metrics_scraping_interval: OptionalDuration,
 
     /// [ADVANCED] Timely progress tracking mode.
-    #[structopt(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
+    #[clap(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
     timely_progress_mode: timely::worker::ProgressMode,
     /// [ADVANCED] Amount of compaction to perform when idle.
-    #[structopt(long, env = "MZ_DIFFERENTIAL_IDLE_MERGE_EFFORT", value_name = "N")]
+    #[clap(long, env = "MZ_DIFFERENTIAL_IDLE_MERGE_EFFORT", value_name = "N")]
     differential_idle_merge_effort: Option<isize>,
 
     // === Logging options. ===
@@ -172,7 +208,7 @@ struct Args {
     ///
     /// The special value "stderr" will emit messages to the standard error
     /// stream. All other values are taken as file paths.
-    #[structopt(long, env = "MZ_LOG_FILE", value_name = "PATH")]
+    #[clap(long, env = "MZ_LOG_FILE", value_name = "PATH")]
     log_file: Option<String>,
     /// Which log messages to emit.
     ///
@@ -197,7 +233,7 @@ struct Args {
     /// in a directive to suppress all log messages, even errors.
     ///
     /// The default value for this option is "info".
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_LOG_FILTER",
         value_name = "FILTER",
@@ -205,9 +241,17 @@ struct Args {
     )]
     log_filter: String,
 
+    /// Prevent dumping of backtraces on SIGSEGV/SIGBUS
+    ///
+    /// In the case of OOMs and memory corruptions, it may be advantageous to NOT dump backtraces,
+    /// as the attempt to dump the backtraces will segfault on its own, corrupting the core file
+    /// further and obfuscating the original bug.
+    #[clap(long, hide = true, env = "MZ_NO_SIGBUS_SIGSEGV_BACKTRACES")]
+    no_sigbus_sigsegv_backtraces: bool,
+
     // == Connection options.
     /// The address on which to listen for connections.
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_LISTEN_ADDR",
         value_name = "HOST:PORT",
@@ -237,71 +281,110 @@ struct Args {
     ///
     /// The most secure mode is "verify-full". This is the default mode when
     /// the --tls-cert option is specified. Otherwise the default is "disable".
-    #[structopt(
+    #[clap(
         long, env = "MZ_TLS_MODE",
         possible_values = &["disable", "require", "verify-ca", "verify-full"],
         default_value = "disable",
-        default_value_if("tls-cert", None, "verify-full"),
+        default_value_ifs = &[
+            ("frontegg-tenant", None, Some("require")),
+            ("tls-cert", None, Some("verify-full")),
+        ],
         value_name = "MODE",
     )]
     tls_mode: String,
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_TLS_CA",
-        required_if("tls-mode", "verify-ca"),
-        required_if("tls-mode", "verify-full"),
+        required_if_eq("tls-mode", "verify-ca"),
+        required_if_eq("tls-mode", "verify-full"),
         value_name = "PATH"
     )]
     tls_ca: Option<PathBuf>,
     /// Certificate file for TLS connections.
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_TLS_CERT",
         requires = "tls-key",
-        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
         value_name = "PATH"
     )]
     tls_cert: Option<PathBuf>,
     /// Private key file for TLS connections.
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_TLS_KEY",
         requires = "tls-cert",
-        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,
+    /// Specifies the tenant id when authenticating users. Must be a valid UUID.
+    #[clap(
+        long,
+        env = "MZ_FRONTEGG_TENANT",
+        requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
+        hide = true
+    )]
+    frontegg_tenant: Option<Uuid>,
+    /// JWK used to validate JWTs during user authentication as a PEM public
+    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
+    #[clap(
+        long,
+        env = "MZ_FRONTEGG_JWK",
+        requires = "frontegg-tenant",
+        hide = true
+    )]
+    frontegg_jwk: Option<String>,
+    /// The full URL (including path) to the api-token endpoint.
+    #[clap(
+        long,
+        env = "MZ_FRONTEGG_API_TOKEN_URL",
+        requires = "frontegg-tenant",
+        hide = true
+    )]
+    frontegg_api_token_url: Option<String>,
 
     // === Storage options. ===
     /// Where to store data.
-    #[structopt(
-        short = "D",
+    #[clap(
+        short = 'D',
         long,
         env = "MZ_DATA_DIRECTORY",
         value_name = "PATH",
         default_value = "mzdata"
     )]
     data_directory: PathBuf,
-    /// Enable symbioisis with a PostgreSQL server.
-    #[structopt(long, env = "MZ_SYMBIOSIS", hidden = true)]
-    symbiosis: Option<String>,
+
+    // === AWS options. ===
+    /// An external ID to be supplied to all AWS AssumeRole operations.
+    ///
+    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[clap(long, value_name = "ID")]
+    aws_external_id: Option<String>,
 
     // === Telemetry options. ===
-    // TODO(benesch): add an environment variable once we upgrade to clap v3.
-    // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     /// Disable telemetry reporting.
-    #[structopt(long, conflicts_with_all = &["telemetry-domain", "telemetry-interval"])]
+    #[clap(
+        long,
+        conflicts_with_all = &["telemetry-domain", "telemetry-interval"],
+        env = "MZ_DISABLE_TELEMETRY",
+    )]
     disable_telemetry: bool,
     /// The domain hosting the telemetry server.
-    #[structopt(long, env = "MZ_TELEMETRY_DOMAIN", hidden = true)]
+    #[clap(long, env = "MZ_TELEMETRY_DOMAIN", hide = true)]
     telemetry_domain: Option<String>,
     /// The interval at which to report telemetry data.
-    #[structopt(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = repr::util::parse_duration), hidden = true)]
+    #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
     telemetry_interval: Option<Duration>,
+
+    #[cfg(feature = "tokio-console")]
+    /// Turn on the console-subscriber to use materialize with `tokio-console`
+    #[clap(long, hide = true)]
+    tokio_console: bool,
 }
 
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
-/// which depends on the number of available CPUs. Ideally structopt would
+/// which depends on the number of available CPUs. Ideally clap would
 /// expose a `default_fn` rather than accepting only string literals.
 struct WorkerCount(usize);
 
@@ -334,7 +417,7 @@ impl fmt::Display for WorkerCount {
 }
 
 fn main() {
-    if let Err(err) = run(Args::from_args()) {
+    if let Err(err) = run(Args::parse()) {
         eprintln!("materialized: {:#}", err);
         process::exit(1);
     }
@@ -342,8 +425,16 @@ fn main() {
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
-    sys::enable_sigbus_sigsegv_backtraces()?;
+
+    if !args.no_sigbus_sigsegv_backtraces {
+        sys::enable_sigbus_sigsegv_backtraces()?;
+    }
+
+    sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
+
+    // Initialize fail crate for failpoint support
+    let _failpoint_scenario = FailScenario::setup();
 
     if args.version > 0 {
         println!("materialized {}", materialized::BUILD_INFO.human_version());
@@ -356,11 +447,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Prevent accidental usage of development builds.
-    //
-    // TODO(benesch): offload environment variable check to clap once we upgrade
-    // to clap v3. Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     #[cfg(debug_assertions)]
-    if !args.dev && !ore::env::is_var_truthy("MZ_DEV") {
+    if !args.dev {
         bail!(
             "refusing to run dev (unoptimized) binary without explicit opt-in\n\
              hint: Pass the '--dev' option or set MZ_DEV=1 in your environment to opt in.\n\
@@ -374,7 +462,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_scraping_interval = args.metrics_scraping_interval;
     let logging = args
         .introspection_frequency
-        .map(|granularity| coord::LoggingConfig {
+        .map(|granularity| mz_coord::LoggingConfig {
             granularity,
             log_logging,
             retain_readings_for,
@@ -418,6 +506,16 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         let key = args.tls_key.unwrap();
         Some(materialized::TlsConfig { mode, cert, key })
     };
+    let frontegg = args
+        .frontegg_tenant
+        .map(|tenant_id| {
+            FronteggAuthentication::new(
+                args.frontegg_api_token_url.unwrap(),
+                args.frontegg_jwk.unwrap().as_bytes(),
+                tenant_id,
+            )
+        })
+        .transpose()?;
 
     // Configure storage.
     let data_directory = args.data_directory;
@@ -450,18 +548,16 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     // Configure tracing.
     {
-        use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+        use tracing_subscriber::filter::{LevelFilter, Targets};
         use tracing_subscriber::fmt;
-        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::layer::{Layer, SubscriberExt};
         use tracing_subscriber::util::SubscriberInitExt;
 
-        use crate::tracing::FilterLayer;
-
-        let env_filter = EnvFilter::try_new(args.log_filter)
+        let filter = Targets::from_str(&args.log_filter)
             .context("parsing --log-filter option")?
             // Ensure panics are logged, even if the user has specified
             // otherwise.
-            .add_directive("panic=error".parse().unwrap());
+            .with_target("panic", LevelFilter::ERROR);
 
         let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
             .register_third_party_visible(metric!(
@@ -472,17 +568,23 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
         match args.log_file.as_deref() {
             Some("stderr") => {
-                // The user explicitly directed logs to stderr. Log only to stderr
-                // with the user-specified `env_filter`.
-                tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(log_message_counter))
-                    .with(env_filter)
+                // The user explicitly directed logs to stderr. Log only to
+                // stderr with the user-specified `filter`.
+                let stack = tracing_subscriber::registry()
+                    .with(
+                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
+                    )
                     .with(
                         fmt::layer()
                             .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr)),
-                    )
-                    .init()
+                            .with_ansi(atty::is(atty::Stream::Stderr))
+                            .with_filter(filter),
+                    );
+
+                #[cfg(feature = "tokio-console")]
+                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
+
+                stack.init()
             }
             log_file => {
                 // Logging to a file. If the user did not explicitly specify
@@ -491,9 +593,10 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     Some(_) => LevelFilter::OFF,
                     None => LevelFilter::WARN,
                 };
-                tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(log_message_counter))
-                    .with(env_filter)
+                let stack = tracing_subscriber::registry()
+                    .with(
+                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
+                    )
                     .with({
                         let path = match log_file {
                             Some(log_file) => PathBuf::from(log_file),
@@ -509,17 +612,25 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                             .create(true)
                             .open(&path)
                             .with_context(|| format!("creating log file: {}", path.display()))?;
-                        fmt::layer().with_ansi(false).with_writer(move || {
-                            file.try_clone().expect("failed to clone log file")
-                        })
+                        fmt::layer()
+                            .with_ansi(false)
+                            .with_writer(move || {
+                                file.try_clone().expect("failed to clone log file")
+                            })
+                            .with_filter(filter.clone())
                     })
-                    .with(FilterLayer::new(
+                    .with(
                         fmt::layer()
                             .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr)),
-                        stderr_level,
-                    ))
-                    .init()
+                            .with_ansi(atty::is(atty::Stream::Stderr))
+                            .with_filter(stderr_level)
+                            .with_filter(filter),
+                    );
+
+                #[cfg(feature = "tokio-console")]
+                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
+
+                stack.init()
             }
         }
     }
@@ -530,7 +641,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
     let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
-    let memory_limit = detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+    let memory_limit = detect_memory_limit().unwrap_or(MemoryLimit {
         max: None,
         swap_max: None,
     });
@@ -557,7 +668,8 @@ os: {os}
 cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
-swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
+swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
+dataflow workers: {workers}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
@@ -590,6 +702,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         swap_total = system.total_swap(),
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
+        workers = args.workers.0,
     );
 
     sys::adjust_rlimits();
@@ -628,7 +741,43 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         } else {
             false
         };
-        let system_table_enabled = !args.disable_persistent_system_tables_test;
+        let mut system_table_enabled = !args.disable_persistent_system_tables_test;
+        if system_table_enabled && args.logical_compaction_window.is_none() {
+            ::tracing::warn!("--logical-compaction-window is off; disabling background persistence test to prevent unbounded disk usage");
+            system_table_enabled = false;
+        }
+
+        let storage = if args.persist_storage_enabled {
+            if args.persist_storage.is_empty() {
+                bail!("--persist-storage must be specified with --persist-storage-enabled");
+            } else if !args.experimental {
+                bail!("cannot specify --persist-storage-enabled without --experimental");
+            } else {
+                PersistStorage::try_from(args.persist_storage)?
+            }
+        } else {
+            PersistStorage::File(PersistFileStorage {
+                blob_path: data_directory.join("persist").join("blob"),
+            })
+        };
+
+        let persistent_kafka_sources_enabled = if args.experimental && args.persistent_kafka_sources
+        {
+            true
+        } else if args.persistent_kafka_sources {
+            bail!("cannot specify --persistent-kafka-sources without --experimental");
+        } else {
+            false
+        };
+
+        let cache_size_limit = {
+            if args.persist_cache_size_limit.is_some() && !args.experimental {
+                bail!("cannot specify --persist-cache-size-limit without --experimental");
+            }
+
+            args.persist_cache_size_limit
+        };
+
         let lock_info = format!(
             "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
             mz_version = materialized::BUILD_INFO.human_version(),
@@ -636,13 +785,23 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             start_time = Utc::now(),
             num_workers = args.workers.0,
         );
+
+        // The min_step_interval knob allows tuning a tradeoff between latency and storage usage.
+        // As persist gets more sophisticated over time, we'll no longer need this knob,
+        // but in the meantime we need it to make tests reasonably performant.
+        // The --timestamp-frequency flag similarly gives testing a control over
+        // latency vs resource usage, so for simplicity we reuse it here."
+        let min_step_interval = args.timestamp_frequency;
+
         PersistConfig {
-            // TODO: These paths are hardcoded for now, but we'll want to make
-            // them configurable once we add additional Log and Blob impls.
-            blob_path: data_directory.join("persist").join("blob"),
+            async_runtime: Some(Arc::clone(&runtime)),
+            storage,
             user_table_enabled,
             system_table_enabled,
+            kafka_sources_enabled: persistent_kafka_sources_enabled,
             lock_info,
+            min_step_interval,
+            cache_size_limit,
         }
     };
 
@@ -655,12 +814,16 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         listen_addr: args.listen_addr,
         third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
         tls,
+        frontegg,
         data_directory,
-        symbiosis_url: args.symbiosis,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
         telemetry,
+        aws_external_id: args
+            .aws_external_id
+            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
+            .unwrap_or(AwsExternalId::NotProvided),
         introspection_frequency: args
             .introspection_frequency
             .unwrap_or_else(|| Duration::from_secs(1)),
@@ -677,7 +840,7 @@ to improve both our software and your queries! Please reach out at:
 
     Web: https://materialize.com
     GitHub issues: https://github.com/MaterializeInc/materialize/issues
-    Email: support@materialize.io
+    Email: support@materialize.com
     Twitter: @MaterializeInc
 =======================================================================
 "
@@ -756,7 +919,7 @@ fn handle_panic(panic_info: &PanicInfo) {
         "<unknown>".to_string()
     };
 
-    log::error!(
+    ::tracing::error!(
         target: "panic",
         "{msg}
 thread: {thr_name}

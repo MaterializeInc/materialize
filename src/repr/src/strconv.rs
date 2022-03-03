@@ -30,21 +30,22 @@ use std::fmt;
 use std::num::FpCategory;
 
 use chrono::offset::{Offset, TimeZone};
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
+use mz_lowertest::MzReflect;
+use mz_ore::display::DisplayExt;
+use mz_ore::result::ResultExt;
 use num_traits::Float as NumFloat;
-use ore::display::DisplayExt;
-use ore::result::ResultExt;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ore::fmt::FormatBuffer;
-use ore::lex::LexBuf;
-use ore::str::StrExt;
+use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
+use mz_ore::str::StrExt;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
@@ -151,6 +152,29 @@ where
 {
     write!(buf, "{}", i);
     Nestable::Yes
+}
+
+/// Writes an OID to `buf`.
+pub fn format_oid<F>(buf: &mut F, oid: u32) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", oid);
+    Nestable::Yes
+}
+
+/// Parses an OID from `s`.
+pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
+    // For historical reasons in PostgreSQL, OIDs are parsed as `i32`s and then
+    // reinterpreted as `u32`s.
+    //
+    // Do not use this as a model for behavior in other contexts. OIDs should
+    // not in general be thought of as freely convertible from `i32`s.
+    let oid: i32 = s
+        .trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("oid", s).with_details(e))?;
+    Ok(u32::from_ne_bytes(oid.to_ne_bytes()))
 }
 
 fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
@@ -321,7 +345,11 @@ pub fn format_date<F>(buf: &mut F, d: NaiveDate) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", d);
+    let (year_ad, year) = d.year_ce();
+    write!(buf, "{:04}-{}", year, d.format("%m-%d"));
+    if !year_ad {
+        write!(buf, " BC");
+    }
     Nestable::Yes
 }
 
@@ -361,13 +389,17 @@ pub fn format_timestamp<F>(buf: &mut F, ts: NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
+    let (year_ad, year) = ts.year_ce();
+    write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
     format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    if !year_ad {
+        write!(buf, " BC");
+    }
     // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }
 
-/// Parses a `DateTime<Utc>` from `s`. See `expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
+/// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
@@ -398,9 +430,13 @@ pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
+    let (year_ad, year) = ts.year_ce();
+    write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
     format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
     write!(buf, "+00");
+    if !year_ad {
+        write!(buf, " BC");
+    }
     // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }
@@ -425,14 +461,19 @@ where
 ///   | <seconds value>
 /// ```
 pub fn parse_interval(s: &str) -> Result<Interval, ParseError> {
-    parse_interval_w_disambiguator(s, DateTimeField::Second)
+    parse_interval_w_disambiguator(s, None, DateTimeField::Second)
 }
 
-/// Parse an interval string, using a specific sql_parser::ast::DateTimeField
-/// to identify ambiguous elements. For more information about this operation,
-/// see the doucmentation on ParsedDateTime::build_parsed_datetime_interval.
-pub fn parse_interval_w_disambiguator(s: &str, d: DateTimeField) -> Result<Interval, ParseError> {
-    ParsedDateTime::build_parsed_datetime_interval(&s, d)
+/// Parse an interval string, using an optional leading precision for time (H:M:S)
+/// and a specific mz_sql_parser::ast::DateTimeField to identify ambiguous elements.
+/// For more information about this operation, see the documentation on
+/// ParsedDateTime::build_parsed_datetime_interval.
+pub fn parse_interval_w_disambiguator(
+    s: &str,
+    leading_time_precision: Option<DateTimeField>,
+    d: DateTimeField,
+) -> Result<Interval, ParseError> {
+    ParsedDateTime::build_parsed_datetime_interval(&s, leading_time_precision, d)
         .and_then(|pdt| pdt.compute_interval())
         .map_err(|e| ParseError::invalid_input_syntax("interval", s).with_details(e))
 }
@@ -457,7 +498,10 @@ pub fn parse_numeric(s: &str) -> Result<OrderedDecimal<Numeric>, ParseError> {
     let cx_status = cx.status();
 
     // Check for values that can only be generated by invalid syntax.
-    if (n.is_infinite() && !cx_status.overflow()) || (n.is_nan() && n.is_negative()) {
+    if (n.is_infinite() && !cx_status.overflow())
+        || (n.is_nan() && n.is_negative())
+        || n.is_signaling_nan()
+    {
         return Err(ParseError::invalid_input_syntax("numeric", s));
     }
 
@@ -781,6 +825,43 @@ where
     Ok(elems)
 }
 
+pub fn parse_legacy_vector<'a, T, E>(
+    s: &'a str,
+    gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
+) -> Result<Vec<T>, ParseError>
+where
+    E: fmt::Display,
+{
+    parse_legacy_vector_inner(s, gen_elem)
+        .map_err(|details| ParseError::invalid_input_syntax("int2vector", s).with_details(details))
+}
+
+pub fn parse_legacy_vector_inner<'a, T, E>(
+    s: &'a str,
+    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
+) -> Result<Vec<T>, String>
+where
+    E: fmt::Display,
+{
+    let mut elems = vec![];
+    let buf = &mut LexBuf::new(s);
+
+    let mut gen = |elem| gen_elem(elem).map_err_to_string();
+
+    loop {
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        match buf.peek() {
+            Some(_) => {
+                let elem = buf.take_while(|ch| !ch.is_ascii_whitespace());
+                elems.push(gen(elem.into())?);
+            }
+            None => break,
+        }
+    }
+
+    Ok(elems)
+}
+
 fn lex_quoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
     assert!(buf.consume('"'));
     let s = buf.take_while(|ch| !matches!(ch, '"' | '\\'));
@@ -1072,15 +1153,41 @@ pub fn format_array_inner<F, T>(
     buf.write_char('}');
 }
 
+pub fn format_legacy_vector<F, T>(
+    buf: &mut F,
+    elems: impl IntoIterator<Item = T>,
+    format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
+) -> Nestable
+where
+    F: FormatBuffer,
+{
+    format_elems(buf, elems, format_elem, ' ');
+    Nestable::MayNeedEscaping
+}
+
 pub fn format_list<F, T>(
     buf: &mut F,
     elems: impl IntoIterator<Item = T>,
-    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
+    format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
 ) -> Nestable
 where
     F: FormatBuffer,
 {
     buf.write_char('{');
+    format_elems(buf, elems, format_elem, ',');
+    buf.write_char('}');
+    Nestable::Yes
+}
+
+/// Writes each `elem` into `buf`, separating the elems with `sep`.
+pub fn format_elems<F, T>(
+    buf: &mut F,
+    elems: impl IntoIterator<Item = T>,
+    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
+    sep: char,
+) where
+    F: FormatBuffer,
+{
     let mut elems = elems.into_iter().peekable();
     while let Some(elem) = elems.next() {
         let start = buf.len();
@@ -1088,11 +1195,9 @@ where
             escape_elem::<_, ListElementEscaper>(buf, start);
         }
         if elems.peek().is_some() {
-            buf.write_char(',')
+            buf.write_char(sep)
         }
     }
-    buf.write_char('}');
-    Nestable::Yes
 }
 
 pub trait ElementEscaper {
@@ -1296,7 +1401,7 @@ where
 }
 
 /// An error while parsing an input as a type.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ParseError {
     kind: ParseErrorKind,
     type_name: String,
@@ -1304,7 +1409,9 @@ pub struct ParseError {
     details: Option<String>,
 }
 
-#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub enum ParseErrorKind {
     OutOfRange,
     InvalidInputSyntax,
@@ -1377,7 +1484,7 @@ impl fmt::Display for ParseError {
 
 impl Error for ParseError {}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,

@@ -1,3 +1,4 @@
+aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
   'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
@@ -8,6 +9,8 @@ alter_index ::=
     )
     | 'RESET' '(' field ( ',' field )* ')'
   )
+array_agg ::=
+  'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 begin ::=
   'BEGIN' ( transaction_mode ( ',' transaction_mode )* )?
 close ::=
@@ -22,22 +25,22 @@ connector_spec ::=
   'KAFKA BROKER' host 'TOPIC' topic?
 copy_to ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
-  ( 'WITH'? '(' option ( ',' option )* ')' )?
+  ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 copy_from ::=
   'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
-  ( 'WITH'? '(' option ( ',' option )* ')' )?
+  ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
+        'INDEX' index_name 'ON' obj_name '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
         | 'DEFAULT INDEX ON' obj_name
     )
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' 'OR REPLACE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_schema ::=
@@ -47,8 +50,10 @@ create_sink ::=
     'FROM' item_name
     'INTO' (
     sink_kafka_connector |
-    'AVRO OCF' path-prefix
+    'AVRO OCF' path
     )
+    ( sink_with_options )?
+    ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
     ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
 create_source_avro_file ::=
@@ -56,17 +61,22 @@ create_source_avro_file ::=
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'AVRO OCF' path with_options?
   ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
-create_source_avro_kafka ::=
+create_source_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
-  'AVRO USING' (
-    'CONFLUENT SCHEMA REGISTRY' url with_options? |
-    'SCHEMA' 'FILE' schema_file_path
-  )
-  ('INCLUDE KEY' ('AS' key_name)?)?
+  ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
+  ('INCLUDE'
+    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
+    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
+  )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
+create_source_kinesis ::=
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
+  'FROM' 'KINESIS ARN' arn with_options?
+  'FORMAT' format_spec
+  ('ENVELOPE NONE')?
 create_source_csv_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -80,62 +90,19 @@ create_source_json ::=
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' 'BYTES'
   ('ENVELOPE NONE')?
-create_source_csv_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
-  ('CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? | format_spec)
-  ('INCLUDE KEY' ('AS' key_name)?)?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
-create_source_csv_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' 'CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS')
-  ('DELIMITED BY' char)?
-  ('ENVELOPE NONE')?
-create_source_json_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' 'BYTES'
-  ('ENVELOPE NONE')?
-create_source_json_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' ) ( 'TEXT' | 'BYTES' | format_spec)
-  ('INCLUDE KEY' ('AS' key_name )?)?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
   'CONNECTION' connection_info
   'PUBLICATION' publication_name
-create_source_protobuf_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' )
-   ('PROTOBUF MESSAGE' message_name
-    'USING SCHEMA' 'FILE' schema_file_path)
-  ('INCLUDE KEY' ('AS' key_name)?)?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
-create_source_protobuf_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' 'PROTOBUF MESSAGE' message_name
-  'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
-  ('ENVELOPE NONE')?
+  ('WITH timestamp_frequency_ms =' int)?
 create_source_pubnub_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
   'FORMAT' 'TEXT'
   ('ENVELOPE' 'NONE')?
-create_source_s3_text ::=
+create_source_s3 ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'S3' 'DISCOVER OBJECTS'
@@ -149,55 +116,9 @@ create_source_s3_text ::=
     )
   )*
   ('COMPRESSION' ('NONE' | 'GZIP'))?
-  'WITH' '('
-      'region =' region
-      aws_credentials?
-  ')'
-  'FORMAT' (
-    'REGEX' regex |
-    'TEXT' |
-    'BYTES'
-  )
+  with_options?
+  'FORMAT' format_spec
   ('ENVELOPE NONE')?
-create_source_s3_json ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM' 'S3' 'DISCOVER OBJECTS'
-  ('MATCHING' pattern)?
-  'USING' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-  ) ( ',' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-    )
-  )*
-  ('COMPRESSION' ('NONE' | 'GZIP'))?
-  'WITH' '('
-      'region =' region
-      aws_credentials?
-  ')'
-  'FORMAT' ('TEXT' | 'BYTES')
-  ('ENVELOPE NONE')?
-create_source_s3_csv ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
-  src_name ( '(' col_name (',' col_name)* ')' ( ',' key_constraint )? )?
-  'FROM' 'S3' 'DISCOVER OBJECTS'
-  ('MATCHING' pattern)?
-  'USING' (
-    'BUCKET SCAN' bucket_name |
-    'SQS NOTIFICATIONS' queue_name
-    ) ( ',' (
-    'BUCKET SCAN' bucket_name |
-    'SQS NOTIFICATIONS' queue_name
-      )
-    )*
-    ('COMPRESSION' ('NONE' | 'GZIP'))?
-    'WITH' '('
-        'region =' region
-        aws_credentials?
-    ')'
-    'FORMAT' 'CSV' 'WITH' column_count 'COLUMNS'
-    ('ENVELOPE NONE')?
 create_source_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -208,41 +129,39 @@ create_source_text ::=
     'BYTES'
   )
 ('ENVELOPE NONE')?
-create_source_text_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT') ('BYTES' | 'TEXT' | format_spec)
-  ('INCLUDE KEY' ('AS' key_name)?)?
-  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
-create_source_text_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' ('BYTES' | 'TEXT')
-  ('ENVELOPE' 'NONE')?
 create_type ::=
-    'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
+    'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
+    'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
 create_user ::=
     'CREATE' 'USER' user_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_view ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' 'OR REPLACE' 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
 create_views ::=
   'CREATE' ('MATERIALIZED')? ('TEMP' | 'TEMPORARY')? 'VIEWS' 'IF NOT EXISTS'? 'FROM' 'SOURCE' '"'src_name'"' ( '(' '"' upstream_table '"'  (AS '"' new_view_name '"' )? ')' )?
 create_table ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'TABLE' table_name
   '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
+deallocate ::=
+  'DEALLOCATE' ('PREPARE')?  (name | 'ALL')?
 declare ::=
   'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=
-  'INSERT' 'INTO' table_name 'VALUES'
-  ( ('(' (col_value) ( ( ',' col_value ) )* ')') ( ( ',' ('(' (col_value) ( ( ',' col_value ) )* ')') )* ) )
+  'INSERT' 'INTO' table_name ('AS'? alias)
+  ( '(' (col_name) ( ',' col_name )* ')' )?
+  (
+    'VALUES' ( ('(' (expr) ( ( ',' expr ) )* ')') ( ( ',' ('(' (expr) ( ( ',' expr ) )* ')') )* ) )
+    | query
+  )
+delete_stmt ::=
+  'DELETE FROM' table_name ('AS'? alias)?
+  'USING' (from_item) ( ( ',' from_item ) )*
+  'WHERE' condition
 discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
 drop_database ::=
-    'DROP' 'DATABASE' ('IF EXISTS')? database_name
+    'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
     'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_role ::=
@@ -261,6 +180,8 @@ drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
 drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
+execute ::=
+  'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain ::=
   'EXPLAIN'
   'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
@@ -274,16 +195,37 @@ fetch ::=
 format_spec ::=
   'AVRO USING' (
         'CONFLUENT SCHEMA REGISTRY' url with_options? |
-        'SCHEMA' 'FILE' schema_file_path
+        'SCHEMA FILE' path
         ) |
   'PROTOBUF' (
-        'MESSAGE' message_name 'USING' 'SCHEMA' 'FILE' schema_file_path? |
+        'MESSAGE' message_name 'USING SCHEMA FILE' path |
         'USING CONFLUENT SCHEMA REGISTRY' url with_options
         ) |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+kinesis_format_spec ::=
+  'PROTOBUF MESSAGE' message_name 'USING SCHEMA FILE' path |
+  'REGEX' regex |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'TEXT' |
+  'BYTES'
+s3_format_spec ::=
+  'REGEX' regex |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'TEXT' |
+  'BYTES'
+sink_format_spec ::=
+  'AVRO USING' (
+        'CONFLUENT SCHEMA REGISTRY' url with_options? |
+        'SCHEMA' 'FILE' schema_file_path
+        ) |
+  'JSON'
+consistency_format_spec ::=
+  'AVRO USING' (
+        'CONFLUENT SCHEMA REGISTRY' url with_options?
+        )
 key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
     'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'
@@ -293,31 +235,51 @@ func_coalesce ::=
   'coalesce' '(' val ( ',' val )* ')'
 func_csv_extract ::=
   'csv_extract' '(' num_csv_col ',' col_name ')'
+func_date_bin ::=
+  'date_bin' '(' stride ',' source ',' origin ')'
+func_date_bin_experimental ::=
+  'date_bin' '(' stride ',' source (',' origin)? ')'
+func_date_bin_hopping ::=
+  'date_bin_hopping' '(' hop ',' width ',' source (',' origin)? ')'
 func_date_trunc ::=
   'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'
 func_extract ::=
   'EXTRACT' '(' ( 'EPOCH' | 'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'QUARTER' | 'MONTH' | 'WEEK' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MICROSECOND' | 'MILLISECOND' | 'DOW' | 'ISODOW' | 'DOY' ) 'FROM' val ')'
+func_date_part ::=
+  'date_part' '(' "'" ( 'epoch' | 'millennium' | 'century' | 'decade' | 'year' | 'quarter' | 'month' | 'week' | 'dat' | 'hour' | 'minute' | 'second' | 'microsecond' | 'millisecond' | 'dow' | 'isodow' | 'doy' ) "'" ',' val ')'
 func_length ::=
   'length' '(' str (',' encoding_name)? ')'
 func_substring ::=
   'substring' '(' str ',' start_pos (',' len)? ')'
 func_timezone ::=
     'TIMEZONE' '(' zone'::'type ',' ( 'timestamp' | 'timestamptz' ) ')'
+func_justify_days ::=
+  'justify_days' '(' interval ')'
+func_justify_hours ::=
+  'justify_hours' '(' interval ')'
+func_justify_interval ::=
+  'justify_interval' '(' interval ')'
 join_expr ::=
     select_pred ('CROSS' | 'NATURAL' join_type?) 'JOIN' table_ref select_post
 	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
 join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
+jsonb_agg ::=
+    'jsonb_agg' '(' expression ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+jsonb_object_agg ::=
+  'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
-    ('CONSISTENCY' 'TOPIC' topic ('CONSISTENCY' 'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url)?)?
-    with_options?
-    'FORMAT' ('AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url | 'JSON')
+    ('CONSISTENCY' '(' 'TOPIC' consistency_topic ('FORMAT' consistency_format_spec)? ')' )?
+list_agg ::=
+  'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 lit_cast ::=
   type val
 op_cast ::=
   val '::' type
+prepare ::=
+  'PREPARE' name 'AS' statement
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
@@ -367,6 +329,8 @@ show_views ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
   'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
+string_agg ::=
+  'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 table_ref ::=
   (
     table_name
@@ -375,11 +339,12 @@ table_ref ::=
     | '(' join_expr ')'
   ) ('AS'? table_alias ('(' col_alias (',' col_alias)* ')'))?
 tail_stmt ::=
-    'TAIL' object_name
+    'TAIL'
+    ( object_name | '(' select_stmt ')' )
     ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
     ('AS OF' timestamp_expression)?
 time_unit ::=
-  'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND'
+  'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS' | 'MICROSECONDS'
 type_bool ::=
   ( 'TRUE' | 'FALSE' )
 type_date ::=
@@ -396,6 +361,7 @@ type_map ::=
     "'" map_string "'" '::' 'MAP' '[' 'TEXT' '=>' value_type ']'
 type_list ::=
     'LIST' '[' (element (',' element)*)? ']'
+    | 'LIST' '(' query ')'
 type_numeric_dec ::=
   'numeric' ( '(' precision ',' scale ')' )?
 type_numeric_val ::=
@@ -419,4 +385,25 @@ type_timestamp ::=
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"
+update_stmt ::=
+  'UPDATE' table_name ('AS'? alias)?
+  'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
+  'WHERE' condition
 with_options ::= 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
+with_options_aws ::= 'WITH' '('
+    (
+      static_credentials
+      | 'profile_name' '=' val
+      | 'role_arn' '=' val
+      | 'region' '=' val
+    )
+    (
+      static_credentials
+      | 'profile_name' '=' val
+      | 'role_arn' '=' val
+      | 'region' '=' val
+    )*
+    ')'
+
+with_options_aws_static ::=
+  'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?

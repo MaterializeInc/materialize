@@ -7,16 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
-use bytes::Bytes;
+use aws_sdk_kinesis::types::{Blob, SdkError};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use rusoto_core::RusotoError;
-use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
 
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct IngestAction {
@@ -24,11 +23,11 @@ pub struct IngestAction {
     rows: Vec<String>,
 }
 
-pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
+pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Error> {
     let stream_prefix = format!("testdrive-{}", cmd.args.string("stream")?);
     match cmd.args.string("format")?.as_str() {
         "bytes" => (),
-        f => return Err(format!("unsupported message format for Kinesis: {}", f)),
+        f => bail!("unsupported message format for Kinesis: {}", f),
     }
     cmd.args.done()?;
 
@@ -40,11 +39,11 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
 
 #[async_trait]
 impl Action for IngestAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stream_name = format!("{}-{}", self.stream_prefix, state.seed);
 
         for row in &self.rows {
@@ -56,32 +55,33 @@ impl Action for IngestAction {
                 .take(30)
                 .map(char::from)
                 .collect();
-            let put_input = PutRecordInput {
-                data: Bytes::from(row.clone()),
-                explicit_hash_key: None,
-                partition_key: random_partition_key,
-                sequence_number_for_ordering: None,
-                stream_name: stream_name.clone(),
-            };
 
             // The Kinesis stream might not be immediately available,
             // be prepared to back off.
             Retry::default()
                 .max_duration(state.default_timeout)
-                .retry(|_| async {
-                    match state.kinesis_client.put_record(put_input.clone()).await {
+                .retry_async(|_| async {
+                    match state
+                        .kinesis_client
+                        .put_record()
+                        .data(Blob::new(row.as_bytes()))
+                        .partition_key(&random_partition_key)
+                        .stream_name(&stream_name)
+                        .send()
+                        .await
+                    {
                         Ok(_output) => Ok(()),
-                        Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {
-                            Err(format!("resource not found: {}", err))
+                        Err(SdkError::ServiceError { err, .. })
+                            if err.is_resource_not_found_exception() =>
+                        {
+                            bail!("resource not found: {}", err)
                         }
-                        Err(err) => {
-                            Err(format!("unable to put Kinesis record: {}", err.to_string()))
-                        }
+                        Err(err) => Err(err).context("putting Kinesis record"),
                     }
                 })
                 .await
-                .map_err(|e| format!("trying to put Kinesis record: {}", e))?;
+                .context("putting Kinesis record")?;
         }
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

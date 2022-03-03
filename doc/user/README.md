@@ -59,15 +59,16 @@ You can now include the diagram on a page using:
 
 ### Checking links locally
 
-You can check links locally with `htmltest`.
+You can check links locally with [`htmltest`](https://github.com/wjdp/htmltest).
 
-To install on a Mac:
+Visit their website for installation instructions, or, if you have installed [Homebrew](https://brew.sh/)
+on a Mac or on Linux, run:
 
 `brew install htmltest`
 
-To check the links:
+To check the links on your branch, run:
 
-Run `./ci/www/lint.sh` on your branch.
+`./ci/test/lint-docs.sh`
 
 ## Function + operator docs
 
@@ -97,7 +98,7 @@ Because each of these three components have multiple implementations, the
 docs for `CREATE SOURCE` are too large to fit on a single page. To manage this,
 we've broken the `CREATE SOURCE` documentation into many pages (one page for
 each meaningfully distinct combination of connector and format), and leveraged
-Hugo partials and shortcodes to simplify page creation and resuse content across
+Hugo partials and shortcodes to simplify page creation and reuse content across
 pages.
 
 * You can find all of the `CREATE SOURCE` docs at

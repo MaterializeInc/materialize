@@ -11,28 +11,33 @@ use std::cmp;
 use std::io::{BufRead, Read};
 use std::time::Duration;
 
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
-use ore::display::DisplayExt;
-use ore::result::ResultExt;
+use maplit::hashmap;
+use prost::Message;
+use prost_reflect::{DynamicMessage, FileDescriptor, MessageDescriptor};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
+use tokio::fs;
 
-use crate::action::{Action, State};
+use crate::action::{self, Action, ControlFlow, State};
 use crate::format::avro::{self, Schema};
 use crate::format::bytes;
-use crate::format::protobuf;
 use crate::parser::BuiltinCommand;
+
+const INGEST_BATCH_SIZE: isize = 10000;
 
 pub struct IngestAction {
     topic_prefix: String,
-    partition: i32,
+    partition: Option<i32>,
     format: Format,
     key_format: Option<Format>,
     timestamp: Option<i64>,
     publish: bool,
     rows: Vec<String>,
+    start_iteration: isize,
     repeat: isize,
 }
 
@@ -43,9 +48,11 @@ enum Format {
         confluent_wire_format: bool,
     },
     Protobuf {
-        message: protobuf::MessageType,
-        schema: Option<String>,
+        descriptor_file: String,
+        message: String,
         confluent_wire_format: bool,
+        schema_id_subject: Option<String>,
+        schema_message_id: u8,
     },
     Bytes {
         terminator: Option<u8>,
@@ -59,7 +66,10 @@ enum Transcoder {
         confluent_wire_format: bool,
     },
     Protobuf {
-        message: protobuf::MessageType,
+        message: MessageDescriptor,
+        confluent_wire_format: bool,
+        schema_id: i32,
+        schema_message_id: u8,
     },
     Bytes {
         terminator: Option<u8>,
@@ -67,19 +77,20 @@ enum Transcoder {
 }
 
 impl Transcoder {
-    fn decode_json<R, T>(row: R) -> Result<Option<T>, String>
+    fn decode_json<R, T>(row: R) -> Result<Option<T>, anyhow::Error>
     where
         R: Read,
         T: DeserializeOwned,
     {
         let deserializer = serde_json::Deserializer::from_reader(row);
-        match deserializer.into_iter().next() {
-            None => Ok(None),
-            Some(r) => r.map(Some).map_err(|e| format!("parsing json: {:#}", e)),
-        }
+        deserializer
+            .into_iter()
+            .next()
+            .transpose()
+            .context("parsing json")
     }
 
-    fn transcode<R>(&self, mut row: R) -> Result<Option<Vec<u8>>, String>
+    fn transcode<R>(&self, mut row: R) -> Result<Option<Vec<u8>>, anyhow::Error>
     where
         R: BufRead,
     {
@@ -101,84 +112,86 @@ impl Transcoder {
                         out.write_u8(0).unwrap();
                         out.write_i32::<NetworkEndian>(*schema_id).unwrap();
                     }
-                    out.extend(avro::to_avro_datum(&schema, val).map_err_to_string()?);
+                    out.extend(avro::to_avro_datum(&schema, val)?);
                     Ok(Some(out))
                 } else {
                     Ok(None)
                 }
             }
-            Transcoder::Protobuf { message } => {
-                fn convert<T: protobuf::Message>(decoded: T) -> Box<dyn protobuf::Message> {
-                    let d: Box<dyn protobuf::Message> = Box::new(decoded);
-                    d
-                }
-                let val = match message {
-                    protobuf::MessageType::Batch => {
-                        Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?.map(convert)
+            Transcoder::Protobuf {
+                message,
+                confluent_wire_format,
+                schema_id,
+                schema_message_id,
+            } => {
+                if let Some(val) = Self::decode_json::<_, serde_json::Value>(row)? {
+                    let message = DynamicMessage::deserialize(message.clone(), val)
+                        .context("parsing protobuf JSON")?;
+                    let mut out = vec![];
+                    if *confluent_wire_format {
+                        // See: https://github.com/MaterializeInc/materialize/issues/9250
+                        // The first byte is a magic byte (0) that indicates the Confluent
+                        // serialization format version, and the next four bytes are a
+                        // 32-bit schema ID, which we default to something fun.
+                        // And, as we only support single-message proto files for now,
+                        // we also set the following message id to 0.
+                        out.write_u8(0).unwrap();
+                        out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                        out.write_u8(*schema_message_id).unwrap();
                     }
-                    protobuf::MessageType::Measurement => {
-                        Self::decode_json::<_, protobuf::gen::billing::Measurement>(row)?
-                            .map(convert)
-                    }
-                    protobuf::MessageType::Struct => {
-                        Self::decode_json::<_, protobuf::gen::simple::Struct>(row)?.map(convert)
-                    }
-                    protobuf::MessageType::SimpleId => {
-                        Self::decode_json::<_, protobuf::gen::simple::SimpleId>(row)?.map(convert)
-                    }
-                    protobuf::MessageType::NestedOuter => {
-                        Self::decode_json::<_, protobuf::gen::nested::NestedOuter>(row)?
-                            .map(convert)
-                    }
-                    protobuf::MessageType::Imported => {
-                        Self::decode_json::<_, protobuf::gen::imported::Imported>(row)?.map(convert)
-                    }
-                };
-                let val = if let Some(decoded) = val {
-                    decoded
+                    message.encode(&mut out)?;
+                    Ok(Some(out))
                 } else {
-                    return Ok(None);
-                };
-                Ok(Some(val.write_to_bytes().map_err_to_string()?))
+                    Ok(None)
+                }
             }
             Transcoder::Bytes { terminator } => {
                 let mut out = vec![];
                 match terminator {
                     Some(t) => {
-                        row.read_until(*t, &mut out).map_err_to_string()?;
+                        row.read_until(*t, &mut out)?;
                         out.pop();
                     }
                     None => {
-                        row.read_to_end(&mut out).map_err_to_string()?;
+                        row.read_to_end(&mut out)?;
                     }
                 }
-                Ok(Some(bytes::unescape(&out)?))
+                if out.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(bytes::unescape(&out)?))
+                }
             }
         }
     }
 }
 
-pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
+pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
-    let partition = cmd.args.opt_parse::<i32>("partition")?.unwrap_or(0);
+    let partition = cmd.args.opt_parse::<i32>("partition")?;
+    let start_iteration = cmd.args.opt_parse::<isize>("start-iteration")?.unwrap_or(0);
     let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
+    let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         },
         "protobuf" => {
-            let message = cmd.args.parse("message")?;
-            let schema = cmd.args.opt_parse::<String>("schema")?;
-            let confluent_wire_format = cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true);
+            let descriptor_file = cmd.args.string("descriptor-file")?;
+            let message = cmd.args.string("message")?;
             Format::Protobuf {
+                descriptor_file,
                 message,
-                schema,
-                confluent_wire_format,
+                // This was introduced after the avro format's confluent-wire-format, so it defaults to
+                // false
+                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                schema_id_subject: cmd.args.opt_string("schema-id-subject"),
+                schema_message_id: cmd.args.opt_parse::<u8>("schema-message-id")?.unwrap_or(0),
             }
         }
         "bytes" => Format::Bytes { terminator: None },
-        f => return Err(format!("unknown format: {}", f)),
+        f => bail!("unknown format: {}", f),
     };
     let key_format = match cmd.args.opt_string("key-format").as_deref() {
         Some("avro") => Some(Format::Avro {
@@ -186,28 +199,38 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         }),
         Some("protobuf") => {
-            let message = cmd.args.parse("key-message")?;
-            let schema = cmd.args.opt_parse::<String>("key-schema")?;
-            let confluent_wire_format = cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true);
+            let descriptor_file = cmd.args.string("key-descriptor-file")?;
+            let message = cmd.args.string("key-message")?;
             Some(Format::Protobuf {
+                descriptor_file,
                 message,
-                schema,
-                confluent_wire_format,
+                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                schema_id_subject: cmd.args.opt_string("key-schema-id-subject"),
+                schema_message_id: cmd
+                    .args
+                    .opt_parse::<u8>("key-schema-message-id")?
+                    .unwrap_or(0),
             })
         }
         Some("bytes") => Some(Format::Bytes {
             terminator: match cmd.args.opt_parse::<char>("key-terminator")? {
                 Some(c) if c.is_ascii() => Some(c as u8),
-                Some(_) => return Err("key terminator must be single ASCII character".into()),
+                Some(_) => bail!("key terminator must be single ASCII character"),
                 None => Some(b':'),
             },
         }),
-        Some(f) => return Err(format!("unknown key format: {}", f)),
+        Some(f) => bail!("unknown key format: {}", f),
         None => None,
     };
     let timestamp = cmd.args.opt_parse("timestamp")?;
-    let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
     cmd.args.done()?;
+
+    if publish
+        && !matches!(format, Format::Avro { .. })
+        && !matches!(key_format, Some(Format::Avro { .. }))
+    {
+        bail!("publish=true is invalid unless format=avro or key-format=avro");
+    }
 
     Ok(IngestAction {
         topic_prefix,
@@ -217,19 +240,20 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         timestamp,
         publish,
         rows: cmd.input,
+        start_iteration,
         repeat,
     })
 }
 
 #[async_trait]
 impl Action for IngestAction {
-    async fn undo(&self, state: &mut State) -> Result<(), String> {
+    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         if self.publish {
             let subjects = state
                 .ccsr_client
                 .list_subjects()
                 .await
-                .map_err(|e| format!("unable to list subjects in schema registry: {}", e))?;
+                .context("listing schema registry subjects")?;
 
             let stale_subjects: Vec<_> = subjects
                 .iter()
@@ -239,8 +263,8 @@ impl Action for IngestAction {
             for subject in stale_subjects {
                 println!("Deleting stale schema registry subject {}", subject);
                 match state.ccsr_client.delete_subject(&subject).await {
-                    Ok(()) | Err(ccsr::DeleteError::SubjectNotFound) => (),
-                    Err(e) => return Err(e.to_string()),
+                    Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                    Err(e) => return Err(e.into()),
                 }
             }
         }
@@ -248,45 +272,72 @@ impl Action for IngestAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic_name = &format!("{}-{}", self.topic_prefix, state.seed);
+        println!(
+            "Ingesting data into Kafka topic {} with repeat {}",
+            topic_name, self.repeat
+        );
+
         let ccsr_client = &state.ccsr_client;
+        let temp_path = &state.temp_path;
         let make_transcoder = |format, typ| async move {
+            let ccsr_subject = format!("{}-{}", topic_name, typ);
             match format {
                 Format::Avro {
                     schema,
                     confluent_wire_format,
                 } => {
                     let schema_id = if self.publish {
-                        let ccsr_subject = format!("{}-{}", topic_name, typ);
                         let schema_id = ccsr_client
-                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Avro, &[])
+                            .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
                             .await
-                            .map_err(|e| format!("schema registry error: {}", e))?;
+                            .context("publishing to schema registry")?;
                         schema_id
                     } else {
                         1
                     };
                     let schema = avro::parse_schema(&schema)
-                        .map_err(|e| format!("parsing avro schema: {}\nschema={}", e, schema))?;
-                    Ok::<_, String>(Transcoder::Avro {
+                        .with_context(|| format!("parsing avro schema: {}", schema))?;
+                    Ok::<_, anyhow::Error>(Transcoder::Avro {
                         schema,
                         schema_id,
                         confluent_wire_format,
                     })
                 }
                 Format::Protobuf {
-                    message, schema, ..
+                    descriptor_file,
+                    message,
+                    confluent_wire_format,
+                    schema_id_subject,
+                    schema_message_id,
                 } => {
-                    if self.publish {
-                        let schema = schema.expect("schema");
-                        let ccsr_subject = format!("{}-{}", topic_name, typ);
+                    let schema_id = if confluent_wire_format {
                         ccsr_client
-                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Protobuf, &[])
+                            .get_schema_by_subject(
+                                schema_id_subject.as_deref().unwrap_or(&ccsr_subject),
+                            )
                             .await
-                            .map_err(|e| format!("schema registry error: {}", e))?;
-                    }
-                    Ok(Transcoder::Protobuf { message })
+                            .context("fetching schema from registry")?
+                            .id
+                    } else {
+                        0
+                    };
+
+                    let bytes = fs::read(temp_path.join(descriptor_file))
+                        .await
+                        .context("reading protobuf descriptor file")?;
+                    let fd = FileDescriptor::decode(&*bytes)
+                        .context("parsing protobuf descriptor file")?;
+                    let message = fd
+                        .get_message_by_name(&message)
+                        .ok_or_else(|| anyhow!("unknown message name {}", message))?;
+                    Ok(Transcoder::Protobuf {
+                        message,
+                        confluent_wire_format,
+                        schema_id,
+                        schema_message_id,
+                    })
                 }
                 Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
             }
@@ -300,8 +351,14 @@ impl Action for IngestAction {
 
         let mut futs = FuturesUnordered::new();
 
-        for _n in 0..self.repeat {
+        for iteration in self.start_iteration..(self.start_iteration + self.repeat) {
             for row in &self.rows {
+                let row = action::substitute_vars(
+                    row,
+                    &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
+                    &None,
+                    false,
+                )?;
                 let mut row = row.as_bytes();
                 let key = match &key_transcoder {
                     None => None,
@@ -309,12 +366,15 @@ impl Action for IngestAction {
                 };
                 let value = value_transcoder
                     .transcode(&mut row)
-                    .map_err(|e| format!("parsing row: {} {}", String::from_utf8_lossy(row), e))?;
+                    .with_context(|| format!("parsing row: {}", String::from_utf8_lossy(row)))?;
                 let producer = &state.kafka_producer;
                 let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
                 futs.push(async move {
-                    let mut record: FutureRecord<_, _> =
-                        FutureRecord::to(topic_name).partition(self.partition);
+                    let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name);
+
+                    if let Some(partition) = self.partition {
+                        record = record.partition(partition);
+                    }
                     if let Some(key) = &key {
                         record = record.key(key);
                     }
@@ -327,10 +387,16 @@ impl Action for IngestAction {
                     producer.send(record, timeout).await
                 });
             }
+
+            // Reap the futures thus produced periodically or after the last iteration
+            if iteration % INGEST_BATCH_SIZE == 0
+                || iteration == (self.start_iteration + self.repeat - 1)
+            {
+                while let Some(res) = futs.next().await {
+                    res.map_err(|(e, _message)| e)?;
+                }
+            }
         }
-        while let Some(res) = futs.next().await {
-            res.map_err(|(e, _message)| e.to_string_alt())?;
-        }
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

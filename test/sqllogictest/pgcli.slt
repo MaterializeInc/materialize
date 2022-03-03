@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# this file contains queries that are used by pgcli
+
+# this query returns 150+ rows and could be subject to frequent change
+# rather than executing QUERY TTTTBT, just make sure that it does not fail
+statement OK
+SELECT
+    nsp.nspname AS schema_name,
+    cls.relname AS table_name,
+    att.attname AS column_name,
+    att.atttypid::REGTYPE::STRING AS type_name,
+    att.atthasdef AS has_default,
+    pg_catalog.pg_get_expr(def.adbin, def.adrelid, true) AS default
+FROM
+    pg_catalog.pg_attribute AS att
+    INNER JOIN pg_catalog.pg_class AS cls ON att.attrelid = cls.oid
+    INNER JOIN pg_catalog.pg_namespace AS nsp ON cls.relnamespace = nsp.oid
+    LEFT JOIN pg_attrdef AS def ON
+            def.adrelid = att.attrelid AND def.adnum = att.attnum
+WHERE
+    cls.relkind = ANY (ARRAY['r', 'p', 'f'])
+    AND NOT att.attisdropped
+    AND att.attnum > 0
+ORDER BY
+    1, 2, att.attnum

@@ -10,7 +10,6 @@
 import concurrent.futures
 import os
 import re
-import subprocess
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,7 +19,8 @@ import click
 import requests
 from semver.version import Version
 
-from materialize import errors, git, spawn, ui
+from materialize import git, spawn, ui
+from materialize.ui import UIError
 
 BIN_CARGO_TOML = "src/materialized/Cargo.toml"
 LICENSE = "LICENSE"
@@ -42,9 +42,6 @@ OPT_AFFECT_REMOTE = click.option(
 )
 
 
-say = ui.speaker("")
-
-
 @click.group()
 def cli() -> None:
     """
@@ -63,7 +60,7 @@ def cli() -> None:
 @OPT_AFFECT_REMOTE
 @click.argument(
     "level",
-    type=click.Choice(["major", "feature", "biweekly", "rc"]),
+    type=click.Choice(["major", "weekly", "patch", "rc"]),
 )
 def new_rc(
     create_branch: Optional[str],
@@ -76,8 +73,8 @@ def new_rc(
     \b
     Arguments:
         level    Which part of the version to change:
-                 * biweekly - The Z in X.Y.Z
-                 * feature  - The Y in X.Y.Z
+                 * patch    - The Z in X.Y.Z
+                 * weekly   - The Y in X.Y.Z
                  * major    - The X in X.Y.Z
                  * rc       - increases the N in -rcN, should only be used if
                               you need to create a second or greater release candidate
@@ -86,14 +83,12 @@ def new_rc(
     new_version = None
     if level == "rc":
         if tag.prerelease is None or not tag.prerelease.startswith("rc"):
-            raise errors.MzConfigurationError(
-                "Attempted to bump an rc version without starting an RC"
-            )
+            raise UIError("Attempted to bump an rc version without starting an RC")
         next_rc = int(tag.prerelease[2:]) + 1
         new_version = tag.replace(prerelease=f"rc{next_rc}")
-    elif level == "biweekly":
+    elif level == "patch":
         new_version = tag.bump_patch().replace(prerelease="rc1")
-    elif level == "feature":
+    elif level == "weekly":
         new_version = tag.bump_minor().replace(prerelease="rc1")
     elif level == "major":
         new_version = tag.bump_major().replace(prerelease="rc1")
@@ -127,14 +122,14 @@ def incorporate_inner(
     new_version = tag.bump_patch().replace(prerelease="dev")
     if not create_branch and not checkout:
         if is_finish:
-            create = f"continue-{new_version}"
+            create_branch = f"continue-{new_version}"
         else:
-            create = f"prepare-{new_version}"
+            create_branch = f"prepare-{new_version}"
 
     release(
         new_version,
         checkout=checkout,
-        create_branch=create,
+        create_branch=create_branch,
         tag=False,
         affect_remote=affect_remote,
     )
@@ -143,9 +138,22 @@ def incorporate_inner(
 @cli.command()
 @OPT_CREATE_BRANCH
 @OPT_AFFECT_REMOTE
-def finish(create_branch: Optional[str], affect_remote: bool) -> None:
+@OPT_CHECKOUT
+def finish(
+    create_branch: Optional[str], checkout: Optional[str], affect_remote: bool
+) -> None:
     """Create the final non-rc tag and a branch to incorporate into the repo"""
-    tag = get_latest_tag(fetch=True)
+    if checkout is not None:
+        tags = git.get_version_tags()
+        tag = Version.parse(checkout.lstrip("v"))
+        if tag not in tags:
+            click.confirm(
+                f"This version: {tag} doesn't look like an existing tag, "
+                "are you sure you want to create a release from it?",
+                abort=True,
+            )
+    else:
+        tag = get_latest_tag(fetch=True)
     if not tag.prerelease or not tag.prerelease.startswith("rc"):
         click.confirm(
             f"This version: {tag} doesn't look like a prerelease, "
@@ -171,7 +179,7 @@ def finish(create_branch: Optional[str], affect_remote: bool) -> None:
 
 @cli.command()
 @click.argument("start-time")
-@click.option("--env", default="dev", type=click.Choice(["dev", "scratch"]))
+@click.option("--env", default="scratch", type=click.Choice(["dev", "scratch"]))
 def dashboard_links(start_time: str, env: str) -> None:
     """
     Create the Grafana dashboard links for the release qualification tests
@@ -200,22 +208,26 @@ def dashboard_links(start_time: str, env: str) -> None:
     template = (
         "https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?"
         + "orgId=1&from={time_from}&to={time_to}&var-test={test}&var-purpose={purpose}"
-        + "&var-env={env}"
+        + "&var-env={env}&var-git_ref={tag}"
     )
     purpose = "load_test"
 
     tests = []
-    for test in ("chbench", "kinesis", "billing-demo"):
+    for test in (
+        "chbench",
+        "perf-kinesis",
+        "kafka-ingest-open-loop",
+        "kafka-ingest-open-loop-persist",
+    ):
         url = template.format(
-            time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
+            time_from=time_from,
+            time_to=time_to,
+            test=test,
+            purpose=purpose,
+            env=env,
+            tag=tag,
         )
         tests.append((test, url))
-
-    purpose = test = "chaos"
-    url = template.format(
-        time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
-    )
-    tests.append((test, url))
 
     print(f"Load tests for release v{tag}")
     for test, url in tests:
@@ -247,9 +259,7 @@ def release(
         version: The version to release. The `v` prefix is optional
     """
     if git.is_dirty():
-        raise errors.MzConfigurationError(
-            "working directory is not clean, stash or commit your changes"
-        )
+        raise UIError("working directory is not clean, stash or commit your changes")
 
     the_tag = f"v{version}"
     confirm_version_is_next(version, affect_remote)
@@ -259,7 +269,8 @@ def release(
     if create_branch is not None:
         git.create_branch(create_branch)
 
-    confirm_on_latest_rc(affect_remote)
+    if not version.prerelease:
+        confirm_on_latest_rc(affect_remote)
 
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
@@ -272,7 +283,7 @@ def release(
         future = four_years_hence()
         change_line(LICENSE, "Change Date", f"Change Date:               {future}")
 
-    say("Updating Cargo.lock")
+    ui.say("Updating Cargo.lock")
     spawn.runv(["cargo", "check", "-p", "materialized"])
     spawn.runv(["cargo", "check", "-p", "materialized"])
     spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
@@ -298,20 +309,24 @@ def release(
             ):
                 spawn.runv(["git", "push", matching, the_tag])
         else:
-            say("")
-            say(
+            ui.say("")
+            ui.say(
                 f"Next step is to push {the_tag} to the MaterializeInc/materialize repo"
             )
     else:
         branch = git.rev_parse("HEAD", abbrev=True)
-        say("")
-        say(f"Create a PR with your branch: '{branch}'")
+        ui.say("")
+        ui.say(f"Create a PR with your branch: '{branch}'")
 
 
 def update_versions_list(released_version: Version) -> None:
     """Update the doc config with the passed-in version"""
     today = date.today().strftime("%d %B %Y")
-    toml_line = f'  {{ name = "v{released_version}", date = "{today}" }},\n'
+    toml_line = (
+        f'  {{ name = "v{released_version}", date = "{today}", '
+        + 'targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", '
+        + '"x86_64-apple-darwin", "aarch64-apple-darwin"] },\n'
+    )
     with open(USER_DOC_CONFIG) as fh:
         docs = fh.readlines()
     wrote_line = False
@@ -322,7 +337,7 @@ def update_versions_list(released_version: Version) -> None:
                 fh.write(toml_line)
                 wrote_line = True
     if not wrote_line:
-        raise errors.MzRuntimeError("Couldn't determine where to insert new version")
+        raise UIError("Couldn't determine where to insert new version")
 
 
 @cli.command()
@@ -348,12 +363,11 @@ def update_upgrade_tests(released_version: Optional[Version], force: bool) -> No
 
 def update_upgrade_tests_inner(released_version: Version, force: bool = False) -> None:
     if released_version.prerelease is not None:
-        say("Not updating upgrade tests for prerelease")
+        ui.say("Not updating upgrade tests for prerelease")
         return
 
     upgrade_dir = Path("./test/upgrade")
     version = f"v{released_version}"
-    readme = upgrade_dir.joinpath("README.md")
     need_upgrade = [
         str(p) for p in upgrade_dir.glob("*current_source*") if "example" not in str(p)
     ]
@@ -362,85 +376,8 @@ def update_upgrade_tests_inner(released_version: Version, force: bool = False) -
     for path in need_upgrade:
         spawn.runv(["git", "mv", path, path.replace("current_source", version)])
 
-    mzcompose = upgrade_dir.joinpath("mzcompose.yml")
-    with mzcompose.open() as fh:
-        contents = fh.readlines()
-
-    workflow_version = str(released_version).replace(".", "_")
-    step = f"""
-      - step: workflow
-        workflow: upgrade-from-{workflow_version}
-"""
-    found = False
-    for i, line in enumerate(contents):
-        if "mkrelease.py will place new versions here" in line:
-            contents.insert(i - 1, step)
-            found = True
-            break
-    if not found:
-        _mzcompose_confused(readme)
-        return
-
-    tests = None
-    new_workflow_location = None
-    found = 0
-    for i, line in enumerate(contents):
-        if "TESTS:" in line:
-            tests = line.split(":")[1].strip()
-
-        if "upgrade-from-latest:" in line:
-            new_workflow_location = i - 1
-            workflow = f"""
-  upgrade-from-{workflow_version}:
-    env:
-      UPGRADE_FROM_VERSION: {version}
-      TESTS: {tests}|{version}
-    steps:
-      - step: workflow
-        workflow: test-upgrade-from-version
-"""
-
-        if new_workflow_location and "TESTS:" in line:
-            if tests is None:
-                _mzcompose_confused(readme)
-                return
-            latest_tests = line.rstrip().split("|")
-            if "current_source" in latest_tests:
-                latest_tests.insert(-1, version)
-            else:
-                latest_tests.append(version)
-            contents[i] = "|".join(latest_tests) + "\n"
-            found += 1
-            if found == 2:
-                contents.insert(new_workflow_location, workflow)
-                break
-
-    with mzcompose.open("w") as fh:
-        fh.write("".join(contents))
-
-    if found != 2:
-        _mzcompose_confused(readme)
-        return
-
-    try:
-        spawn.capture(
-            "bin/mzcompose --mz-find upgrade list-workflows".split(), stderr_too=True
-        )
-    except subprocess.CalledProcessError:
-        say(
-            f"The generated test/upgrade/mzcompose.yml file appears to be broken, "
-            f"please consult {readme}"
-        )
-
     git.commit_all_changed(
         f"Rename {len(need_upgrade)} current_source upgrade tests to {version}"
-    )
-
-
-def _mzcompose_confused(readme_path: Path) -> None:
-    say(
-        f"It appears that the format for upgrade's mzcompose.yml has changed.\n"
-        f"Please update it yourself using the instructions in {readme_path}."
     )
 
 
@@ -458,7 +395,7 @@ def change_line(fname: str, line_start: str, replacement: str) -> None:
         fh.write("\n")
 
     if changes != 1:
-        raise errors.MzConfigurationError(f"Found {changes} {line_start}s in {fname}")
+        raise UIError(f"Found {changes} {line_start}s in {fname}")
 
 
 def four_years_hence() -> str:
@@ -494,7 +431,7 @@ def confirm_version_is_next(this_tag: Version, affect_remote: bool) -> None:
             and this_tag.prerelease is None
             and latest_tag.prerelease is not None
         ):
-            say("Congratulations on the successful release!")
+            ui.say("Congratulations on the successful release!")
         elif (
             this_tag.minor == latest_tag.minor
             and this_tag.patch == latest_tag.patch + 1
@@ -503,7 +440,7 @@ def confirm_version_is_next(this_tag: Version, affect_remote: bool) -> None:
             # prepare next
             pass
         else:
-            say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
+            ui.say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
             sys.exit(1)
     elif this_tag.minor == latest_tag.minor + 1 and this_tag.patch == 0:
         click.confirm("Are you sure you want to bump the minor version?", abort=True)
@@ -562,7 +499,7 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
                     ancestor_ref = str(ref)
                     break
 
-            say(
+            ui.say(
                 f"Using recent_ref={recent_ref}  ancestor_ref={ancestor_ref}",
             )
 
@@ -577,7 +514,6 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
             commit_range,
             "--",
         ],
-        unicode=True,
     )
 
     pattern = re.compile(r"^\s*\(refs/pullreqs/(\d+)|\(#(\d+)")
@@ -597,13 +533,13 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
             prs.append(pr)
 
     if not found_ref:
-        say(
+        ui.say(
             "WARNING: you probably don't have pullreqs configured for your repo",
         )
-        say(
+        ui.say(
             "Add the following line to the MaterializeInc/materialize remote section in your .git/config",
         )
-        say("  fetch = +refs/pull/*/head:refs/pullreqs/*")
+        ui.say("  fetch = +refs/pull/*/head:refs/pullreqs/*")
 
     username = input("Enter your github username: ")
     creds_path = os.path.expanduser("~/.config/materialize/dev-tools-access-token")
@@ -612,7 +548,7 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
         with open(creds_path) as fh:
             token = fh.read().strip()
     except FileNotFoundError:
-        raise errors.MzConfigurationError(
+        raise UIError(
             f"""No developer tool api token at {creds_path!r}
     please create an access token at https://github.com/settings/tokens"""
         )
@@ -636,11 +572,11 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
                 title = contents["title"]
                 collected.append((url, title))
             except KeyError:
-                raise errors.MzRuntimeError(contents)
+                raise UIError(contents)
     for url, title in sorted(collected):
         print(url, title)
 
 
 if __name__ == "__main__":
-    with errors.error_handler(say):
+    with ui.error_handler("mkrelease"):
         cli()

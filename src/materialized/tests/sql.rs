@@ -15,104 +15,104 @@
 
 use std::error::Error;
 use std::fs::File;
+use std::io::Read;
 use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use log::info;
 use postgres::Row;
 use tempfile::NamedTempFile;
+use tracing::info;
 
-use util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
+use mz_ore::assert_contains;
+
+use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
 #[test]
-fn test_no_block() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+fn test_no_block() -> Result<(), anyhow::Error> {
+    mz_ore::test::init_logging();
 
-    ore::panic::set_abort_on_panic();
-    // This is better than relying on CI to time out,
-    // because an actual abort (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    let finished = Arc::new(AtomicBool::new(false));
-    thread::spawn({
-        let finished = finished.clone();
-        move || {
-            sleep(Duration::from_secs(30));
-            if !finished.load(Ordering::SeqCst) {
-                panic!("test_no_block timed out")
-            }
+    // This is better than relying on CI to time out, because an actual failure
+    // (as opposed to a CI timeout) causes `services.log` to be uploaded.
+    mz_ore::test::timeout(Duration::from_secs(30), || {
+        // Create a listener that will simulate a slow Confluent Schema Registry.
+        info!("test_no_block: creating listener");
+        let listener = TcpListener::bind("localhost:0")?;
+        let listener_port = listener.local_addr()?.port();
+
+        info!("test_no_block: starting server");
+        let server = util::start_server(util::Config::default())?;
+        info!("test_no_block: connecting to server");
+        let mut client = server.connect(postgres::NoTls)?;
+
+        info!("test_no_block: spawning thread");
+        let slow_thread = thread::spawn(move || {
+            info!("test_no_block: in thread; executing create source");
+            let result = client.batch_execute(&format!(
+                "CREATE SOURCE foo \
+                FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
+                &*KAFKA_ADDRS, listener_port,
+            ));
+            info!("test_no_block: in thread; create source done");
+            result
+        });
+
+        // Wait for materialized to contact the schema registry, which indicates
+        // the coordinator is processing the CREATE SOURCE command. It will be
+        // unable to complete the query until we respond.
+        info!("test_no_block: accepting fake schema registry connection");
+        let (mut stream, _) = listener.accept()?;
+
+        // Verify that the coordinator can still process other requests from other
+        // sessions.
+        info!("test_no_block: connecting to server again");
+        let mut client = server.connect(postgres::NoTls)?;
+        info!("test_no_block: executing query");
+        let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
+        assert_eq!(answer, 2);
+
+        info!("test_no_block: reading the HTTP request");
+        let mut buf = vec![0; 1024];
+        let mut input = vec![];
+        // The HTTP request will end in two CRLFs, so detect that to know we've finished reading.
+        while {
+            let len = input.len();
+            len < 4 || &input[len - 4..] != b"\r\n\r\n"
+        } {
+            let len_read = stream.read(&mut buf).unwrap();
+            assert!(len_read > 0);
+            input.extend_from_slice(&buf[0..len_read]);
         }
-    });
-    // Create a listener that will simulate a slow Confluent Schema Registry.
-    info!("test_no_block: creating listener");
-    let listener = TcpListener::bind("localhost:0")?;
-    let listener_port = listener.local_addr()?.port();
 
-    info!("test_no_block: starting server");
-    let server = util::start_server(util::Config::default())?;
-    info!("test_no_block: connecting to server");
-    let mut client = server.connect(postgres::NoTls)?;
+        // Return an error to the coordinator, so that we can shutdown cleanly.
+        info!("test_no_block: writing fake schema registry error");
+        write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
+        info!("test_no_block: shutting down fake schema registry connection");
 
-    info!("test_no_block: spawning thread");
-    let slow_thread = thread::spawn(move || {
-        info!("test_no_block: in thread; executing create source");
-        let result = client.batch_execute(&format!(
-            "CREATE SOURCE foo \
-             FROM KAFKA BROKER '{}' TOPIC 'foo' \
-             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
-            &*KAFKA_ADDRS, listener_port,
-        ));
-        info!("test_no_block: in thread; create source done");
-        result
-    });
+        stream.shutdown(Shutdown::Write).unwrap();
 
-    // Wait for materialized to contact the schema registry, which indicates
-    // the coordinator is processing the CREATE SOURCE command. It will be
-    // unable to complete the query until we respond.
-    info!("test_no_block: accepting fake schema registry connection");
-    let (mut stream, _) = listener.accept()?;
+        // Verify that the schema registry error was returned to the client, for
+        // good measure.
+        info!("test_no_block: joining thread");
+        let slow_res = slow_thread.join().unwrap();
+        assert_contains!(slow_res.unwrap_err().to_string(), "server error 503");
 
-    // Verify that the coordinator can still process other requests from other
-    // sessions.
-    info!("test_no_block: connecting to server again");
-    let mut client = server.connect(postgres::NoTls)?;
-    info!("test_no_block: executing query");
-    let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
-    assert_eq!(answer, 2);
-
-    // Return an error to the coordinator, so that we can shutdown cleanly.
-    info!("test_no_block: writing fake schema registry error");
-    write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
-    info!("test_no_block: shutting down fake schema registry connection");
-
-    stream.shutdown(Shutdown::Write).unwrap();
-
-    // Verify that the schema registry error was returned to the client, for
-    // good measure.
-    info!("test_no_block: joining thread");
-    let slow_res = slow_thread.join().unwrap();
-    assert!(slow_res
-        .unwrap_err()
-        .to_string()
-        .contains("server error 503"));
-
-    info!("test_no_block: returning");
-    finished.store(true, Ordering::SeqCst);
-    Ok(())
+        info!("test_no_block: returning");
+        Ok(())
+    })
 }
 
 #[test]
 fn test_time() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
@@ -151,7 +151,7 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -179,7 +179,7 @@ fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -227,7 +227,7 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -306,10 +306,17 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
     }
 
-    let err = client_reads
-        .batch_execute("TAIL v AS OF 1")
-        .unwrap_db_error();
+    // Wait until compaction kicks in and we get an error on trying to read from the cursor.
+    let err = loop {
+        client_reads.batch_execute("COMMIT; BEGIN; DECLARE c CURSOR FOR TAIL v AS OF 1")?;
+
+        if let Err(err) = client_reads.query("FETCH ALL c", &[]) {
+            break err;
+        }
+    };
+
     assert!(err
+        .unwrap_db_error()
         .message()
         .starts_with("Timestamp (1) is not valid for all inputs"));
 
@@ -322,7 +329,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 /// data row we will also see one progressed message.
 #[test]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -335,6 +342,13 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
          DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
     )?;
 
+    #[derive(PartialEq)]
+    enum State {
+        WaitingForData,
+        WaitingForProgress(MzTimestamp),
+        Done,
+    }
+
     for i in 1..=3 {
         let data = format!("line {}", i);
         client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
@@ -343,45 +357,50 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
         // a batch that only contains continuous progress statements, without
         // any data. We retry until we get the batch that has the data, and
         // then verify that it also has a progress statement.
-        loop {
+        let mut state = State::WaitingForData;
+        while state != State::Done {
             let rows = client_reads.query("FETCH ALL c1", &[])?;
 
             let rows = rows.iter();
 
             // find the data row in the sea of progress rows
 
-            // remove progress statements that occured before our data
-            let mut rows = rows.skip_while(|row| row.try_get::<_, String>("data").is_err());
+            // remove progress statements that occurred before our data
+            let skip_progress = state == State::WaitingForData;
+            let mut rows = rows
+                .skip_while(move |row| skip_progress && row.try_get::<_, String>("data").is_err());
 
-            // this must be the data row
-            let data_row = rows.next();
+            if state == State::WaitingForData {
+                // this must be the data row
+                let data_row = rows.next();
 
-            let data_row = match data_row {
-                Some(data_row) => data_row,
-                None => continue, //retry
-            };
+                let data_row = match data_row {
+                    Some(data_row) => data_row,
+                    None => continue, //retry
+                };
 
-            assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
-            assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
-            assert_eq!(data_row.get::<_, String>("data"), data);
-
-            let mut num_progress_rows = 0;
-            for progress_row in rows {
-                assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
-                assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
-                assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
-
+                assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
+                assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
+                assert_eq!(data_row.get::<_, String>("data"), data);
                 let data_ts: MzTimestamp = data_row.get("mz_timestamp");
-                let progress_ts: MzTimestamp = progress_row.get("mz_timestamp");
-                assert!(data_ts < progress_ts);
-
-                num_progress_rows += 1;
+                state = State::WaitingForProgress(data_ts);
             }
+            if let State::WaitingForProgress(data_ts) = &state {
+                let mut num_progress_rows = 0;
+                for progress_row in rows {
+                    assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
+                    assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
+                    assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
 
-            assert!(num_progress_rows > 0);
+                    let progress_ts: MzTimestamp = progress_row.get("mz_timestamp");
+                    assert!(data_ts < &progress_ts);
 
-            // success! break out of the loop
-            break;
+                    num_progress_rows += 1;
+                }
+                if num_progress_rows > 0 {
+                    state = State::Done;
+                }
+            }
         }
     }
 
@@ -392,7 +411,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 // turns them into nullable columns. See #6304.
 #[test]
 fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -422,7 +441,7 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     while state != State::Done {
         let row = client_reads.query_one("FETCH 1 c2", &[])?;
 
-        if row.get::<_, bool>("mz_progressed") == false {
+        if !row.get::<_, bool>("mz_progressed") {
             assert_eq!(row.get::<_, i64>("mz_diff"), 1);
             assert_eq!(row.get::<_, String>("data"), "data");
             state = State::WaitingForProgress;
@@ -441,7 +460,7 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
 /// receive data or not.
 #[test]
 fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -479,7 +498,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
             }
 
             let ts: MzTimestamp = row.get("mz_timestamp");
-            assert!(last_ts < ts);
+            assert!(last_ts <= ts);
             last_ts = ts;
         }
 
@@ -499,13 +518,14 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
     client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&"hello".to_owned()])?;
 
     // fetch away the data message, plus maybe some progress messages
-    loop {
+    let mut num_data_rows = 0;
+    let mut num_progress_rows = 0;
+
+    while num_data_rows == 0 || num_progress_rows == 0 {
         let rows = client_reads.query("FETCH ALL c1", &[])?;
-        let (num_data_rows, num_progress_rows) = verify_rows(rows);
-        assert!(num_progress_rows > 0);
-        if num_data_rows == 1 {
-            break;
-        }
+        let (current_num_data_rows, current_num_progress_rows) = verify_rows(rows);
+        num_data_rows += current_num_data_rows;
+        num_progress_rows += current_num_progress_rows;
     }
 
     // Try and read some progress messages. The normal update interval is
@@ -523,7 +543,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -612,7 +632,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
@@ -671,7 +691,7 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default();
     let server = util::start_server(config)?;
@@ -693,7 +713,7 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 /// and into the user's SQL console.
 #[test]
 fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config = util::Config::default();
     let server = util::start_server(config)?;
@@ -744,7 +764,7 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 // does not keep the server alive forever.
 #[test]
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
 
@@ -765,7 +785,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
         conn_task.abort();
 
         // Need to await `conn_task` to actually deliver the `abort`. We don't
-        // care about the result though (it's probably `JoinError::Cancelled`).
+        // care about the result though (it's probably `JoinError` with `is_cancelled` being true).
         let _ = conn_task.await;
 
         Ok::<_, Box<dyn Error>>(())
@@ -780,11 +800,107 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default().workers(3);
+    let server = util::start_server(config)?;
+    let mut client_interactive = server.connect(postgres::NoTls)?;
+    let mut client_tail = server.connect(postgres::NoTls)?;
+
+    let verify_rw_pair = move |rows: &[Row], expected_data: &str| -> bool {
+        for (i, row) in rows.iter().enumerate() {
+            match row.get::<_, Option<String>>("data") {
+                // Only verify if all rows have expected data
+                Some(inner) => {
+                    if &inner != expected_data {
+                        return false;
+                    }
+                }
+                // Only verify if row without data is last row
+                None => {
+                    if i + 1 != rows.len() {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if rows.len() != 2 {
+            return false;
+        }
+
+        // First row reflects write. Written rows have not progressed, and all
+        // writes occur at the same timestamp.
+        assert_eq!(rows[0].get::<_, Option<bool>>("mz_progressed"), Some(false));
+        // Two writes with the same data have their diffs compacted
+        assert_eq!(rows[0].get::<_, Option<i64>>("mz_diff"), Some(2));
+
+        // Second row reflects closing timestamp, manufactured by the read
+        assert_eq!(rows[1].get::<_, Option<bool>>("mz_progressed"), Some(true));
+        assert_eq!(rows[1].get::<_, Option<i64>>("mz_diff"), None);
+
+        true
+    };
+
+    client_interactive.batch_execute("CREATE TABLE t1 (data text)")?;
+
+    client_tail.batch_execute(
+        "COMMIT; BEGIN;
+         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+    )?;
+
+    // Keep trying until you either panic or are able to verify the expected behavior.
+    loop {
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+        let _ = client_interactive.query("SELECT * FROM T1", &[])?;
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+
+        let first_rows = client_tail.query("FETCH ALL c1", &[])?;
+        let first_rows_verified = verify_rw_pair(&first_rows, "first");
+
+        let _ = client_interactive.query("SELECT * FROM t1", &[])?;
+
+        let second_rows = client_tail.query("FETCH ALL c1", &[])?;
+        let second_rows_verified = verify_rw_pair(&second_rows, "second");
+
+        if first_rows_verified && second_rows_verified {
+            let first_write_ts = first_rows[0].get::<_, MzTimestamp>("mz_timestamp");
+            let first_closed_ts = first_rows[1].get::<_, MzTimestamp>("mz_timestamp");
+            assert!(first_write_ts < first_closed_ts);
+
+            let second_write_ts = second_rows[0].get::<_, MzTimestamp>("mz_timestamp");
+            let second_closed_ts = second_rows[1].get::<_, MzTimestamp>("mz_timestamp");
+            assert!(first_closed_ts <= second_write_ts);
+            assert!(second_write_ts < second_closed_ts);
+            break;
+        }
+    }
+
+    // Ensure reads don't advance timestamp.
+    loop {
+        let first_read =
+            client_interactive.query("SELECT *, mz_logical_timestamp() FROM t1", &[])?;
+        let second_read =
+            client_interactive.query("SELECT *, mz_logical_timestamp() FROM t1", &[])?;
+        if first_read[0].get::<_, MzTimestamp>("mz_logical_timestamp")
+            == second_read[0].get::<_, MzTimestamp>("mz_logical_timestamp")
+        {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 // Tests that temporary views created by one connection cannot be viewed
 // by another connection.
 #[test]
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
     let mut client_a = server.connect(postgres::NoTls)?;
@@ -827,7 +943,7 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 #[test]
 #[ignore]
 fn test_linearizable() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
     let config = util::Config::default();
     config.logical_compaction_window(Duration::from_secs(60));
     let server = util::start_server(util::Config::default())?;

@@ -9,7 +9,7 @@ aliases:
 ---
 
 `jsonb` data expresses a JavaScript Object Notation (JSON) object similar to
-PostgreSQL's implementation.
+[PostgreSQL's implementation](https://www.postgresql.org/docs/current/datatype-json.html).
 
 Detail | Info
 -------|------
@@ -60,9 +60,8 @@ SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::jsonb);
   - Number
   - Boolean
   - Null
-- Numbers in `jsonb` elements are all equivalent to `float` in SQL.
-    - To operate on elements as `int`s, you must cast them to `float` and then
-      to, e.g. `::float::int`.
+- Numbers in `jsonb` elements are all equivalent to
+  [`numeric`](/sql/types/numeric) in SQL.
 
 ### Valid casts
 
@@ -120,6 +119,71 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
     ----------------
      "\"foo\""
     ```
+
+### Subscripting
+
+{{< version-added v0.16.0 />}}
+
+You can use subscript notation (`[]`) to extract an element from a `jsonb` array
+or object.
+
+The returned value is always of type `jsonb`. If the requested array element or
+object key does not exist, or if either the input value or subscript value is
+`NULL`, the subscript operation returns `NULL`.
+
+#### Arrays
+
+To extract an element from an array, supply the 0-indexed position as the
+subscript:
+
+```sql
+SELECT ('[1, 2, 3]'::jsonb)[1]
+```
+```nofmt
+ jsonb
+-------
+ 2
+```
+
+Negative indexes count backwards from the end of the array. [Slice syntax] is
+not supported. Note also that 0-indexed positions are at variance with [`list`]
+and [`array`] types, whose subscripting operation uses 1-indexed positions.
+
+#### Objects
+
+To extract a value from an object, supply the key as the subscript:
+
+```sql
+SELECT ('{"a": 1, "b": 2, "c": 3}'::jsonb)['b'];
+```
+```nofmt
+ jsonb
+-------
+ 2
+```
+
+You can chain subscript operations to retrieve deeply nested elements:
+
+```sql
+SELECT ('{"1": 2, "a": ["b", "c"]}'::jsonb)['a'][1];
+```
+```nofmt
+ jsonb
+-------
+ "c"
+```
+
+#### Remarks
+
+Because the output type of the subscript operation is always `jsonb`, when
+comparing the output of a subscript to a string, you must supply a JSON string
+to compare against:
+
+```sql
+SELECT ('["a", "b"]::jsonb)[1] = '"b"'
+```
+
+Note the extra double quotes on the right-hand side of the comparison.
 
 ## Examples
 
@@ -506,3 +570,7 @@ SELECT to_jsonb('hello');
 ```
 
 Note that the output is `jsonb`.
+
+[Slice syntax]: /sql/types/list#slicing-ranges
+[`list`]: /sql/types/list
+[`array`]: /sql/types/array

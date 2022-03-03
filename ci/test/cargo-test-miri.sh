@@ -18,9 +18,10 @@ set -euo pipefail
 # so keep them away from the `target` directory.
 export CARGO_TARGET_DIR=miri-target
 
-# At the moment only repr has tests meant to be run under miri.
+# At the moment only ore and repr have tests meant to be run under miri.
 pkgs=(
     repr
+    ore
 )
 
 for pkg in "${pkgs[@]}"; do

@@ -1,49 +1,180 @@
-# Simple queries with params should be rejected.
+# Test PREPARE, EXECUTE, DEALLOCATE.
+
 send
-Query {"query": "SELECT $1"}
+Query {"query": "DEALLOCATE ALL"}
+Query {"query": "DEALLOCATE a"}
+Query {"query": "EXECUTE a"}
 ----
 
 until
 ReadyForQuery
+ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"42P02"},{"typ":"M","value":"there is no parameter $1"}]}
+CommandComplete {"tag":"DEALLOCATE ALL"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"26000"},{"typ":"M","value":"prepared statement \"a\" does not exist"}]}
 ReadyForQuery {"status":"I"}
 
-# Test basic prepared statement parameters.
+# TOOD(mjibson): Teach scl.rs how to return error codes.
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
 send
-Parse {"query": "SELECT $1, $2 + 1, $2 - 1, 1 - $2"}
-Bind {"values": ["blah", "42"]}
-Execute
-Sync
+Query {"query": "PREPARE a AS SELECT 1"}
+Query {"query": "PREPARE a AS SELECT 1"}
+Query {"query": "EXECUTE a"}
+Query {"query": "EXECUTE a"}
+Query {"query": "DEALLOCATE a"}
+Query {"query": "EXECUTE a"}
+Query {"query": "DEALLOCATE a"}
 ----
 
 until
 ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
 ----
-ParseComplete
-BindComplete
-DataRow {"fields":["blah","43","41","-41"]}
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42P05"},{"typ":"M","value":"prepared statement \"a\" already exists"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE"}
+ReadyForQuery {"status":"I"}
 
-send
-Query {"query": "DISCARD ALL"}
+# TOOD(mjibson): Teach scl.rs how to return error codes.
+until no_error_fields
+ReadyForQuery
 ----
-
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
 
 until
 ReadyForQuery
 ----
-CommandComplete {"tag":"DISCARD ALL"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"26000"},{"typ":"M","value":"prepared statement \"a\" does not exist"}]}
 ReadyForQuery {"status":"I"}
 
 send
-Execute
-Sync
+Query {"query": "PREPARE a AS SELECT 1"}
+Query {"query": "EXECUTE a"}
+Query {"query": "DEALLOCATE ALL"}
+Query {"query": "EXECUTE a"}
 ----
 
 until
 ReadyForQuery
+ReadyForQuery
+ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"\" does not exist"}]}
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE ALL"}
+ReadyForQuery {"status":"I"}
+
+# TOOD(mjibson): Teach scl.rs how to return error codes.
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "PREPARE a AS SELECT 1 + $2"}
+Query {"query": "PREPARE a AS SELECT 1 + $1"}
+Query {"query": "EXECUTE a"}
+Query {"query": "EXECUTE a ('a')"}
+Query {"query": "EXECUTE a (1, 2)"}
+Query {"query": "EXECUTE a (1)"}
+Query {"query": "DEALLOCATE a"}
+----
+
+until no_error_fields
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE t (i INT)"}
+Query {"query": "INSERT INTO t VALUES (1)"}
+Query {"query": "PREPARE a AS SELECT * FROM t"}
+Query {"query": "EXECUTE a"}
+Query {"query": "DROP TABLE t"}
+Query {"query": "EXECUTE a"}
+Query {"query": "CREATE TABLE t (a TEXT, b FLOAT)"}
+Query {"query": "INSERT INTO t VALUES ('a', 3)"}
+Query {"query": "EXECUTE a"}
+Query {"query": "DEALLOCATE a"}
+----
+
+# TODO(mjibson): Ignore RowDescription here, see desc.pt for why.
+until no_error_fields ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE"}
 ReadyForQuery {"status":"I"}

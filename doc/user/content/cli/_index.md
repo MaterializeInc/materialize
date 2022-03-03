@@ -47,8 +47,8 @@ follows:
 For example, the `--data-directory` command line flag corresponds to the
 `MZ_DATA_DIRECTORY` environment variable.
 
-Note that command line flags that do not take arguments, like `--experimental`
-and `--disable-telemetry`, do not yet have corresponding environment variables.
+If the same command line flag is specified multiple times, the last
+specification takes precedence.
 
 ### Data directory
 
@@ -125,7 +125,7 @@ corresponds to an unboundedly large duration.
 The logical compaction window ends at the current time and extends backwards in
 time for the configured duration. The default window is 1 millisecond.
 
-See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
+See the [Deployment section](/ops/memory#compaction) for guidance on tuning
 the compaction window.
 
 ### Logging
@@ -383,29 +383,7 @@ example, if you add a view that contains a cross join that causes your server to
 immediately run out of memory on boot, you can use `--disable-user-indexes` to
 boot the server and then drop the offending view.
 
-In this mode users...
-
-- Can access objects within the [system catalog][sys-cat] to help determine
-  which indexes are causing the crash.
-- Can only `SELECT` from user-created objects that do not rely on user-created
-  indexes. In essence, this means users can still `SELECT` from user-created...
-  - Tables, but they will never return any data.
-  - Views that contain only references to constant values or depend entirely on
-    system tables' indexes.
-- Cannot `INSERT` data into tables.
-- Can create new objects, but any created indexes are disabled.
-
-After troubleshooting any issues, you can [enable individual
-indexes](/sql/alter-index) or reboot Materialize _without_
-`--disable-user-indexes` to enable all indexes at once.
-
-For assistance with this mode, see:
-
-- [Architecture over: Indexes][api-indexes]
-- [System catalog][sys-cat]
-- [`SHOW INDEX`](/sql/show-index)
-- [`DROP VIEW`](/sql/drop-view)
-- [`DROP INDEX`](/sql/drop-index)
+{{% troubleshooting/disable-user-indexes %}}
 
 ## Special environment variables
 

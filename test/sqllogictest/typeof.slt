@@ -45,6 +45,9 @@ CREATE TYPE int4_list AS LIST (element_type=int4)
 statement ok
 CREATE TYPE int4_list_list AS LIST (element_type=int4_list)
 
+statement ok
+CREATE TYPE composite AS (a int, b text, c float8);
+
 query T
 SELECT pg_typeof('{1}'::int4 list)
 ----
@@ -69,3 +72,24 @@ query T
 SELECT pg_typeof('{{1}}'::int4_list list)
 ----
 int4_list list
+
+query T
+SELECT pg_typeof((1,'abc',2.0)::composite);
+----
+composite
+
+statement ok
+CREATE SCHEMA other;
+
+statement ok
+CREATE TYPE other.composite AS (a text, b text, c float8);
+
+query T
+SELECT pg_typeof(ROW('1', '2', 2.0)::composite)
+----
+composite
+
+query T
+SELECT pg_typeof(ROW('1', '2', 2.0)::other.composite)
+----
+other.composite

@@ -34,7 +34,7 @@
 25
 
 ! SELECT 123 / '-0'::decimal;
-division by zero
+contains:division by zero
 
 > SELECT '0.000000000000000000000000000000000000001'::decimal - '0.000000000000000000000000000000000000001'::decimal = 0;
 true
@@ -49,7 +49,7 @@ true
 0
 
 ! SELECT '0.000000000000000000000000000000000000001'::decimal * '-0.000000000000000000000000000000000000001'::decimal;
-value out of range: underflow
+contains:value out of range: underflow
 
 ! SELECT '0.1'::decimal / 999999999999999999999999999999999999999::decimal;
-value out of range: underflow
+contains:value out of range: underflow

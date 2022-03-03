@@ -269,12 +269,14 @@ COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
-# Verify that querying outside of a time domain is an error.
 simple
 SELECT 1;
 SELECT * FROM t;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.public.t" referenced here, but none available
+1
+COMPLETE 1
+1
+COMPLETE 1
 
 statement ok
 CREATE SCHEMA other
@@ -286,7 +288,15 @@ simple
 SELECT * FROM t;
 SELECT * FROM other.t;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.other.t" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.t5727_primary_idx", "materialize.public.t_primary_idx"
+db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
+DETAIL: The following relations in the query are outside the transaction's time domain:
+"materialize.other.t"
+"materialize.other.t_primary_idx"
+Only the following relations are available:
+"materialize.public.t"
+"materialize.public.t5727"
+"materialize.public.t5727_primary_idx"
+"materialize.public.t_primary_idx"
 
 # Verify that changed tables and views don't change during a transaction.
 
@@ -360,7 +370,16 @@ simple conn=t1
 SELECT * FROM v1;
 COMMIT;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.public.v1" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.t5727_primary_idx", "materialize.public.t_primary_idx", "materialize.public.v", "materialize.public.v_primary_idx"
+db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
+DETAIL: The following relations in the query are outside the transaction's time domain:
+"materialize.public.v1"
+Only the following relations are available:
+"materialize.public.t"
+"materialize.public.t5727"
+"materialize.public.t5727_primary_idx"
+"materialize.public.t_primary_idx"
+"materialize.public.v"
+"materialize.public.v_primary_idx"
 
 simple conn=t1
 ROLLBACK;
@@ -394,9 +413,6 @@ db error: ERROR: unknown catalog item 'u21'
 
 # Test transaction syntax that we don't support.
 
-statement error READ WRITE not yet supported
-BEGIN READ WRITE
-
 statement ok
 BEGIN ISOLATION LEVEL SERIALIZABLE
 
@@ -415,3 +431,31 @@ BEGIN ISOLATION LEVEL REPEATABLE READ
 
 statement ok
 COMMIT
+
+# Access modes.
+
+statement ok
+BEGIN TRANSACTION READ WRITE
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+query I
+SELECT 1
+----
+1
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+statement error transaction in read-only mode
+INSERT INTO t (a) VALUES (1)
+
+statement ok
+ROLLBACK

@@ -8,6 +8,11 @@ menu:
 
 The `jsonb_object_agg(keys, values)` aggregate function zips together `keys`
 and `values` into a [`jsonb`](/sql/types/jsonb) object.
+The input values to the aggregate can be [filtered](../filters).
+
+## Syntax
+
+{{< diagram "jsonb-object-agg.svg" >}}
 
 ## Signatures
 
@@ -26,6 +31,9 @@ pair is retained in the output.
 
 If `keys` is null for any input row, that entry pair will be dropped.
 
+This function always executes on the data from `value` as if it were sorted in ascending order before the function call. Any specified ordering is
+ignored. If you need to perform aggregation in a specific order, you must specify `ORDER BY` within the aggregate function call itself. Otherwise incoming rows are not guaranteed any order.
+
 ### Usage in dataflows
 
 While `jsonb_object_agg` is available in Materialize, materializing
@@ -41,7 +49,7 @@ statements:
 
 ```sql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
-CREATE VIEW bar AS jsonb_object_agg(foo_view.bar);
+CREATE VIEW bar AS SELECT jsonb_object_agg(foo_view.bar);
 ```
 
 ## Examples

@@ -15,4 +15,6 @@ The following failures are injected:
 
 To run:
 
-./mzcompose down -v ; ./mzcompose run pg-cdc-resumption
+```bash
+./mzcompose down -v ; ./mzcompose run default
+```

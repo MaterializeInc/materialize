@@ -1,3 +1,0 @@
-dbt==0.20.2
-pytest-dbt-adapter==0.5.1
-../dbt-materialize

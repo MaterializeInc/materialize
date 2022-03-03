@@ -14,31 +14,32 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
-use dataflow_types::PeekResponse;
-use expr::GlobalId;
-use ore::str::StrExt;
-use repr::Row;
-use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
-use sql::plan::ExecuteTimeout;
+use mz_dataflow_types::PeekResponseUnary;
+use mz_expr::GlobalId;
+use mz_ore::str::StrExt;
+use mz_repr::{Row, ScalarType};
+use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
+use mz_sql::plan::ExecuteTimeout;
 use tokio::sync::watch;
 
 use crate::error::CoordError;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, RowBatchStream, Session};
 
 #[derive(Debug)]
 pub enum Command {
     Startup {
         session: Session,
-        cancel_tx: Arc<watch::Sender<Cancelled>>,
+        create_user_if_not_exists: bool,
+        cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     },
 
     Declare {
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
     },
@@ -46,7 +47,13 @@ pub enum Command {
     Describe {
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
+        session: Session,
+        tx: oneshot::Sender<Response<()>>,
+    },
+
+    VerifyPreparedStatement {
+        name: String,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
     },
@@ -98,7 +105,7 @@ pub struct Response<T> {
     pub session: Session,
 }
 
-pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
+pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
 /// The response to [`ConnClient::startup`](crate::ConnClient::startup).
 #[derive(Debug)]
@@ -158,16 +165,18 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     // The index was altered.
     AlteredIndexLogicalCompaction,
+    // The query was canceled.
+    Canceled,
     /// The requested cursor was closed.
     ClosedCursor,
     CopyTo {
-        format: sql::plan::CopyFormat,
+        format: mz_sql::plan::CopyFormat,
         resp: Box<ExecuteResponse>,
     },
     CopyFrom {
         id: GlobalId,
         columns: Vec<usize>,
-        params: sql::plan::CopyParams,
+        params: mz_sql::plan::CopyParams,
     },
     /// The requested database was created.
     CreatedDatabase {
@@ -203,6 +212,10 @@ pub enum ExecuteResponse {
     },
     /// The requested type was created.
     CreatedType,
+    /// The requested prepared statement was removed.
+    Deallocate {
+        all: bool,
+    },
     /// The requested cursor was declared.
     DeclaredCursor,
     /// The specified number of rows were deleted from the requested table.
@@ -242,6 +255,8 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
+    /// The specified prepared statement was created.
+    Prepare,
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.
@@ -255,10 +270,14 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
-        rx: mpsc::UnboundedReceiver<Vec<Row>>,
+        rx: RowBatchStream,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+    /// Raise a warning.
+    Raise {
+        severity: NoticeSeverity,
+    },
 }
 
 /// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
@@ -270,15 +289,15 @@ pub struct SimpleExecuteResponse {
 #[derive(Debug, Serialize)]
 pub struct SimpleResult {
     pub rows: Vec<Vec<serde_json::Value>>,
-    pub col_names: Vec<Option<String>>,
+    pub col_names: Vec<String>,
 }
 
 /// The state of a cancellation request.
 #[derive(Debug, Clone, Copy)]
-pub enum Cancelled {
+pub enum Canceled {
     /// A cancellation request has occurred.
-    Cancelled,
+    Canceled,
     /// No cancellation request has yet occurred, or a previous request has been
     /// cleared.
-    NotCancelled,
+    NotCanceled,
 }

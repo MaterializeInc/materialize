@@ -27,12 +27,12 @@ a
 
 > INSERT INTO c1 VALUES ('a')
 ! INSERT INTO c1 VALUES ('ab')
-value too long for type character(1)
+contains:value too long for type character(1)
 
 > INSERT INTO c2 VALUES ('a')
 > INSERT INTO c2 VALUES ('ab')
 ! INSERT INTO c2 VALUES ('abc')
-value too long for type character(2)
+contains:value too long for type character(2)
 
 #🔬🔬 char to char
 
@@ -47,7 +47,7 @@ a
 #🔬🔬🔬 Assignment
 
 ! INSERT INTO c1 VALUES ('ab'::char(2));
-value too long for type character(1)
+contains:value too long for type character(1)
 
 > INSERT INTO c1 VALUES ('a  '::char(3));
 
@@ -94,10 +94,10 @@ l
 
 > INSERT INTO v1 VALUES ('a'::char(1));
 ! INSERT INTO v1 VALUES ('ab'::char(2));
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 ! INSERT INTO v1 VALUES ('abc'::char(3));
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 > INSERT INTO v1 VALUES ('a  '::char(3));
 
@@ -110,7 +110,7 @@ l
 > INSERT INTO v2 VALUES ('a'::char(1));
 > INSERT INTO v2 VALUES ('ab'::char(2));
 ! INSERT INTO v2 VALUES ('abc'::char(3));
-value too long for type character varying(2)
+contains:value too long for type character varying(2)
 
 > INSERT INTO v2 VALUES ('a  '::char(3));
 
@@ -170,12 +170,12 @@ a
 
 > INSERT INTO v1 VALUES ('a');
 ! INSERT INTO v1 VALUES ('ab');
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 > INSERT INTO v2 VALUES ('a');
 > INSERT INTO v2 VALUES ('ab');
 ! INSERT INTO v2 VALUES ('abc');
-value too long for type character varying(2)
+contains:value too long for type character varying(2)
 
 > INSERT INTO v VALUES ('a'), ('ab'), ('abc');
 
@@ -192,7 +192,7 @@ a
 #🔬🔬🔬 Assignment
 
 ! INSERT INTO v1 VALUES ('ab'::varchar);
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 > INSERT INTO v1 VALUES ('a  '::varchar);
 
@@ -242,10 +242,10 @@ l
 
 > INSERT INTO v1 VALUES ('a'::varchar(1));
 ! INSERT INTO v1 VALUES ('ab'::varchar(2));
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 ! INSERT INTO v1 VALUES ('abc'::varchar(3));
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 > INSERT INTO v1 VALUES ('a  '::varchar(3));
 
@@ -257,7 +257,7 @@ l
 > INSERT INTO v2 VALUES ('a'::varchar(1));
 > INSERT INTO v2 VALUES ('ab'::varchar(2));
 ! INSERT INTO v2 VALUES ('abc'::varchar(3));
-value too long for type character varying(2)
+contains:value too long for type character varying(2)
 
 > INSERT INTO v2 VALUES ('ab '::char(3));
 
@@ -332,7 +332,7 @@ a
 #🔬🔬🔬 Assignment
 
 ! INSERT INTO c1 VALUES ('ab'::text);
-value too long for type character(1)
+contains:value too long for type character(1)
 
 > INSERT INTO c1 VALUES ('a  '::text);
 
@@ -379,10 +379,10 @@ l
 
 > INSERT INTO v1 VALUES ('a'::text);
 ! INSERT INTO v1 VALUES ('ab'::text);
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 ! INSERT INTO v1 VALUES ('abc'::text);
-value too long for type character varying(1)
+contains:value too long for type character varying(1)
 
 > INSERT INTO v1 VALUES ('a  '::text);
 
@@ -394,7 +394,7 @@ l
 > INSERT INTO v2 VALUES ('a'::text);
 > INSERT INTO v2 VALUES ('ab'::text);
 ! INSERT INTO v2 VALUES ('abc'::text);
-value too long for type character varying(2)
+contains:value too long for type character varying(2)
 
 > INSERT INTO v2 VALUES ('a  '::text);
 

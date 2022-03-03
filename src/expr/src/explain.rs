@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
-use ore::str::{bracketed, separated, StrExt};
-use repr::RelationType;
+use mz_ore::str::{bracketed, separated, StrExt};
+use mz_repr::RelationType;
 
 use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr};
 
@@ -183,8 +183,16 @@ impl<'a> ViewExplanation<'a> {
     /// Attach type information into the explanation.
     pub fn explain_types(&mut self) {
         for node in &mut self.nodes {
-            // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
-            node.typ = Some(node.expr.typ());
+            if let MirRelationExpr::Let { .. } = &node.expr {
+                // Skip.
+                // Since we don't print out Let nodes in the explanation,
+                // types of Let nodes should not be attached to the
+                // explanation. The type information of a Let is always the
+                // same as the the type of the body.
+            } else {
+                // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
+                node.typ = Some(node.expr.typ());
+            }
         }
     }
 
@@ -233,22 +241,13 @@ impl<'a> ViewExplanation<'a> {
                 writeln!(f, "| Project {}", bracketed("(", ")", Indices(outputs)))?
             }
             Map { scalars, .. } => writeln!(f, "| Map {}", separated(", ", scalars))?,
-            FlatMap {
-                func,
-                exprs,
-                demand,
-                ..
-            } => {
+            FlatMap { func, exprs, .. } => {
                 writeln!(f, "| FlatMap {}({})", func, separated(", ", exprs))?;
-                if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", bracketed("(", ")", Indices(demand)))?;
-                }
             }
             Filter { predicates, .. } => writeln!(f, "| Filter {}", separated(", ", predicates))?,
             Join {
                 inputs,
                 equivalences,
-                demand,
                 implementation,
             } => {
                 write!(
@@ -278,9 +277,6 @@ impl<'a> ViewExplanation<'a> {
                 writeln!(f)?;
                 write!(f, "| | implementation = ")?;
                 self.fmt_join_implementation(f, inputs, implementation)?;
-                if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", bracketed("(", ")", Indices(demand)))?;
-                }
             }
             Reduce {
                 group_key,
@@ -454,7 +450,7 @@ impl<'a> fmt::Display for Indices<'a> {
                 while slice.get(last) == Some(&(lead + last)) {
                     last += 1;
                 }
-                write!(f, "#{}..#{}", lead, lead + last - 1)?;
+                write!(f, "#{}..=#{}", lead, lead + last - 1)?;
                 slice = &slice[last..];
             } else {
                 write!(f, "#{}", slice[0])?;

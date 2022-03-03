@@ -1,0 +1,286 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# bin_date
+
+# Tests adapted from Postgresql
+# https://github.com/postgres/postgres/blob/master/src/test/regress/sql/timestamp.sql
+
+# case 1: AD dates, origin < input
+query TTT
+SELECT
+  str,
+  "interval",
+  date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamp '2001-01-01') AS equal
+FROM (
+  VALUES
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s')
+) intervals (str, interval),
+(VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
+----
+day
+1 d
+true
+hour
+1 h
+true
+week
+7 d
+true
+minute
+1 m
+true
+second
+1 s
+true
+
+# case 3: AD dates, origin > input
+query TTT
+SELECT
+  str,
+  "interval",
+  date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamp '2020-03-02') AS equal
+FROM (
+  VALUES
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s')
+) intervals (str, interval),
+(VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
+----
+day
+1 d
+true
+hour
+1 h
+true
+week
+7 d
+true
+minute
+1 m
+true
+second
+1 s
+true
+
+# bin timestamps into arbitrary intervals
+query TT
+SELECT
+  "interval",
+  date_bin("interval"::interval, ts, origin)
+FROM (
+  VALUES
+  ('15 days'),
+  ('2 hours'),
+  ('1 hour 30 minutes'),
+  ('15 minutes'),
+  ('10 seconds')
+) intervals (interval),
+(VALUES (timestamp '2020-02-11 15:44:17.71393')) ts (ts),
+(VALUES (timestamp '2001-01-01')) origin (origin);
+----
+15 days
+2020-02-06 00:00:00
+2 hours
+2020-02-11 14:00:00
+10 seconds
+2020-02-11 15:44:10
+15 minutes
+2020-02-11 15:30:00
+1 hour 30 minutes
+2020-02-11 15:00:00
+
+# shift bins using the origin parameter:
+query T
+SELECT date_bin('5 min'::interval, timestamp '2020-02-01 01:01:01', timestamp '2020-02-01 00:02:30');
+----
+2020-02-01 00:57:30
+
+# disallow > day intervals
+query error timestamps cannot be binned into intervals containing months or years
+SELECT date_bin('5 months'::interval, timestamp '2020-02-01 01:01:01', timestamp '2001-01-01');
+
+query error timestamps cannot be binned into intervals containing months or years
+SELECT date_bin('5 years'::interval,  timestamp '2020-02-01 01:01:01', timestamp '2001-01-01');
+
+# disallow zero intervals
+query error stride must be greater than zero
+SELECT date_bin('0 days'::interval, timestamp '1970-01-01 01:00:00' , timestamp '1970-01-01 00:00:00');
+
+# disallow negative intervals
+query error stride must be greater than zero
+SELECT date_bin('-2 days'::interval, timestamp '1970-01-01 01:00:00' , timestamp '1970-01-01 00:00:00');
+
+# max stride caught
+query error stride cannot exceed
+SELECT date_bin('9223372037 s'::interval, timestamp '2020-02-01 01:01:01', timestamp '2020-02-01 00:02:30');
+
+# max diff caught
+query error source and origin must not differ more than 2\^63 nanoseconds
+SELECT date_bin('1m', timestamp '2262-04-11 23:47:17');
+
+# Test unintuitive day binning
+query TT
+SELECT
+    "interval",
+    date_bin("interval"::interval, timestamp '2020-02-27 15:44:17.71393', timestamp '2001-01-01')
+FROM (
+    VALUES
+    ('1d'), ('2d'), ('3d'),
+    ('4d'), ('5d'), ('6d'),
+    ('7d'), ('8d'), ('9d')
+) intervals ("interval");
+----
+1d
+2020-02-27 00:00:00
+2d
+2020-02-27 00:00:00
+3d
+2020-02-27 00:00:00
+4d
+2020-02-27 00:00:00
+5d
+2020-02-26 00:00:00
+6d
+2020-02-27 00:00:00
+7d
+2020-02-24 00:00:00
+8d
+2020-02-23 00:00:00
+9d
+2020-02-24 00:00:00
+
+# Test that binary extension behaves as expected
+query TT
+SELECT
+  "interval",
+  date_bin("interval"::interval, ts) = date_bin("interval"::interval, ts, timestamp '1970-01-01') AS equal
+FROM (
+  VALUES
+  ('15 days'),
+  ('2 hours'),
+  ('1 hour 30 minutes'),
+  ('15 minutes'),
+  ('10 seconds')
+) intervals (interval),
+(VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
+----
+15 days
+true
+2 hours
+true
+10 seconds
+true
+15 minutes
+true
+1 hour 30 minutes
+true
+
+query T
+SELECT '99999-01-01'::TIMESTAMP + '162144 y';
+----
+262143-01-01 00:00:00
+
+query error timestamp out of range
+SELECT '99999-01-01'::TIMESTAMP + '162145 y';
+
+# date_bin_hopping
+
+query T
+SELECT * FROM date_bin_hopping('45s', '1m', '2001-01-01 00:01:20');
+----
+2001-01-01 00:00:30+00
+2001-01-01 00:01:15+00
+
+statement ok
+CREATE TABLE t (ts timestamp, v int);
+
+statement ok
+INSERT INTO t VALUES
+  ('2021-01-01 01:05', 41),
+  ('2021-01-01 01:07', 21),
+  ('2021-01-01 01:09', 51),
+  ('2021-01-01 01:11', 31),
+  ('2021-01-01 01:13', 11),
+  ('2021-01-01 01:17', 61);
+
+# ts unix epoch origin
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts)
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00
+113
+2021-01-01 01:05:00
+155
+2021-01-01 01:10:00
+103
+2021-01-01 01:15:00
+61
+
+# tstz unix epoch origin
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts::timestamptz)
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00+00
+113
+2021-01-01 01:05:00+00
+155
+2021-01-01 01:10:00+00
+103
+2021-01-01 01:15:00+00
+61
+
+# ts
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts, '1970-01-01')
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00
+113
+2021-01-01 01:05:00
+155
+2021-01-01 01:10:00
+103
+2021-01-01 01:15:00
+61
+
+#tstz
+query TI
+SELECT date_bin_hopping AS w, sum(v)
+  FROM t,
+  date_bin_hopping('5m', '10m', t.ts::timestamptz, '1970-01-01')
+GROUP BY w
+ORDER BY 1;
+----
+2021-01-01 01:00:00+00
+113
+2021-01-01 01:05:00+00
+155
+2021-01-01 01:10:00+00
+103
+2021-01-01 01:15:00+00
+61

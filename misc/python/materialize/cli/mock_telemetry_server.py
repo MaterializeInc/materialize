@@ -52,8 +52,8 @@ import os
 import os.path
 import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
+from materialize import ROOT
 from materialize.cargo import Workspace
 
 
@@ -88,7 +88,7 @@ if __name__ == "__main__":
             "openssl req -nodes -x509 -keyout localhost.crt -out localhost.crt -subj '/CN=localhost'"
         )
 
-    cargo_workspace = Workspace(Path(os.environ["MZ_ROOT"]))
+    cargo_workspace = Workspace(ROOT)
     latest_release = str(cargo_workspace.crate_for_bin("materialized").version)
 
     httpd = HTTPServer(("localhost", 4000), Handler)

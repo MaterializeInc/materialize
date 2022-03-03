@@ -11,9 +11,14 @@ MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install \
     ca-certificates \
+    postgresql-client \
     wait-for-it
 
 COPY kdestroy kinit testdrive /usr/local/bin/
+
+# Install the Protobuf compiler from protobuf-src.
+COPY protobuf-install /usr/local/
+ENV PROTOC /usr/local/bin/protoc
 
 WORKDIR /workdir
 

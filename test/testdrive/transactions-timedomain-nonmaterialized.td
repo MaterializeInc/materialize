@@ -31,10 +31,10 @@ $ file-append path=static.csv
 4
 
 ! SELECT * FROM unindexed
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 ! SELECT * FROM v_unindexed
-unable to automatically determine a query timestamp
+contains:unable to automatically determine a query timestamp
 
 > BEGIN
 
@@ -46,7 +46,7 @@ unable to automatically determine a query timestamp
 4
 
 ! SELECT c FROM unindexed ORDER BY c
-transactions can only reference nearby relations
+contains:Transactions can only reference objects in the same timedomain
 
 > ROLLBACK
 
@@ -59,7 +59,7 @@ transactions can only reference nearby relations
 4
 
 ! SELECT * FROM v_unindexed
-transactions can only reference nearby relations
+contains:Transactions can only reference objects in the same timedomain
 
 > ROLLBACK
 
@@ -100,4 +100,25 @@ transactions can only reference nearby relations
 > SELECT * FROM v
 3
 
+> COMMIT
+
+# Regression for #8657
+# Ensure that views referencing other schemas are transitively included. Here,
+# pg_catalog is generally a view over mz_catalog.
+> BEGIN
+> SELECT c.oid FROM pg_catalog.pg_class c LIMIT 0;
+> SELECT pg_catalog.format_type(a.atttypid, a.atttypmod) FROM pg_catalog.pg_attribute a LIMIT 0;
+> COMMIT
+
+# Regression for #8942
+# Ensure that non-materialized, transitive views are not included. Here,
+# unindexed should not be included in the timedomain.
+> CREATE MATERIALIZED VIEW v_materialized AS SELECT count(*) FROM unindexed
+# Wait for the view to be updated, since we can't retry in the transaction if
+# it returns a 0 timestamp error.
+> SELECT * FROM v_materialized
+3
+> BEGIN
+> SELECT * FROM v_materialized
+3
 > COMMIT

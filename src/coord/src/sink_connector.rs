@@ -7,28 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
-use interchange::avro::get_debezium_transaction_schema;
-use mz_avro::types::Value;
+use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
-use rdkafka::{Message, Offset, TopicPartitionList};
 
-use dataflow_types::{
+use mz_dataflow_types::sinks::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkConnector,
-    SinkConnectorBuilder,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
+    PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
-use expr::GlobalId;
-use ore::collections::CollectionExt;
-use rdkafka::consumer::{BaseConsumer, Consumer};
-use repr::Timestamp;
-use sql::kafka_util;
+use mz_expr::GlobalId;
+use mz_kafka_util::client::MzClientContext;
+use mz_ore::collections::CollectionExt;
 
 use crate::error::CoordError;
 
@@ -42,153 +35,13 @@ pub async fn build(
     }
 }
 
-/// Polls a message from a Kafka Source
-fn get_next_message(
-    consumer: &mut BaseConsumer,
-    timeout: Duration,
-) -> Result<Option<Vec<u8>>, anyhow::Error> {
-    if let Some(result) = consumer.poll(timeout) {
-        match result {
-            Ok(message) => match message.payload() {
-                Some(p) => Ok(Some(p.to_vec())),
-                None => {
-                    bail!("unexpected null payload")
-                }
-            },
-            Err(err) => {
-                bail!("Failed to process message {}", err)
-            }
-        }
-    } else {
-        Ok(None)
-    }
-}
-
-// Retrieves the latest committed timestamp from the consistency topic
-fn get_latest_ts(
-    consistency_topic: &str,
-    consumer: &mut BaseConsumer,
-    timeout: Duration,
-) -> Result<Option<Timestamp>, anyhow::Error> {
-    // ensure the consistency topic has exactly one partition
-    let partitions = kafka_util::get_partitions(&consumer, consistency_topic, timeout)
-        .with_context(|| {
-            format!(
-                "Unable to fetch metadata about consistency topic {}",
-                consistency_topic
-            )
-        })?;
-
-    if partitions.len() != 1 {
-        bail!(
-            "Consistency topic {} should contain a single partition, but instead contains {} partitions",
-            consistency_topic, partitions.len(),
-            );
-    }
-
-    let partition = partitions.into_element();
-
-    // Seek to end-1 offset
-    let mut tps = TopicPartitionList::new();
-    tps.add_partition(consistency_topic, partition);
-    tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
-
-    consumer.assign(&tps).with_context(|| {
-        format!(
-            "Error seeking in consistency topic {}:{}",
-            consistency_topic, partition
-        )
-    })?;
-
-    // We scan from the beginning and see if we can find an END record. We have
-    // to do it like this because Kafka Control Batches mess with offsets. We
-    // therefore cannot simply take the last offset from the back and expect an
-    // END message there. With a transactional producer, the OffsetTail(1) will
-    // not point to an END message but a control message. With aborted
-    // transactions, there might even be a lot of garbage at the end of the
-    // topic or in between.
-
-    let mut latest_message = None;
-    while let Some(message) = get_next_message(consumer, timeout)? {
-        latest_message = Some(message);
-    }
-
-    if latest_message.is_none() {
-        // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
-        match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
-            Ok((lo, hi)) => {
-                if hi == 0 {
-                    return Ok(None);
-                } else {
-                    bail!(
-                        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
-                        consistency_topic,
-                        partition,
-                        lo,
-                        hi
-                    );
-                }
-            }
-            Err(e) => {
-                bail!(
-                    "Failed to fetch metadata while reading from consistency topic: {}",
-                    e
-                );
-            }
-        }
-    }
-
-    let latest_message = latest_message.expect("known to exist");
-
-    // the latest valid message should be an END message. If not, things have
-    // gone wrong!
-    let timestamp = decode_consistency_end_record(&latest_message, consistency_topic)?;
-
-    Ok(Some(timestamp))
-}
-
-fn decode_consistency_end_record(
-    bytes: &[u8],
-    consistency_topic: &str,
-) -> Result<Timestamp, anyhow::Error> {
-    // The first 5 bytes are reserved for the schema id/schema registry information
-    let mut bytes = &bytes[5..];
-    let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
-        .context("Failed to decode consistency topic message")?;
-
-    if let Value::Record(r) = record {
-        let m: HashMap<String, Value> = r.into_iter().collect();
-        let status = m.get("status");
-        let id = m.get("id");
-        match (status, id) {
-            (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
-                if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Timestamp::from(ts))
-                } else {
-                    bail!(
-                        "Malformed consistency record, failed to parse timestamp {} in topic {}",
-                        id,
-                        consistency_topic
-                    );
-                }
-            }
-            _ => {
-                bail!(
-                    "Malformed consistency record in topic {}, expected END with a timestamp but record was {:?}, tried matching {:?} {:?}",
-                    consistency_topic, m, status, id);
-            }
-        }
-    } else {
-        bail!("Failed to decode consistency topic message, was not a parseable record");
-    }
-}
-
 async fn register_kafka_topic(
-    client: &AdminClient<DefaultClientContext>,
+    client: &AdminClient<MzClientContext>,
     topic: &str,
     mut partition_count: i32,
     mut replication_factor: i32,
     succeed_if_exists: bool,
+    retention: KafkaSinkConnectorRetention,
 ) -> Result<(), CoordError> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
@@ -272,32 +125,42 @@ async fn register_kafka_topic(
         }
     }
 
-    let res = client
-        .create_topics(
-            &[NewTopic::new(
-                &topic,
-                partition_count,
-                TopicReplication::Fixed(replication_factor),
-            )],
+    let mut kafka_topic = NewTopic::new(
+        &topic,
+        partition_count,
+        TopicReplication::Fixed(replication_factor),
+    );
+
+    let retention_ms_str = match retention.duration {
+        Some(Some(d)) => Some(d.as_millis().to_string()),
+        Some(None) => Some("-1".to_string()),
+        None => None,
+    };
+    let retention_bytes_str = retention.bytes.map(|s| s.to_string());
+    if let Some(ref retention_ms) = retention_ms_str {
+        kafka_topic = kafka_topic.set("retention.ms", retention_ms);
+    }
+    if let Some(ref retention_bytes) = retention_bytes_str {
+        kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
+    }
+
+    if succeed_if_exists {
+        mz_kafka_util::admin::ensure_topic(
+            client,
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+            &kafka_topic,
         )
         .await
-        .with_context(|| format!("error creating new topic {} for sink", topic))?;
-    if res.len() != 1 {
-        coord_bail!(
-            "error creating topic {} for sink: \
-             kafka topic creation returned {} results, but exactly one result was expected",
-            topic,
-            res.len()
-        );
+    } else {
+        mz_kafka_util::admin::create_new_topic(
+            client,
+            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+            &kafka_topic,
+        )
+        .await
     }
-    if let Err((_, e)) = res.into_element() {
-        // if the topic already exists and we reuse_existing, don't fail - instead proceed
-        // to read the schema
-        if !(succeed_if_exists && e == rdkafka::types::RDKafkaErrorCode::TopicAlreadyExists) {
-            coord_bail!("error creating topic {} for sink: {}", topic, e)
-        }
-    }
+    .with_context(|| format!("Error creating topic {} for sink", topic))?;
+
     Ok(())
 }
 
@@ -306,12 +169,12 @@ async fn register_kafka_topic(
 /// TODO(benesch): do we need to delete the Kafka topic if publishing the
 // schema fails?
 async fn publish_kafka_schemas(
-    ccsr: &ccsr::Client,
+    ccsr: &mz_ccsr::Client,
     topic: &str,
     key_schema: Option<&str>,
-    key_schema_type: Option<ccsr::SchemaType>,
+    key_schema_type: Option<mz_ccsr::SchemaType>,
     value_schema: &str,
-    value_schema_type: ccsr::SchemaType,
+    value_schema_type: mz_ccsr::SchemaType,
 ) -> Result<(Option<i32>, i32), CoordError> {
     let value_schema_id = ccsr
         .publish_schema(
@@ -356,18 +219,21 @@ async fn build_kafka(
     };
     let topic = maybe_append_nonce(&builder.topic_prefix);
 
-    // Create Kafka topic with single partition.
+    // Create Kafka topic
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &builder.broker_addrs.to_string());
     for (k, v) in builder.config_options.iter() {
         // Explicitly reject the statistics interval option here because its not
         // properly supported for this client.
-        if k != "statistics.interval.ms" {
+        // Explicitly reject isolation.level as it's a consumer-specific
+        // parameter and will generate a benign WARN for admin clients
+        if k != "statistics.interval.ms" && k != "isolation.level" {
             config.set(k, v);
         }
     }
-    let client = config
-        .create::<AdminClient<_>>()
+
+    let client: AdminClient<_> = config
+        .create_with_context(MzClientContext)
         .context("creating admin client failed")?;
 
     register_kafka_topic(
@@ -376,11 +242,12 @@ async fn build_kafka(
         builder.partition_count,
         builder.replication_factor,
         builder.reuse_topic,
+        builder.retention,
     )
     .await
     .context("error registering kafka topic for sink")?;
     let published_schema_info = match builder.format {
-        dataflow_types::KafkaSinkFormat::Avro {
+        mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
             ccsr_config,
@@ -391,9 +258,9 @@ async fn build_kafka(
                 &ccsr,
                 &topic,
                 key_schema.as_deref(),
-                Some(ccsr::SchemaType::Avro),
+                Some(mz_ccsr::SchemaType::Avro),
                 &value_schema,
-                ccsr::SchemaType::Avro,
+                mz_ccsr::SchemaType::Avro,
             )
             .await
             .context("error publishing kafka schemas for sink")?;
@@ -402,11 +269,11 @@ async fn build_kafka(
                 value_schema_id,
             })
         }
-        dataflow_types::KafkaSinkFormat::Json => None,
+        mz_dataflow_types::sinks::KafkaSinkFormat::Json => None,
     };
 
     let consistency = match builder.consistency_format {
-        Some(dataflow_types::KafkaSinkFormat::Avro {
+        Some(mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
             value_schema,
             ccsr_config,
             ..
@@ -424,6 +291,7 @@ async fn build_kafka(
                 1,
                 builder.replication_factor,
                 builder.reuse_topic,
+                KafkaSinkConnectorRetention::default(),
             )
             .await
             .context("error registering kafka consistency topic for sink")?;
@@ -435,37 +303,14 @@ async fn build_kafka(
                 None,
                 None,
                 &value_schema,
-                ccsr::SchemaType::Avro,
+                mz_ccsr::SchemaType::Avro,
             )
             .await
             .context("error publishing kafka consistency schemas for sink")?;
 
-            // get latest committed timestamp from consistency topic
-            let gate_ts = if builder.reuse_topic {
-                let mut consumer_config = config.clone();
-                consumer_config
-                    .set(
-                        "group.id",
-                        format!("materialize-bootstrap-{}", consistency_topic),
-                    )
-                    .set("isolation.level", "read_committed")
-                    .set("enable.auto.commit", "false")
-                    .set("auto.offset.reset", "earliest");
-
-                let mut consumer = consumer_config
-                    .create::<BaseConsumer>()
-                    .context("creating consumer client failed")?;
-
-                get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
-                    .context("error restarting from existing kafka consistency topic for sink")?
-            } else {
-                None
-            };
-
             Some(KafkaSinkConsistencyConnector {
                 topic: consistency_topic,
                 schema_id: consistency_schema_id,
-                gate_ts,
             })
         }
         Some(other) => unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other),

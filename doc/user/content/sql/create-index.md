@@ -6,10 +6,9 @@ menu:
     parent: 'sql'
 ---
 
-{{< warning >}} This is an advanced feature of Materialized; most users will not
-need to manually create indexes to maximize the value Materialize offers, as
-running `CREATE MATERIALIZED SOURCE` or `CREATE MATERIALIZED VIEW` automatically
-creates an index which will eagerly materialize that source or view. {{< /warning >}}
+{{< warning >}} This is an advanced feature. Running `CREATE MATERIALIZED VIEW` automatically
+creates an index which will eagerly materialize a view, so most users **will not**
+need to manually create indexes. {{< /warning >}}
 
 `CREATE INDEX` creates an in-memory index on a source or view.
 
@@ -38,46 +37,54 @@ You might want to create indexes when...
 
 Field | Use
 ------|-----
-**DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view) or [**CREATE MATERIALIZED SOURCE**](/sql/create-source). This provides a simple method to convert a non-materialized object to a materialized one.
+**DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view). This provides a simple method to convert a non-materialized object to a materialized one.
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source or view on which you want to create an index.
-_col&lowbar;ref_**...** | The columns to use as the key into the index.
-_field_ | The name of an index parameter to set to _val_. See [`ALTER INDEX`](/sql/alter-index) for available parameters.
+_col&lowbar;expr_**...** | The expressions to use as the key for the index.
+_field_ | The name of the option you want to set.
+_val_ | The value for the option.
 
 {{< version-changed v0.7.1 >}}
-The `WITH (field = val, ...)` clause was added to allow setting index parameters
+The `WITH (field = val, ...)` clause was added to allow setting index options
 when creating the index.
 {{</ version-changed >}}
+
+### `WITH` options
+
+The following option is valid within the `WITH` clause:
+
+{{% index-with-options %}}
 
 ## Details
 
 ### Restrictions
 
-- You can only index some subset of columns from the view's embedded `SELECT`
-  statement's returned columns. For example, if your view embedded `SELECT a, b,
-  c...`, you can only index `{a, b, c}`, even if the source you're reading from
-  contains additional columns.
+- You can only reference the columns available in the `SELECT` list of the query
+  that defines the view. For example, if your view was defined as `SELECT a, b
+  FROM src`, you can only reference columns `a` and `b`, even if `src` contains
+  additional columns.
 
 - You cannot exclude any columns from being in the index's "value" set. For
-  example, if your view embedded `SELECT a, b, c...`, all indexes will contain
-  `{a, b, c}` as their values.
+  example, if your view is defined as `SELECT a, b FROM ...`, all indexes will
+  contain `{a, b}` as their values.
 
-    If you want to create an index that only stores a subset of these columns,
-    consider creating another materialized view that uses `SELECT some_subset
-    FROM this_view...`.
+  If you want to create an index that only stores a subset of these columns,
+  consider creating another materialized view that uses `SELECT some_subset
+  FROM this_view...`.
 
 ### Structure
 
-Indexes in Materialize have the following structure for each unique row.
+Indexes in Materialize have the following structure for each unique row:
 
 ```nofmt
-((tuple of indexed columns), (tuple of the row, i.e. stored columns))
+((tuple of indexed expressions), (tuple of the row, i.e. stored columns))
 ```
 
-#### Indexed columns vs. stored columns
+#### Indexed expressions vs. stored columns
 
-Automatically created indexes will use all columns as key columns for the index,
-unless Materialize is provided or can infer a unique key for the source or view.
+Automatically created indexes will use all columns as key expressions for the
+index, unless Materialize is provided or can infer a unique key for the source
+or view.
 
 For instance, unique keys can be...
 
@@ -89,15 +96,15 @@ For instance, unique keys can be...
     For example, joining a view with unique keys against a second, where the join
     constraint uses foreign keys.
 
-When creating your own indexes, you can choose the indexed columns.
+When creating your own indexes, you can choose the indexed expressions.
 
 ### Memory footprint
 
 The in-memory sizes of indexes are proportional to the current size of the source
 or view they represent. The actual amount of memory required depends on several
 details related to the rate of compaction and the representation of the types of
-data in the source or view. We are working on [a feature to let you see the size
-each index consumes](https://github.com/MaterializeInc/materialize/issues/1532).
+data in the source or view. We are working on a feature to let you see the size
+each index consumes {{% gh 1532 %}}.
 
 Creating an index may also force the first materialization of a view, which may
 cause Materialize to install a dataflow to determine and maintain the results of
@@ -108,7 +115,7 @@ of the index.
 
 ### Optimizing joins with indexes
 
-We can optimize the performance of `JOIN` on two relations by ensuring their
+You can optimize the performance of `JOIN` on two relations by ensuring their
 join keys are the key columns in an index.
 
 ```sql

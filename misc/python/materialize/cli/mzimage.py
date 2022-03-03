@@ -10,23 +10,16 @@
 # mzimage.py — builds Materialize-specific Docker images.
 
 import argparse
-import os
 import sys
-from pathlib import Path
 from typing import Any
 
-from materialize import mzbuild, ui
+from materialize import ROOT, mzbuild, ui
 
 
 def main() -> int:
-    args = parse_args()
+    args = _parse_args()
     ui.Verbosity.init_from_env(explicit=None)
-    root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(
-        root,
-        release_mode=(args.build_mode == "release"),
-        coverage=args.coverage,
-    )
+    repo = mzbuild.Repository.from_arguments(ROOT, args)
 
     if args.command == "list":
         for image in repo:
@@ -37,9 +30,7 @@ def main() -> int:
             return 1
         deps = repo.resolve_dependencies([repo.images[args.image]])
         rimage = deps[args.image]
-        if args.command == "build":
-            deps.acquire(force_build=True)
-        elif args.command == "run":
+        if args.command == "run":
             deps.acquire()
             rimage.run(args.image_args)
         elif args.command == "acquire":
@@ -69,18 +60,20 @@ def main() -> int:
     return 0
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse known args, or exit the program"""
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="mzimage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Swiss army knife for mzbuild images.",
         epilog="For additional help on a subcommand, run:\n\n  %(prog)s <command> -h",
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+    subparsers = parser.add_subparsers(
+        dest="command", metavar="<command>", required=True
+    )
 
     def add_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:
         subparser = subparsers.add_parser(name, **kwargs)
+        mzbuild.Repository.install_arguments(subparser)
         return subparser
 
     def add_image_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:
@@ -88,27 +81,12 @@ def parse_args() -> argparse.Namespace:
         subparser.add_argument(
             "image", help="the name of an mzbuild image in this repository"
         )
-        subparser.add_argument(
-            "--build-mode",
-            default="release",
-            choices=["dev", "release"],
-            help="whether to build in dev or release mode",
-        )
-        subparser.add_argument(
-            "--coverage",
-            help="whether to enable code coverage compilation flags",
-            action="store_true",
-        )
         return subparser
 
     add_subcommand(
         "list",
         description="List all images in this repository.",
         help="list all images",
-    )
-
-    add_image_subcommand(
-        "build", description="Unconditionally build an image.", help="build an image"
     )
 
     add_image_subcommand(
@@ -143,13 +121,7 @@ def parse_args() -> argparse.Namespace:
         help="compute transitive inputs and dependencies",
     )
 
-    args = parser.parse_args()
-    if args.command is None:
-        # TODO(benesch): we can set `required=True` in the call to
-        # `add_subparsers` when we upgrade to Python v3.7+.
-        parser.print_help(file=sys.stderr)
-        sys.exit(1)
-    return args
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

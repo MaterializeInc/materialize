@@ -8,35 +8,30 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::HashMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
+use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
+use aws_sdk_s3::model::{
+    BucketLocationConstraint, CreateBucketConfiguration, Delete, NotificationConfiguration,
+    ObjectIdentifier, QueueConfiguration,
+};
+use aws_sdk_s3::types::{ByteStream, SdkError};
+use aws_sdk_sqs::model::{DeleteMessageBatchRequestEntry, QueueAttributeName};
 use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
-use ore::result::ResultExt;
-use rusoto_core::{ByteStream, RusotoError};
-use rusoto_s3::{
-    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest, Delete,
-    DeleteObjectsRequest, GetBucketNotificationConfigurationRequest, ObjectIdentifier,
-    PutBucketNotificationConfigurationRequest, PutObjectRequest, QueueConfiguration, S3,
-};
-use rusoto_sqs::{
-    CreateQueueError, CreateQueueRequest, DeleteMessageBatchRequest,
-    DeleteMessageBatchRequestEntry, GetQueueAttributesRequest, GetQueueUrlRequest,
-    ReceiveMessageRequest, SetQueueAttributesRequest, Sqs,
-};
 
 use crate::action::file::{build_compression, Compression};
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct CreateBucketAction {
     bucket_prefix: String,
 }
 
-pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction, String> {
+pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     cmd.args.done()?;
     Ok(CreateBucketAction { bucket_prefix })
@@ -44,33 +39,42 @@ pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction
 
 #[async_trait]
 impl Action for CreateBucketAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Creating S3 bucket {}", bucket);
 
         match state
             .s3_client
-            .create_bucket(CreateBucketRequest {
-                bucket: bucket.clone(),
-                create_bucket_configuration: match state.aws_region.name() {
-                    "us-east-1" => None,
-                    name => Some(CreateBucketConfiguration {
-                        location_constraint: Some(name.to_string()),
-                    }),
-                },
-                ..Default::default()
+            .create_bucket()
+            .bucket(&bucket)
+            .set_create_bucket_configuration(match state.aws_region() {
+                "us-east-1" => None,
+                name => Some(
+                    CreateBucketConfiguration::builder()
+                        .location_constraint(BucketLocationConstraint::from(name))
+                        .build(),
+                ),
             })
+            .send()
             .await
         {
-            Ok(_) | Err(RusotoError::Service(CreateBucketError::BucketAlreadyOwnedByYou(_))) => {
+            Ok(_)
+            | Err(SdkError::ServiceError {
+                err:
+                    CreateBucketError {
+                        kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
+                        ..
+                    },
+                ..
+            }) => {
                 state.s3_buckets_created.insert(bucket);
-                Ok(())
+                Ok(ControlFlow::Continue)
             }
-            Err(e) => Err(format!("creating bucket: {}", e)),
+            Err(e) => Err(e).context("creating bucket"),
         }
     }
 }
@@ -82,7 +86,7 @@ pub struct PutObjectAction {
     contents: String,
 }
 
-pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, String> {
+pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     let key = cmd.args.string("key")?;
     let compression = build_compression(&mut cmd)?;
@@ -98,11 +102,11 @@ pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, Stri
 
 #[async_trait]
 impl Action for PutObjectAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Put S3 object {}/{}", bucket, self.key);
 
@@ -113,29 +117,28 @@ impl Action for PutObjectAction {
                 let mut encoder = GzEncoder::new(Vec::new(), Flate2Compression::default());
                 encoder
                     .write_all(buffer.as_ref())
-                    .map_err(|e| format!("error writing bytes to encoder: {}", e))?;
-                encoder
-                    .finish()
-                    .map_err(|e| format!("error compressing contents: {}", e))
+                    .context("writing to gzip encoder")?;
+                encoder.finish().context("writing to gzip encoder")
             }
         }?;
 
         state
             .s3_client
-            .put_object(PutObjectRequest {
-                bucket,
-                body: Some(ByteStream::from(contents)),
-                content_type: Some("application/octet-stream".to_string()),
-                content_encoding: match self.compression {
-                    Compression::None => None,
-                    Compression::Gzip => Some("gzip".to_string()),
-                },
-                key: self.key.clone(),
-                ..Default::default()
+            .put_object()
+            .bucket(bucket)
+            .body(ByteStream::from(contents))
+            .content_type("application/octet-stream")
+            .set_content_encoding(match self.compression {
+                Compression::None => None,
+                Compression::Gzip => Some("gzip".to_string()),
             })
+            .key(&self.key)
+            .send()
             .await
             .map(|_| ())
-            .map_err(|e| format!("putting s3 object: {}", e))
+            .context("putting to S3")?;
+
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -144,7 +147,7 @@ pub struct DeleteObjectAction {
     keys: Vec<String>,
 }
 
-pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction, String> {
+pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     cmd.args.done()?;
     Ok(DeleteObjectAction {
@@ -155,35 +158,32 @@ pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction
 
 #[async_trait]
 impl Action for DeleteObjectAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Deleting S3 objects {}: {}", bucket, self.keys.join(", "));
-        let result = state
+        state
             .s3_client
-            .delete_objects(DeleteObjectsRequest {
-                bucket,
-                delete: Delete {
-                    objects: self
-                        .keys
-                        .iter()
-                        .cloned()
-                        .map(|key| ObjectIdentifier {
-                            key,
-                            version_id: None,
-                        })
-                        .collect(),
-                    quiet: None,
-                },
-                ..Default::default()
-            })
+            .delete_objects()
+            .bucket(bucket)
+            .delete(
+                Delete::builder()
+                    .set_objects(Some(
+                        self.keys
+                            .iter()
+                            .cloned()
+                            .map(|key| ObjectIdentifier::builder().key(key).build())
+                            .collect(),
+                    ))
+                    .build(),
+            )
+            .send()
             .await
-            .map(|_| ())
-            .map_err(|e| format!("deleting s3 objects: {}", e));
-        result
+            .context("deleting S3 objects")?;
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -194,7 +194,9 @@ pub struct AddBucketNotifications {
     sqs_validation_timeout: Option<Duration>,
 }
 
-pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
+pub fn build_add_notifications(
+    mut cmd: BuiltinCommand,
+) -> Result<AddBucketNotifications, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     let queue_prefix = format!("testdrive-{}", cmd.args.string("queue")?);
     let events = cmd
@@ -205,7 +207,7 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
     let sqs_validation_timeout = cmd
         .args
         .opt_string("sqs-validation-timeout")
-        .map(|t| repr::util::parse_duration(&t).map_err_to_string())
+        .map(|t| mz_repr::util::parse_duration(&t).context("parsing duration"))
         .transpose()?;
     cmd.args.done()?;
     Ok(AddBucketNotifications {
@@ -218,20 +220,19 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
 
 #[async_trait]
 impl Action for AddBucketNotifications {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         let queue = format!("{}-{}", self.queue_prefix, state.seed);
 
         let result = state
             .sqs_client
-            .create_queue(CreateQueueRequest {
-                queue_name: queue.clone(),
-                ..Default::default()
-            })
+            .create_queue()
+            .queue_name(&queue)
+            .send()
             .await;
 
         // get queue properties used for the rest of the mutations
@@ -240,90 +241,82 @@ impl Action for AddBucketNotifications {
             Ok(r) => r
                 .queue_url
                 .expect("queue creation should always return the url"),
-            Err(RusotoError::Service(CreateQueueError::QueueNameExists(q))) => {
+            Err(SdkError::ServiceError { err, .. }) if err.is_queue_name_exists() => {
                 let resp = state
                     .sqs_client
-                    .get_queue_url(GetQueueUrlRequest {
-                        queue_name: q,
-                        queue_owner_aws_account_id: None,
-                    })
+                    .get_queue_url()
+                    .queue_name(&queue)
+                    .send()
                     .await
-                    .map_err(|e| {
-                        format!(
-                            "when trying to get sqs queue url for already-existing queue: {}",
-                            e
-                        )
-                    })?;
+                    .context("fetching SQS queue url for existing queue")?;
                 resp.queue_url
                     .expect("successfully getting the url gets the url")
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.into()),
         };
 
-        let queue_arn = state
+        let queue_arn: String = state
             .sqs_client
-            .get_queue_attributes(GetQueueAttributesRequest {
-                attribute_names: Some(vec!["QueueArn".to_string()]),
-                queue_url: queue_url.clone(),
-            })
+            .get_queue_attributes()
+            .queue_url(&queue_url)
+            .attribute_names(QueueAttributeName::QueueArn)
+            .send()
             .await
-            .map_err(|e| format!("getting queue {} attributes: {}", queue, e))?
+            .with_context(|| format!("getting queue {} attributes", queue))?
             .attributes
-            .ok_or_else(|| "the result should not be empty".to_string())?
-            .remove("QueueArn")
-            .ok_or_else(|| "QueueArn should be present in arn request".to_string())?;
+            .ok_or_else(|| anyhow!("queue attributes missing"))?
+            .remove(&QueueAttributeName::QueueArn)
+            .ok_or_else(|| anyhow!("queue ARN attribute missing"))?;
 
         // Configure the queue to allow the S3 bucket to write to this queue
-        let mut attributes = HashMap::new();
-        attributes.insert(
-            "Policy".to_string(),
-            allow_s3_policy(&queue_arn, &bucket, &state.aws_account),
-        );
         state
             .sqs_client
-            .set_queue_attributes(SetQueueAttributesRequest {
-                queue_url: queue_url.clone(),
-                attributes,
-            })
+            .set_queue_attributes()
+            .queue_url(&queue_url)
+            .attributes(
+                QueueAttributeName::Policy,
+                allow_s3_policy(&queue_arn, &bucket, &state.aws_account),
+            )
+            .send()
             .await
-            .map_err(|e| format!("setting aws queue attributes: {}", e))?;
+            .context("setting SQS queue policy")?;
 
         state.sqs_queues_created.insert(queue_url.clone());
 
         // Configure the s3 bucket to write to the queue, without overwriting any existing configs
         let mut config = state
             .s3_client
-            .get_bucket_notification_configuration(GetBucketNotificationConfigurationRequest {
-                bucket: bucket.clone(),
-                ..Default::default()
-            })
+            .get_bucket_notification_configuration()
+            .bucket(&bucket)
+            .send()
             .await
-            .map_err(|e| format!("getting bucket notification_configuration: {}", e))?;
+            .context("getting bucket notification_configuration")?;
 
         {
             let queue_configs = config.queue_configurations.get_or_insert_with(Vec::new);
 
-            queue_configs.push(QueueConfiguration {
-                events: self.events.clone(),
-                queue_arn,
-                ..Default::default()
-            });
+            queue_configs.push(
+                QueueConfiguration::builder()
+                    .set_events(Some(self.events.iter().map(|e| e.into()).collect()))
+                    .queue_arn(queue_arn)
+                    .build(),
+            );
         }
 
         state
             .s3_client
-            .put_bucket_notification_configuration(PutBucketNotificationConfigurationRequest {
-                bucket: bucket.clone(),
-                notification_configuration: config,
-                ..Default::default()
-            })
+            .put_bucket_notification_configuration()
+            .bucket(&bucket)
+            .notification_configuration(
+                NotificationConfiguration::builder()
+                    .set_topic_configurations(config.topic_configurations)
+                    .set_queue_configurations(config.queue_configurations)
+                    .set_lambda_function_configurations(config.lambda_function_configurations)
+                    .build(),
+            )
+            .send()
             .await
-            .map_err(|e| {
-                format!(
-                    "Putting s3 bucket configuration notification {} \n{:?}",
-                    e, e
-                )
-            })?;
+            .context("putting S3 bucket configuration notification")?;
 
         let sqs_validation_timeout = self
             .sqs_validation_timeout
@@ -346,25 +339,23 @@ impl Action for AddBucketNotifications {
         while start.elapsed() < sqs_validation_timeout {
             state
                 .s3_client
-                .put_object(PutObjectRequest {
-                    bucket: bucket.clone(),
-                    body: Some(Vec::new().into()),
-                    key: format!("sqs-test/{}", attempts),
-                    ..Default::default()
-                })
+                .put_object()
+                .bucket(&bucket)
+                .body(ByteStream::from_static(&[]))
+                .key(format!("sqs-test/{}", attempts))
+                .send()
                 .await
-                .map_err(|e| format!("creating object to verify sqs: {}", e))?;
+                .context("creating SQS verification object")?;
             attempts += 1;
 
             let resp = state
                 .sqs_client
-                .receive_message(ReceiveMessageRequest {
-                    queue_url: queue_url.clone(),
-                    wait_time_seconds: Some(1),
-                    ..Default::default()
-                })
+                .receive_message()
+                .queue_url(&queue_url)
+                .wait_time_seconds(1)
+                .send()
                 .await
-                .map_err(|e| format!("reading from sqs for verification: {}", e))?;
+                .context("receiving verification message from SQS")?;
 
             if let Some(ms) = resp.messages {
                 if !ms.is_empty() {
@@ -376,19 +367,22 @@ impl Action for AddBucketNotifications {
                     }
                     state
                         .sqs_client
-                        .delete_message_batch(DeleteMessageBatchRequest {
-                            queue_url: queue_url.to_string(),
-                            entries: ms
-                                .into_iter()
+                        .delete_message_batch()
+                        .queue_url(&queue_url)
+                        .set_entries(Some(
+                            ms.into_iter()
                                 .enumerate()
-                                .map(|(i, m)| DeleteMessageBatchRequestEntry {
-                                    id: i.to_string(),
-                                    receipt_handle: m.receipt_handle.unwrap(),
+                                .map(|(i, m)| {
+                                    DeleteMessageBatchRequestEntry::builder()
+                                        .id(i.to_string())
+                                        .receipt_handle(m.receipt_handle.unwrap())
+                                        .build()
                                 })
                                 .collect(),
-                        })
+                        ))
+                        .send()
                         .await
-                        .map_err(|e| format!("Deleting validation messages from sqs: {}", e))?;
+                        .context("deleting validation messages from SQS")?;
                 }
             }
             if success {
@@ -403,14 +397,14 @@ impl Action for AddBucketNotifications {
                 attempts + 1,
                 start.elapsed()
             );
-            Ok(())
+            Ok(ControlFlow::Continue)
         } else {
             println!(
                 " Error, never got messages (after {} attempts and {:?})",
                 attempts + 1,
                 start.elapsed()
             );
-            Err("Never got messages on S3 bucket notification queue".to_string())
+            bail!("never received messages on S3 bucket notification queue")
         }
     }
 }

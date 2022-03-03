@@ -25,8 +25,9 @@ better availability and durability story.
 
 ### C components
 
-Materialize depends on several components that are written in C, so you'll need
-a working C compiler. You'll also need to install the [CMake] build system.
+Materialize depends on several components that are written in C and C++, so
+you'll need a working C and C++ toolchain. You'll also need to install the
+[CMake] build system.
 
 On macOS, if you install [Homebrew], you'll be guided through the process of
 installing Apple's developer tools, which includes a C compiler. Then it's a
@@ -53,12 +54,62 @@ Install Rust via [rustup]:
 curl https://sh.rustup.rs -sSf | sh
 ```
 
-Rustup will automatically select the correct toolchain version specified in
-[rust-toolchain.toml](/rust-toolchain.toml).
-
 We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
+
+### Editors and IDEs
+
+In principle, any text editor can be used to edit Rust code. There is nothing special about Materialize's codebase: any general Rust development setup should work fine.
+
+By default, we recomend that developers without a strong preference of editor use
+Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
+setup for developing Materialize, and the one for which you are the most likely
+to be able to get help if something goes wrong. It's important to note that you
+**should not** install the "Rust" plugin, as it is known to
+conflict with Rust-Analyzer; the latter has far more advanced code navigation
+features and is the de-facto standard for developing Rust.
+
+Visual Studio Code also works well for editing Python; to work on the Python code
+in the Materialize repository, install the official Python extension from Microsoft
+and add the following to your `settings.json`.
+
+``` json
+{
+  "python.linting.mypyEnabled": true,
+  "python.analysis.extraPaths": [
+      "misc/python"
+  ],
+  "python.defaultInterpreterPath": "misc/python/venv/bin/python"
+}
+```
+
+If you prefer to use another editor, such as Vim or Emacs, we recommend that
+you install an LSP plugin with Rust-Analyzer. How to do so is beyond the scope
+of this document; if you have any issues, ask in one of the engineering channels
+on Slack.
+
+Besides Rust-Analyzer, the only other known tool with good code navigation features
+is CLion along with its Rust plugin. This is a good choice for developers who prefer
+the JetBrains ecosystem, but we no longer recommend it by default, since
+Rust-Analyzer has long since caught up to it in maturity. If you are a
+Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
+JetBrains license. If you're not yet sure you want to use CLion, you can
+use the 30-day free trial.
+
+### Debugging
+
+The standard debuggers for Rust code are `rust-lldb` on macOS, and `rust-gdb` on GNU/Linux.
+(It is also possible to run `rust-lldb` on GNU/Linux if necessary for whatever reason).
+These are wrappers around `lldb` and `gdb`, respectively, that endow them with slightly
+improved capabilities for pretty-printing Rust data structures. Visual Studio Code
+users may want to try the [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+plugin.
+
+Unfortunately, you will soon find that these programs work less well than the equivalent
+tools for some other mainstream programming languages. In particular, inspecting
+complex data structures is often tedious and difficult. For this reason, most developers routinely use
+`println!` statements for debugging, in addition to (or instead of) these standard debuggers.
 
 ### Confluent Platform
 
@@ -91,7 +142,7 @@ documentation. Then please update this guide with the new instructions!
 You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
 
 ```shell
-brew install --cask homebrew/cask-versions/adoptopenjdk8
+brew install --cask homebrew/cask-versions/temurin8
 ```
 
 Then, download and extract the Confluent Platform tarball:
@@ -99,10 +150,17 @@ Then, download and extract the Confluent Platform tarball:
 ```shell
 INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
 mkdir $INSTALL_DIR
-curl http://packages.confluent.io/archive/6.0/confluent-6.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
+curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
 echo export CONFLUENT_HOME=(cd $INSTALL_DIR && pwd) >> ~/.bashrc
 source ~/.bashrc
 confluent local services start
+```
+
+If you have multiple JDKs installed and your current JAVA_HOME points to an incompatible version,
+you can explicitly run confluent with JDK 8 or 11:
+
+```
+JAVA_HOME=$(/usr/libexec/java_home -v 1.8) confluent local services start
 ```
 
 #### Linux
@@ -169,34 +227,8 @@ log` and `ps ... | grep` over the output of `confluent local services status`.
 Still, it's reliable enough to be more convenient than managing each service
 manually.
 
-## Symbiosis mode
-
-For the convenience of developers, Materialize has a semi-secret "symbiosis"
-mode that turns Materialize into a full HTAP system, rather than an OLAP system
-that must sit atop a OLTP system via a CDC pipeline. In other words, where
-you would normally need to plug MySQL into Debezium into Kafka into Materialize,
-and run all the Confluent services that that entails, you can instead run:
-
-    $ materialized --symbiosis postgres://localhost:5432
-
-When symbiosis mode is active, all DDL statements and all writes will be routed
-to the specified PostgreSQL server. `CREATE TABLE`, for example, will create
-both a table in PostgreSQL and a source in Materialize that mirrors that table.
-`INSERT`, `UPDATE`, and `DELETE` statements that target that table will be
-reflected in Materialize for the next `SELECT` statement.
-
-Symbiosis mode is not suitable for production use, as its implementation is
-very inefficient. It is, however, excellent for manually taking Materialize
-for a spin without the hassle of setting up various Kafka topics and Avro
-schemas. It also powers our sqllogictest runner.
-
-See the [symbiosis crate documentation](https://dev.materialize.com/api/rust/symbiosis) for
-more details.
-
-**Note:** As of August 2020, we're laying the groundwork to phase out symbiosis
-mode with [tables](https://materialize.com/docs/sql/create-table). But we're
-stuck with symbiosis mode until tables support `UPDATE` and `DELETE`—at the time
-of writing they only support [`INSERT`](https://materialize.com/docs/sql/insert).
+When the confluent local services are running, they can be examined via a web
+UI which defaults to `localhost:9021`.
 
 ## Web UI
 
@@ -236,14 +268,22 @@ own document. See [Developer guide: testing](guide-testing.md).
 CI performs the lawful evil task of ensuring "good code style" with the
 following tools:
 
-Tool      | Use                     | Run locally with
-----------|-------------------------|-------------------
-[Clippy]  | Rust semantic nits      | `./bin/check`
-[rustfmt] | Rust code formatter     | `cargo fmt`
-Linter    | General formatting nits | `./bin/lint`
+Tool                  | Use                     | Run locally with
+----------------------|-------------------------|-------------------
+[Clippy]              | Rust semantic nits      | `./bin/check`
+[rustfmt]             | Rust code formatter     | `cargo fmt`
+Linter                | General formatting nits | `./bin/lint`
+[Unused dependencies] | Check for unused deps   | `./bin/unused-deps`
 
 See also the [style guide](style.md) for some additional soft
 recommendations.
+
+### Unused dependencies
+
+Use `.bin/unused-deps`. This is also run in ci; use this
+[guide][https://github.com/est31/cargo-udeps#ignoring-some-of-the-dependencies]
+for information about how to ignore false-positives. Common examples are
+dependencies only used on certain platforms.
 
 ## Submitting and reviewing changes
 
@@ -291,10 +331,68 @@ acceptable for:
     entry. Changes to Materialize very rarely require changes in rust-sasl, so
     maintaining the two separately does not introduce much overhead.
 
+## Our Crates
+
+We break up our rust code into crates mostly to improve compilation time, but
+also sometimes because our code is intended to be open sourced or to be re-used
+between different binaries.
+
+You can view a relationship diagram of our crates by running the following
+command:
+
+```shell
+bin/crate-diagram
+```
+
+It is possible to view transitive dependencies of a select subset of roots by specifying the `--roots` flag with a comma separated list of crates:
+
+```shell
+bin/crate-diagram --roots sql,dataflow
+```
+
+## Developer tools
+
+The Materialize repo contains many useful scripts that can be included in your environment
+to improve your development experience.
+
+### Automatic style checks
+
+To ensure each code change passes all style nits before pushing to GitHub, symlink `pre-push`
+into your local git hooks:
+
+```sh
+ln -s ./misc/githooks/pre-push .git/hooks/pre-push
+```
+
+### Shell completion
+
+Some Materialize scripts have shell completion, and the latest versions of the completions files
+are checked in to `misc/completions`. The contents of this directory can be sourced into your shell,
+and will stay updated as any changes are made.
+
+To add the completions to bash, add the following to your `~/.bashrc`:
+
+```shell
+source /path/to/materialize/misc/completions/bash/*
+```
+
+For zsh, add the follow to your `~/.zshrc`:
+
+```shell
+source /path/to/materialize/misc/completions/zsh/*
+```
+
+### Editor add-ons
+
+A few editor-specific add-ons and configurations have been authored to improve the editing of
+Materialize-specific code. Check `misc/editor` for add-ons that may be relevant for your editor
+of choice.
+
 [Apache Kafka]: https://kafka.apache.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
 [Clippy]: https://github.com/rust-lang/rust-clippy
+[Unused dependencies]: https://github.com/est31/cargo-udeps
 [CMake]: https://cmake.org
 [Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
 [Confluent Platform]: https://www.confluent.io/product/confluent-platform/

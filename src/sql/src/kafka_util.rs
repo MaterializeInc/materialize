@@ -16,17 +16,17 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
-use log::{debug, error, info, warn};
-use ore::collections::CollectionExt;
+
+use mz_kafka_util::client::MzClientContext;
+use mz_ore::task;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use reqwest::Url;
-use tokio::task;
 use tokio::time::Duration;
 
-use ccsr::tls::{Certificate, Identity};
-use sql_parser::ast::Value;
+use mz_ccsr::tls::{Certificate, Identity};
+use mz_sql_parser::ast::Value;
 
 enum ValType {
     Path,
@@ -236,6 +236,12 @@ pub fn extract_config(
             Config::string("ssl_key_password").include_env_var(),
             Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
             Config::new("enable_idempotence", ValType::Boolean),
+            Config::new(
+                "fetch_message_max_bytes",
+                // The range of values comes from `fetch.message.max.bytes` in
+                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                ValType::Number(0, 1_000_000_000),
+            ),
         ],
     )
 }
@@ -265,17 +271,17 @@ pub async fn create_consumer(
     match config.create_with_context(KafkaErrCheckContext::default()) {
         Ok(consumer) => {
             let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> = Arc::new(consumer);
-            let context = consumer.context().clone();
-            let topic = String::from(topic);
+            let context = Arc::clone(&consumer.context());
+            let owned_topic = String::from(topic);
             // Wait for a metadata request for up to one second. This greatly
             // increases the probability that we'll see a connection error if
             // e.g. the hostname was mistyped. librdkafka doesn't expose a
             // better API for asking whether a connection succeeded or failed,
             // unfortunately.
-            task::spawn_blocking({
-                let consumer = consumer.clone();
+            task::spawn_blocking(move || format!("kafka_set_metadata:{broker}:{topic}"), {
+                let consumer = Arc::clone(&consumer);
                 move || {
-                    let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
+                    let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
                 }
             })
             .await?;
@@ -357,12 +363,17 @@ pub async fn lookup_start_offsets(
     };
 
     // Lookup offsets
-    task::spawn_blocking({
+    // TODO(guswynn): see if we can add broker to this name
+    task::spawn_blocking(|| format!("kafka_lookup_start_offets:{topic}"), {
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions
-            let num_partitions =
-                get_partitions(consumer.as_ref(), &topic, Duration::from_secs(10))?.len();
+            let num_partitions = mz_kafka_util::client::get_partitions(
+                consumer.as_ref().client(),
+                &topic,
+                Duration::from_secs(10),
+            )?
+            .len();
 
             let mut tpl = TopicPartitionList::with_capacity(1);
             tpl.add_partition_range(&topic, 0, num_partitions as i32 - 1);
@@ -412,36 +423,6 @@ fn fetch_end_offset(
     Ok(high)
 }
 
-// Return the list of partition ids associated with a specific topic
-pub fn get_partitions<C: ConsumerContext>(
-    consumer: &BaseConsumer<C>,
-    topic: &str,
-    timeout: Duration,
-) -> Result<Vec<i32>, anyhow::Error> {
-    let meta = consumer.fetch_metadata(Some(&topic), timeout)?;
-    if meta.topics().len() != 1 {
-        bail!(
-            "topic {} has {} metadata entries; expected 1",
-            topic,
-            meta.topics().len()
-        );
-    }
-    let meta_topic = meta.topics().into_element();
-    if meta_topic.name() != topic {
-        bail!(
-            "got results for wrong topic {} (expected {})",
-            meta_topic.name(),
-            topic
-        );
-    }
-
-    if meta_topic.partitions().len() == 0 {
-        bail!("topic {} does not exist", topic);
-    }
-
-    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
-}
-
 /// Gets error strings from `rdkafka` when creating test consumers.
 #[derive(Default, Debug)]
 pub struct KafkaErrCheckContext {
@@ -465,20 +446,17 @@ impl ClientContext for KafkaErrCheckContext {
                 if error.is_none() {
                     *error = Some(log_message.to_string());
                 }
-                error!(target: "librdkafka", "{} {}", fac, log_message);
             }
-            Warning => warn!(target: "librdkafka", "{} {}", fac, log_message),
-            Notice => info!(target: "librdkafka", "{} {}", fac, log_message),
-            Info => info!(target: "librdkafka", "{} {}", fac, log_message),
-            Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
+            _ => {}
         }
+        MzClientContext.log(level, fac, log_message)
     }
     // Refer to the comment on the `log` callback.
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
         // Allow error to overwrite value irrespective of other conditions
         // (i.e. logging).
         *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
-        error!("librdkafka: {}: {}", error, reason);
+        MzClientContext.error(error, reason)
     }
 }
 
@@ -486,20 +464,41 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    kafka_options: &BTreeMap<String, String>,
-    mut ccsr_options: BTreeMap<String, Value>,
-) -> Result<ccsr::ClientConfig, anyhow::Error> {
-    let mut client_config = ccsr::ClientConfig::new(csr_url);
+    _kafka_options: &BTreeMap<String, String>,
+    ccsr_options: &mut BTreeMap<String, Value>,
+) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
+    let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
 
-    if let Some(ca_path) = kafka_options.get("ssl.ca.location") {
+    // If provided, prefer SSL options from the schema registry configuration
+    if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
+        Some(Value::String(path)) => Some(path),
+        Some(_) => {
+            bail!("ssl_ca_location must be a string");
+        }
+        None => None,
+    } {
         let mut ca_buf = Vec::new();
         File::open(ca_path)?.read_to_end(&mut ca_buf)?;
         let cert = Certificate::from_pem(&ca_buf)?;
         client_config = client_config.add_root_certificate(cert);
     }
 
-    let key_path = kafka_options.get("ssl.key.location");
-    let cert_path = kafka_options.get("ssl.certificate.location");
+    let ssl_key_location = ccsr_options.remove("ssl_key_location");
+    let key_path = match &&ssl_key_location {
+        Some(Value::String(path)) => Some(path),
+        Some(_) => {
+            bail!("ssl_key_location must be a string");
+        }
+        None => None,
+    };
+    let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
+    let cert_path = match &ssl_certificate_location {
+        Some(Value::String(path)) => Some(path),
+        Some(_) => {
+            bail!("ssl_certificate_location must be a string");
+        }
+        None => None,
+    };
     match (key_path, cert_path) {
         (Some(key_path), Some(cert_path)) => {
             // `reqwest` expects identity `pem` files to contain one key and
@@ -520,9 +519,10 @@ pub fn generate_ccsr_client_config(
     }
 
     let mut ccsr_options = extract(
-        &mut ccsr_options,
+        ccsr_options,
         &[Config::string("username"), Config::string("password")],
     )?;
+
     if let Some(username) = ccsr_options.remove("username") {
         client_config = client_config.auth(username, ccsr_options.remove("password"));
     }

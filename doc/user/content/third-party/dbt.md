@@ -4,11 +4,14 @@ description: "Get details about using Materialize with dbt"
 menu:
   main:
     parent: 'third-party'
+weight: 2
 ---
 
 You can use [dbt] to easily create views and materialized views in your `materialized`
-instance. To do so, all you need to do is install our [`dbt-materialize`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/README.md)
+instance. All you need to do is install the [`dbt-materialize`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/README.md)
 adapter.
+
+To get started, check out our [dbt and Materialize](/guides/dbt/) guide.
 
 ## What's missing?
 

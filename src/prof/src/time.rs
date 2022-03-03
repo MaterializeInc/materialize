@@ -34,10 +34,7 @@ pub async unsafe fn prof_time(
     let mut profile = <StackProfile as Default>::default();
     for (f, weight) in report.data {
         let thread_name;
-        let mut addrs: Vec<_> = f.frames[0..f.depth]
-            .iter()
-            .map(|f| f.ip() as usize)
-            .collect();
+        let mut addrs: Vec<_> = f.frames.iter().map(|f| f.ip() as usize).collect();
         addrs.reverse();
         let weight = weight as f64;
         let anno = if merge_threads {

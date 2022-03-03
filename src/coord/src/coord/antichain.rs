@@ -11,6 +11,9 @@
 
 #![allow(missing_debug_implementations)]
 
+use std::rc::Rc;
+use tracing::trace;
+
 use timely::order::PartialOrder;
 use timely::progress::change_batch::ChangeBatch;
 use timely::progress::frontier::MutableAntichain;
@@ -67,7 +70,7 @@ impl<T: PartialOrder + Ord + Clone + std::fmt::Debug> AntichainToken<T> {
         new_frontier.extend(frontier.into_iter());
 
         if !<_ as PartialOrder>::less_equal(&self.antichain.frontier(), &new_frontier.borrow()) {
-            log::trace!(
+            trace!(
                 "Ignoring request to 'advance' to {:?} current antichain {:?}",
                 new_frontier,
                 self.antichain
@@ -115,8 +118,8 @@ impl<T: PartialOrder + Ord + Clone> Clone for AntichainToken<T> {
         (self.action.borrow_mut())(self.changes.borrow_mut().drain());
         Self {
             antichain: self.antichain.clone(),
-            changes: self.changes.clone(),
-            action: self.action.clone(),
+            changes: Rc::clone(&self.changes),
+            action: Rc::clone(&self.action),
         }
     }
 }

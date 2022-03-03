@@ -9,7 +9,6 @@
 
 #![allow(clippy::as_conversions)]
 
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 
@@ -19,7 +18,7 @@ use dec::OrderedDecimal;
 use lazy_static::lazy_static;
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-use repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
+use mz_repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
 
 /// (TO BE DEPRECATED) A wrapper for the `repr` crate's `Decimal` type that can be serialized to
 /// and deserialized from the PostgreSQL binary format.

@@ -36,7 +36,7 @@ ReadyForQuery
 ReadyForQuery
 ----
 CopyIn {"format":"text","column_formats":["text","text"]}
-ErrorResponse {"fields":[{"typ":"C","value":"57014"},{"typ":"M","value":"COPY from stdin failed: frontend failure"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"57014"},{"typ":"M","value":"COPY from stdin failed: frontend failure"}]}
 ReadyForQuery {"status":"I"}
 ReadyForQuery {"status":"I"}
 

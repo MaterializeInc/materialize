@@ -227,7 +227,7 @@ a  b
 # Kafka metrics for the real_time_src should be enabled now
 # Count should be 2 because there are two materialized views on real_time_src
 # If real_time_src_no_stats were also emitting stats, there would be 3 rows
-> SELECT count(*) FROM mz_kafka_consumer_partitions;
+> SELECT count(*) FROM mz_kafka_source_statistics;
 count
 -----
 2

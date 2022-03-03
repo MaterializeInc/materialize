@@ -15,8 +15,29 @@ CREATE TABLE t (a int, b int)
 statement ok
 INSERT INTO t (a, b) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
-statement error aggregate functions are not allowed in WHERE clause
+query error aggregate functions are not allowed in WHERE clause
 SELECT a FROM t WHERE sum(b) = 3 GROUP BY a
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT b FROM t GROUP BY a
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT 1 FROM t GROUP BY a ORDER BY b
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT 1 FROM t GROUP BY a HAVING b > 0
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT DISTINCT ON (b) a FROM t GROUP BY a ORDER BY b
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT t.b FROM t GROUP BY a
+
+query error column "c" does not exist
+SELECT c FROM t GROUP BY a
+
+query error column "t.c" does not exist
+SELECT t.c FROM t GROUP BY a
 
 query IIIR colnames
 SELECT 1 AS literal, sum(a) as sum_a, sum(b), avg(a) FROM t
@@ -45,7 +66,7 @@ dummy 2 3
 dummy 3 1
 
 # ...unless they are ambiguous...
-query error column name "c" is ambiguous
+query error column reference "c" is ambiguous
 SELECT a AS c, sum(b) AS c FROM t GROUP BY c
 
 # ...although ambiguity between the input list and the output list is not an
@@ -56,6 +77,20 @@ SELECT a, sum(b) AS a FROM t GROUP BY a
 1 3
 2 3
 3 1
+
+query I
+SELECT a FROM t GROUP BY t.a, t.a
+----
+1
+2
+3
+
+query I
+SELECT a FROM t GROUP BY t.a, public.t.a
+----
+1
+2
+3
 
 # Smoke test to make sure multiple accumulable and hierarchical reductions work
 query IIIII rowsort
@@ -116,6 +151,12 @@ SELECT pg_typeof(sum(b)) FROM t_bigint
 ----
 pg_typeof
 numeric
+
+query TT colnames
+SELECT pg_typeof(a) as a_type, pg_typeof(b) as b_type FROM t_bigint GROUP BY a_type, b_type
+----
+a_type b_type
+bigint bigint
 
 # Tests to make sure reduce elision works correctly
 
@@ -243,7 +284,7 @@ query error Expected end of statement, found left parenthesis
 SELECT column1 FILTER (WHERE column1 = 1) FROM (VALUES (1))
 
 query error aggregate functions are not allowed in FILTER
-SELECT v, count(*) FILTER (WHERE count(*) > 5) FROM filter_test GROUP BY v
+SELECT v, count(*) FILTER (WHERE count(1) > 5) FROM filter_test GROUP BY v
 
 # These filter tests are Materialize-specific.
 
@@ -398,3 +439,168 @@ FROM
     v
 ----
 {"0":"c","1":"a","2":"b"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"b"}
+
+
+# Test Reduction elision
+
+statement ok
+CREATE TABLE a (x text)
+
+statement ok
+INSERT INTO a VALUES ('a'),('b')
+
+statement ok
+CREATE TABLE qs (q int not null)
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM a ORDER BY x);
+----
+a,b
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM a ORDER BY x limit 1);
+----
+a
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+a,b
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+a
+
+query T
+SELECT STRING_AGG(x, ',') from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+true
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM a ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM a ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT LIST_AGG(x)::text from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+{true}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM a ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM a ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT ARRAY_AGG(x) from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+{true}
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM a ORDER BY x)
+----
+["a","b"]
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM a ORDER BY x limit 1)
+----
+["a"]
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+["a","b"]
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+["a"]
+
+query T
+SELECT JSONB_AGG(x) from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+["true"]
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM t ORDER BY a)
+----
+{"1":2,"2":3,"3":1}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM t ORDER BY a limit 1)
+----
+{"1":1}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM (SELECT 'a' as a,'b' as b UNION ALL SELECT 'c' as a,'d' as b) ORDER by a)
+----
+{"a":"b","c":"d"}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM (SELECT 'a' as a,'b' as b UNION ALL SELECT 'c' as a,'d' as b) ORDER by a limit 1)
+----
+{"a":"b"}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) from (SELECT TRUE::text as a, FALSE::text as b FROM(SELECT AVG(0) FROM qs))
+----
+{"true":"false"}
+
+query TI
+SELECT a.*, ROW_NUMBER() over () FROM (SELECT * FROM a ORDER BY x) a
+----
+a  1
+b  2
+
+query TI
+SELECT a.*, ROW_NUMBER() over () FROM (SELECT * FROM a ORDER BY x limit 1) a
+----
+a  1
+
+
+query TI
+SELECT a.*, ROW_NUMBER() OVER() FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x) a
+----
+a  1
+b  2
+
+query TI
+SELECT a.*, ROW_NUMBER() OVER() FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1) a
+----
+a  1
+
+query TI
+SELECT a.*, ROW_NUMBER() OVER() from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs)) a
+----
+true 1

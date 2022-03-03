@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 
-use expr::GlobalId;
+use mz_expr::GlobalId;
 
 use crate::coord::antichain::AntichainToken;
 
@@ -43,6 +43,11 @@ impl<T: Timestamp> ArrangementFrontiers<T> {
     }
     pub fn contains_key(&self, id: GlobalId) -> bool {
         self.index.contains_key(&id)
+    }
+    pub fn intersection(&self, ids: impl IntoIterator<Item = GlobalId>) -> Vec<GlobalId> {
+        ids.into_iter()
+            .filter(|id| self.contains_key(*id))
+            .collect()
     }
     pub fn insert(&mut self, id: GlobalId, state: Frontiers<T>) -> Option<Frontiers<T>> {
         self.index.insert(id, state)
@@ -105,10 +110,6 @@ pub struct Frontiers<T: Timestamp> {
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     pub upper: MutableAntichain<T>,
-    /// The most recent frontier for durable data.
-    /// All data at times in advance of this frontier have not yet been
-    /// durably persisted and may not be replayable across restarts.
-    pub durability: MutableAntichain<T>,
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
@@ -124,10 +125,9 @@ pub struct Frontiers<T: Timestamp> {
 }
 
 impl<T: Timestamp + Copy> Frontiers<T> {
-    /// Creates an empty index state from a number of workers and a function to run
-    /// when the since changes. Returns the initial since handle.
+    /// Creates an empty index state from a function to run when the since changes.
+    /// Returns the initial since handle.
     pub fn new<I, F>(
-        workers: usize,
         initial: I,
         compaction_window_ms: Option<T>,
         since_action: F,
@@ -139,11 +139,9 @@ impl<T: Timestamp + Copy> Frontiers<T> {
         let mut upper = MutableAntichain::new();
         // Upper must always start at minimum ("0"), even if we initialize since to
         // something in advance of it.
-        upper.update_iter(Some((T::minimum(), workers as i64)));
-        let durability = upper.clone();
+        upper.update_iter(Some((T::minimum(), 1)));
         let frontier = Self {
             upper,
-            durability,
             since: Rc::new(RefCell::new(MutableAntichain::new())),
             compaction_window_ms,
             since_action: Rc::new(RefCell::new(since_action)),
@@ -158,7 +156,7 @@ impl<T: Timestamp + Copy> Frontiers<T> {
         I: IntoIterator<Item = T>,
     {
         let since = Rc::clone(&self.since);
-        let since_action = self.since_action.clone();
+        let since_action = Rc::clone(&self.since_action);
         AntichainToken::new(values, move |changes| {
             let changed = since.borrow_mut().update_iter(changes).next().is_some();
             if changed {
@@ -222,7 +220,7 @@ mod tests {
     fn test_frontiers_action() {
         let expect = Rc::new(RefCell::new(Antichain::from_elem(0)));
         let inner = Rc::clone(&expect);
-        let (f, initial) = Frontiers::new(1, Some(0), None, move |since| {
+        let (f, initial) = Frontiers::new(Some(0), None, move |since| {
             assert_eq!(*inner.borrow(), since);
         });
         // Adding 5 should not change the since.

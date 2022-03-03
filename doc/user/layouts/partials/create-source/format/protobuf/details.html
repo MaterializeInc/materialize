@@ -2,7 +2,7 @@
 
 Protobuf-formatted external sources require:
 
-- `FileDescriptSet`
+- `FileDescriptorSet`
 - Top-level message name
 
 #### `FileDescriptorSet`
@@ -13,7 +13,7 @@ needs to decode incoming Protobuf data.
 You can generate the `FileDescriptorSet` with `protoc`, e.g.
 
 ```shell
-protoc --include_imports --descriptor_set_out=SCHEMA billing.proto
+protoc --include_imports --descriptor_set_out=billing.pb billing.proto
 ```
 
 #### Top-level message
@@ -33,3 +33,15 @@ _message&lowbar;name_ value would be:
 ```nofmt
 billing.Batch
 ```
+
+#### Schema evolution
+
+As long as you follow the [Protobuf rules for backwards-compatible schema
+evolution](https://developers.google.com/protocol-buffers/docs/overview#updating),
+you can write messages to your source using a newer version of the schema than
+you provided to Materialize when you created the source. Materialize continues
+to use the original definition of the schema by mapping values from the new
+schema to the old schema as described in the linked document.
+
+To use the new version of the message definition in Materialize, you need to
+drop and recreate your source.

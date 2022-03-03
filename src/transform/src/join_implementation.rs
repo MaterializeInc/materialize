@@ -19,11 +19,32 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
+use mz_expr::{
+    Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
-pub struct JoinImplementation;
+pub struct JoinImplementation {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for JoinImplementation {
+    /// Construct a new [`JoinImplementation`] where `recursion_guard`
+    /// is initialized with [`RECURSION_LIMIT`] as limit.
+    fn default() -> JoinImplementation {
+        JoinImplementation {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for JoinImplementation {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for JoinImplementation {
     fn transform(
@@ -36,8 +57,7 @@ impl crate::Transform for JoinImplementation {
             let keys = idxs.iter().map(|(_id, keys)| keys.clone()).collect();
             arranged.insert(Id::Global(*on_id), keys);
         }
-        self.action_recursive(relation, &mut arranged);
-        Ok(())
+        self.action_recursive(relation, &mut arranged)
     }
 }
 
@@ -50,9 +70,9 @@ impl JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         arranged: &mut HashMap<Id, Vec<Vec<MirScalarExpr>>>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action_recursive(value, arranged);
+            self.action_recursive(value, arranged)?;
             match &**value {
                 MirRelationExpr::ArrangeBy { keys, .. } => {
                     arranged.insert(Id::Local(*id), keys.clone());
@@ -65,11 +85,13 @@ impl JoinImplementation {
                 }
                 _ => {}
             }
-            self.action_recursive(body, arranged);
+            self.action_recursive(body, arranged)?;
             arranged.remove(&Id::Local(*id));
+            Ok(())
         } else {
-            relation.visit1_mut(|e| self.action_recursive(e, arranged));
+            relation.try_visit_mut_children(|e| self.action_recursive(e, arranged))?;
             self.action(relation, arranged);
+            Ok(())
         }
     }
 
@@ -85,10 +107,11 @@ impl JoinImplementation {
             ..
         } = relation
         {
-            // Canonicalize the equivalence classes
-            expr::canonicalize::canonicalize_equivalences(equivalences);
-
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+
+            // Canonicalize the equivalence classes
+            mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
@@ -191,7 +214,7 @@ impl JoinImplementation {
 
 mod delta_queries {
 
-    use expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     ///
@@ -207,7 +230,6 @@ mod delta_queries {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            demand: _,
             implementation,
         } = &mut new_join
         {
@@ -262,7 +284,7 @@ mod delta_queries {
 
 mod differential {
 
-    use expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     pub fn plan(
@@ -276,7 +298,6 @@ mod differential {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            demand: _,
             implementation,
         } = &mut new_join
         {
@@ -411,10 +432,10 @@ fn implement_arrangements<'a>(
         if let Some(mut lifted_mfp) = lifted_mfp {
             lifted_mfp.permute(
                 // globalize all input column references
-                &(new_join_mapper
+                new_join_mapper
                     .local_columns(index)
-                    .zip(new_join_mapper.global_columns(index)))
-                .collect(),
+                    .zip(new_join_mapper.global_columns(index))
+                    .collect(),
                 // shift the position of scalars to be after the last input
                 // column
                 arity,
@@ -448,9 +469,7 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
                         &mut |e| {
                             if let MirScalarExpr::Column(c) = e {
                                 if *c >= mfp.input_arity {
-                                    if *c >= mfp.input_arity {
-                                        *e = map[*c - mfp.input_arity].clone();
-                                    }
+                                    *e = map[*c - mfp.input_arity].clone();
                                 }
                             }
                             None

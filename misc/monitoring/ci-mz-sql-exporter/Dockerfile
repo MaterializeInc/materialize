@@ -23,8 +23,8 @@ RUN set -x \
 
 COPY --chown=nobody:nogroup conf/* /sql_exporter/
 
-EXPOSE 9399
+EXPOSE 9400
 
 ENTRYPOINT "/bin/sql_exporter"
 WORKDIR "/sql_exporter"
-CMD ["-config.file", "/sql_exporter/sql_exporter.yml"]
+CMD ["-config.file", "/sql_exporter/sql_exporter.yml", "-web.listen-address", "9400"]

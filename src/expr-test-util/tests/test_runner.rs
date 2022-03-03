@@ -8,13 +8,15 @@
 // by the Apache License, Version 2.0.
 
 mod test {
-    use expr_test_util::*;
-    use lowertest::{from_json, TestDeserializeContext};
-    use ore::result::ResultExt;
-    use ore::str::separated;
+    use mz_expr_test_util::*;
+    use mz_lowertest::{from_json, TestDeserializeContext};
+    use mz_ore::result::ResultExt;
     use serde::de::DeserializeOwned;
     use serde::Serialize;
 
+    /// Build a object of type `T` from the test spec, turn it back into a
+    /// test spec, construct an object from the new test spec, and see if the
+    /// two objects are the same.
     fn roundtrip<F, T, G, C>(
         s: &str,
         type_name: &str,
@@ -42,14 +44,46 @@ mod test {
                 new_s,
                 serde_json::to_string_pretty(&result).unwrap(),
                 serde_json::to_string_pretty(&new_result).unwrap(),
-                json.to_string(),
+                json,
                 type_name = type_name
             ))
         }
     }
 
+    /// An extended version of `roundtrip`.
+    ///
+    /// Only works for `MirRelationExpr`.
+    ///
+    /// When converting the relation back to the test spec, this method also
+    /// figures out the catalog commands required to create the relation from a
+    /// blank catalog.
+    fn roundtrip_with_catalog(orig_spec: &str, orig_catalog: &TestCatalog) -> Result<(), String> {
+        let orig_rel = build_rel(orig_spec, &orig_catalog)?;
+        let json = serde_json::to_value(orig_rel.clone()).map_err_to_string()?;
+        let mut new_catalog = TestCatalog::default();
+        let (new_spec, source_defs) = json_to_spec(&json.to_string(), &new_catalog);
+        for source_def in source_defs {
+            new_catalog.handle_test_command(&source_def)?;
+        }
+        let new_rel = build_rel(&new_spec, &new_catalog)?;
+        if new_rel.eq(&orig_rel) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Round trip failed. New spec:\n{}
+            Original relation:\n{}
+            New relation:\n{}
+            JSON for original relation:\n{}",
+                new_spec,
+                serde_json::to_string_pretty(&orig_rel).unwrap(),
+                serde_json::to_string_pretty(&new_rel).unwrap(),
+                json,
+            ))
+        }
+    }
+
     #[test]
-    fn run() {
+    fn run_roundtrip_tests() {
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {
@@ -63,8 +97,8 @@ mod test {
                         match roundtrip(
                             &s.input,
                             "MirScalarExpr",
-                            |s| build_scalar(s),
-                            || MirScalarExprDeserializeContext::default(),
+                            build_scalar,
+                            MirScalarExprDeserializeContext::default,
                         ) {
                             Ok(scalar) => format!("{}\n", scalar),
                             Err(err) => format!("error: {}\n", err),
@@ -84,21 +118,16 @@ mod test {
                             // whitespace, remove whitespace before comparing results.
                             Ok(rel) => format!(
                                 "{}\n",
-                                catalog
-                                    .generate_explanation(&rel, s.args.get("format"))
+                                generate_explanation(&catalog, &rel, s.args.get("format"))
                                     .trim_end()
                             ),
                             Err(err) => format!("error: {}\n", err),
                         }
                     }
-                    "rel-to-test" => {
-                        let (spec, source_defs) = json_to_spec(&s.input, &catalog);
-                        format!(
-                            "cat\n{}\n----\nok\n\n{}\n",
-                            separated("\n", source_defs),
-                            spec
-                        )
-                    }
+                    "rel-to-test" => match roundtrip_with_catalog(&s.input, &catalog) {
+                        Ok(()) => "ok\n".to_string(),
+                        Err(err) => format!("error: {}\n", err),
+                    },
                     _ => panic!("unknown directive: {}", s.directive),
                 }
             })

@@ -9,98 +9,22 @@
 
 //! Provides convenience functions for working with upstream Postgres sources from the `sql` package.
 
-use std::fmt;
-
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::config::{ReplicationMode, SslMode};
-use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{Client, Config};
 
-use sql_parser::ast::display::{AstDisplay, AstFormatter};
-use sql_parser::ast::Ident;
-use sql_parser::impl_display;
-
-pub enum PgScalarType {
-    Simple(PgType),
-    Numeric { precision: u16, scale: u16 },
-    NumericArray { precision: u16, scale: u16 },
-    BPChar { length: i32 },
-    BPCharArray { length: i32 },
-    VarChar { length: i32 },
-    VarCharArray { length: i32 },
-}
-
-impl AstDisplay for PgScalarType {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Simple(typ) => {
-                f.write_str(typ);
-            }
-            Self::Numeric { precision, scale } => {
-                f.write_str("numeric(");
-                f.write_str(precision);
-                f.write_str(", ");
-                f.write_str(scale);
-                f.write_str(")");
-            }
-            Self::NumericArray { precision, scale } => {
-                f.write_str("numeric(");
-                f.write_str(precision);
-                f.write_str(", ");
-                f.write_str(scale);
-                f.write_str(")[]");
-            }
-            Self::BPChar { length } => {
-                f.write_str("character(");
-                f.write_str(length);
-                f.write_str(")");
-            }
-            Self::BPCharArray { length } => {
-                f.write_str("character(");
-                f.write_str(length);
-                f.write_str(")[]");
-            }
-            Self::VarChar { length } => {
-                f.write_str("character varying(");
-                f.write_str(length);
-                f.write_str(")");
-            }
-            Self::VarCharArray { length } => {
-                f.write_str("character varying(");
-                f.write_str(length);
-                f.write_str(")[]");
-            }
-        }
-    }
-}
-impl_display!(PgScalarType);
+use mz_ore::task;
+use mz_pgrepr::Type as PgType;
 
 /// The schema of a single column
 pub struct PgColumn {
-    pub name: Ident,
-    pub scalar_type: PgScalarType,
+    pub name: String,
+    pub ty: PgType,
     pub nullable: bool,
     pub primary_key: bool,
 }
-
-impl AstDisplay for PgColumn {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(&self.name);
-        f.write_str(" ");
-        f.write_str(&self.scalar_type);
-        if self.primary_key {
-            f.write_str(" PRIMARY KEY");
-        }
-        if self.nullable {
-            f.write_str(" NULL");
-        } else {
-            f.write_str(" NOT NULL");
-        }
-    }
-}
-impl_display!(PgColumn);
 
 /// Information about a remote table
 pub struct TableInfo {
@@ -183,7 +107,16 @@ pub async fn publication_info(
     let config = conn.parse()?;
     let tls = make_tls(&config)?;
     let (client, connection) = config.connect(tls).await?;
-    tokio::spawn(connection);
+    task::spawn(|| format!("postgres_publication_info:{conn}"), connection);
+
+    client
+        .query(
+            "SELECT oid FROM pg_publication WHERE pubname = $1",
+            &[&publication],
+        )
+        .await?
+        .get(0)
+        .ok_or_else(|| anyhow!("publication {:?} does not exist", publication))?;
 
     let tables = client
         .query(
@@ -209,7 +142,7 @@ pub async fn publication_info(
                 "SELECT
                         a.attname AS name,
                         a.atttypid AS oid,
-                        a.atttypmod AS modifier,
+                        a.atttypmod AS typmod,
                         a.attnotnull AS not_null,
                         b.oid IS NOT NULL AS primary_key
                     FROM pg_catalog.pg_attribute a
@@ -228,46 +161,13 @@ pub async fn publication_info(
             .map(|row| {
                 let name: String = row.get("name");
                 let oid = row.get("oid");
-                let pg_type =
-                    PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
-                let scalar_type = match pg_type {
-                    typ @ PgType::NUMERIC | typ @ PgType::NUMERIC_ARRAY => {
-                        let modifier: i32 = row.get("modifier");
-                        // https://github.com/postgres/postgres/blob/REL_13_3/src/backend/utils/adt/numeric.c#L978-L983
-                        let tmp_mod = modifier - 4;
-                        let scale = (tmp_mod & 0xffff) as u16;
-                        let precision = ((tmp_mod >> 16) & 0xffff) as u16;
-
-                        if typ == PgType::NUMERIC {
-                            PgScalarType::Numeric { scale, precision }
-                        } else {
-                            PgScalarType::NumericArray { scale, precision }
-                        }
-                    }
-                    typ @ PgType::BPCHAR
-                    | typ @ PgType::BPCHAR_ARRAY
-                    | typ @ PgType::VARCHAR
-                    | typ @ PgType::VARCHAR_ARRAY => {
-                        let modifier: i32 = row.get("modifier");
-                        // BPCHAR: https://github.com/postgres/postgres/blob/272d82ec6febb97ab25fd7c67e9c84f4660b16ac/src/backend/utils/adt/varchar.c#L282-L286
-                        // VARCHAR https://github.com/postgres/postgres/blob/272d82ec6febb97ab25fd7c67e9c84f4660b16ac/src/backend/utils/adt/varchar.c#L617
-                        let length = if modifier < 4 { i32::MAX } else { modifier - 4 };
-
-                        match typ {
-                            PgType::BPCHAR => PgScalarType::BPChar { length },
-                            PgType::BPCHAR_ARRAY => PgScalarType::BPCharArray { length },
-                            PgType::VARCHAR => PgScalarType::VarChar { length },
-                            PgType::VARCHAR_ARRAY => PgScalarType::VarCharArray { length },
-                            _ => unreachable!(),
-                        }
-                    }
-                    other => PgScalarType::Simple(other),
-                };
+                let typmod: i32 = row.get("typmod");
+                let ty = PgType::from_oid_and_typmod(oid, typmod)?;
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PgColumn {
-                    name: Ident::new(name),
-                    scalar_type,
+                    name,
+                    ty,
                     nullable: !not_null,
                     primary_key,
                 })
@@ -289,7 +189,10 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
     let config = conn.parse()?;
     let tls = make_tls(&config)?;
     let (client, connection) = tokio_postgres::connect(&conn, tls).await?;
-    tokio::spawn(connection);
+    task::spawn(
+        || format!("postgres_drop_replication_slots:{conn}"),
+        connection,
+    );
 
     let replication_client = connect_replication(conn).await?;
     for slot in slots {
@@ -325,10 +228,13 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
 pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
     let mut config: Config = conn.parse()?;
     let tls = make_tls(&config)?;
-    let (client, conn) = config
+    let (client, connection) = config
         .replication_mode(ReplicationMode::Logical)
         .connect(tls)
         .await?;
-    tokio::spawn(conn);
+    task::spawn(
+        || format!("postgres_connect_replication:{conn}"),
+        connection,
+    );
     Ok(client)
 }

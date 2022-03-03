@@ -130,7 +130,7 @@ select * from (select 1, a+1 from t), t;
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | Map 1
-| Project (#3, #0..#2)
+| Project (#3, #0..=#2)
 
 EOF
 
@@ -151,7 +151,7 @@ select * from (select b+1, 2, 1, a+1 from t), t;
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | Map 2, 1
-| Project (#0, #4, #5, #1..#3)
+| Project (#0, #4, #5, #1..=#3)
 
 EOF
 
@@ -162,7 +162,7 @@ select * from (select 3, b+1, 2, a+2, 1, a+1 from t), t;
 %0 =
 | Get materialize.public.t (u1)
 | Map (#1 + 1), (#0 + 2), (#0 + 1)
-| Project (#2..#4)
+| Project (#2..=#4)
 | ArrangeBy ()
 
 %1 =
@@ -172,7 +172,7 @@ select * from (select 3, b+1, 2, a+2, 1, a+1 from t), t;
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | Map 3, 2, 1
-| Project (#5, #0, #6, #1, #7, #2..#4)
+| Project (#5, #0, #6, #1, #7, #2..=#4)
 
 EOF
 
@@ -298,7 +298,6 @@ explain select * from (select 1 as a from t), generate_series(a+1, 4);
 | Get materialize.public.t (u1)
 | Project ()
 | FlatMap generate_series(2, 4, 1)
-| | demand = (#0)
 | Map 1
 | Project (#1, #0)
 
@@ -827,7 +826,7 @@ explain select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) whe
 %3 =
 | Join %0 %1 %2
 | | implementation = Differential %1 %2.() %0.()
-| Project (#0..#3)
+| Project (#0..=#3)
 
 EOF
 

@@ -9,7 +9,7 @@
 
 //! Metrics that sinks report.
 
-use ore::{
+use mz_ore::{
     metric,
     metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec},
 };
@@ -21,7 +21,6 @@ pub struct KafkaBaseMetrics {
     pub(crate) message_send_errors_counter: IntCounterVec,
     pub(crate) message_delivery_errors_counter: IntCounterVec,
     pub(crate) rows_queued: UIntGaugeVec,
-    pub(crate) messages_in_flight: UIntGaugeVec,
 }
 
 impl KafkaBaseMetrics {
@@ -45,11 +44,6 @@ impl KafkaBaseMetrics {
             rows_queued: registry.register(metric!(
                 name: "mz_kafka_sink_rows_queued",
                 help: "The current number of rows queued by the Kafka sink operator (note that one row can generate multiple Kafka messages)",
-                var_labels: ["topic", "sink_id", "worker_id"],
-            )),
-            messages_in_flight: registry.register(metric!(
-                name: "mz_kafka_sink_messages_in_flight",
-                help: "The current number of messages waiting to be delivered by the Kafka producer",
                 var_labels: ["topic", "sink_id", "worker_id"],
             )),
         }

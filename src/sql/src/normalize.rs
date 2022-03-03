@@ -16,23 +16,22 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail, Context};
-use rusoto_core::Region;
+use anyhow::{bail, Context};
+use itertools::Itertools;
 
-use aws_util::aws;
-use repr::ColumnName;
-use sql_parser::ast::display::AstDisplay;
-use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{
+use mz_dataflow_types::sources::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
+use mz_repr::ColumnName;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, UnresolvedObjectName, Value,
-    ViewDefinition,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function,
+    FunctionArgs, Ident, IfExistsBehavior, Op, Query, Raw, SqlOption, Statement, TableFactor,
+    TableFunction, UnresolvedObjectName, Value, ViewDefinition,
 };
 
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{resolve_names_stmt, Aug, DatabaseSpecifier, FullName, PartialName};
 use crate::plan::error::PlanError;
-use crate::plan::query::{resolve_names_stmt, Aug};
 use crate::plan::statement::StatementContext;
 
 /// Normalizes a single identifier.
@@ -61,6 +60,22 @@ pub fn unresolved_object_name(mut name: UnresolvedObjectName) -> Result<PartialN
     };
     assert!(name.0.is_empty());
     Ok(out)
+}
+
+/// Normalizes an operator reference.
+///
+/// Qualified operators outside of the pg_catalog schema are rejected.
+pub fn op(op: &Op) -> Result<&str, PlanError> {
+    if !op.namespace.is_empty()
+        && (op.namespace.len() != 1 || op.namespace[0].as_str() != "pg_catalog")
+    {
+        sql_bail!(
+            "operator does not exist: {}.{}",
+            op.namespace.iter().map(|n| n.to_string()).join("."),
+            op.op,
+        )
+    }
+    Ok(&op.op)
 }
 
 /// Normalizes a list of `WITH` options.
@@ -191,6 +206,25 @@ pub fn create_statement(
             }
         }
 
+        fn visit_table_function_mut(&mut self, func: &'ast mut TableFunction<Aug>) {
+            if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
+                self.err = Some(e);
+                return;
+            }
+
+            match &mut func.args {
+                FunctionArgs::Star => (),
+                FunctionArgs::Args { args, order_by } => {
+                    for arg in args {
+                        self.visit_expr_mut(arg);
+                    }
+                    for expr in order_by {
+                        self.visit_order_by_expr_mut(expr);
+                    }
+                }
+            }
+        }
+
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
             match table_factor {
                 TableFactor::Table { name, alias, .. } => {
@@ -199,34 +233,8 @@ pub fn create_statement(
                         self.visit_table_alias_mut(alias);
                     }
                 }
-                TableFactor::Function {
-                    ref mut name,
-                    args,
-                    alias,
-                } => {
-                    if let Err(e) = normalize_function_name(self.scx, name) {
-                        self.err = Some(e);
-                        return;
-                    }
-
-                    match args {
-                        FunctionArgs::Star => (),
-                        FunctionArgs::Args { args, order_by } => {
-                            for expr in args {
-                                self.visit_expr_mut(expr);
-                            }
-                            for expr in order_by {
-                                self.visit_order_by_expr_mut(expr);
-                            }
-                        }
-                    }
-                    if let Some(alias) = alias {
-                        self.visit_table_alias_mut(alias);
-                    }
-                }
-                // We only need special behavior for `TableFactor::Table` and
-                // `TableFactor::Function`. Just visit the other types of table
-                // factors like normal.
+                // We only need special behavior for `TableFactor::Table`.
+                // Just visit the other types of table factors like normal.
                 _ => visit_mut::visit_table_factor_mut(self, table_factor),
             }
         }
@@ -266,7 +274,7 @@ pub fn create_statement(
             connector: _,
             with_options: _,
             format: _,
-            key_envelope: _,
+            include_metadata: _,
             envelope: _,
             if_not_exists,
             materialized,
@@ -364,23 +372,32 @@ pub fn create_statement(
             *if_not_exists = false;
         }
 
-        Statement::CreateType(CreateTypeStatement {
-            name, with_options, ..
-        }) => {
-            *name = allocate_name(name)?;
-            let mut normalizer = QueryNormalizer::new(scx);
-            for option in with_options {
-                match option {
-                    SqlOption::DataType { data_type, .. } => {
-                        normalizer.visit_data_type_mut(data_type);
+        Statement::CreateType(CreateTypeStatement { name, as_type, .. }) => match as_type {
+            CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
+                *name = allocate_name(name)?;
+                let mut normalizer = QueryNormalizer::new(scx);
+                for option in with_options {
+                    match option {
+                        SqlOption::DataType { data_type, .. } => {
+                            normalizer.visit_data_type_mut(data_type);
+                        }
+                        _ => unreachable!(),
                     }
-                    _ => unreachable!(),
+                }
+                if let Some(err) = normalizer.err {
+                    return Err(err.into());
                 }
             }
-            if let Some(err) = normalizer.err {
-                return Err(err.into());
+            CreateTypeAs::Record { column_defs } => {
+                let mut normalizer = QueryNormalizer::new(scx);
+                for c in column_defs {
+                    normalizer.visit_column_def_mut(c);
+                }
+                if let Some(err) = normalizer.err {
+                    return Err(err.into());
+                }
             }
-        }
+        },
 
         _ => unreachable!(),
     }
@@ -409,14 +426,30 @@ macro_rules! with_option_type {
     ($name:ident, Interval) => {
         match $name {
             Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                ::repr::strconv::parse_interval(&value)?
+                mz_repr::strconv::parse_interval(&value)?
             }
             Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                ::repr::strconv::parse_interval(&interval.value)?
+                mz_repr::strconv::parse_interval(&interval.value)?
             }
             _ => ::anyhow::bail!("expected Interval"),
         }
     };
+}
+
+/// Ensures that the given set of options are empty, useful for validating that
+/// `WITH` options are all real, used options
+pub(crate) fn ensure_empty_options<V>(
+    with_options: &BTreeMap<String, V>,
+    context: &str,
+) -> Result<(), anyhow::Error> {
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for {}: {}",
+            context,
+            with_options.keys().join(",")
+        )
+    }
+    Ok(())
 }
 
 /// This macro accepts a struct definition and will generate it and a `try_from`
@@ -472,10 +505,10 @@ macro_rules! with_options {
 }
 
 /// Normalizes option values that contain AWS connection parameters.
-pub fn aws_connect_info(
+pub fn aws_config(
     options: &mut BTreeMap<String, Value>,
     region: Option<String>,
-) -> anyhow::Result<aws::ConnectInfo> {
+) -> Result<AwsConfig, anyhow::Error> {
     let mut extract = |key| match options.remove(key) {
         Some(Value::String(key)) => {
             if !key.is_empty() {
@@ -488,67 +521,77 @@ pub fn aws_connect_info(
         _ => Ok(None),
     };
 
-    let region_raw = match region {
-        Some(region) => region,
-        None => extract("region")?.ok_or_else(|| anyhow!("region is required"))?,
-    };
-
-    let region = match region_raw.parse() {
-        Ok(region) => {
-            // ignore/drop the endpoint option if we're pointing at a valid,
-            // non-custom AWS region. Endpoints are meaningless without custom
-            // regions, and this makes writing tests that support both
-            // LocalStack and real AWS much easier.
-            let _ = extract("endpoint");
-            region
-        }
-        Err(e) => {
-            // Region's FromStr doesn't support parsing custom regions.
-            // If a Kinesis stream's ARN indicates it exists in a custom
-            // region, support it iff a valid endpoint for the stream
-            // is also provided.
-            match extract("endpoint").with_context(|| {
-                format!("endpoint is required for custom regions: {:?}", region_raw)
-            })? {
-                Some(endpoint) => Region::Custom {
-                    name: region_raw,
-                    endpoint,
-                },
-                _ => bail!(
-                    "Unable to parse AWS region: {}. If providing a custom \
-                     region, an `endpoint` option must also be provided",
-                    e
-                ),
+    let credentials = match extract("profile")? {
+        Some(profile_name) => {
+            for name in &["access_key_id", "secret_access_key", "token"] {
+                let extracted = extract(name);
+                if matches!(extracted, Ok(Some(_)) | Err(_)) {
+                    bail!(
+                        "AWS profile cannot be set in combination with '{0}', \
+                         configure '{0}' inside the profile file",
+                        name
+                    );
+                }
             }
+            AwsCredentials::Profile { profile_name }
+        }
+        None => {
+            let access_key_id = extract("access_key_id")?;
+            let secret_access_key = extract("secret_access_key")?;
+            let session_token = extract("token")?;
+            let credentials = match (access_key_id, secret_access_key, session_token) {
+                (None, None, None) => AwsCredentials::Default,
+                (Some(access_key_id), Some(secret_access_key), session_token) => {
+                    AwsCredentials::Static {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    }
+                }
+                (Some(_), None, _) => {
+                    bail!("secret_acccess_key must be specified if access_key_id is specified")
+                }
+                (None, Some(_), _) => {
+                    bail!("secret_acccess_key cannot be specified without access_key_id")
+                }
+                (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
+            };
+
+            credentials
         }
     };
 
-    aws::ConnectInfo::new(
+    let region = match region {
+        Some(region) => Some(region),
+        None => extract("region")?,
+    };
+    let endpoint = match extract("endpoint")? {
+        None => None,
+        Some(endpoint) => Some(SerdeUri(endpoint.parse().context("parsing AWS endpoint")?)),
+    };
+    let arn = extract("role_arn")?;
+    Ok(AwsConfig {
+        credentials,
         region,
-        extract("access_key_id")?,
-        extract("secret_access_key")?,
-        extract("token")?,
-    )
+        endpoint,
+        role: arn.map(|arn| AwsAssumeRole { arn }),
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::collections::BTreeMap;
     use std::error::Error;
-    use std::rc::Rc;
 
-    use ore::collections::CollectionExt;
+    use mz_ore::collections::CollectionExt;
 
     use super::*;
     use crate::catalog::DummyCatalog;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
-        let scx =
-            &StatementContext::new(None, &DummyCatalog, Rc::new(RefCell::new(BTreeMap::new())));
+        let scx = &StatementContext::new(None, &DummyCatalog);
 
-        let parsed = sql_parser::parser::parse_statements(
+        let parsed = mz_sql_parser::parser::parse_statements(
             "create materialized view foo as select 1 as bar",
         )?
         .into_element();
@@ -560,46 +603,5 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn with_options_errors_if_endpoint_missing_for_invalid_region() {
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("nonsense".into()));
-        assert!(aws_connect_info(&mut map, None).is_err());
-
-        let mut map = BTreeMap::new();
-        assert!(aws_connect_info(&mut map, Some("nonsense".into())).is_err());
-    }
-
-    #[test]
-    fn with_options_allows_invalid_region_with_endpoint() {
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("nonsense".into()));
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, None).is_ok());
-
-        let mut map = BTreeMap::new();
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, Some("nonsense".into())).is_ok());
-    }
-
-    #[test]
-    fn with_options_ignores_endpoint_with_valid_region() {
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("us-east-1".into()));
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, None).is_ok());
-
-        let mut map = BTreeMap::new();
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, Some("us-east-1".into())).is_ok());
-
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("us-east-1".into()));
-        assert!(aws_connect_info(&mut map, None).is_ok());
-
-        let mut map = BTreeMap::new();
-        assert!(aws_connect_info(&mut map, Some("us-east-1".into())).is_ok());
     }
 }

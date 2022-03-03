@@ -46,4 +46,4 @@ $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema
 {"key": 999999999999} {"nokey": "nokey1"}
 
 ! SELECT * FROM int2long
-Schemas don't match: Long, Int
+contains:Writer schema has type `Long`, but reader schema has type `Int` for field `Key.key`

@@ -7,206 +7,34 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::convert::TryInto;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
+use mz_dataflow_types::sources::AwsExternalId;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
-use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
-use repr::MessagePayload;
+use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 
-use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, SourceDataEncoding,
+use mz_dataflow_types::sources::{
+    encoding::SourceDataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
+    MzOffset,
 };
-use expr::{PartitionId, SourceInstanceId};
-use kafka_util::KafkaAddrs;
-use log::{error, info, log_enabled, warn};
+use mz_expr::{PartitionId, SourceInstanceId};
+use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
+use mz_repr::adt::jsonb::Jsonb;
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 use super::metrics::SourceBaseMetrics;
-
-/// Values recorded from the last rdkafka statistics callback, used to generate a
-/// diff of values for logging
-#[derive(Default)]
-pub struct PartitionStats {
-    rxmsgs: i64,
-    rxbytes: i64,
-    txmsgs: i64,
-    txbytes: i64,
-    lo_offset: i64,
-    hi_offset: i64,
-    ls_offset: i64,
-    app_offset: i64,
-    consumer_lag: i64,
-    initial_high_offset: Option<i64>,
-}
-
-impl PartitionStats {
-    /// Return the value required to negate the last value recorded for this partition
-    fn negate(
-        &self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        partition_id: String,
-    ) -> MaterializedEvent {
-        MaterializedEvent::KafkaConsumerPartition {
-            consumer_name,
-            source_id,
-            partition_id,
-            rxmsgs: -self.rxmsgs,
-            rxbytes: -self.rxbytes,
-            txmsgs: -self.txmsgs,
-            txbytes: -self.txbytes,
-            lo_offset: -self.lo_offset,
-            hi_offset: -self.hi_offset,
-            ls_offset: -self.ls_offset,
-            app_offset: -self.app_offset,
-            consumer_lag: -self.consumer_lag,
-            initial_high_offset: -self.initial_high_offset.unwrap_or(0),
-        }
-    }
-    /// Update the value for this partition, returning a MaterializedEvent that represents the
-    /// difference between the previous values and the new values
-    fn update(
-        &mut self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        partition_id: String,
-        stats: &rdkafka::statistics::Partition,
-    ) -> MaterializedEvent {
-        let reported_initial_high_offset =
-            if self.initial_high_offset.is_none() && stats.hi_offset > 0 {
-                self.initial_high_offset = Some(stats.hi_offset);
-                stats.hi_offset
-            } else {
-                0
-            };
-
-        let event = MaterializedEvent::KafkaConsumerPartition {
-            consumer_name,
-            source_id,
-            partition_id,
-            rxmsgs: stats.rxmsgs - self.rxmsgs,
-            rxbytes: stats.rxbytes - self.rxbytes,
-            txmsgs: stats.txmsgs - self.txmsgs,
-            txbytes: stats.txbytes - self.txbytes,
-            lo_offset: stats.lo_offset - self.lo_offset,
-            hi_offset: stats.hi_offset - self.hi_offset,
-            ls_offset: stats.ls_offset - self.ls_offset,
-            app_offset: stats.app_offset - self.app_offset,
-            consumer_lag: stats.consumer_lag - self.consumer_lag,
-            initial_high_offset: reported_initial_high_offset,
-        };
-
-        self.rxmsgs = stats.rxmsgs;
-        self.rxbytes = stats.rxbytes;
-        self.txmsgs = stats.txmsgs;
-        self.txbytes = stats.txbytes;
-        self.lo_offset = stats.lo_offset;
-        self.hi_offset = stats.hi_offset;
-        self.ls_offset = stats.ls_offset;
-        self.app_offset = stats.app_offset;
-        self.consumer_lag = stats.consumer_lag;
-
-        event
-    }
-}
-
-#[derive(Default)]
-pub struct BrokerRTTWindow {
-    min: i64,
-    max: i64,
-    avg: i64,
-    sum: i64,
-    cnt: i64,
-    stddev: i64,
-    p50: i64,
-    p75: i64,
-    p90: i64,
-    p95: i64,
-    p99: i64,
-    p99_99: i64,
-}
-
-impl BrokerRTTWindow {
-    /// Return the value required to negate the last value recorded for this window
-    fn negate(
-        &self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        broker_name: String,
-    ) -> MaterializedEvent {
-        MaterializedEvent::KafkaBrokerRtt {
-            consumer_name: consumer_name,
-            source_id: source_id,
-            broker_name: broker_name,
-            min: -self.min,
-            max: -self.max,
-            avg: -self.avg,
-            sum: -self.sum,
-            cnt: -self.cnt,
-            stddev: -self.stddev,
-            p50: -self.p50,
-            p75: -self.p75,
-            p90: -self.p90,
-            p95: -self.p95,
-            p99: -self.p99,
-            p99_99: -self.p99_99,
-        }
-    }
-    /// Update the value for window, returning a MaterializedEvent that represents the
-    /// difference between the previous values and the new values
-    fn update(
-        &mut self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        broker_name: String,
-        stats: &rdkafka::statistics::Window,
-    ) -> MaterializedEvent {
-        let event = MaterializedEvent::KafkaBrokerRtt {
-            consumer_name,
-            source_id,
-            broker_name,
-            min: stats.min - self.min,
-            max: stats.max - self.max,
-            avg: stats.avg - self.avg,
-            sum: stats.sum - self.sum,
-            cnt: stats.cnt - self.cnt,
-            stddev: stats.stddev - self.stddev,
-            p50: stats.p50 - self.p50,
-            p75: stats.p75 - self.p75,
-            p90: stats.p90 - self.p90,
-            p95: stats.p95 - self.p95,
-            p99: stats.p99 - self.p99,
-            p99_99: stats.p99_99 - self.p99_99,
-        };
-
-        self.min = stats.min;
-        self.max = stats.max;
-        self.avg = stats.avg;
-        self.sum = stats.sum;
-        self.cnt = stats.cnt;
-        self.stddev = stats.stddev;
-        self.p50 = stats.p50;
-        self.p75 = stats.p75;
-        self.p90 = stats.p90;
-        self.p95 = stats.p95;
-        self.p99 = stats.p99;
-        self.p99_99 = stats.p99_99;
-
-        event
-    }
-}
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -220,232 +48,59 @@ pub struct KafkaSourceReader {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
-    /// The number of known partitions.
-    known_partitions: i32,
     /// Worker ID
-    worker_id: i32,
+    worker_id: usize,
+    /// Total count of workers
+    worker_count: usize,
     /// Map from partition -> most recently read offset
     last_offsets: HashMap<i32, i64>,
     /// Map from partition -> offset to start reading at
     start_offsets: HashMap<i32, i64>,
     /// Timely worker logger for source events
     logger: Option<Logger>,
-    /// Channel to receive Kafka statistics objects from the stats callback
-    stats_rx: crossbeam_channel::Receiver<Statistics>,
+    /// Channel to receive Kafka statistics JSON blobs from the stats callback.
+    stats_rx: crossbeam_channel::Receiver<Jsonb>,
+    // The last statistics JSON blob received.
+    last_stats: Option<Jsonb>,
+    /// The last partition we received
+    partition_info: Arc<Mutex<Option<Vec<i32>>>>,
+    /// A handle to the spawned metadata thread
+    // Drop order is important here, we want the thread to be unparked after the `partition_info`
+    // Arc has been dropped, so that the unpacked thread notices it and exits immediately
+    _metadata_thread_handle: UnparkOnDrop<()>,
+}
+
+struct UnparkOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for UnparkOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.thread().unpark();
+    }
 }
 
 impl SourceReader for KafkaSourceReader {
+    type Key = Option<Vec<u8>>;
+    type Value = Option<Vec<u8>>;
+
     /// Create a new instance of a Kafka reader.
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
+        worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        _: AwsExternalId,
+        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         logger: Option<Logger>,
         _: SourceBaseMetrics,
-    ) -> Result<(KafkaSourceReader, Option<PartitionId>), anyhow::Error> {
-        match connector {
-            ExternalSourceConnector::Kafka(kc) => Ok((
-                KafkaSourceReader::new(
-                    source_name,
-                    source_id,
-                    worker_id,
-                    consumer_activator,
-                    kc,
-                    logger,
-                ),
-                None,
-            )),
-            _ => unreachable!(),
-        }
-    }
-    /// Ensures that a partition queue for `pid` exists.
-    /// In Kafka, partitions are assigned contiguously. This function consequently
-    /// creates partition queues for every p <= pid
-    fn add_partition(&mut self, pid: PartitionId) {
-        let pid = match pid {
-            PartitionId::Kafka(p) => p,
+    ) -> Result<Self, anyhow::Error> {
+        let kc = match connector {
+            ExternalSourceConnector::Kafka(kc) => kc,
             _ => unreachable!(),
         };
 
-        self.create_partition_queue(pid);
-        // Indicate a last offset of -1 if we have not been instructed to
-        // have a specific start offset for this topic.
-        let start_offset = *self.start_offsets.get(&pid).unwrap_or(&-1);
-        let prev = self.last_offsets.insert(pid, start_offset);
-
-        assert!(prev.is_none());
-        self.known_partitions = cmp::max(self.known_partitions, pid + 1);
-    }
-
-    /// This function polls from the next consumer for which a message is available. This function polls the set
-    /// round-robin: when a consumer is polled, it is placed at the back of the queue.
-    ///
-    /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
-    /// we skip this message, and seek to the appropriate offset
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
-        // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
-        // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
-        // event queue, such as statistics callbacks.
-        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
-            match result {
-                Err(e) => error!(
-                    "kafka error when polling consumer for source: {} topic: {} : {}",
-                    self.source_name, self.topic_name, e
-                ),
-                Ok(m) => error!(
-                    "unexpected receipt of kafka message from non-partitioned queue for source: {} topic: {} partition: {} offset: {}",
-                    self.source_name, self.topic_name, m.partition(), m.offset()
-                ),
-            }
-        }
-
-        // Read any statistics objects generated via the GlueConsumerContext::stats callback
-        while let Ok(statistics) = self.stats_rx.try_recv() {
-            if let Some(logger) = self.logger.as_mut() {
-                for part in self.partition_consumers.iter_mut() {
-                    for (broker, stats) in &statistics.brokers {
-                        match &stats.rtt {
-                            Some(rtt) => {
-                                let window = part
-                                    .broker_windows
-                                    .entry(broker.into())
-                                    .or_insert_with(BrokerRTTWindow::default);
-
-                                logger.log(window.update(
-                                    statistics.name.to_string(),
-                                    self.id,
-                                    broker.to_string(),
-                                    rtt,
-                                ));
-                            }
-                            None => (),
-                        }
-                    }
-
-                    let new_stats = match statistics.topics.get(self.topic_name.as_str()) {
-                        Some(t) => match t.partitions.get(&part.pid) {
-                            Some(p) => p,
-                            None => continue,
-                        },
-                        None => continue,
-                    };
-
-                    let (consumer_name, part_stats) =
-                        part.partition_stats.get_or_insert_with(|| {
-                            (statistics.name.clone(), PartitionStats::default())
-                        });
-
-                    logger.log(part_stats.update(
-                        consumer_name.to_string(),
-                        self.id,
-                        part.pid.to_string(),
-                        &new_stats,
-                    ));
-                }
-            }
-        }
-
-        let mut next_message = NextMessage::Pending;
-        let consumer_count = self.get_partition_consumers_count();
-        let mut attempts = 0;
-        while attempts < consumer_count {
-            let mut partition_queue = self.partition_consumers.pop_front().unwrap();
-            let message = match partition_queue.get_next_message() {
-                Err(e) => {
-                    let pid = partition_queue.pid();
-                    let last_offset = self
-                        .last_offsets
-                        .get(&pid)
-                        .expect("partition known to be installed");
-
-                    error!(
-                        "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
-                        self.source_name,
-                        self.topic_name,
-                        pid,
-                        last_offset,
-                        e
-                    );
-                    None
-                }
-                Ok(m) => m,
-            };
-
-            if let Some(message) = message {
-                let partition = match message.partition {
-                    PartitionId::Kafka(pid) => pid,
-                    _ => unreachable!(),
-                };
-
-                // Convert the received offset back from a 1-indexed MzOffset to the correct offset.
-                let offset = message.offset.offset - 1;
-                // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
-                // a network issue or a new partition added, at which point the consumer may
-                // start processing the topic from the beginning, or we may see duplicate offsets
-                // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
-                // that we are ever going to see holds.
-                // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
-                // is enabled, there may be gaps in the sequence.
-                // If we see an "old" offset, we ast-forward the consumer and skip that message
-
-                // Given the explicit consumer to partition assignment, we should never receive a message
-                // for a partition for which we have no metadata
-                assert!(self.last_offsets.contains_key(&partition));
-
-                let last_offset_ref = self
-                    .last_offsets
-                    .get_mut(&partition)
-                    .expect("partition known to be installed");
-
-                let last_offset = *last_offset_ref;
-                if offset <= last_offset {
-                    info!(
-                        "Kafka message before expected offset, skipping: \
-                             source {} (reading topic {}, partition {}) \
-                             received offset {} expected offset {:?}",
-                        self.source_name,
-                        self.topic_name,
-                        partition,
-                        offset,
-                        last_offset + 1,
-                    );
-                    // Seek to the *next* offset (aka last_offset + 1) that we have not yet processed
-                    self.fast_forward_consumer(partition, last_offset + 1);
-                    // We explicitly should not consume the message as we have already processed it
-                    // However, we make sure to activate the source to make sure that we get a chance
-                    // to read from this consumer again (even if no new data arrives)
-                    next_message = NextMessage::TransientDelay;
-                } else {
-                    next_message = NextMessage::Ready(message);
-                    *last_offset_ref = offset;
-                }
-            }
-            self.partition_consumers.push_back(partition_queue);
-            if let NextMessage::Ready(_) = next_message {
-                // Found a message, exit the loop and return message
-                break;
-            } else {
-                attempts += 1;
-            }
-        }
-
-        Ok(next_message)
-    }
-}
-
-impl KafkaSourceReader {
-    /// Constructor
-    pub fn new(
-        source_name: String,
-        source_id: SourceInstanceId,
-        worker_id: usize,
-        consumer_activator: SyncActivator,
-        kc: KafkaSourceConnector,
-        logger: Option<Logger>,
-    ) -> KafkaSourceReader {
         let KafkaSourceConnector {
             addrs,
             topic,
@@ -454,7 +109,6 @@ impl KafkaSourceReader {
             cluster_id,
             ..
         } = kc;
-        let worker_id = worker_id.try_into().unwrap();
         let kafka_config = create_kafka_config(
             &source_name,
             &addrs,
@@ -466,25 +120,172 @@ impl KafkaSourceReader {
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext {
                 activator: consumer_activator,
-                stats_tx: stats_tx,
+                stats_tx,
             })
             .expect("Failed to create Kafka Consumer");
+        let consumer = Arc::new(consumer);
 
-        let start_offsets = kc.start_offsets.iter().map(|(k, v)| (*k, v - 1)).collect();
+        // Start offsets is a map from pid -> next 0-indexed offset to read from,
+        // which is equivalent to 1 + the last 0-indexed offset read.
+        let mut start_offsets: HashMap<_, _> = kc.start_offsets.into_iter().collect();
 
-        KafkaSourceReader {
+        // Restored offsets are 1-indexed, so convert to 0-indexed offsets by
+        // subtracting 1. The bindings in sqlite already encode 1 offset past the
+        // last read offset.
+        for (pid, offset) in restored_offsets {
+            let pid = match pid {
+                PartitionId::Kafka(id) => id,
+                _ => panic!("unexpected partition id type"),
+            };
+            if let Some(offset) = offset {
+                if let Some(start_offset) = start_offsets.get_mut(&pid) {
+                    *start_offset = std::cmp::max(offset.offset - 1, *start_offset);
+                } else {
+                    start_offsets.insert(pid, offset.offset - 1);
+                }
+            }
+        }
+
+        let partition_info = Arc::new(Mutex::new(None));
+        let metadata_thread_handle = {
+            let partition_info = Arc::downgrade(&partition_info);
+            let topic = topic.clone();
+            let consumer = Arc::clone(&consumer);
+            let metadata_refresh_frequency = config_options
+                .get("topic.metadata.refresh.interval.ms")
+                // Safe conversion: statement::extract_config enforces that option is a value
+                // between 0 and 3600000
+                .map(|s| Duration::from_millis(s.parse().unwrap()))
+                // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                .unwrap_or_else(|| Duration::from_secs(300));
+
+            let handle = std::thread::Builder::new()
+                .name("kafka-metadata".to_string())
+                .spawn(move || {
+                    while let Some(partition_info) = partition_info.upgrade() {
+                        match get_kafka_partitions(&consumer, &topic, Duration::from_secs(30)) {
+                            Ok(info) => {
+                                *partition_info.lock().unwrap() = Some(info);
+                                std::thread::park_timeout(metadata_refresh_frequency);
+                            }
+                            Err(_) => std::thread::park_timeout(Duration::from_secs(30)),
+                        }
+                    }
+                })
+                .unwrap();
+            UnparkOnDrop(handle)
+        };
+
+        Ok(KafkaSourceReader {
             topic_name: topic,
             source_name,
             id: source_id,
             partition_consumers: VecDeque::new(),
-            known_partitions: 0,
-            consumer: Arc::new(consumer),
+            consumer,
             worker_id,
+            worker_count,
             last_offsets: HashMap::new(),
             start_offsets,
             logger,
             stats_rx,
+            last_stats: None,
+            partition_info,
+            _metadata_thread_handle: metadata_thread_handle,
+        })
+    }
+
+    /// This function polls from the next consumer for which a message is available. This function
+    /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
+    /// queue.
+    ///
+    /// If a message has an offset that is smaller than the next expected offset for this consumer
+    /// (and this partition) we skip this message, and seek to the appropriate offset
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+        let partition_info = self.partition_info.lock().unwrap().take();
+        if let Some(partitions) = partition_info {
+            for pid in partitions {
+                self.add_partition(PartitionId::Kafka(pid));
+            }
         }
+        let mut next_message = NextMessage::Pending;
+
+        // Poll the consumer once. We split the consumer's partitions out into separate queues and
+        // poll those individually, but it's still necessary to drive logic that consumes from
+        // rdkafka's internal event queue, such as statistics callbacks.
+        //
+        // Additionally, assigning topics and splitting them off into separate queues is not
+        // atomic, so we expect to see at least some messages to show up when polling the consumer
+        // directly.
+        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
+            match result {
+                Err(e) => error!(
+                    "kafka error when polling consumer for source: {} topic: {} : {}",
+                    self.source_name, self.topic_name, e
+                ),
+                Ok(message) => {
+                    let source_message = SourceMessage::from(&message);
+                    next_message = self.handle_message(source_message);
+                }
+            }
+        }
+
+        self.update_stats();
+
+        let consumer_count = self.get_partition_consumers_count();
+        let mut attempts = 0;
+        while attempts < consumer_count {
+            // First, see if we have a message aleady, either from polling the consumer, above, or
+            // from polling the partition queues below.
+            if let NextMessage::Ready(_) = next_message {
+                // Found a message, exit the loop and return message
+                break;
+            }
+
+            let message = self.poll_from_next_queue();
+            attempts += 1;
+
+            if let Some(message) = message {
+                next_message = self.handle_message(message);
+            }
+        }
+
+        Ok(next_message)
+    }
+}
+
+impl KafkaSourceReader {
+    /// Ensures that a partition queue for `pid` exists.
+    /// In Kafka, partitions are assigned contiguously. This function consequently
+    /// creates partition queues for every p <= pid
+    fn add_partition(&mut self, pid: PartitionId) {
+        if !crate::source::responsible_for(
+            &self.id.source_id,
+            self.worker_id,
+            self.worker_count,
+            &pid,
+        ) {
+            return;
+        }
+        let pid = match pid {
+            PartitionId::Kafka(p) => p,
+            _ => unreachable!(),
+        };
+        if self.last_offsets.contains_key(&pid) {
+            return;
+        }
+
+        let start_offset = match self.start_offsets.get(&pid) {
+            Some(offset) => *offset,
+            None => 0,
+        };
+
+        self.create_partition_queue(pid, Offset::Offset(start_offset));
+
+        // Indicate a last offset of -1 if we have not been instructed to have a specific start
+        // offset for this topic.
+        let prev = self.last_offsets.insert(pid, start_offset - 1);
+
+        assert!(prev.is_none());
     }
 
     /// Returns a count of total number of consumers for this source
@@ -495,7 +296,7 @@ impl KafkaSourceReader {
     }
 
     /// Creates a new partition queue for `partition_id`.
-    fn create_partition_queue(&mut self, partition_id: i32) {
+    fn create_partition_queue(&mut self, partition_id: i32, initial_offset: Offset) {
         info!(
             "Activating Kafka queue for {} [{}] (source {}) on worker {}",
             self.topic_name, partition_id, self.id, self.worker_id
@@ -512,7 +313,7 @@ impl KafkaSourceReader {
         }
         // Add new partition
         partition_list
-            .add_partition_offset(&self.topic_name, partition_id, Offset::Beginning)
+            .add_partition_offset(&self.topic_name, partition_id, initial_offset)
             .expect("offset known to be valid");
         self.consumer
             .assign(&partition_list)
@@ -520,17 +321,23 @@ impl KafkaSourceReader {
 
         // Since librdkafka v1.6.0, we need to recreate all partition queues
         // after every call to `self.consumer.assign`.
+        let context = Arc::clone(&self.consumer.context());
         for pc in &mut self.partition_consumers {
             pc.partition_queue = self
                 .consumer
                 .split_partition_queue(&self.topic_name, pc.pid)
                 .expect("partition known to be valid");
+            pc.partition_queue.set_nonempty_callback({
+                let context = Arc::clone(&context);
+                move || context.activate()
+            });
         }
 
-        let partition_queue = self
+        let mut partition_queue = self
             .consumer
             .split_partition_queue(&self.topic_name, partition_id)
             .expect("partition known to be valid");
+        partition_queue.set_nonempty_callback(move || context.activate());
         self.partition_consumers
             .push_front(PartitionConsumer::new(partition_id, partition_queue));
         assert_eq!(
@@ -580,28 +387,120 @@ impl KafkaSourceReader {
             ),
         }
     }
+
+    /// Read any statistics JSON blobs generated via the rdkafka statistics callback.
+    fn update_stats(&mut self) {
+        while let Ok(stats) = self.stats_rx.try_recv() {
+            if let Some(logger) = self.logger.as_mut() {
+                logger.log(MaterializedEvent::KafkaSourceStatistics {
+                    source_id: self.id,
+                    old: self.last_stats.take(),
+                    new: Some(stats.clone()),
+                });
+                self.last_stats = Some(stats);
+            }
+        }
+    }
+
+    /// Polls from the next partition queue and returns the message, if any.
+    ///
+    /// We maintain the list of partition queues in a queue, and add queues that we polled from to
+    /// the end of the queue. We thus swing through all available partition queues in a somewhat
+    /// fair manner.
+    fn poll_from_next_queue(&mut self) -> Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>> {
+        let mut partition_queue = self.partition_consumers.pop_front().unwrap();
+
+        let message = match partition_queue.get_next_message() {
+            Err(e) => {
+                let pid = partition_queue.pid();
+                let last_offset = self
+                    .last_offsets
+                    .get(&pid)
+                    .expect("partition known to be installed");
+
+                error!(
+                        "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
+                        self.source_name,
+                        self.topic_name,
+                        pid,
+                        last_offset,
+                        e
+                    );
+                None
+            }
+            Ok(m) => m,
+        };
+
+        self.partition_consumers.push_back(partition_queue);
+
+        message
+    }
+
+    /// Checks if the given message is viable for emission. This checks if the message offset is
+    /// past the expected offset and seeks the consumer if it is not.
+    fn handle_message(
+        &mut self,
+        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+        let partition = match message.partition {
+            PartitionId::Kafka(pid) => pid,
+            _ => unreachable!(),
+        };
+
+        // Convert the received offset back from a 1-indexed MzOffset to the correct offset.
+        let offset = message.offset.offset - 1;
+        // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
+        // a network issue or a new partition added, at which point the consumer may
+        // start processing the topic from the beginning, or we may see duplicate offsets
+        // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
+        // that we are ever going to see holds.
+        // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
+        // is enabled, there may be gaps in the sequence.
+        // If we see an "old" offset, we ast-forward the consumer and skip that message
+
+        // Given the explicit consumer to partition assignment, we should never receive a message
+        // for a partition for which we have no metadata
+        assert!(self.last_offsets.contains_key(&partition));
+
+        let last_offset_ref = self
+            .last_offsets
+            .get_mut(&partition)
+            .expect("partition known to be installed");
+
+        let last_offset = *last_offset_ref;
+        if offset <= last_offset {
+            info!(
+                "Kafka message before expected offset, skipping: \
+                             source {} (reading topic {}, partition {}) \
+                             received offset {} expected offset {:?}",
+                self.source_name,
+                self.topic_name,
+                partition,
+                offset,
+                last_offset + 1,
+            );
+            // Seek to the *next* 0 indexed offset that we have not yet processed
+            self.fast_forward_consumer(partition, last_offset + 1);
+            // We explicitly should not consume the message as we have already processed it
+            // However, we make sure to activate the source to make sure that we get a chance
+            // to read from this consumer again (even if no new data arrives)
+            NextMessage::TransientDelay
+        } else {
+            *last_offset_ref = offset;
+            NextMessage::Ready(message)
+        }
+    }
 }
 
 impl Drop for KafkaSourceReader {
     fn drop(&mut self) {
-        // Retract any metrics logged for this source
+        // Retract any metrics logged for this source.
         if let Some(logger) = self.logger.as_mut() {
-            for part in self.partition_consumers.iter_mut() {
-                if let Some((consumer_name, partition_stats)) = part.partition_stats.as_ref() {
-                    logger.log(partition_stats.negate(
-                        consumer_name.to_string(),
-                        self.id,
-                        part.pid.to_string(),
-                    ));
-                    for (broker, window) in part.broker_windows.iter() {
-                        logger.log(window.negate(
-                            consumer_name.to_string(),
-                            self.id,
-                            broker.to_string(),
-                        ));
-                    }
-                }
-            }
+            logger.log(MaterializedEvent::KafkaSourceStatistics {
+                source_id: self.id,
+                old: self.last_stats.take(),
+                new: None,
+            });
         }
     }
 }
@@ -665,7 +564,9 @@ fn create_kafka_config(
     // This is a very simple integration at the moment; enabling `debug`-level
     // logs for the `librdkafka` target enables the full firehouse of librdkafka
     // debug logs. We may want to investigate finer-grained control.
-    if log_enabled!(target: "librdkafka", log::Level::Debug) {
+    // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
+    if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
+        debug!("Enabling 'debug' for rdkafka");
         kafka_config.set("debug", "all");
     }
 
@@ -679,17 +580,17 @@ fn create_kafka_config(
     kafka_config
 }
 
-impl<'a> From<&BorrowedMessage<'a>> for SourceMessage {
+impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
     fn from(msg: &BorrowedMessage<'a>) -> Self {
         let kafka_offset = KafkaOffset {
             offset: msg.offset(),
         };
         Self {
-            payload: msg.payload().map(|p| MessagePayload::Data(p.to_vec())),
             partition: PartitionId::Kafka(msg.partition()),
             offset: kafka_offset.into(),
             upstream_time_millis: msg.timestamp().to_millis(),
             key: msg.key().map(|k| k.to_vec()),
+            value: msg.payload().map(|p| p.to_vec()),
         }
     }
 }
@@ -700,10 +601,6 @@ struct PartitionConsumer {
     pid: i32,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
-    /// Memoized Consumer Name and Statistics for a partition consumer
-    partition_stats: Option<(String, PartitionStats)>,
-    /// Memoized Statistics for brokers
-    broker_windows: HashMap<String, BrokerRTTWindow>,
 }
 
 impl PartitionConsumer {
@@ -712,13 +609,13 @@ impl PartitionConsumer {
         PartitionConsumer {
             pid,
             partition_queue,
-            partition_stats: None,
-            broker_windows: HashMap::new(),
         }
     }
 
     /// Returns the next message to process for this partition (if any).
-    fn get_next_message(&mut self) -> Result<Option<SourceMessage>, KafkaError> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
                 let result = SourceMessage::from(&msg);
@@ -736,19 +633,33 @@ impl PartitionConsumer {
     }
 }
 
-/// An implementation of [`ConsumerContext`] that unparks the wrapped thread
-/// when the message queue switches from nonempty to empty.
+/// An implementation of [`ConsumerContext`] that forwards statistics to the
+/// worker
 struct GlueConsumerContext {
     activator: SyncActivator,
-    stats_tx: crossbeam_channel::Sender<Statistics>,
+    stats_tx: crossbeam_channel::Sender<Jsonb>,
 }
 
 impl ClientContext for GlueConsumerContext {
-    fn stats(&self, statistics: Statistics) {
-        self.stats_tx
-            .send(statistics)
-            .expect("timely operator hung up while Kafka source active");
-        self.activate();
+    fn stats_raw(&self, statistics: &[u8]) {
+        match Jsonb::from_slice(statistics) {
+            Ok(statistics) => {
+                self.stats_tx
+                    .send(statistics)
+                    .expect("timely operator hung up while Kafka source active");
+                self.activate();
+            }
+            Err(e) => error!("failed decoding librdkafka statistics JSON: {}", e),
+        };
+    }
+
+    // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
+    // implementation.
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        MzClientContext.log(level, fac, log_message)
+    }
+    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        MzClientContext.error(error, reason)
     }
 }
 
@@ -760,8 +671,111 @@ impl GlueConsumerContext {
     }
 }
 
-impl ConsumerContext for GlueConsumerContext {
-    fn message_queue_nonempty_callback(&self) {
-        self.activate();
+impl ConsumerContext for GlueConsumerContext {}
+
+/// Return the list of partition ids associated with a specific topic
+fn get_kafka_partitions(
+    consumer: &BaseConsumer<GlueConsumerContext>,
+    topic: &str,
+    timeout: Duration,
+) -> Result<Vec<i32>, anyhow::Error> {
+    let metadata = consumer.fetch_metadata(Some(topic), timeout)?;
+    Ok(metadata.topics()[0]
+        .partitions()
+        .iter()
+        .map(|x| x.id())
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use rdkafka::consumer::{BaseConsumer, Consumer};
+    use rdkafka::{ClientConfig, Message, Offset, TopicPartitionList};
+    use uuid::Uuid;
+
+    // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
+    // lead to a race condition where sometimes we receive messages from polling the main consumer
+    // instead of on the partition queue. This can be surfaced by running the test in a loop (in
+    // the dataflow directory) using:
+    //
+    // cargo stress --lib --release source::kafka::tests::reproduce_kafka_queue_issue
+    //
+    // cargo-stress can be installed via `cargo install cargo-stress`
+    //
+    // You need to set up a topic "queue-test" with 1000 "hello" messages in it. Obviously, running
+    // this test requires a running Kafka instance at localhost:9092.
+    #[test]
+    #[ignore]
+    fn demonstrate_kafka_queue_race_condition() -> Result<(), anyhow::Error> {
+        let topic_name = "queue-test";
+        let pid = 0;
+
+        let mut kafka_config = ClientConfig::new();
+        kafka_config.set("bootstrap.servers", "localhost:9092".to_string());
+        kafka_config.set("enable.auto.commit", "false");
+        kafka_config.set("group.id", Uuid::new_v4().to_string());
+        kafka_config.set("fetch.message.max.bytes", "100");
+        let consumer: BaseConsumer<_> = kafka_config.create()?;
+
+        let consumer = Arc::new(consumer);
+
+        let mut partition_list = TopicPartitionList::new();
+        // Using Offset:Beginning here will work fine, only Offset:Offset(0) leads to the race
+        // condition.
+        partition_list.add_partition_offset(topic_name, pid, Offset::Offset(0))?;
+
+        consumer.assign(&partition_list)?;
+
+        let partition_queue = consumer
+            .split_partition_queue(topic_name, pid)
+            .expect("missing partition queue");
+
+        let expected_messages = 1_000;
+
+        let mut common_queue_count = 0;
+        let mut partition_queue_count = 0;
+
+        loop {
+            if let Some(msg) = consumer.poll(Duration::from_millis(0)) {
+                match msg {
+                    Ok(msg) => {
+                        let _payload =
+                            std::str::from_utf8(msg.payload().expect("missing payload"))?;
+                        if partition_queue_count > 0 {
+                            anyhow::bail!("Got message from common queue after we internally switched to partition queue.");
+                        }
+
+                        common_queue_count += 1;
+                    }
+                    Err(err) => anyhow::bail!("{}", err),
+                }
+            }
+
+            match partition_queue.poll(Duration::from_millis(0)) {
+                Some(Ok(msg)) => {
+                    let _payload = std::str::from_utf8(msg.payload().expect("missing payload"))?;
+                    partition_queue_count += 1;
+                }
+                Some(Err(err)) => anyhow::bail!("{}", err),
+                _ => (),
+            }
+
+            if (common_queue_count + partition_queue_count) == expected_messages {
+                break;
+            }
+        }
+
+        assert!(
+            common_queue_count == 0,
+            "Got {} out of {} messages from common queue. Partition queue: {}",
+            common_queue_count,
+            expected_messages,
+            partition_queue_count
+        );
+
+        Ok(())
     }
 }

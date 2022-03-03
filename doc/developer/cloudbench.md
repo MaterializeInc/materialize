@@ -5,7 +5,7 @@
 The Cloudbench tool, available at `bin/cloudbench` in the repository, launches one-off benchmarks in the AWS Scratch account.
 
 Very little structure is imposed on the benchmarks scripts:
-* they must write a CSV file (with header) containing the results to `stdout`
+* they must write a CSV file (with header) containing the results to a file named `results.csv`
 * they must (for now) be written in Python.
 * they must follow the Unix convention of exiting with code 0 on success, and non-zero otherwise.
 

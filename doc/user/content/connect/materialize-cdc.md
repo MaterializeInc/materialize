@@ -4,8 +4,9 @@ description: "The Materialize CDC format is a format for change datafeeds that h
 menu:
   main:
     parent: "connections"
-    weight: 4
 ---
+
+{{< beta />}}
 
 Change data capture (CDC) tools provide feeds that record any changes to a database. Typically, the feeds are then saved to another platform, like Kafka, for storage or processing. However, sometimes the stream can have missing or duplicate records, or records can be received out of order. For example, if a CDC tool crashes while writing a record, it may retry and write the record again, resulting in a duplicate entry.
 
@@ -132,7 +133,7 @@ Field | Description
 
 ## Example Materialize CDC workflow
 
-You specify the use of the Materialize CDC format in the [Avro schema](../../sql/create-source/avro-kafka/#avro-format-details) when a source is created.
+You specify the use of the Materialize CDC format in the [Avro schema](../../sql/create-source/kafka/#format_spec) when a source is created.
 
 ```sql
   CREATE MATERIALIZED SOURCE name_of_source

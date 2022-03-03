@@ -1,0 +1,827 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Queries that particulary stress the optimizer.
+# The passing criteria of the tests in this file is:
+#  1. they should not result in crashes
+#  2. they should not lead to planning issues, mostly fixpoint issues
+
+statement ok
+create table events(origin_id int, category_id int, payload jsonb, timestamp_col timestamp);
+
+statement ok
+create table origins(id int, category_id int);
+
+# Regression test for #8387
+# Ignoring the plan on purpose. We just want to check we can handle the query.
+statement ok
+EXPLAIN PLAN FOR
+SELECT
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days,
+    (SELECT max(timestamp_col)
+       FROM events
+      WHERE (payload->>'type' = 'foo1'
+         AND category_id = origins.category_id
+         AND origin_id = origins.id
+         AND mz_logical_timestamp() BETWEEN (1000 * CAST(extract(epoch from timestamp_col) AS numeric)) AND (1000 * CAST(extract(epoch from timestamp_col + interval '90' days) AS numeric))
+      )
+    ) AS quz__foo1_types__max_time__90days
+FROM
+    origins;

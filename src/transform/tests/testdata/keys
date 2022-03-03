@@ -38,7 +38,7 @@ opt format=types
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -63,19 +63,19 @@ steps format=types
 | | keys = ((#0), (#1))
 
 ====
-No change: TopKElision, NonNullRequirements
+No change: TopKElision, NonNullRequirements { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
 ====
-Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
+Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Negate, Filter, Project, Join, TopK, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Reduce, Union, UnionBranchCancellation, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
 %0 =
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 ====
-No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet { inline_mfp: false }, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, UpdateLet, InlineLet { inline_mfp: true }, Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, CanonicalizeMfp
+No change: Fixpoint { transforms: [PredicatePushdown { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, NonNullable, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Negate, Filter, Project, Join, TopK, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Reduce, Union, UnionBranchCancellation, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Negate, Filter, Project, Join, TopK, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Reduce, Union, UnionBranchCancellation, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Fixpoint { transforms: [Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Project, Union, UnionBranchCancellation, RelationCSE, InlineLet { inline_mfp: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }], limit: 100 }, Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, CanonicalizeMfp
 ====
 Applied RelationCSE:
 %0 = Let l0 =
@@ -87,7 +87,7 @@ Applied RelationCSE:
 | Get %0 (l0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -95,30 +95,26 @@ Applied RelationCSE:
 | Get %1 (l1)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
 
 ====
-Applied InlineLet { inline_mfp: false }:
+Applied InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }:
 %0 =
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 ====
-No change: UpdateLet, FoldConstants { limit: Some(10000) }
+No change: UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }
 ====
 Final:
 %0 =
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| Project (#0..#2, #0..#2)
+| Project (#0..=#2, #0..=#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
@@ -148,7 +144,7 @@ opt format=types
 | | implementation = Differential %1 %0.(#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ()
-| Project (#0..#4, #2)
+| Project (#0..=#4, #2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ()
 ----

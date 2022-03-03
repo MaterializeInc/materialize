@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>{{ .Permalink }}</title>
+  <link rel="canonical" href="{{ .Permalink }}"/>
+  <meta name="robots" content="noindex">
+  <meta charset="utf-8" />
+  <meta http-equiv="refresh" content="0; url={{ .Permalink }}" />
+</head>
+{{/*
+  The following line makes it so that ci/deploy/website.sh can easily extract
+  the target of this alias and turn it into a server-side redirect.
+*/}}
+{{ "<!--" | safeHTML }} #HUGOALIAS# {{ .Permalink }} {{ "-->" | safeHTML }}
+</html>

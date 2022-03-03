@@ -41,8 +41,7 @@ Testdrive is the preferred system test framework when testing:
 # When not to use
 
 `testdrive` is currently sub-optimal for the situations listed below and `sqllogictest` is the better driver in those cases:
-- test cases containing many `EXPLAIN` statements and a lot of recorded query plans
-- tests that require the use of `INSERT SELECT, `UPDATE` and `DELETE`
+- test cases containing many `EXPLAIN` statements and a lot of recorded query plans;
 - test cases where substantial changes of the ouput over time are expected, which is often the case if many query plans have been recorded in the test.
 
 Unlike the `sqllogictest` driver, `testdrive` will fail the test at the first difference, and there is no ability to automatically produce a new version of the test file that includes all the required updates to make the test pass.
@@ -55,42 +54,50 @@ Unlike the `sqllogictest` driver, `testdrive` will fail the test at the first di
 
 The easiest way to run testdrive tests is via mzcompose.
 
-The mzcompose configuration will automatically set up all of testdrive's dependencies, including
-Zookeeper, Kafka, the Confluent Schema Registry, and mock versions of AWS S3 and Kinesis.
+The mzcompose configuration will automatically set up all of testdrive's
+dependencies, including Zookeeper, Kafka, the Confluent Schema Registry, and
+mock versions of AWS S3 and Kinesis.
+
+**WARNING:** On ARM-based machines (like M1 Macs), running the Confluent
+Platform in Docker is nearly unusably slow because it runs under QEMU emulation.
+(Confluent [refuses to announce a timeline][confluent-arm] for when they will
+provide ARM images.) As a workaround, run tests using Redpanda instead of the
+Confluent Platform, or run tests locally without mzcompose.
+
+For full reference documentation on the available mzcompose optoins, consult the
+help text:
 
 ```
-TD_TEST=*.td ./mzcompose --mz-build-mode=dev run testdrive
+./mzcompose run default --help
 ```
 
-Supported **environment variables**:
+### Common invocations
 
-* `TD_TEST` (default `*.td`) is a glob of tests to run from the test/testdrive directory. The
-  default is to not run any of the "esoteric" tests.
+Run testdrive against all files in `test/testdrive` using Confluent Platform and
+Localstack:
 
-  ```
-  TD_TEST=joins.td ./mzcompose --mz-build-mode=dev run testdrive
-  ```
+```
+./mzcompose --dev run default
+```
 
-* `AWS_REGION`/`AWS_ENDPOINT`: will be supplied to the testdrive `--aws-region`/`--aws-endpoint`
-  command line options, respectively.
+Run using Redpanda instead of the Confluent Platform:
 
-Supported **workflows** (target of `mzcompose run <workflow>`):
+```
+./mzcompose --dev run default --redpanda
+```
 
-* `testdrive`: Run tests with [LocalStack][] stubbing out AWS services. This allows you to run all
-  tests without needing to configure AWS credentials:
+Run testdrive against a single file:
 
-  ```console
-  $ TD_TEST=*.td ./mzcompose run testdrive
-  ```
+```
+./mzcompose --dev run default FILE.td
+```
 
-* `ci`: Expect actual AWS credentials to be available (q.v. [our documentation][aws-creds-docs]),
-  either in the process environment or via AWS EC2 Profiles:
+Run S3 tests against a real AWS region. This expects actual AWS credentials to
+be available (q.v. [our documentation][aws-creds]).
 
-  ```console
-  $ aws-vault exec scratch -- env TD_TEST=**/*.td ./mzcompose run local-aws
-  ```
-
-[aws-creds-docs]: https://handbook.dev.i.mtrlz.dev/setup/#configure-aws-vault
+```
+./mzcompose --dev run default --aws-region=us-east-2 esoteric/s3.td
+```
 
 ## Running tests locally without mzcompose
 
@@ -139,7 +146,7 @@ To run a test against the actual S3/SQS service at AWS:
 ```
 export AWS_ACCESS_KEY_ID=XXX
 export AWS_SECRET_ACCESS_KEY=YYY
-target/release/testdrive --aws-region=eu-central-1 --default-timeout=600  test/testdrive/disabled/s3-sqs-notifications.td
+target/release/testdrive --aws-region=eu-central-1 --default-timeout=600s test/testdrive/disabled/s3-sqs-notifications.td
 ```
 
 # Creating tests
@@ -166,9 +173,17 @@ The `testdrive` binary accepts the following command-line options. They are usua
 
 ## Default timeout
 
-####  `--default-timeout <default-timeout>`
+#### `--default-timeout <default-timeout>`
 
-Default timeout in seconds [default: 10]. A timeout at least that long will be applied to all operations.
+Default timeout as a Duration string [default: "10s"]. A timeout at least that long will be applied to all operations.
+
+#### `--initial-backoff <initial-backoff>`
+
+Specifies the initial backoff interval that will be applied as testdrive retries queries. Default is "50ms".
+
+#### `--backoff-factor <backoff-factor>`
+
+Specifies the backoff factor that will be applied to increase the backoff interval between retries. Default is 1.5.
 
 ## Interfacing with services
 
@@ -244,10 +259,6 @@ Shuffle the list of tests before running them (using the value from --seed, if a
 
 ## Other options
 
-#### `--ci-output`
-
-Emit Buildkite-specific markup
-
 #### `--validate-catalog /path/to/catalog`
 
 After executing a DDL statement, validate that the on-disk representation of the catalog is identical to the in-memory one.
@@ -317,12 +328,39 @@ The syntax is identical, however the statement will not be retried on error:
 
 ```
 ! SELECT * FROM no_such_table
-unknown catalog item
+contains:unknown catalog item
 ```
 
 The expected error string is provided after the statement and `testdrive` will retry the statement until the expected error is returned or a timeout occurs.
 
-Note that you can provide a string that is a substring of the expected error. The full error above would have been `ERROR:  unknown catalog item 'no_such_table'` but the substring `unknown catalog item` will match and the test will pass. This allows for any variable portions of the error message to be omitted from the test file.
+The full error above would have been `ERROR:  unknown catalog item 'no_such_table'` but the match specifier `contains` ensures that the substring `unknown catalog item` will match and the test will pass.
+
+There are three match specifiers: `contains`, `exact`, and `regex`.
+
+The alternatives would be written as:
+
+```
+! SELECT * FROM no_such_table
+exact: ERROR:  unknown catalog item 'no_such_table'
+```
+
+or:
+
+```
+! SELECT * FROM no_such_table
+regex: unknown catalog.*no_such_table
+```
+
+It is possible to include variables in expected errors:
+
+```
+$ set table_name=no_table
+
+$ SELECT * FROM ${table_name}
+exact:ERROR:  unknown catalog item '${table_name}'
+```
+
+And for regex matches all variables match literally, they are not treated as regular expression patterns. A variable valued `my.+name` will match the string `my.+name`, not `my friend's name`.
 
 ## Executing statements in multiple sessions
 
@@ -417,12 +455,6 @@ The random seed currently in effect. If no ```--seed``` option was specified, it
 
 The temporary directory to use. If no ```--temp-dir``` option is specified, it will be a random directory inside the OS temp directory.
 
-#### `testdrive.protobuf-descriptors`
-
-#### `testdrive.protobuf-descriptors-file`
-
-The protobuf definitions from `src/testdrive/src/format/protobuf/` are compiled in and made available for tests to use.
-
 #### `testdrive.aws-region`
 
 #### `testdrive.aws-account`
@@ -512,10 +544,29 @@ INSERT INTO postgres_connect VALUES (2);
 COMMIT;
 ```
 
+Note that when using multiple connections, commands are already executed in a
+single-threaded context, so will be serialized in the order they appear in the
+`.td` file.
+
 #### `$ postgres-verify-slot connection=... slot=... active=(true|false)`
 
 Pauses the test until the desired Postgres replication slot has become active or inactive on the Postgres side of the direct Postgres replication. This is used to prevent flakiness in Postgres-related tests.
 
+
+## Connecting to MySQL
+
+#### `$ mysql-connect name=... url=... password=...`
+
+Creates a named connection to MySQL. For example:
+
+```
+$ mysql-connect name=mysql_connection url=mysql://mysql_user@mysql_host password=1234
+
+```
+
+##### `$ mysql-execute name=...`
+
+Executes SQL queries over the specified named connection to MySQL. The ouput of the queries is not validated, but an error will cause the test to fail.
 
 ## Connecting to Microsoft SQL Server
 
@@ -525,7 +576,7 @@ Creates a named connection to SQL Server. The parameters of the connection are s
 
 ```
 $ sql-server-connect name=sql-server
-server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${env.SA_PASSWORD}
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 ```
 
 #### `$ sql-server-execute name=...`
@@ -564,10 +615,6 @@ Instructs Mz to sleep for the specified number of seconds. `mz_sleep()` returns 
 #### `$ set-sql-timeout duration=N(ms|s|m)`
 
 Adjusts the SQL timeout for tests that contain queries that may take a long time to run. Alternatively, the `--default-timeout` setting can be passed to `testdrive`.
-
-#### "$ set-execution-count count=N"
-
-Will run the test N times.
 
 ## Actions on Avro OCF files
 
@@ -645,11 +692,21 @@ For data provided as `format=bytes key-format=bytes`, the separator between the 
 
 ##### `repeat=N`
 
-Send the same data `N` times to Kafka. This is used to create larger Kafka topics without bloating the test
+Send the same data `N` times to Kafka. This is used to create longer Kafka topics without bloating the test.
 
-#### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium]`
+The variable `${kafka-ingest.iteration}` will hold the current iteration and can be used in the body of `$ kafka-ingest`.
 
-Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.
+##### `start-iteration=N`
+
+Set the starting value of the `${kafka-ingest.iteration}` variable.
+
+#### `partition=N`
+
+Send the data to the specified partition.
+
+#### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium] [partial-search=usize]`
+
+Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test. If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and compared to the provided records. The recordsdo not have to match starting at the beginning of the sink but once one record matches, the following must all match.  There are permitted to be records remaining in the topic after the matching is complete.  Note that if the topic is not required to have `partial-search` elements in it but there will be an attempt to read up to this number with a blocking read.
 
 ## Actions on Kinesis
 
@@ -706,3 +763,30 @@ The test will fail unless the HTTP status code of the response is in the 200 ran
 #### `$ schema-registry-wait-schema schema=...`
 
 Block the test until the specified schema has been defined at the schema registry. This is used to fortify tests that expect an external party, e.g. Debezium to  upload a particular schema.
+
+## Actions with `psql`
+
+#### `$ psql-execute command=...`
+
+Executes a command against Materialize via `psql`. This is intended for testing
+`psql`-specific commands like `\dn`.
+
+## Conditionally skipping the rest of a `.td` file
+
+```
+$ skip-if
+SELECT true
+```
+
+`skip-if` followed by a SQL statement will skip the rest of the `.td` file if
+the statement returns one row containing one column with the value `true`. If
+the statement returns `false`, then execution of the script proceeds normally.
+If the query returns anything but a single row with a single column containing a
+`boolean` value, testdrive will mark the script as failed and proceed with
+execution of the next script.
+
+This action can be useful to conditionally test things in different versions of
+Materialize, and more!
+
+[confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
+[aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md

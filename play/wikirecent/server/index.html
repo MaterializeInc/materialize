@@ -1,0 +1,60 @@
+<html>
+  <head>
+    <title>{% block title %}Wikipedia Live Edits!{% end %}</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+
+  </head>
+  <body>
+    <h1><span id="counter">0</span> Edits Made!</h1>
+    <script>
+      "use strict";
+
+      const connection = new WebSocket(`ws://${location.host}/api/stream/counter`);
+      connection.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        // Counter is a single row table, so every update should contain one
+        // insert and maybe one delete (which we don"t care about).
+        document.getElementById("counter").innerHTML = data.inserted[0][0]
+      }
+
+    </script>
+
+    <div id="top10"></div>
+    <script type="text/javascript">
+      "use strict";
+
+      const chart = {
+        $schema: "https://vega.github.io/schema/vega-lite/v4.json",
+        mark: "bar",
+        height: 400,
+        width: 800,
+        data: {name: "data"},
+        encoding: {
+          x: {field: "subject", type: "nominal", sort: "y"},
+          y: {field: "count", type: "quantitative"},
+        }
+      };
+
+      const config = {
+        actions: false
+      };
+
+      vegaEmbed("#top10", chart, config).then(chart => {
+        const convertToSubject = (row) => ({subject: row[0], count: parseInt(row[1])});
+        const connection = new WebSocket(`ws://${location.host}/api/stream/top10`);
+        connection.onmessage = function(event) {
+          const data = JSON.parse(event.data);
+          const inserted = data.inserted.map(convertToSubject);
+          const deleted = data.deleted.map(convertToSubject);
+          const changeSet = vega.changeset()
+            .insert(inserted)
+            .remove(d => deleted.includes(d));
+          chart.view.change("data", changeSet).resize().run();
+        }
+      });
+    </script>
+  </body>
+</html>

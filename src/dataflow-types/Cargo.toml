@@ -1,29 +1,43 @@
 [package]
-name = "dataflow-types"
+name = "mz-dataflow-types"
 description = "Types for the dataflow crate."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
-aws-util = { path = "../aws-util" }
-ccsr = { path = "../ccsr" }
-expr = { path = "../expr" }
+anyhow = "1.0.55"
+async-trait = "0.1.52"
+aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
+aws-smithy-http = "0.38.0"
+aws-types = { version = "0.8.0", features = ["hardcoded-credentials"] }
+bytes = "1.1.0"
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+crossbeam-channel = "0.5.2"
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+enum-iterator = "0.7.0"
+enum-kinds = "0.5.1"
+futures = "0.3.21"
 globset = { version = "0.4.8", features = ["serde1"] }
-interchange = { path = "../interchange" }
-kafka-util = { path = "../kafka-util" }
-log = "0.4.13"
-ore = { path = "../ore" }
+http = "0.2.6"
+http-serde = "1.1.0"
+mz-aws-util = { path = "../aws-util" }
+mz-ccsr = { path = "../ccsr" }
+mz-expr = { path = "../expr" }
+mz-interchange = { path = "../interchange" }
+mz-kafka-util = { path = "../kafka-util" }
+mz-ore = { path = "../ore" }
+mz-persist-types = { path = "../persist-types" }
+mz-repr = { path = "../repr" }
+num_enum = "0.5.6"
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
-repr = { path = "../repr" }
-rusoto_core = "0.47.0"
-serde = { version = "1.0.130", features = ["derive"] }
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.79"
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.11.0"
+tokio = "1.17.0"
+tracing = "0.1.31"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
-
-[dev-dependencies]
-serde_json = "1.0.68"

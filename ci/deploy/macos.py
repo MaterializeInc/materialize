@@ -7,21 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 from pathlib import Path
 
 from materialize import spawn
+from materialize.xcompile import Arch
 
 from . import deploy_util
 
 
 def main() -> None:
-    print("--- Building materialized release binary")
-    spawn.runv(["cargo", "build", "--bin", "materialized", "--release"])
+    target = f"{Arch.host()}-apple-darwin"
 
-    print("--- Uploading binary tarball")
-    deploy_util.deploy_tarball(
-        "x86_64-apple-darwin", Path("target") / "release" / "materialized"
+    print("--- Building materialized release binary")
+    spawn.runv(
+        ["cargo", "build", "--bin", "materialized", "--release"],
+        env=dict(os.environ, RUSTUP_TOOLCHAIN=deploy_util.materialized_rust_version()),
     )
+
+    print(f"--- Uploading {target} binary tarball")
+    deploy_util.deploy_tarball(target, Path("target") / "release" / "materialized")
 
 
 if __name__ == "__main__":

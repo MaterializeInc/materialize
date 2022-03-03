@@ -4,7 +4,6 @@ description: "Find out how Materialize can help improve your team's business int
 menu:
     main:
         parent: "demos"
-        weight: 4
 ---
 
 **tl;dr** Materialize can enable real-time monitoring within business
@@ -90,7 +89,7 @@ answers from your data warehouse.
 
 Metabase is an open-source tool to create visualizations of SQL queries'
 results, and then group them into dashboards. For instance, teams might use
-Metabase to monitor purchasing geographic purchasing patterns from their stores.
+Metabase to monitor geographic purchasing patterns from their stores.
 
 In our demo, we'll use Metabase to visualize the results of some TPC-H-like
 queries, and watch the visualizations update as quickly as Metabase allows.
@@ -119,10 +118,10 @@ Putting this all together, our deployment looks like this:
    and 8GB memory. Running Docker for Mac with less resources may cause the demo
    to fail.
 
-1. Clone the Materialize repository:
+1. Clone the Materialize repository at the latest release:
 
     ```shell
-    git clone https://github.com/MaterializeInc/materialize.git
+    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
     ```
 
    You can also view the demo's code on
@@ -131,8 +130,8 @@ Putting this all together, our deployment looks like this:
 1. Download and start all of the components we've listed above by running:
 
    ```shell
-   cd demo/chbench
-   ./mzcompose run demo
+   cd materialize/demo/chbench
+   ./mzcompose run default
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -148,31 +147,32 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can get Materialize to read data from Kafka and define the views we want
 Materialize to maintain for us.
 
-1. In the same terminal, launch the Materialize CLI by running:
+1. Launch the `psql` SQL shell against Materialize by running:
 
     ```shell
-    ./mzcompose run cli
+    ./mzcompose sql materialized
     ```
 
 1. Within the CLI, ensure you have all of the necessary sources, which represent
-   all of the tables from MySQL:
+   all of the tables from MySQL. It may take a minute or two for these sources
+   to appear.
 
     ```sql
     SHOW SOURCES;
     ```
 
     ```nofmt
-    customer
-    district
-    item
-    nation
-    neworder
-    order
-    orderline
-    region
-    stock
-    supplier
-    warehouse
+    debezium_tpcch_customer
+    debezium_tpcch_district
+    debezium_tpcch_item
+    debezium_tpcch_nation
+    debezium_tpcch_neworder
+    debezium_tpcch_order
+    debezium_tpcch_orderline
+    debezium_tpcch_region
+    debezium_tpcch_stock
+    debezium_tpcch_supplier
+    debezium_tpcch_warehouse
     ```
 
 1. Create a straightforward view of the underlying data.
@@ -187,13 +187,13 @@ Materialize to maintain for us.
             avg(ol_quantity) as avg_qty,
             avg(ol_amount) as avg_amount,
             count(*) as count_order
-        FROM orderline
+        FROM debezium_tpcch_orderline
         WHERE ol_delivery_d > date '1998-12-01'
         GROUP BY ol_number;
     ```
 
     This is used to repesent "Query 01" in chBench, which tracks statistics
-    about the TPC-C `orderline` table.
+    about the TPC-C `debezium_tpcch_orderline` table.
 
 1. Check the results of the view:
 
@@ -217,13 +217,13 @@ Materialize to maintain for us.
             extract('year' FROM o_entry_d) AS l_year,
             sum(ol_amount) AS revenue
         FROM
-            supplier,
-            stock,
-            orderline,
-            order,
-            customer,
-            nation AS n1,
-            nation AS n2
+            debezium_tpcch_supplier,
+            debezium_tpcch_stock,
+            debezium_tpcch_orderline,
+            debezium_tpcch_order,
+            debezium_tpcch_customer,
+            debezium_tpcch_nation AS n1,
+            debezium_tpcch_nation AS n2
         WHERE
             ol_supply_w_id = s_w_id
             AND ol_i_id = s_i_id
@@ -261,7 +261,19 @@ Materialize to maintain for us.
 
 ### Set up Metabase
 
-1. In a browser, go to <localhost:3030>.
+1. Start Metabase:
+
+    ```shell
+    ./mzcompose up -d metabase
+    ```
+
+1. Open Metabase:
+
+   ```shell
+    ./mzcompose web metabase
+   ```
+
+   It may take a minute or two for Metabase to start up.
 
 1. Click **Let's get started**.
 
@@ -272,7 +284,7 @@ Materialize to maintain for us.
 
     Field             | Enter...
     ----------------- | ----------------
-    Database          | **Materialize**
+    Database type     | **PostgreSQL**
     Name              | **tpcch**
     Host              | **materialized**
     Port              | **6875**
@@ -336,7 +348,7 @@ Materialize to maintain for us.
 >}}
 
 If you want to see more chBench queries, you can repeat these steps for the view
-`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/main/demo/chbench/chbench/mz-default-mysql.cfg).
+`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/{{< version >}}/demo/chbench/chbench/mz-default-mysql.cfg).
 
 ## Recap
 

@@ -15,9 +15,10 @@ import os
 import shlex
 import sys
 import time
-from typing import Any, AsyncGenerator, Callable, Generator, Iterable, Optional, Union
+from contextlib import contextmanager
+from typing import Any, AsyncGenerator, Callable, Generator, Iterable, Optional
 
-from materialize import docker
+from colored import attr, fg
 
 
 class Verbosity:
@@ -54,6 +55,15 @@ def speaker(prefix: str) -> Callable[..., None]:
             print(f"{prefix}{msg}", file=sys.stderr)
 
     return say
+
+
+header = speaker("==> ")
+say = speaker("")
+
+
+def warn(message: str) -> None:
+    """Emits a warning message to stderr."""
+    print(f"{fg('yellow')}warning:{attr('reset')} {message}")
 
 
 def confirm(question: str) -> bool:
@@ -147,39 +157,43 @@ def env_is_truthy(env_var: str) -> bool:
     return False
 
 
-def warn_docker_resource_limits() -> None:
-    """Check docker for recommended resource limits"""
-    warn = speaker("WARN:")
+class UIError(Exception):
+    """An error intended for display to humans.
 
-    limits = docker.resource_limits()
-    if limits.mem_total < docker.RECOMMENDED_MIN_MEM:
-        actual = humanize(limits.mem_total)
-        desired = humanize(docker.RECOMMENDED_MIN_MEM)
-        warn(
-            f"Docker only has {actual} memory, "
-            f"less than {desired} can cause demos to fail in unexpected ways.\n"
-            "    See https://materialize.com/docs/third-party/docker/\n"
-        )
-    if limits.ncpus < docker.RECOMMENDED_MIN_CPUS:
-        warn(
-            f"Docker only has access to {limits.ncpus}, "
-            f"fewer than {docker.RECOMMENDED_MIN_CPUS} can cause demos to fail in unexpected ways.\n"
-            "    See https://materialize.com/docs/third-party/docker/\n"
-        )
+    Use this exception type when the error is something the user can be expected
+    to handle. If the error indicates a truly unexpected condition (i.e., a
+    programming error), use a different exception type that will produce a
+    backtrace instead.
 
-
-def humanize(val: Union[int, float], kind: str = "B") -> str:
-    """A convert val to a human-readable number
-
-    ::
-
-        >>> humanize(16795869184, "B")
-        '15.6 GiB'
+    Attributes:
+        hint: An optional hint to display alongside the error message.
     """
-    suffixes = ["", "Ki", "Mi", "Gi", "Ti"]
-    index = 0
-    while val > 1024:
-        val /= 1024
-        index += 1
-    suffix = suffixes[index]
-    return f"{val:.1f} {suffix}{kind}"
+
+    def __init__(self, message: str, hint: Optional[str] = None):
+        super().__init__(message)
+        self.hint = hint
+
+    def set_hint(self, hint: str) -> None:
+        """Attaches a hint to the error.
+
+        This method will overwrite the existing hint, if any.
+        """
+        self.hint = hint
+
+
+@contextmanager
+def error_handler(prog: str) -> Any:
+    """Catches and pretty-prints any raised `UIError`s.
+
+    Args:
+        prog: The name of the program with which to prefix the error message.
+    """
+    try:
+        yield
+    except UIError as e:
+        print(f"{prog}: {fg('red')}error:{attr('reset')} {e}", file=sys.stderr)
+        if e.hint:
+            print(f"{attr('bold')}hint:{attr('reset')} {e.hint}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(1)

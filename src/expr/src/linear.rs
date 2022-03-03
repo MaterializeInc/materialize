@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row};
+use mz_repr::{Datum, Row};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -63,6 +63,15 @@ impl MapFilterProject {
             projection: (0..input_arity).collect(),
             input_arity,
         }
+    }
+
+    /// Given two mfps, return an mfp that applies one
+    /// followed by the other.
+    /// Note that the arguments are in the opposite order
+    /// from how function composition is usually written in mathematics.
+    pub fn compose(before: Self, after: Self) -> Self {
+        let (m, f, p) = after.into_map_filter_project();
+        before.map(m).filter(f).project(p)
     }
 
     /// True if the operator describes the identity transformation.
@@ -143,19 +152,22 @@ impl MapFilterProject {
         self
     }
 
+    /// Like [`MapFilterProject::as_map_filter_project`], but consumes `self` rather than cloning.
+    pub fn into_map_filter_project(self) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
+        let predicates = self
+            .predicates
+            .into_iter()
+            .map(|(_pos, predicate)| predicate)
+            .collect();
+        (self.expressions, predicates, self.projection)
+    }
+
     /// As the arguments to `Map`, `Filter`, and `Project` operators.
     ///
     /// In principle, this operator can be implemented as a sequence of
     /// more elemental operators, likely less efficiently.
     pub fn as_map_filter_project(&self) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
-        let map = self.expressions.clone();
-        let filter = self
-            .predicates
-            .iter()
-            .map(|(_pos, predicate)| predicate.clone())
-            .collect::<Vec<_>>();
-        let project = self.projection.clone();
-        (map, filter, project)
+        self.clone().into_map_filter_project()
     }
 
     /// Determines if a scalar expression must be equal to a literal datum.
@@ -193,9 +205,10 @@ impl MapFilterProject {
             return None;
         }
         let mut row = Row::default();
+        let mut packer = row.packer();
         for expr in exprs {
             if let Some(literal) = self.literal_constraint(expr) {
-                row.push(literal);
+                packer.push(literal);
             } else {
                 return None;
             }
@@ -406,7 +419,7 @@ impl MapFilterProject {
     /// # Example
     ///
     /// ```rust
-    /// use expr::{BinaryFunc, MapFilterProject, MirScalarExpr};
+    /// use mz_expr::{BinaryFunc, MapFilterProject, MirScalarExpr};
     ///
     /// // imagine an action on columns (a, b, c, d).
     /// let original = MapFilterProject::new(4).map(vec![
@@ -427,7 +440,7 @@ impl MapFilterProject {
     /// // Partition `original` using the available columns and current input arity.
     /// // This informs `partition` which columns are available, where they can be found,
     /// // and how many columns are not relevant but should be preserved.
-    /// let (before, after) = original.partition(&available_columns, 5);
+    /// let (before, after) = original.partition(available_columns, 5);
     ///
     /// // `before` sees all five input columns, and should append `a + b + c`.
     /// assert_eq!(before, MapFilterProject::new(5).map(vec![
@@ -450,7 +463,7 @@ impl MapFilterProject {
     /// // may not need all inputs. The `demand()` and `permute()` methods can
     /// // optimize the representation.
     /// ```
-    pub fn partition(self, available: &HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
+    pub fn partition(self, available: HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
         // Map expressions, filter predicates, and projections for `before` and `after`.
         let mut before_expr = Vec::new();
         let mut before_pred = Vec::new();
@@ -507,7 +520,7 @@ impl MapFilterProject {
         // Map from prior output location to location in un-projected `before`.
         // This map is used to correct references in `before` but it should be
         // adjusted to reflect `before`s projection prior to use in `after`.
-        let mut before_map = available.clone();
+        let mut before_map = available;
         // Input columns include any additional undescribed columns that may
         // not be captured by the `available` argument, so we must independently
         // track the current number of columns (vs relying on `before_map.len()`).
@@ -624,9 +637,7 @@ impl MapFilterProject {
     /// The supplied `shuffle` may not list columns that are not "demanded" by the
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
-    pub fn permute(&mut self, shuffle: &HashMap<usize, usize>, new_input_arity: usize) {
-        self.remove_undemanded();
-        let mut shuffle = shuffle.clone();
+    pub fn permute(&mut self, mut shuffle: HashMap<usize, usize>, new_input_arity: usize) {
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
         for index in 0..map.len() {
             // Intermediate columns are just shifted.
@@ -671,20 +682,20 @@ impl MapFilterProject {
     /// along the optimization path.
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,5,6]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,6,7]);
     ///
@@ -732,22 +743,22 @@ impl MapFilterProject {
     /// in inliniing.
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,5,6]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(7),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(10),
     ///     ])
@@ -766,7 +777,7 @@ impl MapFilterProject {
     /// for example if they occur in conditional branches of a `MirScalarExpr::If`.
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of unconditionally evaluated expressions, as well as
     /// // the non-extraction of common expressions guarded by conditions.
     /// let mut map_filter_project = MapFilterProject::new(2)
@@ -884,15 +895,15 @@ impl MapFilterProject {
     /// pass (the `remove_undemanded` method).
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Use the output from first `memoize_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(7),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(10),
     ///     ])
@@ -900,13 +911,13 @@ impl MapFilterProject {
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,8,11]);
     ///
@@ -967,7 +978,7 @@ impl MapFilterProject {
         // Inline expressions per `should_inline`.
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
-            expr[0].visit_mut(&mut |e| {
+            expr[0].visit_mut_post(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = prior[*i - input_arity].clone();
@@ -977,7 +988,7 @@ impl MapFilterProject {
         }
         for (_index, pred) in self.predicates.iter_mut() {
             let expressions = &self.expressions;
-            pred.visit_mut(&mut |e| {
+            pred.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = expressions[*i - input_arity].clone();
@@ -1004,25 +1015,25 @@ impl MapFilterProject {
     /// # Example
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Use the output from `inline_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,8,11]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,6,7]);
     ///
@@ -1132,14 +1143,104 @@ pub fn memoize_expr(
     )
 }
 
+pub mod util {
+    use std::collections::HashMap;
+
+    use crate::MirScalarExpr;
+
+    /// Return the map associating columns in the logical,
+    /// unthinned representation of a collection to columns in the
+    /// thinned representation of the arrangement corresponding to `key`.
+    ///
+    /// Returns the permutation and the thinning
+    /// expression that should be used to create the arrangement.
+    ///
+    /// The permutations and thinning expressions generated here will be tracked in
+    /// `dataflow::plan::AvailableCollections`; see the
+    /// documentation there for more details.
+    pub fn permutation_for_arrangement<B: FromIterator<(usize, usize)>>(
+        key: &[MirScalarExpr],
+        unthinned_arity: usize,
+    ) -> (B, Vec<usize>) {
+        let columns_in_key: HashMap<_, _> = key
+            .iter()
+            .enumerate()
+            .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
+            .collect();
+        let mut input_cursor = key.len();
+        let permutation = (0..unthinned_arity)
+            .map(|c| {
+                if let Some(c) = columns_in_key.get(&c) {
+                    // Column is in key (and thus gone from the value
+                    // of the thinned representation)
+                    *c
+                } else {
+                    // Column remains in value of the thinned representation
+                    input_cursor += 1;
+                    input_cursor - 1
+                }
+            })
+            .enumerate()
+            .collect();
+        let thinning = (0..unthinned_arity)
+            .into_iter()
+            .filter(|c| !columns_in_key.contains_key(&c))
+            .collect();
+        (permutation, thinning)
+    }
+
+    /// Given the permutations (see [`permutation_for_arrangement`] and
+    /// (`dataflow::plan::AvailableCollections`) corresponding to two
+    /// collections with the same key arity,
+    /// computes the permutation for the result of joining them.
+    pub fn join_permutations(
+        key_arity: usize,
+        stream_permutation: HashMap<usize, usize>,
+        thinned_stream_arity: usize,
+        lookup_permutation: HashMap<usize, usize>,
+    ) -> HashMap<usize, usize> {
+        let stream_arity = stream_permutation
+            .keys()
+            .cloned()
+            .max()
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let lookup_arity = lookup_permutation
+            .keys()
+            .cloned()
+            .max()
+            .map(|i| i + 1)
+            .unwrap_or(0);
+
+        (0..stream_arity + lookup_arity)
+            .map(|i| {
+                let location = if i < stream_arity {
+                    stream_permutation[&i]
+                } else {
+                    let location_in_lookup = lookup_permutation[&(i - stream_arity)];
+                    if location_in_lookup < key_arity {
+                        location_in_lookup
+                    } else {
+                        location_in_lookup + thinned_stream_arity
+                    }
+                };
+                (i, location)
+            })
+            .collect()
+    }
+}
+
 pub mod plan {
 
-    use serde::{Deserialize, Serialize};
-    use std::convert::TryFrom;
+    use std::collections::HashMap;
 
-    use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc};
-    use repr::adt::numeric::Numeric;
-    use repr::{Datum, Diff, Row, RowArena, ScalarType};
+    use serde::{Deserialize, Serialize};
+
+    use crate::{
+        func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc,
+    };
+    use mz_repr::adt::numeric::Numeric;
+    use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1148,6 +1249,9 @@ pub mod plan {
     }
 
     impl SafeMfpPlan {
+        pub fn permute(&mut self, map: HashMap<usize, usize>, new_arity: usize) {
+            self.mfp.permute(map, new_arity);
+        }
         /// Evaluates the linear operator on a supplied list of datums.
         ///
         /// The arguments are the initial datums associated with the row,
@@ -1168,22 +1272,23 @@ pub mod plan {
             &'a self,
             datums: &mut Vec<Datum<'a>>,
             arena: &'a RowArena,
-            row: &'a mut Row,
+            row_buf: &'a mut Row,
         ) -> Result<Option<Row>, EvalError> {
             let passed_predicates = self.evaluate_inner(datums, arena)?;
             if !passed_predicates {
                 Ok(None)
             } else {
-                row.clear();
-                row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
-                Ok(Some(row.finish_and_reuse()))
+                row_buf
+                    .packer()
+                    .extend(self.mfp.projection.iter().map(|c| datums[*c]));
+                Ok(Some(row_buf.clone()))
             }
         }
 
         /// A version of `evaluate` which produces an iterator over `Datum`
         /// as output.
         ///
-        /// This version can be usefulwhen one wants to capture the resulting
+        /// This version can be useful when one wants to capture the resulting
         /// datums without packing and then unpacking a row.
         #[inline(always)]
         pub fn evaluate_iter<'b, 'a: 'b>(
@@ -1241,7 +1346,7 @@ pub mod plan {
     /// They must directly constrain `MzLogicalTimestamp` from below or above,
     /// by expressions that do not themselves contain `MzLogicalTimestamp`.
     /// Conjunctions of such constraints are also ok.
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
         mfp: SafeMfpPlan,
@@ -1291,7 +1396,7 @@ pub mod plan {
                     mut expr2,
                 } = predicate
                 {
-                    // Attempt to put `MzLogicalTimestamp` in the first argument position.
+                    // Attempt to put `LogicalTimestamp` in the first argument position.
                     if !expr1.contains_temporal()
                         && *expr2 == MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
                     {
@@ -1324,7 +1429,7 @@ pub mod plan {
                     // We'll need to use this a fair bit.
                     let decimal_one = MirScalarExpr::literal_ok(
                         Datum::from(Numeric::from(1)),
-                        ScalarType::Numeric { scale: None },
+                        ScalarType::Numeric { max_scale: None },
                     );
 
                     // TODO(#7611): Truncate any significant fractional digits
@@ -1332,9 +1437,9 @@ pub mod plan {
                     // of negative values intact. (Negative values are never
                     // chosen as valid bounds, so their resultant values matter
                     // little, but we do want to know they were negative.)
-                    let expr2_floor = expr2.call_unary(UnaryFunc::FloorNumeric);
+                    let expr2_floor = expr2.call_unary(UnaryFunc::FloorNumeric(func::FloorNumeric));
 
-                    // MzLogicalTimestamp <OP> <EXPR2> for several supported operators.
+                    // LogicalTimestamp <OP> <EXPR2> for several supported operators.
                     match func {
                         BinaryFunc::Eq => {
                             // Lower bound of expr, upper bound of expr+1
@@ -1401,17 +1506,21 @@ pub mod plan {
         /// If `self` contains only non-temporal predicates, the result will either be `(time, diff)`,
         /// or an evaluation error. If `self contains temporal predicates, the results can be times
         /// that are greater than the input `time`, and may contain negated `diff` values.
-        pub fn evaluate<'b, 'a: 'b>(
+        ///
+        /// The `row_builder` is not cleared first, but emptied if the function
+        /// returns an iterator with any `Ok(_)` element.
+        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
-            time: repr::Timestamp,
+            time: mz_repr::Timestamp,
             diff: Diff,
-        ) -> impl Iterator<Item = Result<(Row, repr::Timestamp, Diff), (EvalError, repr::Timestamp, Diff)>>
+            row_builder: &mut Row,
+        ) -> impl Iterator<Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>>
         {
             match self.mfp.evaluate_inner(datums, &arena) {
                 Err(e) => {
-                    return Some(Err((e, time, diff)))
+                    return Some(Err((e.into(), time, diff)))
                         .into_iter()
                         .chain(None.into_iter());
                 }
@@ -1437,7 +1546,7 @@ pub mod plan {
                 if lower_bound.is_some() {
                     match l.eval(datums, &arena) {
                         Err(e) => {
-                            return Some(Err((e, time, diff)))
+                            return Some(Err((e.into(), time, diff)))
                                 .into_iter()
                                 .chain(None.into_iter());
                         }
@@ -1480,7 +1589,7 @@ pub mod plan {
                 if upper_bound != lower_bound {
                     match u.eval(datums, &arena) {
                         Err(e) => {
-                            return Some(Err((e, time, diff)))
+                            return Some(Err((e.into(), time, diff)))
                                 .into_iter()
                                 .chain(None.into_iter());
                         }
@@ -1522,14 +1631,22 @@ pub mod plan {
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
             if lower_bound != upper_bound && !null_eval {
-                // Allocate a row to produce as output.
-                let capacity =
-                    repr::datums_size(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                let mut row = Row::with_capacity(capacity);
-                row.extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                // TODO: avoid the clone if `upper_opt` is `None`.
-                let lower_opt = lower_bound.map(|time| Ok((row.clone(), time, diff)));
-                let upper_opt = upper_bound.map(|time| Ok((row, time, -diff)));
+                row_builder
+                    .packer()
+                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+                let (lower_opt, upper_opt) = match (lower_bound, upper_bound) {
+                    (Some(lower_bound), Some(upper_bound)) => (
+                        Some(Ok((row_builder.clone(), lower_bound, diff))),
+                        Some(Ok((row_builder.clone(), upper_bound, -diff))),
+                    ),
+                    (Some(lower_bound), None) => {
+                        (Some(Ok((row_builder.clone(), lower_bound, diff))), None)
+                    }
+                    (None, Some(upper_bound)) => {
+                        (None, Some(Ok((row_builder.clone(), upper_bound, -diff))))
+                    }
+                    _ => (None, None),
+                };
                 lower_opt.into_iter().chain(upper_opt.into_iter())
             } else {
                 None.into_iter().chain(None.into_iter())

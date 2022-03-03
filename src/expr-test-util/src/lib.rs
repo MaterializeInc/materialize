@@ -13,47 +13,28 @@ use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 use serde_json::Value;
 
-use expr::explain::ViewExplanation;
-use expr::func::{IsNull, Not};
-use expr::*;
-use lowertest::*;
-use ore::result::ResultExt;
-use ore::str::separated;
-use repr::{ColumnType, RelationType, Row, ScalarType};
-use repr_test_util::*;
-
-gen_reflect_info_func!(
-    produce_rti,
-    [
-        BinaryFunc,
-        NullaryFunc,
-        UnaryFunc,
-        VariadicFunc,
-        MirScalarExpr,
-        ScalarType,
-        TableFunc,
-        AggregateFunc,
-        MirRelationExpr,
-        JoinImplementation,
-        EvalError,
-    ],
-    [
-        AggregateExpr,
-        ColumnOrder,
-        ColumnType,
-        RelationType,
-        IsNull,
-        Not
-    ]
-);
+use mz_expr::explain::ViewExplanation;
+use mz_expr::{
+    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr,
+};
+use mz_lowertest::*;
+use mz_ore::result::ResultExt;
+use mz_ore::str::separated;
+use mz_repr::{ColumnType, RelationType, Row, ScalarType};
+use mz_repr_test_util::*;
 
 lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = produce_rti();
+    pub static ref RTI: ReflectedTypeInfo = {
+        let mut rti = ReflectedTypeInfo::default();
+        EvalError::add_to_reflected_type_info(&mut rti);
+        MirRelationExpr::add_to_reflected_type_info(&mut rti);
+        rti
+    };
 }
 
 /// Builds a `MirScalarExpr` from a string.
 ///
-/// See [lowertest::to_json] for the syntax.
+/// See [mz_lowertest::to_json] for the syntax.
 pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
     deserialize(
         &mut tokenize(s)?.into_iter(),
@@ -65,7 +46,7 @@ pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
 
 /// Builds a `MirRelationExpr` from a string.
 ///
-/// See [lowertest::to_json] for the syntax.
+/// See [mz_lowertest::to_json] for the syntax.
 pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, String> {
     deserialize(
         &mut tokenize(s)?.into_iter(),
@@ -75,7 +56,25 @@ pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, Stri
     )
 }
 
-/// Turns the json version of a MirRelationExpr into the [lowertest::to_json]
+/// Pretty-print the MirRelationExpr.
+///
+/// If format contains "types", then add types to the pretty-printed
+/// `MirRelationExpr`.
+pub fn generate_explanation(
+    humanizer: &dyn ExprHumanizer,
+    rel: &MirRelationExpr,
+    format: Option<&Vec<String>>,
+) -> String {
+    let mut explanation = ViewExplanation::new(rel, humanizer);
+    if let Some(format) = format {
+        if format.contains(&"types".to_string()) {
+            explanation.explain_types();
+        }
+    }
+    explanation.to_string()
+}
+
+/// Turns the json version of a MirRelationExpr into the [mz_lowertest::to_json]
 /// syntax.
 ///
 /// The return value is a tuple of:
@@ -120,37 +119,40 @@ pub struct TestCatalog {
 }
 
 impl<'a> TestCatalog {
-    fn insert(&mut self, name: &str, typ: RelationType) {
-        // TODO(justin): error on dup name?
-        let id = GlobalId::User(self.objects.len() as u64);
+    /// Registers an object in the catalog.
+    ///
+    /// Specifying `transient` as true allows the object to be deleted by
+    /// [Self::remove_transient_objects].
+    ///
+    /// Returns the GlobalId assigned by the catalog to the object.
+    ///
+    /// Errors if an object of the same name is already in the catalog.
+    pub fn insert(
+        &mut self,
+        name: &str,
+        typ: RelationType,
+        transient: bool,
+    ) -> Result<GlobalId, String> {
+        if self.objects.contains_key(name) {
+            return Err(format!("Object {} already exists in catalog", name));
+        }
+        let id = if transient {
+            GlobalId::Transient(self.objects.len() as u64)
+        } else {
+            GlobalId::User(self.objects.len() as u64)
+        };
         self.objects.insert(name.to_string(), (id, typ));
         self.names.insert(id, name.to_string());
+        Ok(id)
     }
 
     fn get(&'a self, name: &str) -> Option<&'a (GlobalId, RelationType)> {
         self.objects.get(name)
     }
 
-    fn get_source_name(&'a self, id: &GlobalId) -> Option<&'a String> {
+    /// Looks up the name of the object referred to as `id`.
+    pub fn get_source_name(&'a self, id: &GlobalId) -> Option<&'a String> {
         self.names.get(id)
-    }
-
-    /// Pretty-print the MirRelationExpr.
-    ///
-    /// If format contains "types", then add types to the pretty-printed
-    /// `MirRelationExpr`.
-    pub fn generate_explanation(
-        &self,
-        rel: &MirRelationExpr,
-        format: Option<&Vec<String>>,
-    ) -> String {
-        let mut explanation = ViewExplanation::new(rel, self);
-        if let Some(format) = format {
-            if format.contains(&"types".to_string()) {
-                explanation.explain_types();
-            }
-        }
-        explanation.to_string()
     }
 
     /// Handles instructions to modify the catalog.
@@ -177,7 +179,7 @@ impl<'a> TestCatalog {
                             let typ: RelationType =
                                 deserialize(&mut inner_iter, "RelationType", &RTI, &mut ctx)?;
 
-                            self.insert(&name, typ);
+                            self.insert(&name, typ, false)?;
                         }
                         s => return Err(format!("not a valid catalog command: {:?}", s)),
                     }
@@ -186,6 +188,24 @@ impl<'a> TestCatalog {
             }
         }
         Ok(())
+    }
+
+    /// Clears all transient objects from the catalog.
+    pub fn remove_transient_objects(&mut self) {
+        self.objects.retain(|_, (id, _)| {
+            if let GlobalId::Transient(_) = id {
+                false
+            } else {
+                true
+            }
+        });
+        self.names.retain(|k, _| {
+            if let GlobalId::Transient(_) = k {
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -661,12 +681,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                         for _ in 0..diff {
                                             rows.push(format!(
                                                 "[{}]",
-                                                separated(
-                                                    " ",
-                                                    row.unpack()
-                                                        .into_iter()
-                                                        .map(|d| datum_to_test_spec(d))
-                                                )
+                                                separated(" ", row.iter().map(datum_to_test_spec))
                                             ))
                                         }
                                     }

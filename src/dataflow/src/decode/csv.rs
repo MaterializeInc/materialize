@@ -7,10 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::iter;
-
-use dataflow_types::{CsvEncoding, DataflowError, DecodeError, LinearOperator};
-use repr::{Datum, Row};
+use mz_dataflow_types::{sources::encoding::CsvEncoding, DecodeError, LinearOperator};
+use mz_repr::{Datum, Row};
 
 #[derive(Debug)]
 pub struct CsvDecoderState {
@@ -23,7 +21,7 @@ pub struct CsvDecoderState {
     ends_cursor: usize,
     csv_reader: csv_core::Reader,
     demanded: Vec<bool>,
-    row_packer: Row,
+    row_buf: Row,
     events_error: usize,
     events_success: usize,
 }
@@ -58,7 +56,7 @@ impl CsvDecoderState {
             ends_cursor: 1,
             csv_reader: csv_core::ReaderBuilder::new().delimiter(delimiter).build(),
             demanded,
-            row_packer: Default::default(),
+            row_buf: Row::default(),
             events_error: 0,
             events_success: 0,
         }
@@ -70,12 +68,7 @@ impl CsvDecoderState {
         }
     }
 
-    pub fn decode(
-        &mut self,
-        chunk: &mut &[u8],
-        coord: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
+    pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         loop {
             let (result, n_input, n_output, n_ends) = self.csv_reader.read_record(
                 *chunk,
@@ -105,56 +98,37 @@ impl CsvDecoderState {
                         }
                         if ends_valid != self.n_cols {
                             self.events_error += 1;
-                            Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                            Err(DecodeError::Text(format!(
                                 "CSV error at record number {}: expected {} columns, got {}.",
                                 self.total_events(),
                                 self.n_cols,
                                 ends_valid
-                            ))))
+                            )))
                         } else {
                             match std::str::from_utf8(&self.output[0..self.output_cursor]) {
                                 Ok(output) => {
                                     self.events_success += 1;
-                                    let mut row_packer = std::mem::take(&mut self.row_packer);
-                                    if push_metadata {
-                                        row_packer.extend(
-                                            (0..self.n_cols)
-                                                .map(|i| {
-                                                    Datum::String(
-                                                        if self.next_row_is_header
-                                                            || self.demanded[i]
-                                                        {
-                                                            &output[self.ends[i]..self.ends[i + 1]]
-                                                        } else {
-                                                            ""
-                                                        },
-                                                    )
-                                                })
-                                                .chain(iter::once(Datum::from(coord))),
-                                        );
-                                    } else {
-                                        row_packer.extend((0..self.n_cols).map(|i| {
-                                            Datum::String(
-                                                if self.next_row_is_header || self.demanded[i] {
-                                                    &output[self.ends[i]..self.ends[i + 1]]
-                                                } else {
-                                                    ""
-                                                },
-                                            )
-                                        }));
-                                    }
-                                    self.row_packer = row_packer;
+                                    let mut row_packer = self.row_buf.packer();
+                                    row_packer.extend((0..self.n_cols).map(|i| {
+                                        Datum::String(
+                                            if self.next_row_is_header || self.demanded[i] {
+                                                &output[self.ends[i]..self.ends[i + 1]]
+                                            } else {
+                                                ""
+                                            },
+                                        )
+                                    }));
                                     self.output_cursor = 0;
                                     self.ends_cursor = 1;
-                                    Ok(Some(self.row_packer.finish_and_reuse()))
+                                    Ok(Some(self.row_buf.clone()))
                                 }
                                 Err(e) => {
                                     self.events_error += 1;
-                                    Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                                    Err(DecodeError::Text(format!(
                                         "CSV error at record number {}: invalid UTF-8 ({})",
                                         self.total_events(),
                                         e
-                                    ))))
+                                    )))
                                 }
                             }
                         }
@@ -171,14 +145,14 @@ impl CsvDecoderState {
                                 .enumerate()
                                 .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
                             if let Some((i, (actual, expected))) = mismatched {
-                                break Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                                break Err(DecodeError::Text(format!(
                                     "source file contains incorrect columns '{:?}', \
                                      first mismatched column at index {} expected={} actual={}",
                                     row,
                                     i + 1,
                                     expected,
                                     actual
-                                ))));
+                                )));
                             }
                         }
                         if chunk.is_empty() {

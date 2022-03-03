@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 > SELECT SUM(LENGTH(text)) FROM s3_text;
-65280
+67328
 
 > SELECT SUM(LENGTH(text)) FROM s3_gzip;
-65280
+67328

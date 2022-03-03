@@ -1,42 +1,52 @@
 [package]
-name = "expr"
+name = "mz-expr"
 description = "The core expression language for Materialize."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.58.0"
 publish = false
+
+[[bench]]
+name = "like_pattern"
+harness = false
 
 [dependencies]
 aho-corasick = "0.7.18"
-anyhow = "1.0.44"
+anyhow = "1.0.55"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
-dec = "0.4.5"
+dec = "0.4.8"
+derivative = "2.2.0"
 encoding = "0.2.0"
 enum-iterator = "0.7.0"
+fallible-iterator = "0.2.0"
 hex = "0.4.3"
-hmac = "0.11.0"
-itertools = "0.10.1"
-lowertest = { path = "../lowertest"}
-md-5 = "0.9.0"
-num_enum = "0.5.4"
+hmac = "0.12.1"
+itertools = "0.10.3"
+lazy_static = "1.4.0"
+md-5 = "0.10.1"
+mz-lowertest = { path = "../lowertest" }
+mz-ore = { path = "../ore" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-repr = { path = "../repr" }
 num = "0.4.0"
 num-iter = "0.1.42"
-ordered-float = { version = "2.8.0", features = ["serde"] }
-ore = { path = "../ore" }
-pdqselect = "0.1.0"
-pgrepr = { path = "../pgrepr" }
+num_enum = "0.5.6"
+ordered-float = { version = "2.10.0", features = ["serde"] }
+paste = "1.0.0"
 regex = "1.5.4"
 regex-syntax = "0.6.25"
-repr = { path = "../repr" }
-serde = { version = "1.0.130", features = ["derive"] }
-serde_json = "1.0.68"
-sha-1 = "0.9.8"
-sha2 = "0.9.8"
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.79"
+serde_regex = "1.1.0"
+sha-1 = "0.10.0"
+sha2 = "0.10.2"
 uncased = "0.9.6"
-paste = "1"
+uuid = "0.8.2"
 
 [dev-dependencies]
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 datadriven = "0.6.0"
-expr_test_util = { path = "../expr-test-util"}
-ore = { path = "../ore" }
-proc-macro2 = "1.0.29"
+mz-expr-test-util = { path = "../expr-test-util" }
+mz-ore = { path = "../ore" }
+proc-macro2 = "1.0.36"

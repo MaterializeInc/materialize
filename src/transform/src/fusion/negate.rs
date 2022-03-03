@@ -10,7 +10,7 @@
 //! Fuses a sequence of `Negate` operators in to one or zero `Negate` operators.
 
 use crate::TransformArgs;
-use expr::MirRelationExpr;
+use mz_expr::MirRelationExpr;
 
 /// Fuses a sequence of `Negate` operators in to one or zero `Negate` operators.
 #[derive(Debug)]
@@ -22,15 +22,12 @@ impl crate::Transform for Negate {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)))
     }
 }
 
 impl Negate {
-    /// Fuses a sequence of `Negate` operators in to one or zero `Negate` operators.
+    /// Fuses a sequence of `Negate` operators into one or zero `Negate` operators.
     pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Negate { input } = relation {
             let mut require_negate = true;

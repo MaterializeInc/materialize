@@ -69,11 +69,6 @@ impl<T: MetricVecBuilder> ThirdPartyMetric<MetricVec<T>> {
         self.inner.get_metric_with_label_values(vals)
     }
 
-    /// Removes a metric with the given label values.
-    pub fn remove_label_values(&self, vals: &[&str]) -> Result<(), Error> {
-        self.inner.remove_label_values(vals)
-    }
-
     /// Creates a metric that can be scraped by a third party, with the given label values.
     /// # Panics
     /// Panics if the metric can not be created.

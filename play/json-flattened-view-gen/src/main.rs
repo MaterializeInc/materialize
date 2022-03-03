@@ -15,7 +15,6 @@
 
 use anyhow::bail;
 use serde_json::value::Value;
-use structopt::StructOpt;
 
 #[derive(Debug)]
 enum PostgresType {
@@ -64,31 +63,31 @@ fn flatten_single_value(flattened: &mut Vec<(String, PostgresType)>, key: String
 
 /// Generates SQL commands to create views on json sources, flattened for easier
 /// access. String fields will be converted to text to avoid extra quotes.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Parser)]
 struct Args {
     /// Sample json object
-    #[structopt(parse(try_from_str = serde_json::from_str))]
+    #[clap(parse(try_from_str = serde_json::from_str))]
     sample_json: Value,
 
     /// Name of json source
-    #[structopt(short = "s", long = "source-name", default_value = "json_source")]
+    #[clap(short = 's', long = "source-name", default_value = "json_source")]
     source_name: String,
 
     /// Name of intermediate json view, for converting from bytes to json
-    #[structopt(
-        short = "i",
+    #[clap(
+        short = 'i',
         long = "intermediate-view-name",
         default_value = "jsonified"
     )]
     intermediate_view_name: String,
 
     /// Name of output view, containing flattened json leaf nodes and strings converted to text
-    #[structopt(short = "o", long = "output-view-name", default_value = "flattened")]
+    #[clap(short = 'o', long = "output-view-name", default_value = "flattened")]
     output_view_name: String,
 }
 
 fn main() -> Result<(), anyhow::Error> {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
     let flattened = flatten_object(args.sample_json)?;
     let selections: Vec<String> = flattened
         .iter()

@@ -11,6 +11,8 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::thread;
+use std::time::Duration;
 
 use reqwest::{blocking::Client, StatusCode, Url};
 use tempfile::NamedTempFile;
@@ -21,7 +23,7 @@ pub mod util;
 
 #[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let data_dir = tempfile::tempdir()?;
     let config = util::Config::default().data_directory(data_dir.path());
@@ -40,7 +42,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
         )?;
         client.batch_execute(
-            "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
+            "CREATE MATERIALIZED VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
         )?;
         client.batch_execute("CREATE DATABASE d")?;
         client.batch_execute("CREATE SCHEMA d.s")?;
@@ -65,10 +67,10 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .map(|row| (row.get("Column_name"), row.get("Seq_in_index")))
                 .collect::<Vec<(String, i64)>>(),
             &[
-                ("?column?".into(), 1),
-                ("data".into(), 2),
+                ("a".into(), 1),
+                ("a_data".into(), 2),
                 ("c".into(), 3),
-                ("data".into(), 4),
+                ("c_data".into(), 4),
             ],
         );
         assert_eq!(
@@ -123,7 +125,7 @@ fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
                     .to_string()
                     .contains("Materialize previously started with --experimental")
                 {
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         }
@@ -154,7 +156,7 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
                     .to_string()
                     .contains("Experimental mode is only available on new nodes")
                 {
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         }
@@ -174,8 +176,11 @@ fn test_pid_file() -> Result<(), Box<dyn Error>> {
     match util::start_server(config.clone()) {
         Ok(_) => panic!("unexpected success"),
         Err(e) => {
-            if !e.to_string().contains("process already running") {
-                return Err(e);
+            if !e
+                .to_string()
+                .contains("running with the same data directory")
+            {
+                return Err(e.into());
             }
         }
     }
@@ -276,7 +281,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCase {
             query: "select 1; select 2",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":[null]},{"rows":[[2]],"col_names":[null]}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"rows":[[2]],"col_names":["?column?"]}]}"#,
         },
         // CREATEs should not work.
         TestCase {
@@ -307,12 +312,42 @@ fn test_metrics_registry_hygiene() -> Result<(), Box<dyn Error>> {
         source_file.path().display()
     ))?;
     client.batch_execute(
-        "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
+        "CREATE MATERIALIZED VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
     )?;
 
     // Check that metrics are where we expect them:
     let default_metrics = prometheus::default_registry().gather();
     assert_eq!(0, default_metrics.len());
     assert_ne!(0, server.metrics_registry.gather().len());
+    Ok(())
+}
+
+// Test that the server properly handles cancellation requests.
+#[test]
+fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut client = server.connect(postgres::NoTls)?;
+    let cancel_token = client.cancel_token();
+
+    thread::spawn(move || {
+        // Abort the query after 2s.
+        thread::sleep(Duration::from_secs(2));
+        let _ = cancel_token.cancel_query(postgres::NoTls);
+    });
+
+    client.batch_execute("CREATE TABLE t (i INT)")?;
+
+    match client.simple_query("SELECT * FROM t AS OF now()+'1h'") {
+        Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    client
+        .simple_query("SELECT 1")
+        .expect("simple query succeeds after cancellation");
+
     Ok(())
 }

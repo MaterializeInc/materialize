@@ -12,8 +12,8 @@ There are broadly three test suites:
      in the `tests/` directory within a crate.
 
   2. The data-driven **system test suite** in the top-level [test/](/test)
-     directory. These consist of text files in various DSLs (sqllogictest and
-     testdrive, at the moment) that essentially specify SQL commands to run and
+     directory. These consist of text files in various DSLs (sqllogictest,
+     testdrive, pgtest) that essentially specify SQL commands to run and
      their expected output.
 
   3. The long-running **performance and stability test suite**. This test suite
@@ -41,7 +41,7 @@ $ cargo test
 
 Some of the packages have tests that depend on ZooKeeper, Kafka, and the
 Confluent Schema Registry running locally on the default ports. See the
-[Developer guide](develop.md) for full details on setting this up, but
+[Developer guide](guide.md) for full details on setting this up, but
 the following will do the trick if you have the Confluent Platform 5.3+ CLI
 installed and configured:
 
@@ -235,6 +235,16 @@ data type, like, say, `DATE`, the upstream CockroachDB sqllogictests will
 provide most of the coverage, but it's worth adding some (*very*) basic
 testdrive tests (e.g., `> SELECT DATE '1999-01-01'`) to ensure that our pgwire
 implementation is properly serializing dates.
+
+### pgtest
+
+Pgtest is DSL to specify raw pgwire messages to send and their expected
+responses. It can be used to test message sequences that are difficult
+or impossible to test with PostgreSQL drivers. Its output is generated
+against PostgreSQL and then tested against Materialize. Usage is
+documented at the [pgtest crate][pgtest-docs].
+
+[pgtest-docs]: https://dev.materialize.com/api/rust/mz_pgtest/index.html
 
 ## Long-running tests
 

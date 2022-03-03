@@ -22,9 +22,9 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat,
-    CreateSourceKeyEnvelope, DataType, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    TableConstraint, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, Envelope,
+    Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -71,16 +71,10 @@ pub enum Statement<T: AstInfo> {
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement),
     Close(CloseStatement),
-}
-
-impl<T: AstInfo> Statement<T> {
-    /// Reports whether the statement is cursor-related.
-    pub fn is_cursor(&self) -> bool {
-        matches!(
-            self,
-            Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_)
-        )
-    }
+    Prepare(PrepareStatement<T>),
+    Execute(ExecuteStatement<T>),
+    Deallocate(DeallocateStatement),
+    Raise(RaiseStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -126,6 +120,10 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
+            Statement::Prepare(stmt) => f.write_node(stmt),
+            Statement::Execute(stmt) => f.write_node(stmt),
+            Statement::Deallocate(stmt) => f.write_node(stmt),
+            Statement::Raise(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -269,8 +267,8 @@ impl_display_t!(CopyStatement);
 /// `UPDATE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpdateStatement<T: AstInfo> {
-    /// TABLE
-    pub table_name: UnresolvedObjectName,
+    /// `FROM`
+    pub table_name: T::ObjectName,
     /// Column assignments
     pub assignments: Vec<Assignment<T>>,
     /// WHERE
@@ -297,7 +295,11 @@ impl_display_t!(UpdateStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeleteStatement<T: AstInfo> {
     /// `FROM`
-    pub table_name: UnresolvedObjectName,
+    pub table_name: T::ObjectName,
+    /// `AS`
+    pub alias: Option<TableAlias>,
+    /// `USING`
+    pub using: Vec<TableWithJoins<T>>,
     /// `WHERE`
     pub selection: Option<Expr<T>>,
 }
@@ -306,6 +308,14 @@ impl<T: AstInfo> AstDisplay for DeleteStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DELETE FROM ");
         f.write_node(&self.table_name);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+        if !self.using.is_empty() {
+            f.write_str(" USING ");
+            f.write_node(&display::comma_separated(&self.using));
+        }
         if let Some(selection) = &self.selection {
             f.write_str(" WHERE ");
             f.write_node(selection);
@@ -357,8 +367,8 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub col_names: Vec<Ident>,
     pub connector: CreateSourceConnector,
     pub with_options: Vec<SqlOption<T>>,
+    pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub key_envelope: CreateSourceKeyEnvelope,
     pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,
@@ -398,7 +408,11 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str(")");
         }
         f.write_node(&self.format);
-        f.write_node(&self.key_envelope);
+        if !self.include_metadata.is_empty() {
+            f.write_str(" INCLUDE ");
+            f.write_node(&display::comma_separated(&self.include_metadata));
+        }
+
         match self.envelope {
             Envelope::None => (),
             _ => {
@@ -757,10 +771,7 @@ pub struct CreateTypeStatement<T: AstInfo> {
     /// Name of the created type.
     pub name: UnresolvedObjectName,
     /// The new type's "base type".
-    pub as_type: CreateTypeAs,
-    /// Provides the name and type for the key
-    /// and value.
-    pub with_options: Vec<SqlOption<T>>,
+    pub as_type: CreateTypeAs<T>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
@@ -768,32 +779,45 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
         f.write_str("CREATE TYPE ");
         f.write_node(&self.name);
         f.write_str(" AS ");
-        f.write_str(&self.as_type);
-        f.write_str("( ");
-        if !self.with_options.is_empty() {
-            f.write_node(&display::comma_separated(&self.with_options));
-        }
-        f.write_str(" )");
+        match &self.as_type {
+            CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
+                f.write_str(&self.as_type);
+                f.write_str("( ");
+                if !with_options.is_empty() {
+                    f.write_node(&display::comma_separated(&with_options));
+                }
+                f.write_str(" )");
+            }
+            CreateTypeAs::Record { column_defs } => {
+                f.write_str("( ");
+                if !column_defs.is_empty() {
+                    f.write_node(&display::comma_separated(&column_defs));
+                }
+                f.write_str(" )");
+            }
+        };
     }
 }
 impl_display_t!(CreateTypeStatement);
 
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateTypeAs {
-    List,
-    Map,
+pub enum CreateTypeAs<T: AstInfo> {
+    List { with_options: Vec<SqlOption<T>> },
+    Map { with_options: Vec<SqlOption<T>> },
+    Record { column_defs: Vec<ColumnDef<T>> },
 }
 
-impl AstDisplay for CreateTypeAs {
+impl<T: AstInfo> AstDisplay for CreateTypeAs<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateTypeAs::List => f.write_str("LIST "),
-            CreateTypeAs::Map => f.write_str("MAP "),
+            CreateTypeAs::List { .. } => f.write_str("LIST "),
+            CreateTypeAs::Map { .. } => f.write_str("MAP "),
+            CreateTypeAs::Record { .. } => f.write_str("RECORD "),
         }
     }
 }
-impl_display!(CreateTypeAs);
+impl_display_t!(CreateTypeAs);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -898,6 +922,7 @@ impl_display!(DiscardTarget);
 pub struct DropDatabaseStatement {
     pub name: Ident,
     pub if_exists: bool,
+    pub restrict: bool,
 }
 
 impl AstDisplay for DropDatabaseStatement {
@@ -907,6 +932,9 @@ impl AstDisplay for DropDatabaseStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&self.name);
+        if self.restrict {
+            f.write_str(" RESTRICT");
+        }
     }
 }
 impl_display!(DropDatabaseStatement);
@@ -1246,7 +1274,7 @@ impl_display!(RollbackStatement);
 /// `TAIL`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TailStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub relation: TailRelation<T>,
     pub options: Vec<WithOption>,
     pub as_of: Option<Expr<T>>,
 }
@@ -1254,7 +1282,7 @@ pub struct TailStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for TailStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("TAIL ");
-        f.write_node(&self.name);
+        f.write_node(&self.relation);
         if !self.options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.options));
@@ -1268,6 +1296,26 @@ impl<T: AstInfo> AstDisplay for TailStatement<T> {
 }
 impl_display_t!(TailStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TailRelation<T: AstInfo> {
+    Name(UnresolvedObjectName),
+    Query(Query<T>),
+}
+
+impl<T: AstInfo> AstDisplay for TailRelation<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            TailRelation::Name(name) => f.write_node(&name),
+            TailRelation::Query(query) => {
+                f.write_str("(");
+                f.write_node(query);
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display_t!(TailRelation);
+
 /// `EXPLAIN ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainStatement<T: AstInfo> {
@@ -1279,6 +1327,11 @@ pub struct ExplainStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
+        if self.options.timing {
+            f.write_str("(TIMING ");
+            f.write_str(self.options.timing);
+            f.write_str(") ");
+        }
         if self.options.typed {
             f.write_str("TYPED ");
         }
@@ -1371,7 +1424,7 @@ pub enum SqlOption<T: AstInfo> {
     },
     DataType {
         name: Ident,
-        data_type: DataType<T>,
+        data_type: T::DataType,
     },
 }
 
@@ -1537,18 +1590,27 @@ impl_display_t!(Assignment);
 pub enum ExplainStage {
     /// The sql::HirRelationExpr after parsing
     RawPlan,
-    /// The expr::MirRelationExpr after decorrelation
+    /// Query Graph
+    QueryGraph,
+    /// Optimized Query Graph
+    OptimizedQueryGraph,
+    /// The mz_expr::MirRelationExpr after decorrelation
     DecorrelatedPlan,
-    /// The expr::MirRelationExpr after optimization
+    /// The mz_expr::MirRelationExpr after optimization
     OptimizedPlan,
+    /// The render::plan::Plan
+    PhysicalPlan,
 }
 
 impl AstDisplay for ExplainStage {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStage::OptimizedQueryGraph => f.write_str("OPTIMIZED QUERY GRAPH"),
+            ExplainStage::QueryGraph => f.write_str("QUERY GRAPH"),
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
         }
     }
 }
@@ -1563,6 +1625,7 @@ pub enum Explainee<T: AstInfo> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainOptions {
     pub typed: bool,
+    pub timing: bool,
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
@@ -1655,3 +1718,93 @@ impl AstDisplay for FetchDirection {
     }
 }
 impl_display!(FetchDirection);
+
+/// `PREPARE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PrepareStatement<T: AstInfo> {
+    pub name: Ident,
+    pub stmt: Box<Statement<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for PrepareStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("PREPARE ");
+        f.write_node(&self.name);
+        f.write_str(" AS ");
+        f.write_node(&self.stmt);
+    }
+}
+impl_display_t!(PrepareStatement);
+
+/// `EXECUTE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExecuteStatement<T: AstInfo> {
+    pub name: Ident,
+    pub params: Vec<Expr<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ExecuteStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXECUTE ");
+        f.write_node(&self.name);
+        if !self.params.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.params));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(ExecuteStatement);
+
+/// `DEALLOCATE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeallocateStatement {
+    pub name: Option<Ident>,
+}
+
+impl AstDisplay for DeallocateStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DEALLOCATE ");
+        match &self.name {
+            Some(name) => f.write_node(name),
+            None => f.write_str("ALL"),
+        };
+    }
+}
+impl_display!(DeallocateStatement);
+
+/// `RAISE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RaiseStatement {
+    pub severity: NoticeSeverity,
+}
+
+impl AstDisplay for RaiseStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("RAISE ");
+        f.write_node(&self.severity);
+    }
+}
+impl_display!(RaiseStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NoticeSeverity {
+    Debug,
+    Info,
+    Log,
+    Notice,
+    Warning,
+}
+
+impl AstDisplay for NoticeSeverity {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            NoticeSeverity::Debug => "DEBUG",
+            NoticeSeverity::Info => "INFO",
+            NoticeSeverity::Log => "LOG",
+            NoticeSeverity::Notice => "NOTICE",
+            NoticeSeverity::Warning => "WARNING",
+        })
+    }
+}
+impl_display!(NoticeSeverity);

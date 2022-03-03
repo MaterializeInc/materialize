@@ -11,16 +11,21 @@
 
 //! Driver for timely/differential dataflow.
 
+mod activator;
 mod arrangement;
 mod decode;
+mod event;
 mod metrics;
 mod operator;
 mod render;
+mod replay;
 mod server;
 mod sink;
 
 pub mod logging;
 pub mod source;
 
-pub use render::plan::Plan;
-pub use server::{serve, Command, Config, Response, TimestampBindingFeedback, WorkerFeedback};
+pub use server::{
+    boundary::ComputeReplay, boundary::DummyBoundary, boundary::EventLinkBoundary,
+    boundary::StorageCapture, serve, serve_boundary, tcp_boundary, Config, Server,
+};

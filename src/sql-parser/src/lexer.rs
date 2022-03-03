@@ -33,11 +33,10 @@
 //! [backend/parser/scan.l]: https://github.com/postgres/postgres/blob/90851d1d26f54ccb4d7b1bc49449138113d6ec83/src/backend/parser/scan.l
 
 use std::char;
-use std::convert::TryFrom;
 use std::fmt;
 
-use ore::lex::LexBuf;
-use ore::str::StrExt;
+use mz_ore::lex::LexBuf;
+use mz_ore::str::StrExt;
 
 use crate::keywords::Keyword;
 use crate::parser::ParserError;

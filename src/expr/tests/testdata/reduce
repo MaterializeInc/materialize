@@ -305,6 +305,236 @@ reduce
 ----
 (#0 || #1)
 
+## Record get/create optimizations
+
+reduce
+(call_unary (record_get 0) (call_variadic (record_create ["f1" "f2"]) [#0 #1]))
+[int32 int32]
+----
+#0
+
+reduce
+(call_unary (record_get 0)
+    (call_variadic coalesce
+        [
+            (call_variadic (record_create ["f1" "f2"]) [#0 #1])
+            (call_variadic (record_create ["f1" "f2"]) [(null int32) (null int32)])
+        ]
+    )
+)
+[int32 int32]
+----
+#0
+
+## Case/If optimizations
+
+reduce
+(if (call_binary gt #0 #1) false true)
+[int32 int32]
+----
+((isnull(#0) || isnull(#1)) || (#0 <= #1))
+
+reduce
+(if (call_binary gt #0 #1) false (null bool))
+[int32 int32]
+----
+(null && ((isnull(#0) || isnull(#1)) || (#0 <= #1)))
+
+reduce
+(if (call_binary gt #0 #1) false false)
+[int32 int32]
+----
+false
+
+# non-literal expression in the THEN clause
+reduce
+(if (call_binary gt #0 #1) (call_binary eq #0 (1 int32)) false)
+[int32 int32]
+----
+if (#0 > #1) then {(#0 = 1)} else {false}
+
+reduce
+(if (call_binary gt #0 #1) (null bool) false)
+[int32 int32]
+----
+(null && ((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1)))
+
+# non-literal expression in the THEN clause
+reduce
+(if (call_binary gt #0 #1) true false)
+[int32 int32]
+----
+((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1))
+
+reduce
+(if (call_binary gt #0 #1) true (null bool))
+[int32 int32]
+----
+(null || ((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1)))
+
+reduce
+(if (call_binary gt #0 #1) (call_binary eq #0 (1 int32)) true)
+[int32 int32]
+----
+if (#0 > #1) then {(#0 = 1)} else {true}
+
+reduce
+(if (call_binary gt #0 #1) (null bool) true)
+[int32 int32]
+----
+(null || ((isnull(#0) || isnull(#1)) || (#0 <= #1)))
+
+reduce
+(if (call_binary gt #0 #1) true true)
+[int32 int32]
+----
+true
+
+reduce
+(if (call_binary gt #0 #1) (null bool) (null bool))
+[int32 int32]
+----
+null
+
+reduce
+(if (call_binary gt #0 #1) (null int32) (null int32))
+[int32 int32]
+----
+null
+
+reduce
+(if (call_binary gt #0 #1) (1 int32) (2 int32))
+[int32 int32]
+----
+if (#0 > #1) then {1} else {2}
+
+reduce
+(if (null bool) true false)
+[]
+----
+false
+
+reduce
+(if (null bool) false true)
+[]
+----
+true
+
+reduce
+(if (null bool) #0 false)
+[bool]
+----
+false
+
+reduce
+(if (null bool) #0 true)
+[bool]
+----
+true
+
+reduce
+(if (null bool) false #0)
+[bool]
+----
+#0
+
+reduce
+(if (null bool) true #0)
+[bool]
+----
+#0
+
+reduce
+(if true true false)
+[]
+----
+true
+
+reduce
+(if true false true)
+[]
+----
+false
+
+reduce
+(if true #0 false)
+[bool]
+----
+#0
+
+reduce
+(if true #0 true)
+[bool]
+----
+#0
+
+reduce
+(if true false #0)
+[bool]
+----
+false
+
+reduce
+(if true true #0)
+[bool]
+----
+true
+
+reduce
+(if false true false)
+[]
+----
+false
+
+reduce
+(if false false true)
+[]
+----
+true
+
+reduce
+(if false #0 false)
+[bool]
+----
+false
+
+reduce
+(if false #0 true)
+[bool]
+----
+true
+
+reduce
+(if false false #0)
+[bool]
+----
+#0
+
+reduce
+(if false true #0)
+[bool]
+----
+#0
+
+### Regression test for #9995.
+### The inner if statement can be replaced by its `condition`, but we must
+### ensure that we keep the type of the `then` and `els` clauses.
+### The type of the error should be int32 instead of bool.
+
+reduce
+(if
+    (call_binary eq #0 1)
+    1
+    (if
+        (call_binary eq #0 (call_binary div_int64 1 0))
+        1
+        1
+    )
+)
+[int64]
+----
+if (#0 = 1) then {1} else {(err: division by zero)}
+
 ## undistribute_and/or works despite multiple copies of the same expression in
 ## the intersection
 
@@ -339,6 +569,7 @@ canonicalize-join
     (call_binary add_int32 #0 #0)
     (call_binary add_int32 #0 (call_binary add_int32 #0 #0))
 ]]
+[int32]
 ----
 [(#0 && (#0 + #0)) (#0 + #0) (#0 + (#0 + #0))]
 
@@ -353,6 +584,7 @@ canonicalize-join
         (call_binary add_int32 (call_binary add_int32 #3 #3) #3)
     ]
 ]
+[int32 int32 int32 int32]
 ----
 [#0 #3]
 [#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
@@ -369,6 +601,7 @@ canonicalize-join
     ]
     [(call_binary add_int32 #2 #2) (call_binary mul_int32 #4 #5)]
 ]
+[int32 int32 int32 int32 int32 int32]
 ----
 [#0 #3]
 [#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
@@ -391,12 +624,15 @@ canonicalize-join
     [(call_binary add_int32 #3 #3) (call_binary mul_int32 #4 #5) (call_binary
     sub_int32 (call_binary add_int32 #3 #3) (call_binary mul_int32 #4 #5))]
 ]
+[int32 int32 int32 int32 int32 int32]
 ----
 [#0 #3]
 [#1 (#0 + #0) (#1 + #0) (#1 + #1) ((#2 + #2) + #1) (#1 - #1) (#4 * #5)]
 
 canonicalize-join
-[[#0 #3 #3] [(call_binary add_int32 #0 #0) #1] [(call_binary add_int32 #3 #3) #2]]
+[[#0 #3 #3] [(call_binary add_int32 #0 #0) #1] [(call_binary add_int32 #3 #3)
+#2]]
+[int32 int32 int32 int32]
 ----
 [#0 #3]
 [#1 #2 (#0 + #0)]
@@ -406,6 +642,7 @@ canonicalize-join
 
 canonicalize-join
 [[#0 #0 #3] [(call_binary add_int32 #0 #0) (call_binary add_int32 #3 #3)]]
+[int32 int32 int32 int32]
 ----
 [#0 #3]
 
@@ -419,6 +656,7 @@ canonicalize-join
     (call_unary neg_int32 (call_unary neg_int32 (call_unary cast_int16_to_int32
     #0)))
 ]]
+[int32]
 ----
 [-(i16toi32(#0)) i16toi32(#0)]
 
@@ -430,6 +668,7 @@ canonicalize-join
     (4 int32)
     (call_binary add_int32 #1 (4 int32))
 ]]
+[int32 int32]
 ----
 [#0 4 (#1 + 4)]
 
@@ -440,10 +679,11 @@ canonicalize-join
     [(call_unary neg_int32 #0) (call_unary neg_int32 #1) (call_unary neg_int32 (4 int32))]
     [(call_binary add_int32 #1 (call_unary neg_int32 #1)) #3]
 ]
+[int32 int32 int32 int32]
 ----
 [#0 4]
-[#3 (#1 + -(4))]
-[-(#1) -(4)]
+[#3 (#1 + -4)]
+[-4 -(#1)]
 
 canonicalize-join
 [
@@ -452,7 +692,159 @@ canonicalize-join
     [(call_unary neg_int32 #1) (call_unary neg_int32 (4 int32))]
     [(call_binary add_int32 #1 (call_unary neg_int32 #1)) #3]
 ]
+[int32 int32 int32 int32]
 ----
 [#0 4]
-[#3 (#1 + -(4))]
-[-(#1) -(4)]
+[#3 (#1 + -4)]
+[-4 -(#1)]
+
+# expressions in join equivalences get reduced after simpler equivalent
+# expressions are substituted
+
+## constant folding
+
+canonicalize-join
+[
+    [0 (call_binary add_int64 0 #0)]
+    [1234 (call_binary add_int64 (call_binary add_int64 0 #0) 0)]
+]
+[int64]
+----
+[0 1234 (0 + #0)]
+
+## consecutive nots cancel each other
+
+canonicalize-join
+[
+    [(call_unary not #0) (call_binary (is_regexp_match true) #1 #2)]
+    [false (call_unary not (call_binary (is_regexp_match true) #1 #2))]
+]
+[bool string string]
+----
+[#0 false]
+[true (#1 ~* #2)]
+
+canonicalize-join
+[
+    [(call_unary not #0) (call_binary or #0 #1)]
+    [false (call_unary not (call_binary or #0 #1))]
+]
+[bool bool]
+----
+[#0 false]
+[#1 true]
+
+## demorgans
+
+canonicalize-join
+[
+    [ (call_binary and #2 #3) (call_variadic coalesce [#0 #1 false])]
+    [ #0 (call_binary or (call_variadic coalesce [#0 #1 false]) (call_binary and #2 #4))]
+]
+[bool bool bool bool bool]
+----
+[#0 (#2 && (#3 || #4))]
+[(#2 && #3) coalesce(#0, #1, false)]
+
+## decompose is_null
+
+canonicalize-join
+[
+    [ (call_binary add_int32 #2 #3) (call_variadic coalesce [#0 #1 false])]
+    [ #0 (call_unary is_null (call_variadic coalesce [#0 #1 false]))]
+]
+[int32 int32 int32 int32]
+----
+[#0 (isnull(#2) || isnull(#3))]
+[(#2 + #3) coalesce(#0, #1, false)]
+
+# impossible condition detection during predicate canonicalization produces
+# reliable output regardless of the order of the input predicates
+canonicalize
+[(call_binary eq #0 10) (call_unary is_null #0)]
+[int64]
+----
+false
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #1))
+        (call_binary eq #0 #1))
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #2))
+        (call_binary eq #0 #2))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #2))
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #1))
+        (call_binary eq #0 #1))
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #2))
+        (call_binary eq #0 #2))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #2))
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #1)
+            (call_unary is_null #2))
+        (call_binary eq #1 #2))
+    (call_binary eq #0 #1)
+    (call_binary eq #0 #2)
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
+(#1 = #2)
+
+# check that predicates are sorted by their complexity
+canonicalize
+[
+    (call_binary eq (call_binary add_int32 #0 (1 int32)) #1)
+    (call_binary lt #0 (2147483647 int32))
+]
+[int32 int32]
+----
+(#0 < 2147483647)
+(#1 = (#0 + 1))
+
+canonicalize
+[
+    (call_binary lt (call_binary add_int32 #0 (1 int32)) #2)
+    (call_binary lt (call_binary add_int32 #0 (1 int32)) (2147483647 int32))
+    (call_binary eq #0 #1)
+]
+[int32 int32 int32]
+----
+(#0 = #1)
+((#0 + 1) < 2147483647)
+((#0 + 1) < #2)

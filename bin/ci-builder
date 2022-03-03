@@ -11,21 +11,29 @@
 #
 # ci-builder — builds and releases CI builder image.
 
+# NOTE(benesch): this script is reaching the breaking point in Bash. We should
+# rewrite it in Python before adding much more logic to it.
+
 set -euo pipefail
+
+NIGHTLY_RUST_DATE=2021-11-29
 
 cd "$(dirname "$0")/.."
 
+. misc/shlib/shlib.bash
+
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <build|push|run> <stable|nightly> [<args>...]
+    echo "usage: $0 <command> <stable|nightly> [<args>...]
 
 Manages the ci-builder Docker image, which contains the dependencies required
 to build, test, and deploy the code in this repository.
 
 Commands:
-    run      run a command in the ci-builder image
-    build    build and tag new version of the ci-builder image
-    push     push a new version of the ci-builder image to Docker Hub
+    run         run a command in the ci-builder image
+    build       build the ci-builder image locally
+    exists      reports via the exit code whether the ci-builder image exists
+    root-shell  open a root shell to the most recently started ci-builder container
 
 For details, consult ci/builder/README.md."
     exit 1
@@ -36,11 +44,10 @@ channel=$1 && shift
 
 rust_date=
 case "$channel" in
-    stable) rust_version=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" rust-toolchain.toml) ;;
-    nightly) rust_version=nightly ;;
-    nightly-*)
-        rust_date=/${channel#nightly-}
+    stable) rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' src/materialized/Cargo.toml) ;;
+    nightly)
         rust_version=nightly
+        rust_date=/$NIGHTLY_RUST_DATE
         ;;
     *)
         printf "unknown rust channel %q\n" "$channel"
@@ -48,9 +55,12 @@ case "$channel" in
         ;;
 esac
 
-tag_file=ci/builder/${channel%%-*}.stamp
+arch_gcc=${MZ_DEV_CI_BUILDER_ARCH:-$(arch_gcc)}
+arch_go=$(arch_go "$arch_gcc")
 
-rust_components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
+cid_file=ci/builder/.${channel%%-*}.cidfile
+
+rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu
 if [[ $rust_version = nightly ]]; then
     rust_components+=,miri-preview
 else
@@ -63,48 +73,86 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
-    cp misc/python/requirements{,-dev}.txt ci/builder
-    docker build --pull \
+    docker buildx build --pull \
+        --cache-from=materialize/ci-builder:"$cache_tag" \
+        --cache-to=type=inline,mode=max \
+        --build-arg "ARCH_GCC=$arch_gcc" \
+        --build-arg "ARCH_GO=$arch_go" \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
-        --tag materialize/ci-builder \
+        --tag materialize/ci-builder:"$tag" \
+        --tag materialize/ci-builder:"$cache_tag" \
         "$@" ci/builder
 }
 
-tag=$rust_version-$(date +%Y%m%d-%H%M%S)
+shasum=sha1sum
+if ! command_exists "$shasum"; then
+    shasum=shasum
+fi
+if ! command_exists "$shasum"; then
+    die "error: ci-builder: unable to find suitable SHA-1 tool; need either sha1sum or shasum"
+fi
+
+# The tag is the base32 encoded hash of the ci/builder directory. This logic is
+# similar to what mzbuild uses. Unfortunately we can't use mzbuild itself due to
+# a chicken-and-egg problem: mzbuild depends on the Python packages that are
+# *inside* this image. See materialize.git.expand_globs in the Python code for
+# details on this computation.
+files=$(cat \
+        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
+        <(git ls-files --others --exclude-standard -z ci/builder) \
+    | LC_ALL=C sort -z \
+    | xargs -0 sha1sum)
+files+="
+date:$rust_date
+arch:$arch_gcc
+"
+tag=$(echo "$files" | python3 -c '
+import base64
+import hashlib
+import sys
+
+input = sys.stdin.buffer.read()
+hash = base64.b32encode(hashlib.sha1(input).digest())
+print(hash.decode())
+')
+cache_tag=cache-$rust_version-$arch_go
+
+
 case "$cmd" in
     build)
-        build --tag materialize/ci-builder:"$tag"
-        echo "$tag" > "$tag_file"
+        build "$@"
+        ;;
+    exists)
+        docker manifest inspect materialize/ci-builder:"$tag" &> /dev/null
         ;;
     push)
-        build --tag materialize/ci-builder:"$tag"
+        build "$@"
         docker push materialize/ci-builder:"$tag"
-        echo "$tag" > "$tag_file"
+        docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
+        mkdir -p target-xcompile
         args=(
+            --cidfile "$cid_file"
             --rm --interactive
             --init
+            --volume "$(pwd)/target-xcompile:/mnt/build"
             --volume "$(pwd):$(pwd)"
             --workdir "$(pwd)"
             --env AWS_ACCESS_KEY_ID
             --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
-            --env BUILDKITE
-            --env BUILDKITE_AGENT_ACCESS_TOKEN
-            --env BUILDKITE_BRANCH
-            --env BUILDKITE_BUILD_ID
-            --env BUILDKITE_BUILD_NUMBER
-            --env BUILDKITE_COMMIT
-            --env BUILDKITE_JOB_ID
-            --env BUILDKITE_TAG
             --env CI
+            --env GITHUB_TOKEN
             --env GPG_KEY
             --env PYPI_TOKEN
         )
+        for env in $(printenv | grep '^BUILDKITE' | sed 's/=.*//'); do
+            args+=(--env "$env")
+        done
         if [[ -t 1 ]]; then
             args+=(--tty)
         fi
@@ -148,7 +196,17 @@ case "$cmd" in
         else
             args+=(--user "$(id -u):1001")
         fi
-        docker run "${args[@]}" "materialize/ci-builder:$(<"$tag_file")" "$@"
+        if [[ "${CI_BUILDER_SCCACHE:-}" ]]; then
+            args+=(
+                --env "RUSTC_WRAPPER=sccache"
+                --env SCCACHE_BUCKET
+            )
+        fi
+        rm -f "$cid_file"
+        docker run "${args[@]}" "materialize/ci-builder:$tag" "$@"
+        ;;
+    root-shell)
+        docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
         ;;
     *)
         printf "unknown command %q\n" "$cmd"

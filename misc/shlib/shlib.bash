@@ -114,15 +114,15 @@ ci_init() {
 }
 
 ci_collapsed_heading() {
-    echo "---" "$@"
+    echo "---" "$@" >&2
 }
 
 ci_uncollapsed_heading() {
-    echo "+++" "$@"
+    echo "+++" "$@" >&2
 }
 
 ci_uncollapse_current_section() {
-    echo "^^^ +++"
+    echo "^^^ +++" >&2
 }
 
 ci_try_passed=0
@@ -163,6 +163,33 @@ mapfile_shim() {
         val+=("$line")
     done
     declare -ag "${1:-MAPFILE}=($(printf "%q " "${val[@]}"))"
+}
+
+# arch_gcc
+#
+# Computes the host architecture using GCC nomenclature: x86_64 or aarch64.
+# Dies if the host architecture is unknown.
+arch_gcc() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|aarch64) echo "$arch" ;;
+        arm64) echo aarch64 ;;
+        *) die "unknown host architecture \"$arch\"" ;;
+    esac
+}
+
+# arch_go [ARCH-GCC]
+#
+# Converts ARCH-GCC to Go nomenclature: amd64 or arm64. If ARCH-GCC is not
+# specified, uses the host architecture.
+arch_go() {
+    local arch=${1:-$(arch_gcc)}
+    case "$arch" in
+        x86_64) echo amd64 ;;
+        aarch64) echo arm64 ;;
+        *) die "unknown host architecture \"$arch\"" ;;
+    esac
 }
 
 ########################################

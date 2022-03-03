@@ -14,30 +14,37 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::env;
+use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use compile_time_run::run_command_str;
-use coord::PersistConfig;
 use futures::StreamExt;
+use mz_coord::PersistConfig;
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::FronteggAuthentication;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 
-use build_info::BuildInfo;
-use coord::LoggingConfig;
-use ore::metrics::MetricsRegistry;
-use pid_file::PidFile;
+use mz_build_info::BuildInfo;
+use mz_coord::LoggingConfig;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
+use mz_ore::option::OptionExt;
+use mz_ore::task;
+use mz_pid_file::PidFile;
 
 use crate::mux::Mux;
 use crate::server_metrics::Metrics;
 
-mod http;
-mod mux;
-mod server_metrics;
-mod telemetry;
+pub mod http;
+pub mod mux;
+pub mod server_metrics;
+pub mod telemetry;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -110,15 +117,20 @@ pub struct Config {
     pub third_party_metrics_listen_addr: Option<SocketAddr>,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
+    /// Materialize Cloud configuration to enable Frontegg JWT user authentication.
+    pub frontegg: Option<FronteggAuthentication>,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
 
+    // === AWS options. ===
+    /// An [external ID] to be supplied to all AWS AssumeRole operations.
+    ///
+    /// [external id]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
+    pub aws_external_id: AwsExternalId,
+
     // === Mode switches. ===
-    /// An optional symbiosis endpoint. See the
-    /// [`symbiosis`](../symbiosis/index.html) crate for details.
-    pub symbiosis_url: Option<String>,
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
     /// Whether to enable catalog-only mode.
@@ -198,11 +210,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 builder.set_private_key_file(&tls_config.key, SslFiletype::PEM)?;
                 builder.build().into_context()
             };
-            let pgwire_tls = pgwire::TlsConfig {
+            let pgwire_tls = mz_pgwire::TlsConfig {
                 context: context.clone(),
                 mode: match tls_config.mode {
-                    TlsMode::Require | TlsMode::VerifyCa { .. } => pgwire::TlsMode::Require,
-                    TlsMode::VerifyFull { .. } => pgwire::TlsMode::VerifyUser,
+                    TlsMode::Require | TlsMode::VerifyCa { .. } => mz_pgwire::TlsMode::Require,
+                    TlsMode::VerifyFull { .. } => mz_pgwire::TlsMode::VerifyUser,
                 },
             };
             let http_tls = http::TlsConfig {
@@ -217,27 +229,71 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
 
     // Attempt to acquire PID file lock.
-    let pid_file = PidFile::open(config.data_directory.join("materialized.pid"))?;
+    let pid_file =
+        PidFile::open(config.data_directory.join("materialized.pid")).map_err(|e| match e {
+            // Enhance error with some materialized-specific details.
+            mz_pid_file::Error::AlreadyRunning { pid } => anyhow!(
+                "another materialized process (PID {}) is running with the same data directory\n\
+                data directory: {}\n",
+                pid.display_or("<unknown>"),
+                fs::canonicalize(&config.data_directory)
+                    .unwrap_or_else(|_| config.data_directory.clone())
+                    .display(),
+            ),
+            e => e.into(),
+        })?;
 
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
-    // Initialize coordinator.
-    let (coord_handle, coord_client) = coord::serve(coord::Config {
+    // Load the coordinator catalog from disk.
+    let coord_storage = mz_coord::catalog::storage::Connection::open(
+        &config.data_directory.join("catalog"),
+        Some(config.experimental_mode),
+    )?;
+
+    // Initialize persistence runtime.
+    let persister = config
+        .persist
+        .init(
+            // Safe to use the cluster ID as the reentrance ID because
+            // `materialized` can only run as a single node.
+            coord_storage.cluster_id(),
+            BUILD_INFO,
+            &config.metrics_registry,
+        )
+        .await?;
+
+    // Initialize dataflow server.
+    let (dataflow_server, dataflow_client) = mz_dataflow::serve(mz_dataflow::Config {
         workers,
-        timely_worker: config.timely_worker,
-        symbiosis_url: config.symbiosis_url.as_deref(),
+        timely_config: timely::Config {
+            communication: timely::CommunicationConfig::Process(workers),
+            worker: timely::WorkerConfig::default(),
+        },
+        experimental_mode: config.experimental_mode,
+        now: SYSTEM_TIME.clone(),
+        metrics_registry: config.metrics_registry.clone(),
+        persister: persister.runtime.clone(),
+        aws_external_id: config.aws_external_id.clone(),
+    })?;
+
+    // Initialize coordinator.
+    let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
+        dataflow_client: Box::new(dataflow_client),
         logging: config.logging,
-        data_directory: &config.data_directory,
+        storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
         disable_user_indexes: config.disable_user_indexes,
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
+        aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
-        persist: config.persist,
+        persister,
+        now: SYSTEM_TIME.clone(),
     })
     .await?;
 
@@ -248,8 +304,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Listen on the third-party metrics port if we are configured for it.
     if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
-        tokio::spawn({
-            let server = http::ThirdPartyServer::new(metrics_registry.clone(), metrics.clone());
+        task::spawn(|| "metrics_server", {
+            let server = http::ThirdPartyServer::new(metrics_registry.clone());
             async move {
                 server.serve(third_party_addr).await;
             }
@@ -264,16 +320,18 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // should be rejected. Once all existing user connections have gracefully
     // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
-    tokio::spawn({
-        let pgwire_server = pgwire::Server::new(pgwire::Config {
+    task::spawn(|| "pgwire_server", {
+        let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
             metrics_registry: &metrics_registry,
+            frontegg: config.frontegg.clone(),
         });
         let http_server = http::Server::new(http::Config {
             tls: http_tls,
+            frontegg: config.frontegg,
             coord_client: coord_client.clone(),
-            metrics_registry: metrics_registry,
+            metrics_registry,
             global_metrics: metrics,
             pgwire_metrics: pgwire_server.metrics(),
         });
@@ -295,9 +353,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             domain: telemetry.domain,
             interval: telemetry.interval,
             cluster_id: coord_handle.cluster_id(),
+            workers,
             coord_client,
         };
-        tokio::spawn(async move { telemetry::report_loop(config).await });
+        task::spawn(|| "telemetry_loop", async move {
+            telemetry::report_loop(config).await
+        });
     }
 
     Ok(Server {
@@ -305,6 +366,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         _pid_file: pid_file,
         _drain_trigger: drain_trigger,
         _coord_handle: coord_handle,
+        _dataflow_server: dataflow_server,
     })
 }
 
@@ -314,7 +376,8 @@ pub struct Server {
     _pid_file: PidFile,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
-    _coord_handle: coord::Handle,
+    _coord_handle: mz_coord::Handle,
+    _dataflow_server: mz_dataflow::Server,
 }
 
 impl Server {

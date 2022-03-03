@@ -69,6 +69,7 @@ You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
 
 - [`date`](../date) (by assignment)
 - [`text`](../text) (by assignment)
+- [`time`](../time) (by assignment)
 
 #### To `timestamp` or `timestamptz`
 

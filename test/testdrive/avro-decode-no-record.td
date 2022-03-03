@@ -8,18 +8,23 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that attempting to decode something that is not a record results in a proper error
+# Decoding a schema that is not a record results in a relation with a single column
 #
 
-$ set no-record={"type": "map", "values" : "int" }
+$ set no-record
+"int"
 
 $ kafka-create-topic topic=avro-decode-no-record
 
 $ kafka-ingest format=avro topic=avro-decode-no-record schema=${no-record} timestamp=1
-{"f1":123}
+123
 
-! CREATE MATERIALIZED SOURCE avro_decode_no_record
+> CREATE MATERIALIZED SOURCE avro_decode_no_record
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-no-record-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${no-record}'
   ENVELOPE NONE
-validating avro value schema: row schemas must be records, got: Map(Piece(Int))
+
+> SHOW COLUMNS FROM avro_decode_no_record
+name       nullable  type
+----------------------------
+\?column?  false     integer

@@ -6,7 +6,10 @@ menu:
     parent: 'sql-functions'
 ---
 
-`date_trunc` returns a [`timestamp`](../../types/timestamp) with the "floor value" of the specified time component, i.e. the largest time component less than or equal to the provided value.
+`date_trunc` computes _ts_val_'s "floor value" of the specified time component,
+i.e. the largest time component less than or equal to the provided value.
+
+To align values along arbitrary values, see [`date_bin`].
 
 ## Signatures
 
@@ -14,11 +17,11 @@ menu:
 
 Parameter | Type | Description
 ----------|------|------------
-_ts&lowbar;val_ | [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz) | The value you want to truncate.
+_ts_val_ | [`timestamp`], [`timestamp with time zone`] | The value you want to truncate.
 
 ### Return value
 
-`date_trunc` returns a [`timestamp`](../../types/float) value.
+`date_trunc` returns the same type as _ts_val_.
 
 ## Examples
 
@@ -40,3 +43,7 @@ SELECT date_trunc('year', TIMESTAMP '2019-11-26 15:56:46.241150') AS year_trunc;
 -------------------------------
  2019-01-01 00:00:00.000000000
 ```
+
+[`date_bin`]: ../date-bin
+[`timestamp`]: ../../types/timestamp
+[`timestamp with time zone`]: ../../types/timestamptz

@@ -19,14 +19,14 @@ use askama::Template;
 use cfg_if::cfg_if;
 use hyper::{Body, Request, Response};
 
-use prof::{ProfStartTime, StackProfile};
+use mz_prof::{ProfStartTime, StackProfile};
 
 use crate::http::util;
 use crate::BUILD_INFO;
 
 pub async fn handle_prof(
     req: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     cfg_if! {
         if #[cfg(target_os = "macos")] {
@@ -69,7 +69,7 @@ async fn time_prof<'a>(
         if #[cfg(target_os = "macos")] {
             ctl_lock = ();
         } else {
-            ctl_lock = if let Some(ctl) = prof::jemalloc::PROF_CTL.as_ref() {
+            ctl_lock = if let Some(ctl) = mz_prof::jemalloc::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
                 borrow.deactivate()?;
                 Some(borrow)
@@ -82,7 +82,7 @@ async fn time_prof<'a>(
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
     let stacks =
-        unsafe { prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
+        unsafe { mz_prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
     flamegraph(stacks, "CPU Time Flamegraph", false, &[])
@@ -94,7 +94,7 @@ fn flamegraph(
     display_bytes: bool,
     extras: &[&str],
 ) -> anyhow::Result<Response<Body>> {
-    let collated = prof::collate_stacks(stacks);
+    let collated = mz_prof::collate_stacks(stacks);
     let data_json = RefCell::new(String::new());
     collated.dfs(
         |node| {
@@ -177,12 +177,13 @@ mod enabled {
     use std::io::{BufReader, Read};
     use std::sync::Arc;
 
+    use hyper::http::HeaderValue;
     use hyper::{header, Body, Method, Request, Response, StatusCode};
-    use prof::symbolicate;
+    use mz_prof::symbolicate;
     use tokio::sync::Mutex;
     use url::form_urlencoded;
 
-    use prof::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
+    use mz_prof::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
@@ -205,10 +206,11 @@ mod enabled {
     }
 
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
+        let accept = req.headers().get("Accept").cloned();
         match (req.method(), &*PROF_CTL) {
-            (&Method::GET, Some(prof_ctl)) => handle_get(req.uri().query(), prof_ctl).await,
+            (&Method::GET, Some(prof_ctl)) => handle_get(req.uri().query(), accept, prof_ctl).await,
 
-            (&Method::POST, Some(prof_ctl)) => handle_post(req, prof_ctl).await,
+            (&Method::POST, Some(prof_ctl)) => handle_post(req, accept, prof_ctl).await,
 
             _ => super::disabled::handle(req).await,
         }
@@ -216,6 +218,7 @@ mod enabled {
 
     pub async fn handle_post(
         body: Request<Body>,
+        accept: Option<HeaderValue>,
         prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
     ) -> Result<Response<Body>, anyhow::Error> {
         let query = body.uri().query().map(str::to_string);
@@ -236,14 +239,14 @@ mod enabled {
                     let mut borrow = prof_ctl.lock().await;
                     borrow.activate()?;
                 };
-                handle_get(query.as_ref().map(String::as_str), prof_ctl).await
+                handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await
             }
             "deactivate" => {
                 {
                     let mut borrow = prof_ctl.lock().await;
                     borrow.deactivate()?;
                 };
-                handle_get(query.as_ref().map(String::as_str), prof_ctl).await
+                handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await
             }
             "dump_file" => {
                 let mut borrow = prof_ctl.lock().await;
@@ -258,14 +261,7 @@ mod enabled {
                     .body(Body::from(s))
                     .unwrap())
             }
-            "dump_stats" => {
-                let mut borrow = prof_ctl.lock().await;
-                let s = borrow.dump_stats()?;
-                Ok(Response::builder()
-                    .header(header::CONTENT_TYPE, "text/plain")
-                    .body(Body::from(s))
-                    .unwrap())
-            }
+            "dump_stats" => handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await,
             "dump_symbolicated_file" => {
                 let mut borrow = prof_ctl.lock().await;
                 let f = borrow.dump()?;
@@ -338,12 +334,14 @@ mod enabled {
 
     pub async fn handle_get(
         query: Option<&str>,
+        accept: Option<HeaderValue>,
         prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
     ) -> anyhow::Result<Response<Body>> {
         match query {
             Some("dump_stats") => {
+                let json = accept.map_or(false, |accept| accept.as_bytes() == b"application/json");
                 let mut borrow = prof_ctl.lock().await;
-                let s = borrow.dump_stats()?;
+                let s = borrow.dump_stats(json)?;
                 Ok(Response::builder()
                     .header(header::CONTENT_TYPE, "text/plain")
                     .body(Body::from(s))

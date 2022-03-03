@@ -51,9 +51,14 @@ def clean_up_s3() -> None:
             )
             continue
         print("Deleting bucket {} (age={})".format(desc["Name"], age))
-        bucket = boto3.resource("s3").Bucket(desc["Name"])
-        bucket.objects.all().delete()
-        bucket.delete()
+        try:
+            bucket = boto3.resource("s3").Bucket(desc["Name"])
+            bucket.objects.all().delete()
+            bucket.delete()
+        except client.exceptions.NoSuchBucket:
+            print(
+                f"Couldn't delete {desc['Name']}: NoSuchBucket. This might be a transient issue."
+            )
 
 
 def clean_up_sqs() -> None:
@@ -90,11 +95,44 @@ def clean_up_ec2() -> None:
         print("No instances to delete")
 
 
+def clean_up_iam() -> None:
+    client = boto3.client("iam")
+    response = client.list_roles()
+    roles = response.get("Roles", [])
+
+    roles = [r for r in roles if r["RoleName"].startswith("testdrive")]
+
+    if not roles:
+        print("No testdrive IAM roles found")
+        return
+
+    now = datetime.utcnow().timestamp()
+
+    print(f"Found {len(roles)} candidate IAM roles for deletion")
+    for role in roles:
+        used = role.get("RoleLastUsed", {}).get("LastUsedDate")
+        if used is None:
+            used = role["CreateDate"]
+
+        role_name = role["RoleName"]
+        expiration = (used + MAX_AGE).timestamp()
+        if now > expiration:
+            policy_response = client.list_role_policies(RoleName=role_name)
+            for policy_name in policy_response.get("PolicyNames", []):
+                client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+
+            client.delete_role(RoleName=role_name)
+            print(f"Deleted role {role_name}")
+        else:
+            print(f"Skipping role {role_name}")
+
+
 def main() -> None:
     clean_up_kinesis()
     clean_up_s3()
     clean_up_sqs()
     clean_up_ec2()
+    clean_up_iam()
 
 
 if __name__ == "__main__":

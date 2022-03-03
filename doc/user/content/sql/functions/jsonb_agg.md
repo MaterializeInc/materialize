@@ -8,6 +8,11 @@ menu:
 
 The `jsonb_agg(expression)` function aggregates all values indicated by its expression,
 returning the values (including nulls) as a [`jsonb`](/sql/types/jsonb) array.
+The input values to the aggregate can be [filtered](../filters).
+
+## Syntax
+
+{{< diagram "jsonb-agg.svg" >}}
 
 ## Signatures
 
@@ -18,6 +23,9 @@ _expression_ | [jsonb](../../types) | The values you want aggregated.
 ### Return value
 
 `jsonb_agg` returns the aggregated values as a `jsonb` array.
+
+This function always executes on the data from `value` as if it were sorted in ascending order before the function call. Any specified ordering is
+ignored. If you need to perform aggregation in a specific order, you must specify `ORDER BY` within the aggregate function call itself. Otherwise incoming rows are not guaranteed any order.
 
 ## Details
 
@@ -34,7 +42,7 @@ on top of that. That pattern is illustrated in the following statements:
 
 ```sql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
-CREATE VIEW bar AS jsonb_agg(foo_view.bar);
+CREATE VIEW bar AS SELECT jsonb_agg(foo_view.bar) FROM foo_view;
 ```
 
 ## Examples

@@ -1,0 +1,16 @@
+[package]
+name = "mz-process-collector"
+description = "Customized collection of Prometheus process metrics."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.58.0"
+publish = false
+
+[dependencies]
+lazy_static = "1.4.0"
+libc = "0.2.119"
+mz-ore = { path = "../ore" }
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = { version = "0.12.0", default-features = false }

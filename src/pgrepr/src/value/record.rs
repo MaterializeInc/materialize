@@ -10,7 +10,6 @@
 // TODO(benesch): remove this module if upstream adds implementations of FromSql
 // to tuples directly: https://github.com/sfackler/rust-postgres/pull/626.
 
-use std::convert::TryFrom;
 use std::error::Error;
 
 use postgres_types::{private, FromSql, Kind, Type, WrongType};

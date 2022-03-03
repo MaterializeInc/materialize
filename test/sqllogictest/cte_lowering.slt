@@ -1,0 +1,799 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test that correlated CTE are lowered properly
+
+mode cockroach
+
+statement ok
+CREATE TABLE x (a int)
+
+statement ok
+INSERT INTO x VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE y (a int)
+
+statement ok
+INSERT INTO y VALUES (2), (3), (4)
+
+# Check that CTEs aren't inlined during planning
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH t AS (SELECT * FROM y WHERE a < 3)
+  SELECT * FROM t NATURAL JOIN t a;
+----
+%0 = Let t (l0) =
+| Get materialize.public.y (u3)
+| Filter (#0 < 3)
+
+%1 =
+| InnerJoin %0 %0 on (true && (#0 = #1))
+| Project (#0)
+
+EOF
+
+# Check that CTE defined in outer context is explained properly
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH t AS (SELECT * FROM y WHERE a < 3)
+  SELECT * FROM y WHERE (select a from t) < a;
+----
+%0 = Let t (l0) =
+| Get materialize.public.y (u3)
+| Filter (#0 < 3)
+
+%1 =
+| Get materialize.public.y (u3)
+| Filter (select(%2) < #0)
+| |
+| | %2 =
+| | | Get t (l0) (%0)
+| |
+
+EOF
+
+# Check the body of a CTE is only lowered once
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+WITH t AS (SELECT * FROM y WHERE a < 3)
+  SELECT * FROM t NATURAL JOIN t a;
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.y (u3)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Filter (#0 < 3)
+
+%3 = Let l2 =
+| Join %2 %2
+| | implementation = Unimplemented
+| Project (#0, #1)
+| Filter (true && (#0 = #1))
+
+%4 =
+| Get %3 (l2)
+| Project (#0)
+
+EOF
+
+# Correlated CTE inside a LATERAL join operand
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM a);
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u1)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u3)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+| Filter (#1 < #0)
+| Reduce group=(#0)
+| | agg max(#1)
+
+%6 =
+| Get %5 (l3)
+| Distinct group=(#0)
+| Negate
+
+%7 =
+| Get %3 (l2)
+| Distinct group=(#0)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %3 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%10 =
+| Constant (null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+
+%12 = Let l4 =
+| Union %5 %11
+
+%13 =
+| Get %12 (l4)
+
+%14 =
+| Join %2 %13 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2)
+| Filter true
+
+EOF
+
+query II
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM a);
+----
+1  NULL
+2  NULL
+3  2
+
+# Reference of a correlated CTE applied to an outer relation that has the same cardinality as
+# the one the CTE was applied to.
+# When the CTE is lowered, the outer relation is `Get x`. But then, the reference of the CTE
+# is applied to `Distinct(Join(Get x, Get y), x.*)` which has the same cardinality as `Get x`.
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) as (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT (SELECT m FROM a) FROM y) b;
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u1)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u3)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+| Filter (#1 < #0)
+| Reduce group=(#0)
+| | agg max(#1)
+
+%6 =
+| Get %5 (l3)
+| Distinct group=(#0)
+| Negate
+
+%7 =
+| Get %3 (l2)
+| Distinct group=(#0)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %3 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%10 =
+| Constant (null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+
+%12 = Let l4 =
+| Union %5 %11
+
+%13 =
+| Get materialize.public.y (u3)
+
+%14 = Let l5 =
+| Join %3 %13
+| | implementation = Unimplemented
+
+%15 = Let l6 =
+| Get %14 (l5)
+| Distinct group=(#0, #1)
+
+%16 = Let l7 =
+| Get %15 (l6)
+| Distinct group=(#0)
+
+%17 = Let l8 =
+| Join %16 %12 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2)
+
+%18 =
+| Get %17 (l8)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%19 = Let l9 =
+| Union %17 %18
+
+%20 =
+| Get %19 (l9)
+| Distinct group=(#0)
+| Negate
+
+%21 =
+| Get %16 (l7)
+| Distinct group=(#0)
+
+%22 =
+| Union %20 %21
+
+%23 =
+| Join %22 %16 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%24 =
+| Constant (null)
+
+%25 =
+| Join %23 %24
+| | implementation = Unimplemented
+
+%26 =
+| Union %19 %25
+
+%27 =
+| Join %15 %26 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3)
+
+%28 =
+| Join %14 %27 (= #0 #2) (= #1 #3)
+| | implementation = Unimplemented
+| Map #4
+| Project (#0, #1, #5)
+| Project (#0, #2)
+
+%29 =
+| Join %2 %28 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2)
+| Filter true
+
+EOF
+
+# Correlated CTE used at different scope level: offset 0 and offset 1 (RHS of the join)
+# Note: the CTE is represented by %12 (l4)
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM a INNER JOIN a b ON a.m = b.m);
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u1)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u3)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+| Filter (#1 < #0)
+| Reduce group=(#0)
+| | agg max(#1)
+
+%6 =
+| Get %5 (l3)
+| Distinct group=(#0)
+| Negate
+
+%7 =
+| Get %3 (l2)
+| Distinct group=(#0)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %3 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%10 =
+| Constant (null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+
+%12 = Let l4 =
+| Union %5 %11
+
+%13 = Let l5 =
+| Join %12 %12 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3)
+| Filter (#1 = #2)
+
+%14 =
+| Get %13 (l5)
+
+%15 =
+| Join %2 %14 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2, #3)
+| Filter true
+
+EOF
+
+query III
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM a INNER JOIN a b ON a.m = b.m);
+----
+3  2  2
+
+query III
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) as (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM a INNER JOIN a b ON true);
+----
+1  NULL  NULL
+2  NULL  NULL
+3  2  2
+
+# Correlated CTE used at different scope level: offset 0 and offset 3 (subquery in the
+# selection list of a derived relation in the RHS of the join)
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) as (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM a INNER JOIN (SELECT (SELECT m FROM a) FROM y) b ON true);
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u1)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u3)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+| Filter (#1 < #0)
+| Reduce group=(#0)
+| | agg max(#1)
+
+%6 =
+| Get %5 (l3)
+| Distinct group=(#0)
+| Negate
+
+%7 =
+| Get %3 (l2)
+| Distinct group=(#0)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %3 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%10 =
+| Constant (null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+
+%12 = Let l4 =
+| Union %5 %11
+
+%13 =
+| Get materialize.public.y (u3)
+
+%14 = Let l5 =
+| Join %3 %13
+| | implementation = Unimplemented
+
+%15 = Let l6 =
+| Get %14 (l5)
+| Distinct group=(#0, #1)
+
+%16 = Let l7 =
+| Get %15 (l6)
+| Distinct group=(#0)
+
+%17 = Let l8 =
+| Join %16 %12 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2)
+
+%18 =
+| Get %17 (l8)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%19 = Let l9 =
+| Union %17 %18
+
+%20 =
+| Get %19 (l9)
+| Distinct group=(#0)
+| Negate
+
+%21 =
+| Get %16 (l7)
+| Distinct group=(#0)
+
+%22 =
+| Union %20 %21
+
+%23 =
+| Join %22 %16 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%24 =
+| Constant (null)
+
+%25 =
+| Join %23 %24
+| | implementation = Unimplemented
+
+%26 =
+| Union %19 %25
+
+%27 =
+| Join %15 %26 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3)
+
+%28 = Let l10 =
+| Join %14 %27 (= #0 #2) (= #1 #3)
+| | implementation = Unimplemented
+| Map #4
+| Project (#0, #1, #5)
+| Project (#0, #2)
+
+%29 = Let l11 =
+| Join %12 %28 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3)
+| Filter true
+
+%30 =
+| Get %29 (l11)
+
+%31 =
+| Join %2 %30 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2, #3)
+| Filter true
+
+EOF
+
+query III
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM a INNER JOIN (SELECT (SELECT m FROM a) FROM y) b ON true);
+----
+1  NULL  NULL
+1  NULL  NULL
+1  NULL  NULL
+2  NULL  NULL
+2  NULL  NULL
+2  NULL  NULL
+3  2  2
+3  2  2
+3  2  2
+
+# Correlated CTE used from a correlated scope
+# Note: the CTE is represented by %12 (l4)
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM y INNER JOIN LATERAL(SELECT y.a FROM x WHERE (SELECT m FROM a) > 0) ON true);
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u1)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u3)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+| Filter (#1 < #0)
+| Reduce group=(#0)
+| | agg max(#1)
+
+%6 =
+| Get %5 (l3)
+| Distinct group=(#0)
+| Negate
+
+%7 =
+| Get %3 (l2)
+| Distinct group=(#0)
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %8 %3 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%10 =
+| Constant (null)
+
+%11 =
+| Join %9 %10
+| | implementation = Unimplemented
+
+%12 = Let l4 =
+| Union %5 %11
+
+%13 =
+| Get materialize.public.y (u3)
+
+%14 = Let l5 =
+| Join %3 %13
+| | implementation = Unimplemented
+
+%15 = Let l6 =
+| Get %14 (l5)
+| Distinct group=(#1)
+
+%16 =
+| Get materialize.public.x (u1)
+
+%17 = Let l7 =
+| Join %15 %16
+| | implementation = Unimplemented
+| Filter true
+
+%18 = Let l8 =
+| Get %17 (l7)
+| Distinct group=(#0)
+
+%19 = Let l9 =
+| Join %18 %12 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2)
+
+%20 =
+| Get %19 (l9)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%21 = Let l10 =
+| Union %19 %20
+
+%22 =
+| Get %21 (l10)
+| Distinct group=(#0)
+| Negate
+
+%23 =
+| Get %18 (l8)
+| Distinct group=(#0)
+
+%24 =
+| Union %22 %23
+
+%25 =
+| Join %24 %18 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%26 =
+| Constant (null)
+
+%27 =
+| Join %25 %26
+| | implementation = Unimplemented
+
+%28 =
+| Union %21 %27
+
+%29 = Let l11 =
+| Join %17 %28 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3)
+| Filter (#2 > 0)
+| Project (#0, #1)
+
+%30 =
+| Get %29 (l11)
+| Map #0
+| Project (#0..=#2)
+| Project (#0, #2)
+
+%31 =
+| Join %14 %30 (= #1 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3)
+| Filter true
+
+%32 =
+| Join %2 %31 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0, #2, #3)
+| Filter true
+
+EOF
+
+# Check that CTEs are annotated with their names
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH a(a) AS (SELECT a FROM y),
+     b(b) AS (SELECT a FROM y),
+     x(x) AS (SELECT b FROM b)
+SELECT (WITH c(c) AS (SELECT a FROM y)
+        SELECT c FROM c where (WITH d(d) AS (SELECT c FROM c)
+                               SELECT max(d) FROM d) > 1)
+FROM (WITH e(e) AS (SELECT b FROM b)
+      SELECT e FROM e where (WITH f(f) AS (SELECT e FROM e)
+                             SELECT min(f) FROM f)
+                             < (SELECT max(x) FROM x))
+----
+%0 = Let a (l0) =
+| Get materialize.public.y (u3)
+
+%1 = Let b (l1) =
+| Get materialize.public.y (u3)
+
+%2 = Let x (l2) =
+| Get b (l1) (%1)
+
+%3 = Let e (l3) =
+| Get b (l1) (%1)
+
+%4 =
+| Get e (l3) (%3)
+| Filter (select(%6) < select(%7))
+| |
+| | %5 = Let f (l4) =
+| | | Get e (l3) (%3)
+| |
+| | %6 =
+| | | Get f (l4) (%5)
+| | | Reduce group=() min(#0)
+| |
+| |
+| | %7 =
+| | | Get x (l2) (%2)
+| | | Reduce group=() max(#0)
+| |
+| Map select(%9)
+| |
+| | %8 = Let c (l3) =
+| | | Get materialize.public.y (u3)
+| |
+| | %9 =
+| | | Get c (l3) (%8)
+| | | Filter (select(%11) > 1)
+| | | |
+| | | | %10 = Let d (l4) =
+| | | | | Get c (l3) (%8)
+| | | |
+| | | | %11 =
+| | | | | Get d (l4) (%10)
+| | | | | Reduce group=() max(#0)
+| | | |
+| |
+| Project (#1)
+
+EOF
+
+# CTEs with the same name in nested context
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH a(a) AS (SELECT a FROM y) SELECT * FROM (WITH a(a) AS (SELECT a FROM a) SELECT a FROM a);
+----
+%0 = Let a (l0) =
+| Get materialize.public.y (u3)
+
+%1 = Let a (l1) =
+| Get a (l0) (%0)
+
+%2 =
+| Get a (l1) (%1)
+
+EOF

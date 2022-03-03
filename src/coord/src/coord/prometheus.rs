@@ -11,7 +11,6 @@
 //! updates for the mz_metrics table.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::pin::Pin;
 
 use anyhow::anyhow;
@@ -21,9 +20,9 @@ use prometheus::proto::MetricType;
 use tokio::time::{self, Duration};
 use tokio_stream::wrappers::IntervalStream;
 
-use ore::metrics::MetricsRegistry;
-use ore::now;
-use repr::{Datum, Diff, Row};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{self, SYSTEM_TIME};
+use mz_repr::{Datum, Diff, Row};
 
 use crate::catalog::builtin::{
     BuiltinTable, MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS,
@@ -47,7 +46,7 @@ fn convert_metrics_to_value_rows<
     timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
-    let mut row_packer = Row::default();
+    let mut row_buf = Row::default();
     let mut rows: Vec<Row> = vec![];
     let mut metadata: Vec<Row> = vec![];
 
@@ -64,6 +63,7 @@ fn convert_metrics_to_value_rows<
                 .into_iter()
                 .map(|pair| (pair.get_name(), Datum::from(pair.get_value())))
                 .collect();
+            let mut row_packer = row_buf.packer();
             row_packer.push(Datum::from(fam.get_name()));
             row_packer.push(Datum::from(timestamp));
             row_packer.push_dict(labels.iter().copied());
@@ -72,7 +72,7 @@ fn convert_metrics_to_value_rows<
                 MetricType::GAUGE => metric.get_gauge().get_value(),
                 _ => unreachable!("never hit for anything other than gauges & counters"),
             }));
-            rows.push(row_packer.finish_and_reuse());
+            rows.push(row_buf.clone());
         }
     }
     (rows, metadata)
@@ -85,7 +85,7 @@ fn convert_metrics_to_histogram_rows<
     timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
-    let mut row_packer = Row::default();
+    let mut row_buf = Row::default();
     let mut rows: Vec<Row> = vec![];
     let mut metadata: Vec<Row> = vec![];
 
@@ -100,12 +100,13 @@ fn convert_metrics_to_histogram_rows<
                     .map(|pair| (pair.get_name(), Datum::from(pair.get_value())))
                     .collect();
                 for bucket in metric.get_histogram().get_bucket() {
+                    let mut row_packer = row_buf.packer();
                     row_packer.push(Datum::from(name));
                     row_packer.push(Datum::from(timestamp));
                     row_packer.push_dict(labels.iter().copied());
                     row_packer.push(Datum::from(bucket.get_upper_bound()));
                     row_packer.push(Datum::from(bucket.get_cumulative_count() as i64));
-                    rows.push(row_packer.finish_and_reuse());
+                    rows.push(row_buf.clone());
                 }
             }
         }
@@ -155,10 +156,9 @@ fn add_expiring_update(
     });
 }
 
-fn add_metadata_update<'a, I: IntoIterator<Item = Row>>(
+fn add_metadata_update<I: IntoIterator<Item = Row>>(
     updates: I,
     diff: Diff,
-    retain_for: u64,
     out: &mut Vec<TimestampedUpdate>,
 ) {
     let id = MZ_PROMETHEUS_METRICS.id;
@@ -167,7 +167,7 @@ fn add_metadata_update<'a, I: IntoIterator<Item = Row>>(
             .into_iter()
             .map(|row| BuiltinTableUpdate { id, row, diff })
             .collect(),
-        timestamp_offset: retain_for,
+        timestamp_offset: 0,
     });
 }
 
@@ -214,7 +214,7 @@ impl Scraper {
     /// Scrapes the metrics once, producing a batch of updates that should be
     /// inserted into the `mz_metrics` table.
     pub fn scrape_once(&mut self) -> Vec<TimestampedUpdate> {
-        let now = now::system_time();
+        let now = SYSTEM_TIME();
         let timestamp = now::to_datetime(now);
 
         let metric_fams = self.registry.gather();
@@ -249,7 +249,7 @@ impl Scraper {
                     .insert(metric.clone(), now + retain_for)
                     .is_none()
             });
-        add_metadata_update(missing, 1, retain_for, &mut out);
+        add_metadata_update(missing, 1, &mut out);
 
         // Expire any that can now go (I would love HashMap.drain_filter here):
         add_metadata_update(
@@ -259,7 +259,6 @@ impl Scraper {
                 .map(|(row, _)| row)
                 .cloned(),
             -1,
-            retain_for,
             &mut out,
         );
         self.metadata.retain(|_, &mut retention| retention > now);

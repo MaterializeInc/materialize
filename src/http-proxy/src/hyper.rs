@@ -15,8 +15,6 @@
 
 //! Proxy adapters for [`hyper`](hyper_dep).
 
-use std::error::Error;
-
 use hyper_dep::client::HttpConnector;
 use hyper_proxy::{Proxy, ProxyConnector};
 use hyper_tls::HttpsConnector;
@@ -30,8 +28,14 @@ pub type Connector = ProxyConnector<HttpsConnector<HttpConnector>>;
 ///
 /// For details about the system proxy configuration, see the
 /// [crate documentation](crate).
-pub fn connector() -> Result<Connector, Box<dyn Error + Send + Sync>> {
-    let mut connector = ProxyConnector::new(HttpsConnector::new())?;
+pub fn connector() -> Connector {
+    // `ProxyConnector::new` only errors if creating a TLS context fails, and if
+    // that's broken, `HttpsConnector::new()` has already panicked. So no point
+    // returning an error here instead of panicking. It's much more convenient
+    // downstream and more consistent with the rest of the Rust ecosystem if
+    // creating a connector is infallible.
+    let mut connector = ProxyConnector::new(HttpsConnector::new())
+        .unwrap_or_else(|e| panic!("hyper_proxy::ProxyConnector::new failure: {}", e));
 
     if let Some(http_proxy) = PROXY_CONFIG.http_proxy() {
         let matches = move |scheme: Option<&str>, host: Option<&str>, port| {
@@ -54,5 +58,5 @@ pub fn connector() -> Result<Connector, Box<dyn Error + Send + Sync>> {
         connector.add_proxy(Proxy::new(matches, all_proxy.clone()));
     }
 
-    Ok(connector)
+    connector
 }

@@ -23,7 +23,7 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedObjectName};
+use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedDataType, UnresolvedObjectName};
 
 // This represents the metadata that lives next to an AST, as we take it through
 // various stages in the planning process.
@@ -43,6 +43,8 @@ use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedObjectName};
 pub trait AstInfo: Clone {
     // The type used for table references.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
+    // The type used for data types.
+    type DataType: AstDisplay + Clone + Hash + Debug + Eq;
     // The type stored next to CTEs for their assigned ID.
     type Id: Clone + Hash + Debug + Eq;
 }
@@ -81,6 +83,7 @@ impl_display!(RawName);
 
 impl AstInfo for Raw {
     type ObjectName = RawName;
+    type DataType = UnresolvedDataType;
     type Id = ();
 }
 
@@ -144,6 +147,16 @@ impl<T: AstInfo> Query<T> {
         Query {
             ctes: vec![],
             body: SetExpr::Select(Box::new(select)),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        }
+    }
+
+    pub fn query(query: Query<T>) -> Query<T> {
+        Query {
+            ctes: vec![],
+            body: SetExpr::Query(Box::new(query)),
             order_by: vec![],
             limit: None,
             offset: None,
@@ -408,9 +421,14 @@ pub enum TableFactor<T: AstInfo> {
         alias: Option<TableAlias>,
     },
     Function {
-        name: UnresolvedObjectName,
-        args: FunctionArgs<T>,
+        function: TableFunction<T>,
         alias: Option<TableAlias>,
+        with_ordinality: bool,
+    },
+    RowsFrom {
+        functions: Vec<TableFunction<T>>,
+        alias: Option<TableAlias>,
+        with_ordinality: bool,
     },
     Derived {
         lateral: bool,
@@ -437,14 +455,34 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                     f.write_node(alias);
                 }
             }
-            TableFactor::Function { name, args, alias } => {
-                f.write_node(name);
-                f.write_str("(");
-                f.write_node(args);
+            TableFactor::Function {
+                function,
+                alias,
+                with_ordinality,
+            } => {
+                f.write_node(function);
+                if let Some(alias) = &alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+                if *with_ordinality {
+                    f.write_str(" WITH ORDINALITY");
+                }
+            }
+            TableFactor::RowsFrom {
+                functions,
+                alias,
+                with_ordinality,
+            } => {
+                f.write_str("ROWS FROM (");
+                f.write_node(&display::comma_separated(functions));
                 f.write_str(")");
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
+                }
+                if *with_ordinality {
+                    f.write_str(" WITH ORDINALITY");
                 }
             }
             TableFactor::Derived {
@@ -476,6 +514,21 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
     }
 }
 impl_display_t!(TableFactor);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableFunction<T: AstInfo> {
+    pub name: UnresolvedObjectName,
+    pub args: FunctionArgs<T>,
+}
+impl<T: AstInfo> AstDisplay for TableFunction<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str("(");
+        f.write_node(&self.args);
+        f.write_str(")");
+    }
+}
+impl_display_t!(TableFunction);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableAlias {
@@ -528,7 +581,7 @@ impl<T: AstInfo> AstDisplay for Join<T> {
                             f.write_node(expr);
                         }
                         JoinConstraint::Using(attrs) => {
-                            f.write_str(" USING(");
+                            f.write_str(" USING (");
                             f.write_node(&display::comma_separated(attrs));
                             f.write_str(")");
                         }

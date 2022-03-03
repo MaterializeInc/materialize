@@ -24,21 +24,29 @@ query TTTT
 SELECT * FROM y a, y b, jsonb_each(a.a);
 ----
 
-query I
+query I rowsort
 SELECT generate_series FROM generate_series(1, 3)
 ----
 1
 2
 3
 
-query I
+query I rowsort
 SELECT generate_series FROM generate_series(2, 4)
 ----
 2
 3
 4
 
-query I
+query II colnames,rowsort
+SELECT * FROM generate_series(2, 4) WITH ORDINALITY
+----
+generate_series ordinality
+2 1
+3 2
+4 3
+
+query I rowsort
 SELECT generate_series FROM generate_series(-2, 2)
 ----
 0
@@ -47,7 +55,7 @@ SELECT generate_series FROM generate_series(-2, 2)
 -2
 -1
 
-query I
+query I rowsort
 SELECT generate_series FROM generate_series(-2::bigint, 2)
 ----
 0
@@ -81,13 +89,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | CallTable generate_series(-2, 2, 1)
-
-%2 =
-| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -106,11 +108,6 @@ x
 1
 2
 3
-
-# TODO(justin): Don't currently support the timestamp version.
-query error arguments cannot be implicitly cast to any implementation's parameters
-SELECT * FROM generate_series(now() - '5m'::interval, now(), '5s'::interval)
-----
 
 # generate_series with lateral joins.
 
@@ -191,7 +188,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 | CallTable generate_series(1, #^0, 1)
 
 %2 =
-| InnerLateralJoin %0 %1 on true
+| InnerJoin %0 %1 on true
 
 EOF
 
@@ -205,7 +202,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 | CallTable generate_series(i32toi64(100), i32toi64(#^0), 1)
 
 %2 =
-| InnerLateralJoin %0 %1 on true
+| InnerJoin %0 %1 on true
 
 EOF
 
@@ -214,8 +211,14 @@ EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, 10)
 ----
 %0 =
 | Get materialize.public.x (u3)
-| FlatMap generate_series(1, 10, 1)
-| | demand = (#0..#2)
+| ArrangeBy ()
+
+%1 =
+| Constant (1) (2) (3) (4) (5) (6) (7) (8) (9) (10)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 
 EOF
 
@@ -225,45 +228,46 @@ EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, a)
 %0 =
 | Get materialize.public.x (u3)
 | FlatMap generate_series(1, #0, 1)
-| | demand = (#0..#2)
 
 EOF
 
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.x (u3)
-| ArrangeBy ()
+| Filter !(isnull(#1))
 
 %1 =
-| Get materialize.public.x (u3)
+| Get %0 (l0)
+| ArrangeBy (#1)
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+| Join %1 %0 (= #1 #3)
+| | implementation = Differential %0 %1.(#1)
+| Project (#0..=#2)
 | FlatMap generate_series(#0, #2, 1)
-| | demand = (#0..#4)
-| Filter (#1 = #3)
+| Project (#0..=#2, #1, #3)
 
 EOF
 
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.x (u3)
-| ArrangeBy ()
+| Filter !(isnull(#1))
 
 %1 =
-| Get materialize.public.x (u3)
+| Get %0 (l0)
+| ArrangeBy (#1)
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+| Join %1 %0 (= #1 #3)
+| | implementation = Differential %0 %1.(#1)
+| Project (#0..=#2)
 | FlatMap generate_series(#0, #2, 1)
-| | demand = (#0..#4)
-| Filter (#1 = #3)
+| Project (#0..=#2, #1, #3)
 
 EOF
 
@@ -272,19 +276,21 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.x (u3)
-| ArrangeBy ()
+| Filter !(isnull(#1))
 
 %1 =
-| Get materialize.public.x (u3)
+| Get %0 (l0)
+| ArrangeBy (#1)
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| FlatMap generate_series(#0, #3, 1)
-| | demand = (#0..#4)
-| Filter (#0 = #4), (#1 = #3)
+| Join %1 %0 (= #1 #3)
+| | implementation = Differential %0 %1.(#1)
+| Project (#0..=#2)
+| FlatMap generate_series(#0, #1, 1)
+| Filter (#0 = #3)
+| Project (#0..=#2, #1, #3)
 
 EOF
 
@@ -307,7 +313,10 @@ SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row(generate_ser
 statement error  Negative multiplicity in constant result: -1
 SELECT * FROM (values ('a')), repeat_row(-1)
 
-query error unable to determine which implementation to use
+statement error constant folding encountered reduce on collection with non-positive multiplicities
+SELECT (SELECT 1 FROM repeat_row(-1))
+
+query T
 SELECT generate_series FROM generate_series(null, null, null)
 ----
 
@@ -412,13 +421,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2, 1)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | CallTable generate_series(-2, 2, 1)
-
-%2 =
-| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -426,13 +429,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 1::bigint)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | CallTable generate_series(i32toi64(-2), i32toi64(2), i32toi64(1))
-
-%2 =
-| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -451,3 +448,893 @@ EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigi
 | Constant (0) (2) (-2)
 
 EOF
+
+# information_schema._pg_expandarray
+
+query error arguments cannot be implicitly cast
+SELECT information_schema._pg_expandarray()
+
+query error arguments cannot be implicitly cast
+SELECT * FROM information_schema._pg_expandarray()
+
+query error cannot determine type of empty array
+SELECT information_schema._pg_expandarray(ARRAY[])
+
+query error cannot determine type of empty array
+SELECT * FROM information_schema._pg_expandarray(ARRAY[])
+
+query error arguments cannot be implicitly cast
+SELECT * FROM information_schema._pg_expandarray(NULL)
+
+query error arguments cannot be implicitly cast
+SELECT information_schema._pg_expandarray(NULL)
+
+query T colnames
+SELECT information_schema._pg_expandarray(ARRAY[]::int[])
+----
+_pg_expandarray
+
+query TI colnames
+SELECT * FROM information_schema._pg_expandarray(ARRAY[]::int[])
+----
+x  n
+
+query T colnames
+SELECT information_schema._pg_expandarray(ARRAY[100])
+----
+ _pg_expandarray
+(100,1)
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY[100])
+----
+100 1
+
+query T
+SELECT information_schema._pg_expandarray(ARRAY[2, 1]) ORDER BY 1
+----
+(1,2)
+(2,1)
+
+query II
+SELECT * FROM information_schema._pg_expandarray(ARRAY[2, 1]) ORDER BY x
+----
+1 2
+2 1
+
+query T
+SELECT information_schema._pg_expandarray(ARRAY[3, 2, 1]) ORDER BY 1
+----
+(1,3)
+(2,2)
+(3,1)
+
+query II
+SELECT * FROM information_schema._pg_expandarray(ARRAY[3, 2, 1]) ORDER BY x
+----
+1 3
+2 2
+3 1
+
+query T
+SELECT information_schema._pg_expandarray(ARRAY['a'])
+----
+(a,1)
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY['a'])
+----
+a 1
+
+query T
+SELECT information_schema._pg_expandarray(ARRAY['b', 'a']) ORDER BY 1
+----
+(a,2)
+(b,1)
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY['b', 'a']) ORDER BY x
+----
+a 2
+b 1
+
+query T
+SELECT information_schema._pg_expandarray(ARRAY['c', 'b', 'a']) ORDER BY 1
+----
+(a,3)
+(b,2)
+(c,1)
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY['c', 'b', 'a']) ORDER BY x
+----
+a 3
+b 2
+c 1
+
+# Test table and column naming for table functions that return 1 column.
+
+query T colnames
+SELECT generate_series.* FROM generate_series(1, 1)
+----
+generate_series
+1
+
+query T
+SELECT generate_series.generate_series FROM generate_series(1, 1)
+----
+1
+
+query T colnames
+SELECT g FROM generate_series(1, 1) AS g
+----
+g
+1
+
+query T
+SELECT g.g FROM generate_series(1, 1) AS g
+----
+1
+
+query T colnames
+SELECT g.* FROM generate_series(1, 1) AS g
+----
+g
+1
+
+query T colnames
+SELECT g FROM generate_series(1, 1) AS g(a)
+----
+g
+1
+
+query T colnames
+SELECT g FROM ROWS FROM (generate_series(1, 1)) AS g(a)
+----
+g
+1
+
+query T colnames
+SELECT jsonb_array_elements FROM ROWS FROM (jsonb_array_elements('[1]'), generate_series(1, 1));
+----
+jsonb_array_elements
+(1,1)
+
+query T colnames
+SELECT jsonb_array_elements.generate_series FROM ROWS FROM (jsonb_array_elements('[1]'), generate_series(1, 1));
+----
+generate_series
+1
+
+query T colnames
+SELECT repeat_row FROM ROWS FROM (repeat_row(2), generate_series(1, 1));
+----
+repeat_row
+()
+(1)
+
+query T colnames
+SELECT g.a FROM generate_series(1, 1) AS g(a)
+----
+a
+1
+
+query T colnames
+SELECT g.* FROM generate_series(1, 1) AS g(a)
+----
+a
+1
+
+statement error column "g.g" does not exist
+SELECT g.g FROM generate_series(1, 1) AS g(a)
+
+statement error column "generate_series" does not exist
+SELECT generate_series FROM generate_series(1, 1) AS g
+
+statement error column "g.generate_series" does not exist
+SELECT g.generate_series FROM generate_series(1, 1) AS g
+
+statement error column "generate_series.g" does not exist
+SELECT generate_series.g FROM generate_series(1, 1) AS g
+
+# Test table and column naming for set functions that return more than 1 column.
+
+query T colnames
+SELECT g FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+g
+(100,1)
+
+query TT colnames
+SELECT _pg_expandarray.* FROM information_schema._pg_expandarray(ARRAY[100])
+----
+x n
+100 1
+
+query T
+SELECT _pg_expandarray.x FROM information_schema._pg_expandarray(ARRAY[100])
+----
+100
+
+query T
+SELECT g FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+(100,1)
+
+query T
+SELECT g.x FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+100
+
+query TT
+SELECT g.* FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+100 1
+
+query T colnames
+SELECT information_schema._pg_expandarray(ARRAY['a']) AS x
+----
+x
+(a,1)
+
+# Test aliasing table functions and using named columns of the results.
+
+query T rowsort
+SELECT jsonb_array_elements.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]')
+----
+1
+2
+3
+
+query T rowsort
+SELECT js.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]') js
+----
+1
+2
+3
+
+# Test more table/set functions in select projections.
+
+statement ok
+CREATE TABLE t (i int)
+
+statement ok
+INSERT INTO t VALUES (1), (2)
+
+query II colnames
+SELECT t.i, g.g FROM t, LATERAL generate_series(3,4) g(g) ORDER BY i, g
+----
+i g
+1 3
+1 4
+2 3
+2 4
+
+# This should be identical to the above.
+query II colnames
+SELECT t.i, generate_series(3,4) g FROM t ORDER BY i, g
+----
+i g
+1 3
+1 4
+2 3
+2 4
+
+query T colnames
+SELECT jsonb_each('{"3":4,"1":2}'::JSONB) ORDER BY 1
+----
+jsonb_each
+(1,2)
+(3,4)
+
+query ITT colnames
+SELECT 1, jsonb_object_keys('{"1":2,"3":4}'::JSONB), jsonb_object_keys('{"1":2,"3":4,"5":6}'::JSONB) ORDER BY 3
+----
+?column? jsonb_object_keys jsonb_object_keys
+1  1  1
+1  3  3
+1  NULL  5
+
+query T colnames
+SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3) ORDER BY 1
+----
+jsonb_build_object
+{"a":1,"c":3}
+{"b":1,"c":3}
+
+query TT
+SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3) ORDER BY 1
+----
+{"a":1,"c":3} {"a":1,"c":3}
+{"b":1,"c":3} {"b":1,"c":3}
+
+# TODO: query error argument 1: key must not be null
+query TT
+SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2}'), 1, 'c', 3)
+----
+{"b":1,"c":3}  NULL
+{"a":1,"c":3}  {"a":1,"c":3}
+
+query error table functions are not allowed in other table functions
+SELECT jsonb_array_elements(jsonb_array_elements('[[1,2],[3,4]]')), jsonb_array_elements(jsonb_array_elements('[[1],[3,4,5]]')) ORDER BY 1
+
+query error table functions are not allowed in other table functions
+SELECT jsonb_array_elements(jsonb_array_elements('[[1,2],[3,4]]')), jsonb_array_elements('[7,8,9]') ORDER BY 1
+
+# Postgres explicitly disallows table funcs (although it uses "set-returning
+# functions") in CASE and COALESCE.
+query error table functions are not allowed in CASE
+SELECT i, CASE WHEN i > 0 THEN generate_series(1, 5) ELSE 0 END FROM t
+
+query error table functions are not allowed in COALESCE
+SELECT COALESCE(1, generate_series(1, 1))
+
+query error table functions are not allowed in aggregate function calls
+SELECT array_agg(generate_series(1, 2))
+
+# Subqueries avoid the CASE errors.
+query I
+SELECT COALESCE(1, (SELECT generate_series(1, 1)))
+----
+1
+
+query error table functions are not allowed in WHERE clause
+SELECT 1 WHERE generate_series(1, 1)
+
+# timestamp-based generate series
+
+query T
+SELECT * FROM generate_series('2021-01-01 00:00:00'::TIMESTAMP, '2021-01-01 02:00:00'::TIMESTAMP, '1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00
+2021-01-01 01:00:00
+2021-01-01 02:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-01 00:00:00'::TIMESTAMP, '-1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00
+2021-01-01 01:00:00
+2021-01-01 02:00:00
+2021-01-01 03:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-03 00:00:00'::TIMESTAMP, '1 day') ORDER BY 1
+----
+2021-01-01 03:00:00
+2021-01-02 03:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-03 00:00:00'::TIMESTAMP, '2021-01-01 03:00:00'::TIMESTAMP, '1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-03 00:00:00'::TIMESTAMP, '-1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMP, '2022-01-31 00:00:00'::TIMESTAMP, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00
+2021-02-28 03:00:00
+2021-03-28 03:00:00
+2021-04-28 03:00:00
+2021-05-28 03:00:00
+2021-06-28 03:00:00
+2021-07-28 03:00:00
+2021-08-28 03:00:00
+2021-09-28 03:00:00
+2021-10-28 03:00:00
+2021-11-28 03:00:00
+2021-12-28 03:00:00
+2022-01-28 03:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMP, '2021-04-30 00:00:00'::TIMESTAMP, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00
+2021-02-28 03:00:00
+2021-03-28 03:00:00
+2021-04-28 03:00:00
+
+# Leap years
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMP, '2020-04-30 00:00:00'::TIMESTAMP, '1 month') ORDER BY 1
+----
+2020-01-31 03:00:00
+2020-02-29 03:00:00
+2020-03-29 03:00:00
+2020-04-29 03:00:00
+
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMP, '2020-11-30 00:00:00'::TIMESTAMP, '2 month') ORDER BY 1
+----
+2020-01-31 03:00:00
+2020-03-31 03:00:00
+2020-05-31 03:00:00
+2020-07-31 03:00:00
+2020-09-30 03:00:00
+
+query T
+SELECT * FROM generate_series('2020-01-01 22:00:00'::TIMESTAMP, '2021-01-01 00:00:00'::TIMESTAMP, '1 month 1 day 1 hour') ORDER BY 1
+----
+2020-01-01 22:00:00
+2020-02-02 23:00:00
+2020-03-04 00:00:00
+2020-04-05 01:00:00
+2020-05-06 02:00:00
+2020-06-07 03:00:00
+2020-07-08 04:00:00
+2020-08-09 05:00:00
+2020-09-10 06:00:00
+2020-10-11 07:00:00
+2020-11-12 08:00:00
+2020-12-13 09:00:00
+
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-03 00:00:00'::TIMESTAMP, '0 day');
+
+# timestamptz-based generate series
+
+query T
+SELECT * FROM generate_series('2021-01-01 00:00:00'::TIMESTAMPTZ, '2021-01-01 02:00:00'::TIMESTAMPTZ, '1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00+00
+2021-01-01 01:00:00+00
+2021-01-01 02:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-01 00:00:00'::TIMESTAMPTZ, '-1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00+00
+2021-01-01 01:00:00+00
+2021-01-01 02:00:00+00
+2021-01-01 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '1 day') ORDER BY 1
+----
+2021-01-01 03:00:00+00
+2021-01-02 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-03 00:00:00'::TIMESTAMPTZ, '2021-01-01 03:00:00'::TIMESTAMPTZ, '1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '-1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMPTZ, '2022-01-31 00:00:00'::TIMESTAMPTZ, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00+00
+2021-02-28 03:00:00+00
+2021-03-28 03:00:00+00
+2021-04-28 03:00:00+00
+2021-05-28 03:00:00+00
+2021-06-28 03:00:00+00
+2021-07-28 03:00:00+00
+2021-08-28 03:00:00+00
+2021-09-28 03:00:00+00
+2021-10-28 03:00:00+00
+2021-11-28 03:00:00+00
+2021-12-28 03:00:00+00
+2022-01-28 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMPTZ, '2021-04-30 00:00:00'::TIMESTAMPTZ, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00+00
+2021-02-28 03:00:00+00
+2021-03-28 03:00:00+00
+2021-04-28 03:00:00+00
+
+# Leap years
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMPTZ, '2020-04-30 00:00:00'::TIMESTAMPTZ, '1 month') ORDER BY 1
+----
+2020-01-31 03:00:00+00
+2020-02-29 03:00:00+00
+2020-03-29 03:00:00+00
+2020-04-29 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMPTZ, '2020-11-30 00:00:00'::TIMESTAMPTZ, '2 month') ORDER BY 1
+----
+2020-01-31 03:00:00+00
+2020-03-31 03:00:00+00
+2020-05-31 03:00:00+00
+2020-07-31 03:00:00+00
+2020-09-30 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2020-01-01 22:00:00'::TIMESTAMPTZ, '2021-01-01 00:00:00'::TIMESTAMPTZ, '1 month 1 day 1 hour') ORDER BY 1
+----
+2020-01-01 22:00:00+00
+2020-02-02 23:00:00+00
+2020-03-04 00:00:00+00
+2020-04-05 01:00:00+00
+2020-05-06 02:00:00+00
+2020-06-07 03:00:00+00
+2020-07-08 04:00:00+00
+2020-08-09 05:00:00+00
+2020-09-10 06:00:00+00
+2020-10-11 07:00:00+00
+2020-11-12 08:00:00+00
+2020-12-13 09:00:00+00
+
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '0 day');
+
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2022-01-03 00:00:00'::TIMESTAMP, '1 month -30 day') ORDER BY 1;
+
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2022-01-03 00:00:00'::TIMESTAMP, '1 day -24 hr') ORDER BY 1;
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-05 00:00:00'::TIMESTAMP, '1 day -12 hrs') ORDER BY 1;
+----
+2021-01-01 03:00:00
+2021-01-01 15:00:00
+2021-01-02 03:00:00
+2021-01-02 15:00:00
+2021-01-03 03:00:00
+2021-01-03 15:00:00
+2021-01-04 03:00:00
+2021-01-04 15:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-02-01 00:00:00'::TIMESTAMP, '1 month -15 days') ORDER BY 1;
+----
+2021-01-01 03:00:00
+2021-01-17 03:00:00
+
+# Test ROWS FROM
+
+query I colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1));
+----
+generate_series
+1
+
+query II colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 6)) ORDER BY 2;
+----
+generate_series generate_series
+1 3
+2 4
+NULL 5
+NULL 6
+
+query III colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 6)) WITH ORDINALITY ORDER BY 3;
+----
+generate_series generate_series ordinality
+1 3 1
+2 4 2
+NULL 5 3
+NULL 6 4
+
+query IIII colnames
+SELECT * FROM ROWS FROM (generate_series(1, 3), generate_series(1, 6), generate_series(1, 9), generate_series(1, 12)) ORDER BY 4;
+----
+generate_series generate_series generate_series generate_series
+1     1     1     1
+2     2     2     2
+3     3     3     3
+NULL  4     4     4
+NULL  5     5     5
+NULL  6     6     6
+NULL  NULL  7     7
+NULL  NULL  8     8
+NULL  NULL  9     9
+NULL  NULL  NULL  10
+NULL  NULL  NULL  11
+NULL  NULL  NULL  12
+
+query IIII colnames
+SELECT * FROM ROWS FROM (generate_series(1, 2), information_schema._pg_expandarray(array[9]), generate_series(3, 6)) ORDER BY 4;
+----
+generate_series x n generate_series
+1  9  1  3
+2  NULL  NULL  4
+NULL  NULL  NULL  5
+NULL  NULL  NULL  6
+
+query I colnames
+SELECT generate_series FROM ROWS FROM (generate_series(1, 1))
+----
+generate_series
+1
+
+query error column reference "generate_series" is ambiguous
+SELECT generate_series FROM ROWS FROM (generate_series(1, 1), generate_series(2, 2))
+
+query I colnames
+SELECT generate_series FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+----
+generate_series
+1
+
+query error column "_pg_expandarray" does not exist
+SELECT _pg_expandarray FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+
+query I
+SELECT generate_series.x FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+----
+9
+
+query I colnames
+SELECT x FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+----
+x
+9
+
+# Convert to text because sqllogictest doesn't know how to format records.
+query T colnames
+SELECT _pg_expandarray::text FROM ROWS FROM (information_schema._pg_expandarray(array[9]))
+----
+_pg_expandarray
+(9,1)
+
+query II colnames
+SELECT _pg_expandarray.* FROM ROWS FROM (information_schema._pg_expandarray(array[9]))
+----
+x n
+9 1
+
+# ROWS FROM with aliases
+
+query error Expected right parenthesis
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1) AS g)
+
+
+query I colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1)) AS g
+----
+g
+1
+
+query I colnames
+SELECT g.g FROM LATERAL ROWS FROM (generate_series(1,1)) AS g
+----
+g
+1
+
+query I colnames
+SELECT g.g FROM LATERAL ROWS FROM (generate_series(1,1)) AS g(g)
+----
+g
+1
+
+query II colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1), generate_series(1,1)) AS g
+----
+generate_series generate_series
+1 1
+
+query II colnames
+SELECT g.* FROM LATERAL ROWS FROM (generate_series(1,1), generate_series(1,1)) AS g
+----
+generate_series generate_series
+1 1
+
+query III colnames
+SELECT g.* FROM LATERAL ROWS FROM (generate_series(1,1), information_schema._pg_expandarray(array[1])) AS g
+----
+generate_series x n
+1 1 1
+
+query III colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1), information_schema._pg_expandarray(array[1])) AS g(a,b,c)
+----
+a b c
+1 1 1
+
+# Multiple table funcs in SELECT projection.
+
+query II colnames rowsort
+SELECT generate_series(1,2) x, generate_series(1,2) ORDER BY 1
+----
+x generate_series
+1 1
+2 2
+
+query II colnames rowsort
+SELECT generate_series(1,2), generate_series(1,2) y ORDER BY 1
+----
+generate_series y
+1 1
+2 2
+
+query II colnames rowsort
+SELECT generate_series(1,2) x, generate_series(1,2) y ORDER BY 1
+----
+x y
+1 1
+2 2
+
+query II
+SELECT generate_series(1, 1), generate_series(2, 2)
+----
+1 2
+
+query IT colnames
+SELECT (information_schema._pg_expandarray(array[10])).x, information_schema._pg_expandarray(array[10])
+----
+x _pg_expandarray
+10 (10,1)
+
+query IIITITT colnames
+SELECT
+    (information_schema._pg_expandarray(ARRAY[100])).*,
+    (information_schema._pg_expandarray(ARRAY[100])).x,
+    information_schema._pg_expandarray(ARRAY[100])::text,
+    generate_series(1, 2),
+    jsonb_array_elements('[3]'),
+    jsonb_array_elements('[4,5]')
+ORDER BY generate_series
+----
+x n x _pg_expandarray generate_series jsonb_array_elements jsonb_array_elements
+100 1 100 (100,1) 1 3 4
+NULL NULL NULL NULL 2 NULL 5
+
+query error column reference "generate_series" is ambiguous
+SELECT
+    generate_series(1, 2),
+    generate_series(1, 3)
+ORDER BY generate_series
+
+# Duplicate, identical table functions are not ambiguous.
+query II
+SELECT
+    generate_series(1, 2),
+    generate_series(1, 2)
+ORDER BY generate_series
+----
+1 1
+2 2
+
+query IIIT colnames,rowsort
+SELECT generate_series(1, 2), (information_schema._pg_expandarray(ARRAY[100])).*, jsonb_array_elements('[3]')::text ORDER BY 1
+----
+generate_series x n jsonb_array_elements
+1 100 1 3
+2 NULL NULL NULL
+
+query ITI colnames,rowsort
+SELECT generate_series(1, 2), information_schema._pg_expandarray(ARRAY[100])::text, generate_series(1, 3) ORDER BY 3
+----
+generate_series _pg_expandarray generate_series
+1 (100,1) 1
+2 NULL 2
+NULL NULL 3
+
+# Some error cases
+
+query error table functions are not allowed in WHERE clause
+SELECT 1 FROM t WHERE generate_series(1, 1) = 1
+
+# TODO: This error should complain about the DISTINCT.
+query error table functions are not allowed in SELECT clause
+SELECT generate_series(DISTINCT 1, 1)
+
+# Subqueries avoid the uniqueness check.
+query II
+SELECT generate_series(1, 1), (SELECT generate_series(2, 2))
+----
+1 2
+
+query error type integer is not composite
+SELECT (generate_series(1, 1)).*
+
+query error not a composite type
+SELECT (generate_series(1, 1)).generate_series
+
+# GENERATE_SUBSCRIPTS
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 1) AS s;
+----
+1
+2
+3
+4
+
+query I
+SELECT generate_subscripts('{1,NULL,3,NULL}'::int[], 1) AS s;
+----
+1
+2
+3
+4
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::TEXT[], 1) AS s;
+----
+1
+2
+3
+4
+
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 0) AS s;
+----
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], -1) AS s;
+----
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 2) AS s;
+----
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 12345) AS s;
+----
+
+query error parsing multi-dimensional arrays is not supported
+SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 1) AS s;
+
+query error table functions are not allowed in other table functions
+SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series(1, 1)) AS s
+
+# test lower bound, this should return indices 2,3,4
+# but currently we dont support this syntax
+query error invalid input syntax for type array
+SELECT generate_subscripts('[2:4]={1,2,3,4}'::int[], 1) AS s;
+
+query I
+select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 1);
+----
+1
+2
+
+query I
+select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 2);
+----
+1
+2
+3
+
+# Regression test for #9653: LATERAL column references in ROWS FROM
+
+query III
+SELECT * FROM generate_series(1, 3) as foo(a), ROWS FROM (generate_series(foo.a, foo.a + 2), generate_series(foo.a, foo.a + 1)) order by 1, 2, 3;
+----
+1  1  1
+1  2  2
+1  3  NULL
+2  2  2
+2  3  3
+2  4  NULL
+3  3  3
+3  4  4
+3  5  NULL
+
+query IIII
+SELECT * FROM generate_series(1, 3) as foo(a), ROWS FROM (generate_series(foo.a, foo.a + 2), generate_series(foo.a, foo.a + 1), generate_series(foo.a, foo.a)) order by 1, 2, 3, 4;
+----
+1  1  1  1
+1  2  2  NULL
+1  3  NULL  NULL
+2  2  2  2
+2  3  3  NULL
+2  4  NULL  NULL
+3  3  3  3
+3  4  4  NULL
+3  5  NULL  NULL
+
+# Regression test for #9657
+statement ok
+create view bar as select * from y, rows from (generate_series(1, 2), jsonb_array_elements(y.a));
+
+# Regression for #10363
+query IT
+WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY generate_series
+----
+1 a
+2 a

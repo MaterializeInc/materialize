@@ -35,8 +35,9 @@ CREATE TABLE types_table (char_col char(3), date_col DATE, time_col TIME, timest
 INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678);
 ALTER TABLE types_table REPLICA IDENTITY FULL;
 
-CREATE TABLE large_text (f1 TEXT);
-INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024));
+CREATE TABLE large_text (f1 TEXT, f2 TEXT);
+INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), REPEAT('y', 1 * 1024 * 1024));
+INSERT INTO large_text VALUES (REPEAT('a', 3 * 1024 * 1024),  REPEAT('b', 2 * 1024 * 1024));
 ALTER TABLE large_text REPLICA IDENTITY FULL;
 
 CREATE TABLE trailing_space_pk (f1 TEXT PRIMARY KEY);
@@ -66,6 +67,11 @@ CREATE TABLE "таблица" ("колона" TEXT);
 ALTER TABLE "таблица" REPLICA IDENTITY FULL;
 INSERT INTO "таблица" VALUES ('стойност');
 
+CREATE TABLE escaped_text_table (f1 TEXT, f2 TEXt);
+ALTER TABLE escaped_text_table REPLICA IDENTITY FULL;
+INSERT INTO escaped_text_table VALUES ('escaped\ntext\twith\nnewlines\tand\ntabs', 'more\tescaped\ntext');
+INSERT INTO escaped_text_table VALUES ('second\nrow\twith\tmore\ttabs', 'and\nmore\n\nnewlines\n');
+
 CREATE TABLE conflict_table (f1 INTEGER);
 ALTER TABLE conflict_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_table VALUES (123);
@@ -85,34 +91,32 @@ CREATE TABLE "space table" ("space column" INTEGER);
 ! CREATE MATERIALIZED SOURCE "no_such_host"
   FROM POSTGRES CONNECTION 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
-failed to lookup address information
+contains:failed to lookup address information
 
 ! CREATE MATERIALIZED SOURCE "no_such_port"
   FROM POSTGRES CONNECTION 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
-error connecting to server: Connection refused (os error 111)
+contains:error connecting to server: Connection refused (os error 111)
 
 ! CREATE MATERIALIZED SOURCE "no_such_user"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=no_such_user password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
-db error: FATAL: role "no_such_user" does not exist
+contains:db error: FATAL: role "no_such_user" does not exist
 
 ! CREATE MATERIALIZED SOURCE "no_such_password"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
   PUBLICATION 'mz_source';
-db error: FATAL: password authentication failed for user "postgres"
+contains:db error: FATAL: password authentication failed for user "postgres"
 
 ! CREATE MATERIALIZED SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
   PUBLICATION 'mz_source';
-db error: FATAL: database "no_such_dbname" does not exist
+contains:db error: FATAL: database "no_such_dbname" does not exist
 
-> CREATE MATERIALIZED SOURCE "no_such_publication"
+! CREATE MATERIALIZED SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'no_such_publication';
-# TODO: This should produce an error
-
-> DROP SOURCE "no_such_publication"
+contains:publication "no_such_publication" does not exist
 
 > CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
@@ -153,6 +157,8 @@ db error: FATAL: database "no_such_dbname" does not exist
 
 > CREATE VIEWS FROM SOURCE materialize."public".mz_source ("таблица");
 
+> CREATE VIEWS FROM SOURCE mz_source ("escaped_text_table");
+
 > CREATE VIEWS FROM SOURCE "mz_source" (conflict_schema.conflict_table AS public.conflict_table);
 
 > CREATE VIEWS FROM SOURCE "mz_source" ("space table");
@@ -178,8 +184,9 @@ db error: FATAL: database "no_such_dbname" does not exist
 > SELECT pg_typeof(numeric) FROM types_table;
 "numeric"
 
-> SELECT LENGTH(f1) FROM large_text;
-16777216
+> SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
+16777216 1048576
+3145728  2097152
 
 > SELECT LENGTH(f1), f1 FROM trailing_space_pk;
 "6" "abc   "
@@ -199,6 +206,10 @@ db error: FATAL: database "no_such_dbname" does not exist
 > SELECT * FROM "таблица";
 стойност
 
+> SELECT * FROM escaped_text_table;
+"escaped\\ntext\\twith\\nnewlines\\tand\\ntabs" "more\\tescaped\\ntext"
+"second\\nrow\\twith\\tmore\\ttabs" "and\\nmore\\n\\nnewlines\\n"
+
 > SELECT * FROM conflict_table;
 234
 
@@ -206,7 +217,7 @@ db error: FATAL: database "no_such_dbname" does not exist
 # Confirm that the new sources can be used to build upon
 #
 
-> CREATE MATERIALIZED VIEW join_view AS SELECT * FROM pk_table, nonpk_table WHERE pk_table.pk = nonpk_table.f1;
+> CREATE MATERIALIZED VIEW join_view (a, b, c, d) AS SELECT * FROM pk_table, nonpk_table WHERE pk_table.pk = nonpk_table.f1;
 
 > SELECT * FROM join_view;
 "1" "one" "1" "1"
@@ -245,7 +256,7 @@ UPDATE nonpk_table SET f1 = f1 + 100 WHERE f1 = 3;
 
 INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678);
 
-INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024));
+INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), 'abc');
 
 INSERT INTO trailing_space_pk VALUES ('klm   ');
 UPDATE trailing_space_pk SET f1 = 'xyz   ' WHERE f1 = 'klm   ';
@@ -287,9 +298,10 @@ INSERT INTO "таблица" SELECT * FROM "таблица";
 "foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
 "foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
 
-> SELECT LENGTH(f1) FROM large_text;
-16777216
-16777216
+> SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
+16777216 1048576
+3145728  2097152
+16777216 3
 
 > SELECT LENGTH(f1), f1 FROM trailing_space_pk;
 "6" "xyz   "
@@ -404,10 +416,10 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION mz_source;
 INSERT INTO pk_table VALUES (99999);
 
-! SELECT COUNT(*) = 0 FROM pk_table;
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
-Source error: materialize.public.mz_source: file IO: db error: ERROR: publication "mz_source" does not exist
+! SELECT COUNT(*) = 0 FROM pk_table;
+regex:Source error: .*: file IO: db error: ERROR: publication "mz_source" does not exist
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA conflict_schema CASCADE;

@@ -61,28 +61,31 @@
 //! ```
 
 // TODO
-// - Variant with S3Blob
 // - Impl of Runtime directly using Indexed
-// - Impl of Runtime with Timely workers running in threads
 // - Impl of Runtime with Timely workers running in processes
 // - Storage (log/blob) with variable latency/slow requests
 // - Vary key size
 // - Deleting streams
 
-use std::env;
+use std::collections::VecDeque;
+use std::time::Instant;
+use std::{env, thread};
 
-use ore::test::init_logging;
+use mz_ore::test::init_logging;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use timely::progress::Antichain;
+use tracing::{debug, info, warn};
 
 use crate::error::Error;
-use crate::indexed::ListenEvent;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
+use crate::pfuture::PFuture;
+use crate::storage::SeqNo;
 
 pub mod direct;
 pub mod generator;
+pub mod progress;
 pub mod validator;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,8 +113,15 @@ pub struct Input {
 }
 
 #[derive(Debug)]
-pub struct Step {
+pub struct StepMeta {
     req_id: ReqId,
+    before: Instant,
+    after: Instant,
+}
+
+#[derive(Debug)]
+pub struct Step {
+    meta: StepMeta,
     res: Res,
 }
 
@@ -131,11 +141,11 @@ pub enum Req {
 
 #[derive(Debug)]
 pub enum Res {
-    Write(WriteReq, Result<WriteRes, Error>),
-    Seal(SealReq, Result<(), Error>),
+    Write(WriteReq, Result<SeqNo, Error>),
+    Seal(SealReq, Result<SeqNo, Error>),
     ReadOutput(ReadOutputReq, Result<ReadOutputRes, Error>),
-    AllowCompaction(AllowCompactionReq, Result<(), Error>),
-    TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
+    AllowCompaction(AllowCompactionReq, Result<SeqNo, Error>),
+    TakeSnapshot(TakeSnapshotReq, Result<SeqNo, Error>),
     ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
     Start(Result<(), Error>),
     Stop(Result<(), Error>),
@@ -146,7 +156,7 @@ pub enum Res {
 #[derive(Clone, Debug)]
 pub struct WriteReqSingle {
     stream: String,
-    update: ((String, ()), u64, isize),
+    update: ((String, ()), u64, i64),
 }
 
 #[derive(Clone, Debug)]
@@ -161,18 +171,21 @@ pub enum WriteReq {
 }
 
 #[derive(Clone, Debug)]
-pub struct WriteRes {
-    seqno: u64,
-}
-
-#[derive(Clone, Debug)]
 pub struct ReadOutputReq {
     stream: String,
 }
 
 #[derive(Clone, Debug)]
+pub enum ReadOutputEvent<D> {
+    /// Records in the data stream.
+    Records(Vec<D>),
+    /// Progress of the data stream.
+    Sealed(u64),
+}
+
+#[derive(Clone, Debug)]
 pub struct ReadOutputRes {
-    contents: Vec<ListenEvent<String, ()>>,
+    contents: Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, i64)>>,
 }
 
 #[derive(Clone, Debug)]
@@ -202,35 +215,158 @@ pub struct ReadSnapshotReq {
 pub struct ReadSnapshotRes {
     seqno: u64,
     since: Antichain<u64>,
-    contents: Vec<((String, ()), u64, isize)>,
+    contents: Vec<((String, ()), u64, i64)>,
+}
+
+#[derive(Debug)]
+pub struct FutureStep {
+    req_id: ReqId,
+    before: Instant,
+    res: FutureRes,
+}
+
+impl FutureStep {
+    pub fn recv(self) -> Step {
+        let res = self.res.recv();
+        let after = Instant::now();
+        debug!("{:?} res: {:?}", self.req_id, &res);
+        let meta = StepMeta {
+            req_id: self.req_id,
+            before: self.before,
+            after,
+        };
+        Step { meta, res }
+    }
+}
+
+#[derive(Debug)]
+pub enum FutureRes {
+    Write(WriteReq, Result<PFuture<SeqNo>, Error>),
+    Seal(SealReq, Result<PFuture<SeqNo>, Error>),
+    AllowCompaction(AllowCompactionReq, Result<PFuture<SeqNo>, Error>),
+    Ready(Res),
+}
+
+impl FutureRes {
+    pub fn recv(self) -> Res {
+        match self {
+            FutureRes::Write(req, res) => {
+                let res = res.and_then(|res| res.recv());
+                Res::Write(req, res)
+            }
+            FutureRes::Seal(req, res) => {
+                let res = res.and_then(|res| res.recv());
+                Res::Seal(req, res)
+            }
+            FutureRes::AllowCompaction(req, res) => {
+                let res = res.and_then(|res| res.recv());
+                Res::AllowCompaction(req, res)
+            }
+            FutureRes::Ready(res) => res,
+        }
+    }
+}
+
+pub trait RuntimeWorker: Send + 'static {
+    fn run(&mut self, i: Input) -> FutureStep;
 }
 
 pub trait Runtime {
-    fn run(&mut self, i: Input) -> Step;
+    type Worker: RuntimeWorker;
+
+    fn add_worker(&mut self) -> Self::Worker;
     fn finish(self);
 }
 
+#[derive(Debug)]
 pub struct Runner<R: Runtime> {
     generator: Generator,
     runtime: R,
-    steps: Vec<Step>,
 }
 
+// TODO: Increase this to 3 once Validator can handle that.
+const NUM_INGEST_WORKER_THREADS: usize = 1;
+const NUM_DATAFLOW_WORKER_THREADS: usize = 2;
+
 impl<R: Runtime> Runner<R> {
+    const MAX_OUTSTANDING: usize = 10;
+
     pub fn new(generator: Generator, runtime: R) -> Self {
-        Runner {
-            generator,
-            runtime,
-            steps: Vec::new(),
-        }
+        Runner { generator, runtime }
     }
 
-    pub fn run(mut self, steps: usize) -> Vec<Step> {
-        for input in self.generator.take(steps) {
-            self.steps.push(self.runtime.run(input));
+    pub fn run(mut self, num_steps: usize) -> Vec<Step> {
+        let (tx, rx) = crossbeam_channel::bounded::<Input>(num_steps);
+
+        let mut threads = Vec::new();
+        for idx in 0..NUM_INGEST_WORKER_THREADS {
+            let mut worker = self.runtime.add_worker();
+            let rx = rx.clone();
+            threads.push(
+                thread::Builder::new()
+                    .name(format!("nemesis:work-{}", idx))
+                    .spawn(move || {
+                        let mut outstanding =
+                            VecDeque::<FutureStep>::with_capacity(Self::MAX_OUTSTANDING);
+                        let mut steps = Vec::with_capacity(num_steps);
+
+                        // Pipeline up to MAX_OUTSTANDING requests by filling up `outstanding`
+                        // from the back with un-awaited requests and, once it hits our pipeline
+                        // limit, popping them off the front (and blocking) before issuing any
+                        // new ones. This helps keep the traffic more interesting by ensuring
+                        // that we don't (for example) hit a StorageUnavailable or Stop and then
+                        // immediately fill every in-flight request with an Error.
+                        //
+                        // Concretely: imagine if we issues every request simultaneously and
+                        // then waited for them all to finish. What is likely to happen is that
+                        // every write/seal/allow compaction request errors because either
+                        // storage is unavailable or the runtime is restarting. Or, perhaps, the
+                        // seal with the highest timestamp ends up executing first and every
+                        // write and seal for a lower timestamp errors. These are valid
+                        // histories, but they aren't interesting tests of the system. (Another
+                        // example of a way we tune the traffic to make it interesting is in the
+                        // generator, where we disable most request types when the runtime or
+                        // storage are down, so that it becomes much more likely that we'll
+                        // generate traffic to bring them back.)
+                        //
+                        // Additionally, this helps ensure that ReadOutput has an interesting
+                        // amount of output to read (see the NB in Seal). The Runtime now, when
+                        // a seal call is successful, blocks the returned Future until the
+                        // dataflow has caught up to the seal. Combined with this, we're
+                        // guaranteed that a ReadOutput that trails a Seal by MAX_OUTSTANDING
+                        // will include dataflow output up to that seal.
+                        for input in rx {
+                            while outstanding.len() >= Self::MAX_OUTSTANDING {
+                                let step_fut = outstanding.pop_front().unwrap();
+                                let step = step_fut.recv();
+                                steps.push(step);
+                            }
+                            debug!("{:?} req: {:?}", input.req_id, &input.req);
+                            outstanding.push_back(worker.run(input));
+                        }
+
+                        // Don't forget to await the final few requests before cleaning up.
+                        while let Some(step_fut) = outstanding.pop_front() {
+                            let step = step_fut.recv();
+                            steps.push(step);
+                        }
+
+                        steps
+                    })
+                    .expect("thread name is valid"),
+            )
         }
+        for input in self.generator.take(num_steps) {
+            tx.send(input).expect("worker threads don't exit");
+        }
+        drop(tx);
+
+        let steps = threads
+            .into_iter()
+            .flat_map(|w| w.join().expect("thread didn't panic"))
+            .collect();
         self.runtime.finish();
-        self.steps
+        steps
     }
 }
 
@@ -239,13 +375,13 @@ pub fn run<R: Runtime>(steps: usize, config: GeneratorConfig, runtime: R) {
     let seed =
         env::var("MZ_NEMESIS_SEED").map_or_else(|_| OsRng.next_u64(), |s| s.parse().unwrap());
     let steps = env::var("MZ_NEMESIS_STEPS").map_or(steps, |s| s.parse().unwrap());
-    log::info!("MZ_NEMESIS_SEED={} MZ_NEMESIS_STEPS={}", seed, steps);
+    info!("MZ_NEMESIS_SEED={} MZ_NEMESIS_STEPS={}", seed, steps);
     let generator = Generator::new(seed, config);
     let runner = Runner::new(generator, runtime);
     let history = runner.run(steps);
     if let Err(errors) = Validator::validate(history) {
         for err in errors.iter() {
-            log::warn!("invariant violation: {}", err)
+            warn!("invariant violation: {}", err)
         }
         assert!(errors.is_empty());
     }

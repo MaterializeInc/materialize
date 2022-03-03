@@ -8,9 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    protoc::Protoc::new()
-        .include("testdata")
-        .input("testdata/benchmark.proto")
-        .input("testdata/fuzz.proto")
-        .build_script_exec();
+    prost_build::Config::new()
+        .compile_protos(&["benchmark.proto"], &["testdata"])
+        .unwrap();
 }

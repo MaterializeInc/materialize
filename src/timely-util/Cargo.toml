@@ -1,0 +1,14 @@
+[package]
+name = "mz-timely-util"
+description = "Utilities for working with Timely."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.58.0"
+publish = false
+
+[dependencies]
+futures-util = "0.3.19"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread", "time"] }

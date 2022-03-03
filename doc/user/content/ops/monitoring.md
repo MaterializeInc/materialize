@@ -8,9 +8,11 @@ menu:
     parent: operations
 ---
 
-_This page is a work in progress and will have more detail in the coming months.
-If you have specific questions, feel free to [file a GitHub
-issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md)._
+{{< note >}}
+
+This topic describes monitoring for the installed version of Materialize. For information about monitoring Materialize Cloud, see [Monitor Cloud](../../cloud/monitor-cloud).
+
+{{< /note >}}
 
 Materialize supports integration with monitoring tools using both the
 [Prometheus](#prometheus) format and via [SQL interface](#system-catalog-sql-interface)
@@ -70,42 +72,59 @@ $ docker run -d \
 
 ### Observing local Materialize
 
-Using the dashboard to observe a Materialize instance running on the same
-machine as the dashboard is complicated by Docker. The solution depends upon
-your host platform.
+Since the dashboard runs inside a Docker container, using it to observe a Materialize
+instance running on the same machine is complicated by Docker networking isolation. The
+exact steps required to expose `materialized` to the dashboard process depends on exactly
+how you are running `materialized`.
 
-#### Inside Docker Compose or Kubernetes
+{{< tabs >}}
+
+{{< tab "Docker" >}}
 
 Local schedulers like Docker Compose (which we use for our demos) or Kubernetes will
-typically expose running containers to each other using their service name as a public
-DNS hostname, but _only_ within the network that they are running in.
+typically expose running containers to each other using the container's service name as a
+public DNS hostname, but _only_ within the network that the containers are running in.
 
 The easiest way to use the dashboard inside a scheduler is to tell the scheduler to run
 it. Check out the [example configuration for Docker Compose][dc-example].
 
-#### On macOS, with Materialize running outside of Docker
+[dc-example]: https://github.com/MaterializeInc/materialize/blob/d793b112758c840c1240eefdd56ca6f7e4f484cf/demo/billing/mzcompose.yml#L60-L70
 
-The problem with this is that `localhost` inside of Docker does not, on Docker for Mac,
-refer to the macOS network. So instead you must use `host.docker.internal`:
+{{</ tab >}}
+{{< tab "macOS" >}}
+
+When our dashboard container is running inside of Docker via Docker for Mac and
+`materialized` is running on the host macOS system the `localhost` inside of the
+container does not refer to the macOS host machine's network.
+
+You must use `host.docker.internal` to refer to the host system:
 
 ```
 docker run -p 3000:3000 -e MATERIALIZED_URL=host.docker.internal:6875 materialize/dashboard
 ```
 
-#### On Linux, with Materialize running outside of Docker
+{{</ tab >}}
+{{< tab "Linux" >}}
 
-Docker containers use a different network than their host by default, but that is easy to
-override by using the `--network host` option. Using the host network means that ports will be
-allocated from the host, so the `-p` flag is no longer necessary:
+When our dashboard container is running inside of a Docker container on a Linux machine
+we must override one of the isolation policies that Docker creates. Docker configures
+containers to use a different network than their host by default, but that is easy to
+override by using the `--network host` option:
 
 ```
 docker run --network host -e MATERIALIZED_URL=localhost:6875 materialize/dashboard
 ```
 
+Using the host network means that ports will be allocated from the host, so the `-p` flag
+is no longer necessary, with the above command the dashboard will be available on at
+`http://localhost:3000`.
+
+{{</ tab >}}
+{{</ tabs >}}
+
 [simplemon-hub]: https://hub.docker.com/repository/docker/materialize/dashboard
 [dashboard-json]: https://github.com/MaterializeInc/materialize/blob/main/misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
 [graf-import]: https://grafana.com/docs/grafana/latest/reference/export_import/#importing-a-dashboard
-[dc-example]: https://github.com/MaterializeInc/materialize/blob/d793b112758c840c1240eefdd56ca6f7e4f484cf/demo/billing/mzcompose.yml#L60-L70
 
 ## Health check
 
@@ -145,30 +164,11 @@ The Prometheus metrics are not part of Materialize's stable interface.
 Backwards-incompatible changes to the exposed metrics may be made at any time.
 {{< /warning >}}
 
-Materialize exposes [Prometheus](https://prometheus.io/) metrics at the default
-path, `<materialized host>/metrics`.
+{{% monitoring/prometheus-details %}}
 
-Materialize broadly publishes the following types of data there:
+{{% monitoring/system-catalog-sql-interface %}}
 
-- Materialize-specific data with a `mz_*` prefix. For example,
-  `rate(mz_responses_sent_total[10s])` will show you the number of responses
-  averaged over 10 second windows.
-- Standard process metrics with a `process_*` prefix. For exmple, `process_cpu`.
-
-## System catalog SQL interface
-
-The `mz_catalog` SQL interface provides a variety of ways to introspect Materialize. An
-introduction to this catalog is available as part of our [SQL
-documentation](/sql/system-catalog).
-
-A user guide for debugging a running `materialized` using the system catalog is available
-in the form of a walkthrough of useful [diagnostic queries](/ops/diagnosing-using-sql).
-
-## Grafana
-
-Materialize provides a [recommended dashboard][dashboard-json] that you can [import into
-Grafana][graf-import]. It relies on you having configured Prometheus to scrape
-Materialize.
+{{% monitoring/grafana %}}
 
 ## Datadog
 

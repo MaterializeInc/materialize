@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="571" height="309">
+<svg xmlns="http://www.w3.org/2000/svg" width="571" height="391">
    <polygon points="11 17 3 13 3 21"/>
    <polygon points="19 17 11 13 11 21"/>
    <rect x="33" y="3" width="114" height="32" rx="10"/>
@@ -28,73 +28,87 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="463" y="21">FROM</text>
-   <rect x="72" y="101" width="90" height="32"/>
-   <rect x="70" y="99" width="90" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="80" y="119">item_name</text>
-   <rect x="182" y="101" width="54" height="32" rx="10"/>
-   <rect x="180"
+   <rect x="94" y="101" width="90" height="32"/>
+   <rect x="92" y="99" width="90" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="102" y="119">item_name</text>
+   <rect x="204" y="101" width="54" height="32" rx="10"/>
+   <rect x="202"
          y="99"
          width="54"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="190" y="119">INTO</text>
-   <rect x="276" y="101" width="162" height="32"/>
-   <rect x="274" y="99" width="162" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="284" y="119">sink_kafka_connector</text>
-   <rect x="276" y="145" width="94" height="32" rx="10"/>
-   <rect x="274"
+   <text class="terminal" x="212" y="119">INTO</text>
+   <rect x="298" y="101" width="162" height="32"/>
+   <rect x="296" y="99" width="162" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="306" y="119">sink_kafka_connector</text>
+   <rect x="298" y="145" width="94" height="32" rx="10"/>
+   <rect x="296"
          y="143"
          width="94"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="284" y="163">AVRO OCF</text>
-   <rect x="390" y="145" width="94" height="32"/>
-   <rect x="388" y="143" width="94" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="398" y="163">path-prefix</text>
-   <rect x="45" y="231" width="94" height="32" rx="10"/>
+   <text class="terminal" x="306" y="163">AVRO OCF</text>
+   <rect x="412" y="145" width="50" height="32"/>
+   <rect x="410" y="143" width="50" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="420" y="163">path</text>
+   <rect x="73" y="227" width="136" height="32"/>
+   <rect x="71" y="225" width="136" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="81" y="245">sink_with_options</text>
+   <rect x="269" y="227" width="80" height="32" rx="10"/>
+   <rect x="267"
+         y="225"
+         width="80"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="277" y="245">FORMAT</text>
+   <rect x="369" y="227" width="134" height="32"/>
+   <rect x="367" y="225" width="134" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="377" y="245">sink_format_spec</text>
+   <rect x="45" y="313" width="94" height="32" rx="10"/>
    <rect x="43"
-         y="229"
+         y="311"
          width="94"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="53" y="249">ENVELOPE</text>
-   <rect x="179" y="231" width="92" height="32" rx="10"/>
+   <text class="terminal" x="53" y="331">ENVELOPE</text>
+   <rect x="179" y="313" width="92" height="32" rx="10"/>
    <rect x="177"
-         y="229"
+         y="311"
          width="92"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="187" y="249">DEBEZIUM</text>
-   <rect x="179" y="275" width="76" height="32" rx="10"/>
+   <text class="terminal" x="187" y="331">DEBEZIUM</text>
+   <rect x="179" y="357" width="76" height="32" rx="10"/>
    <rect x="177"
-         y="273"
+         y="355"
          width="76"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="187" y="293">UPSERT</text>
-   <rect x="351" y="231" width="142" height="32" rx="10"/>
+   <text class="terminal" x="187" y="375">UPSERT</text>
+   <rect x="351" y="313" width="142" height="32" rx="10"/>
    <rect x="349"
-         y="229"
+         y="311"
          width="142"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="359" y="249">WITH SNAPSHOT</text>
-   <rect x="351" y="275" width="172" height="32" rx="10"/>
+   <text class="terminal" x="359" y="331">WITH SNAPSHOT</text>
+   <rect x="351" y="357" width="172" height="32" rx="10"/>
    <rect x="349"
-         y="273"
+         y="355"
          width="172"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="359" y="293">WITHOUT SNAPSHOT</text>
+   <text class="terminal" x="359" y="375">WITHOUT SNAPSHOT</text>
    <path class="line"
-         d="m19 17 h2 m0 0 h10 m114 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m88 0 h10 m0 0 h10 m60 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-487 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m0 0 h10 m54 0 h10 m20 0 h10 m162 0 h10 m0 0 h46 m-248 0 h20 m228 0 h20 m-268 0 q10 0 10 10 m248 0 q0 -10 10 -10 m-258 10 v24 m248 0 v-24 m-248 24 q0 10 10 10 m228 0 q10 0 10 -10 m-238 10 h10 m94 0 h10 m0 0 h10 m94 0 h10 m22 -44 l2 0 m2 0 l2 0 m2 0 l2 0 m-523 98 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h256 m-286 0 h20 m266 0 h20 m-306 0 q10 0 10 10 m286 0 q0 -10 10 -10 m-296 10 v12 m286 0 v-12 m-286 12 q0 10 10 10 m266 0 q10 0 10 -10 m-276 10 h10 m94 0 h10 m20 0 h10 m92 0 h10 m-132 0 h20 m112 0 h20 m-152 0 q10 0 10 10 m132 0 q0 -10 10 -10 m-142 10 v24 m132 0 v-24 m-132 24 q0 10 10 10 m112 0 q10 0 10 -10 m-122 10 h10 m76 0 h10 m0 0 h16 m60 -76 h10 m0 0 h182 m-212 0 h20 m192 0 h20 m-232 0 q10 0 10 10 m212 0 q0 -10 10 -10 m-222 10 v12 m212 0 v-12 m-212 12 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m142 0 h10 m0 0 h30 m-202 -10 v20 m212 0 v-20 m-212 20 v24 m212 0 v-24 m-212 24 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m172 0 h10 m23 -76 h-3"/>
-   <polygon points="561 213 569 209 569 217"/>
-   <polygon points="561 213 553 209 553 217"/>
+         d="m19 17 h2 m0 0 h10 m114 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m88 0 h10 m0 0 h10 m60 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-465 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m0 0 h10 m54 0 h10 m20 0 h10 m162 0 h10 m0 0 h2 m-204 0 h20 m184 0 h20 m-224 0 q10 0 10 10 m204 0 q0 -10 10 -10 m-214 10 v24 m204 0 v-24 m-204 24 q0 10 10 10 m184 0 q10 0 10 -10 m-194 10 h10 m94 0 h10 m0 0 h10 m50 0 h10 m22 -44 l2 0 m2 0 l2 0 m2 0 l2 0 m-473 94 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h146 m-176 0 h20 m156 0 h20 m-196 0 q10 0 10 10 m176 0 q0 -10 10 -10 m-186 10 v12 m176 0 v-12 m-176 12 q0 10 10 10 m156 0 q10 0 10 -10 m-166 10 h10 m136 0 h10 m40 -32 h10 m0 0 h244 m-274 0 h20 m254 0 h20 m-294 0 q10 0 10 10 m274 0 q0 -10 10 -10 m-284 10 v12 m274 0 v-12 m-274 12 q0 10 10 10 m254 0 q10 0 10 -10 m-264 10 h10 m80 0 h10 m0 0 h10 m134 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-542 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h256 m-286 0 h20 m266 0 h20 m-306 0 q10 0 10 10 m286 0 q0 -10 10 -10 m-296 10 v12 m286 0 v-12 m-286 12 q0 10 10 10 m266 0 q10 0 10 -10 m-276 10 h10 m94 0 h10 m20 0 h10 m92 0 h10 m-132 0 h20 m112 0 h20 m-152 0 q10 0 10 10 m132 0 q0 -10 10 -10 m-142 10 v24 m132 0 v-24 m-132 24 q0 10 10 10 m112 0 q10 0 10 -10 m-122 10 h10 m76 0 h10 m0 0 h16 m60 -76 h10 m0 0 h182 m-212 0 h20 m192 0 h20 m-232 0 q10 0 10 10 m212 0 q0 -10 10 -10 m-222 10 v12 m212 0 v-12 m-212 12 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m142 0 h10 m0 0 h30 m-202 -10 v20 m212 0 v-20 m-212 20 v24 m212 0 v-24 m-212 24 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m172 0 h10 m23 -76 h-3"/>
+   <polygon points="561 295 569 291 569 299"/>
+   <polygon points="561 295 553 291 553 299"/>
 </svg>

@@ -15,8 +15,9 @@ use hyper::Server;
 use hyper::StatusCode;
 use hyper::{Body, Response};
 use lazy_static::lazy_static;
+use mz_ccsr::SchemaReference;
 
-use ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
+use mz_ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
 
 lazy_static! {
     pub static ref SCHEMA_REGISTRY_URL: reqwest::Url = match env::var("SCHEMA_REGISTRY_URL") {
@@ -27,7 +28,7 @@ lazy_static! {
 
 #[tokio::test]
 async fn test_client() -> Result<(), anyhow::Error> {
-    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
+    let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     let existing_subjects = client.list_subjects().await?;
     for s in existing_subjects {
@@ -110,12 +111,144 @@ async fn test_client() -> Result<(), anyhow::Error> {
         .await?;
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 2);
 
+    {
+        let subject_with_slashes = "ccsr/test/schema";
+        let schema_test_id = client
+            .publish_schema(subject_with_slashes, schema_v1, SchemaType::Avro, &[])
+            .await?;
+        assert!(schema_test_id > 0);
+
+        let res = client.get_schema_by_subject(subject_with_slashes).await?;
+        assert_eq!(schema_test_id, res.id);
+        assert_raw_schemas_eq(schema_v1, &res.raw);
+
+        let res = client.get_subject(subject_with_slashes).await?;
+        assert_eq!(1, res.version);
+        assert_eq!(subject_with_slashes, res.name);
+        assert_eq!(schema_test_id, res.schema.id);
+        assert_raw_schemas_eq(schema_v1, &res.schema.raw);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
+    let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
+
+    let existing_subjects = client.list_subjects().await?;
+    for s in existing_subjects {
+        if s.starts_with("ccsr-test-") {
+            client.delete_subject(&s).await?;
+        }
+    }
+    assert_eq!(count_schemas(&client, "ccsr-test-").await?, 0);
+
+    let schema0_subject = "schema0.proto".to_owned();
+    let schema0 = r#"
+        syntax = "proto3";
+
+        message Choice {
+            string field0 = 1;
+            int64 field2 = 2;
+        }
+    "#;
+
+    let schema1_subject = "schema1.proto".to_owned();
+    let schema1 = r#"
+        syntax = "proto3";
+        import "schema0.proto";
+
+        message ChoiceId {
+            string id = 1;
+            Choice choice = 2;
+        }
+    "#;
+
+    let schema2_subject = "schema2.proto".to_owned();
+    let schema2 = r#"
+        syntax = "proto3";
+
+        import "schema0.proto";
+        import "schema1.proto";
+
+        message OtherThingWhoKnowWhatEven {
+            string whatever = 1;
+            ChoiceId nonsense = 2;
+            Choice third_field = 3;
+        }
+    "#;
+
+    let schema0_id = client
+        .publish_schema(&schema0_subject, schema0, SchemaType::Protobuf, &[])
+        .await?;
+    assert!(schema0_id > 0);
+
+    let schema1_id = client
+        .publish_schema(
+            &schema1_subject,
+            schema1,
+            SchemaType::Protobuf,
+            &[SchemaReference {
+                name: schema0_subject.clone(),
+                subject: schema0_subject.clone(),
+                version: 1,
+            }],
+        )
+        .await?;
+    assert!(schema1_id > 0);
+
+    let schema2_id = client
+        .publish_schema(
+            &schema2_subject,
+            schema2,
+            SchemaType::Protobuf,
+            &[
+                SchemaReference {
+                    name: schema1_subject.clone(),
+                    subject: schema1_subject.clone(),
+                    version: 1,
+                },
+                SchemaReference {
+                    name: schema0_subject.clone(),
+                    subject: schema0_subject.clone(),
+                    version: 1,
+                },
+            ],
+        )
+        .await?;
+    assert!(schema2_id > 0);
+
+    let (primary_subject, dependency_subjects) =
+        client.get_subject_and_references(&schema2_subject).await?;
+    assert_eq!(schema2_subject, primary_subject.name);
+    assert_eq!(2, dependency_subjects.len());
+    assert_eq!(schema0_subject, dependency_subjects[0].name);
+    assert_eq!(schema1_subject, dependency_subjects[1].name);
+
+    // Also do the by-id lookup
+    let (primary_subject, dependency_subjects) =
+        client.get_subject_and_references_by_id(schema2_id).await?;
+    assert_eq!(schema2_subject, primary_subject.name);
+    assert_eq!(2, dependency_subjects.len());
+    assert_eq!(schema0_subject, dependency_subjects[0].name);
+    assert_eq!(schema1_subject, dependency_subjects[1].name);
+
     Ok(())
 }
 
 #[tokio::test]
 async fn test_client_errors() -> Result<(), anyhow::Error> {
-    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
+    let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
+    match mz_ccsr::ClientConfig::new(invalid_schema_registry_url).build() {
+        Err(e) => assert_eq!(
+            "cannot construct a CCSR client with a cannot-be-a-base URL",
+            e.to_string(),
+        ),
+        res => panic!("Expected error, got {:?}", res),
+    }
+
+    let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     // Get-by-id-specific errors.
     match client.get_schema_by_id(i32::max_value()).await {
@@ -251,7 +384,7 @@ fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, a
                         .body(Body::from(body))
                 }))
             }));
-        tokio::spawn(async {
+        mz_ore::task::spawn(|| "start_server", async {
             match server.await {
                 Ok(()) => (),
                 Err(err) => eprintln!("server error: {}", err),
@@ -261,7 +394,7 @@ fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, a
     };
 
     let url: reqwest::Url = format!("http://{}", addr).parse().unwrap();
-    ccsr::ClientConfig::new(url).build()
+    mz_ccsr::ClientConfig::new(url).build()
 }
 
 fn assert_raw_schemas_eq(schema1: &str, schema2: &str) {

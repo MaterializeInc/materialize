@@ -1,41 +1,54 @@
 [package]
-name = "ore"
+name = "mz-ore"
 description = "Internal utility libraries for Materialize."
 version = "0.0.0"
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.58.0"
 publish = false
 
-[features]
-default = ["network", "chrono", "cli", "metrics", "test"]
-cli = ["structopt"]
-metrics = ["prometheus"]
-network = ["async-trait", "bytes", "futures", "openssl", "smallvec", "tokio-openssl", "tokio"]
-test = ["ctor", "tracing-subscriber"]
-
+[dependencies]
+anyhow = { version = "1.0.55", optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
 # an external crate is required, it must be optional and feature-gated.
 #
 # The only exception to the above is the `either` crate, which itself has zero
 # dependencies and is widely considered to be basically part of the stdlib.
-[dependencies]
-async-trait = { version = "0.1.51", optional = true }
+async-trait = { version = "0.1.52", optional = true }
 bytes = { version = "1.1.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
+clap = { version = "3.1.2", optional = true }
 ctor = { version = "0.1.21", optional = true }
 either = "1.6.1"
-futures = { version = "0.3.17", optional = true }
+futures = { version = "0.3.21", optional = true }
+lazy_static = "1.4.0"
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.
-openssl = { version = "0.10.36", features = ["vendored"], optional = true  }
+openssl = { version = "0.10.38", features = ["vendored"], optional = true }
+paste = "1.0.6"
+pin-project = "1.0.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, optional = true }
-smallvec = { version = "1.5.0", optional = true }
-structopt = { version = "0.3.23", optional = true }
-tokio = { version = "1.11.0", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
-tokio-openssl = { version = "0.6.2", optional = true }
-tracing-subscriber = { version = "0.2.23", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
+smallvec = { version = "1.8.0", optional = true }
+stacker = { version = "0.1.14", optional = true }
+tokio = { version = "1.17.0", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
+tokio-openssl = { version = "0.6.3", optional = true }
+# TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
+# The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
+# to use `tracing`, we cannot remove this feature until we guarantee no dependencies log using the `log` crate, for
+# log lines we care about.
+# Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
+# there is no global `tracing` subscriber.
+tracing-subscriber = { version = "0.3.9", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
 
 [dev-dependencies]
-crossbeam-utils = "0.8.5"
-tokio = { version = "1.11.0", features = ["macros"] }
+tokio = { version = "1.17.0", features = ["macros"] }
+
+[features]
+default = ["network", "chrono", "cli", "metrics", "stack", "test"]
+network = ["async-trait", "bytes", "futures", "openssl", "smallvec", "tokio-openssl", "tokio", "task"]
+task = ["tokio", "tokio/tracing"]
+cli = ["clap"]
+stack = ["stacker"]
+test = ["anyhow", "ctor", "tracing-subscriber"]
+metrics = ["prometheus"]

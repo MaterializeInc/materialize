@@ -1,0 +1,237 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [int32 int64])
+----
+ok
+
+# both have limit and offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [] 3 2) [] [] 1 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=() order=() limit=1 offset=3
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 1 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc) limit=1 offset=3
+
+# outer limit is greater than inner limit plus outer offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 10 0)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc) limit=3 offset=2
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 10 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc) limit=2 offset=3
+
+# outer offset is equal to inner limit
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [] 3 2) [] [] 1 3)
+----
+%0 =
+| Constant
+
+# outer offset is greater than the inner offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [] 3 0) [] [] null 4)
+----
+%0 =
+| Constant
+
+# inner has no limit, but both have offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [#0] null 2) [0] [#0] 10 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc) limit=10 offset=3
+
+# both have no limit, but offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [#0] null 2) [0] [#0] null 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc) offset=3
+
+# outer has no limit, but both have offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] 3 2) [] [#0] null 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=() order=(#0 asc) limit=2 offset=3
+
+# outer has no limit and no offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] 3 2) [] [#0] null 0)
+----
+%0 =
+| Get x (u0)
+| TopK group=() order=(#0 asc) limit=3 offset=2
+
+# inner has no limit and no offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] null 0) [] [#0] 3 2)
+----
+%0 =
+| Get x (u0)
+| TopK group=() order=(#0 asc) limit=3 offset=2
+
+# inner has no limit and no offset, and outer has only limit
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] null 0) [] [#0] 3 0)
+----
+%0 =
+| Get x (u0)
+| TopK group=() order=(#0 asc) limit=3 offset=0
+
+# inner has no limit and no offset, and outer has only offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] null 0) [] [#0] null 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=() order=(#0 asc) offset=1
+
+# both have no limit and no offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] null 0) [] [#0] null 0)
+----
+%0 =
+| Get x (u0)
+| TopK group=() order=(#0 asc) offset=0
+
+# both have limit 0 and no offset
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] 0 0) [] [#0] 0 0)
+----
+%0 =
+| Constant
+
+# outer has limit 0
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] null 0) [] [#0] 0 0)
+----
+%0 =
+| Constant
+
+# inner has limit 0
+
+build apply=TopKFusion
+(top_k (top_k (get x) [] [#0] 0 0) [] [#0] null 0)
+----
+%0 =
+| Constant
+
+build
+(top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
+----
+%0 =
+| Constant (5) (4) (2) (3) (2) (1)
+| TopK group=() order=() limit=3 offset=2
+| TopK group=() order=() limit=1 offset=1
+
+build apply=TopKFusion
+(top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
+----
+%0 =
+| Constant (5) (4) (2) (3) (2) (1)
+| TopK group=() order=() limit=1 offset=3
+
+opt
+(top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
+----
+%0 =
+| Constant (3)
+
+
+build apply=TopKFusion
+(top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 3)
+----
+%0 =
+| Constant
+
+build apply=TopKFusion
+(top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [] [#1] 3 2) [] [#0] 1 0)
+----
+%0 =
+| Constant (5, 4) (3, 2) (1, 0)
+| TopK group=() order=(#1 asc) limit=3 offset=2
+| TopK group=() order=(#0 asc) limit=1 offset=0
+
+build apply=TopKFusion
+(top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [] [#1] 3 2) [] [#1] 1 0)
+----
+%0 =
+| Constant (5, 4) (3, 2) (1, 0)
+| TopK group=() order=(#1 asc) limit=1 offset=2
+
+build apply=TopKFusion
+(top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [#0] 3 2) [1] [#1] 1 0)
+----
+%0 =
+| Constant (5, 4) (3, 2) (1, 0)
+| TopK group=(#0) order=(#0 asc) limit=3 offset=2
+| TopK group=(#1) order=(#1 asc) limit=1 offset=0
+
+build apply=TopKFusion
+(top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [] 3 2) [0] [#1] 1 0)
+----
+%0 =
+| Constant (5, 4) (3, 2) (1, 0)
+| TopK group=(#0) order=() limit=3 offset=2
+| TopK group=(#0) order=(#1 asc) limit=1 offset=0
+
+# Fusionable TopK operators with grouping key
+
+build apply=TopKFusion
+(top_k (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 3 1) [0] [] 1 0)
+----
+%0 =
+| Constant (5, 4) (3, 2) (1, 0) (1, 1)
+| TopK group=(#0) order=() limit=1 offset=1
+
+build apply=FoldConstants
+(top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 1 1)
+----
+%0 =
+| Constant (1, 1)
+
+build apply=FoldConstants
+(top_k (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 3 1) [0] [] 1 0)
+----
+%0 =
+| Constant (1, 1)

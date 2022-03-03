@@ -12,6 +12,12 @@ cat
 ----
 ok
 
+cat
+(defsource t1 ([(Int32 true) (Int32 true)] []))
+(defsource t2 ([(Int32 true) (Int32 true)] []))
+----
+ok
+
 # regression test for #8235
 build apply=CanonicalizeMfp
 (project
@@ -22,5 +28,233 @@ build apply=CanonicalizeMfp
 ----
 %0 =
 | Get x (u0)
-| Filter null
+| Filter false
 | Project (#1)
+
+# pushdown filters with a map. filters should be fused and re-sorted with the expression inlined
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (filter
+            (map (get x) [(call_binary add_int64 #0 #1)])
+            [(call_binary lt #3 (4321 Int32))])
+        [(call_binary gt #3 (1234 Int32))])
+     [3])
+----
+%0 =
+| Get x (u0)
+| Filter ((#0 + #1) < 4321), ((#0 + #1) > 1234)
+| Map (#0 + #1)
+| Project (#3)
+
+# multiple pushdown filters without a map. filters should be fused and re-sorted least to greatest
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (filter
+            (get x)
+            [(call_binary lt #0 (1234 Int32))])
+        [(call_binary gt #1 (4321 Int32))])
+    [0 1])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 < 1234), (#1 > 4321)
+| Project (#0, #1)
+
+# multiple retained filters with a map. canonicalized filters should be re-sorted least to greatest
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_variadic hmac_string [#0 #1 #2]) (call_variadic hmac_string [#0 #1])])
+        [(call_unary is_null #4) (call_unary is_null #3)])
+     [0 3 4])
+----
+%0 =
+| Get x (u0)
+| Map hmac(#0, #1, #2), hmac(#0, #1)
+| Filter isnull(#3), isnull(#4)
+| Project (#0, #3, #4)
+
+# both pushdown and retained filters with a map
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map (get x) [(call_variadic hmac_string [#0 #1 #2])])
+        [
+            (call_binary lt #0 1234)
+            (call_unary is_null #3)
+        ])
+     [0 3])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 < 1234)
+| Map hmac(#0, #1, #2)
+| Filter isnull(#3)
+| Project (#0, #3)
+
+# regression test for #10000. Both pushdown and retained filters with a map.
+# Even though there is no map in the test, the duplicated predicates cause the creation
+# of a map via memoizing common subexpressions that then gets optimized away.
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (project
+            (join
+                [(get t1) (get t2)]
+                [[#0 #2]])
+            [0])
+        [
+            (call_unary not (call_unary is_null #0))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+        ])
+    [0])
+----
+----
+%0 =
+| Get t1 (u1)
+
+%1 =
+| Get t2 (u2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+| Project (#0)
+----
+----
+
+# same test as above, but with predicates that are equivalent only after considering the innermost map-project
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (map
+            (project
+                (join
+                    [(get t1) (get t2)]
+                    [[#0 #2]])
+                [0 1 1])
+            [(call_binary add_int64 #0 #2)])
+        [
+            (call_unary not (call_unary is_null #0))
+            (call_binary or
+                (call_binary eq (call_binary add_int64 #0 #2) (5 Int32))
+                (call_binary eq (call_binary add_int64 #0 #1) (9 Int32)))
+            (call_binary or
+                (call_binary eq #3 (5 Int32))
+                (call_binary eq #3 (9 Int32)))
+        ])
+    [0])
+----
+----
+%0 =
+| Get t1 (u1)
+
+%1 =
+| Get t2 (u2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0)), ((5 = (#0 + #1)) || (9 = (#0 + #1)))
+| Project (#0)
+----
+----
+
+# consecutive levels of map-filter-project. outermost mfp is the same as the #10000 regression test, and
+# the innermost mfp for `t1` should inline (#0 + #1) expression and push predicate down
+build apply=CanonicalizeMfp
+(project
+    (filter
+        (project
+            (join
+                [
+                    (project
+                        (filter
+                            (map
+                                (get t1)
+                                [(call_binary add_int64 #0 #1)])
+                            [(call_binary gt #2 1234)])
+                        [2])
+                    (map (get t2) [(call_binary mul_int64 #0 #1)])
+                ]
+                [[#0 #2]])
+            [0 1 2 3])
+        [
+            (call_unary not (call_unary is_null #0))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+        ])
+    [0 3])
+----
+----
+%0 =
+| Get t1 (u1)
+| Filter ((#0 + #1) > 1234)
+| Map (#0 + #1)
+| Project (#2)
+
+%1 =
+| Get t2 (u2)
+| Map (#0 * #1)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+| Project (#0, #3)
+----
+----
+
+# TODO (#10130): both filters should be fused and pushed through map. currently the duplicated predicate ((#0 ==5) || (#0 == 1337))
+#                causes one of its instances to be considered retained rather than pushdown
+#
+#                After fixing #10130 the expected output should be:
+#                %0 =
+#                | Get t1 (u1)
+#
+#                %1 =
+#                | Get t2 (u2)
+#
+#                %2 =
+#                | Join %0 %1 (= #0 #2)
+#                | | implementation = Unimplemented
+#                | Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+#                | Map (#0 + #2)
+#                | Project (#4)
+build apply=CanonicalizeMfp
+(project
+    (map
+        (filter
+            (project
+                (join
+                    [(get t1) (get t2)]
+                    [[#0 #2]])
+                [0 2])
+            [
+                (call_unary not (call_unary is_null #0))
+                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            ])
+        [(call_binary add_int64 #0 #1)])
+    [2])
+----
+----
+%0 =
+| Get t1 (u1)
+
+%1 =
+| Get t2 (u2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter !(isnull(#0))
+| Map (#0 + #2)
+| Filter ((#0 = 5) || (#0 = 1337))
+| Project (#4)
+----
+----

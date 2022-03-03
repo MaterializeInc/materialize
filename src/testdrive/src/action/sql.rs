@@ -11,39 +11,40 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::SystemTime;
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use md5::{Digest, Md5};
-use ore::result::ResultExt;
 use postgres_array::Array;
+use regex::Regex;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{FromSql, Type};
 
-use coord::catalog::Catalog;
-use ore::collections::CollectionExt;
-use ore::retry::Retry;
-use pgrepr::{Interval, Jsonb, Numeric};
-use sql_parser::ast::{
+use mz_coord::catalog::Catalog;
+use mz_ore::collections::CollectionExt;
+use mz_ore::now::NOW_ZERO;
+use mz_ore::retry::Retry;
+use mz_pgrepr::{Interval, Jsonb, Numeric};
+use mz_sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
     CreateViewStatement, Raw, Statement, ViewDefinition,
 };
 
-use crate::action::{Action, Context, State};
-use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
+use crate::action::{Action, ControlFlow, State};
+use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
-    context: Context,
 }
 
-pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, String> {
-    let stmts = sql_parser::parser::parse_statements(&cmd.query)
-        .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
+pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
+        .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
-        return Err(format!("expected one statement, but got {}", stmts.len()));
+        bail!("expected one statement, but got {}", stmts.len());
     }
     if let SqlOutput::Full { expected_rows, .. } = &mut cmd.expected_output {
         // TODO(benesch): one day we'll support SQL queries where order matters.
@@ -52,18 +53,17 @@ pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, Str
     Ok(SqlAction {
         cmd,
         stmt: stmts.into_element(),
-        context,
     })
 }
 
 #[async_trait]
 impl Action for SqlAction {
-    async fn undo(&self, state: &mut State) -> Result<(), String> {
+    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         match &self.stmt {
             Statement::CreateDatabase(CreateDatabaseStatement { name, .. }) => {
                 self.try_drop(
                     &mut state.pgclient,
-                    &format!("DROP DATABASE IF EXISTS {}", name.to_string()),
+                    &format!("DROP DATABASE IF EXISTS {}", name),
                 )
                 .await
             }
@@ -102,7 +102,7 @@ impl Action for SqlAction {
         }
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::*;
 
         let query = &self.cmd.query;
@@ -123,22 +123,27 @@ impl Action for SqlAction {
             _ => true,
         };
 
-        let pgclient = &state.pgclient;
-
+        let state = &state;
         match should_retry {
             true => Retry::default()
-                .initial_backoff(Duration::from_millis(50))
-                .factor(1.5)
-                .max_duration(self.context.timeout),
+                .initial_backoff(state.initial_backoff)
+                .factor(state.backoff_factor)
+                .max_duration(state.timeout),
             false => Retry::default().max_tries(1),
         }
-        .retry(|retry_state| async move {
-            match self.try_redo(pgclient, &query).await {
+        .retry_async(|retry_state| async move {
+            match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
                     }
-                    println!("rows match; continuing");
+                    println!(
+                        "rows match; continuing at ts {}",
+                        SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64()
+                    );
                     Ok(())
                 }
                 Err(e) => {
@@ -146,8 +151,10 @@ impl Action for SqlAction {
                         print!("rows didn't match; sleeping to see if dataflow catches up");
                     }
                     if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:.0?}", backoff);
-                        io::stdout().flush().unwrap();
+                        if !backoff.is_zero() {
+                            print!(" {:.0?}", backoff);
+                            io::stdout().flush().unwrap();
+                        }
                     } else {
                         println!();
                     }
@@ -167,32 +174,29 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = Catalog::open_debug(path, ore::now::now_zero)
-                        .map_err_to_string()?
-                        .dump();
+                    let disk_state = Catalog::open_debug(path, NOW_ZERO.clone()).await?.dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
                         state.materialized_addr,
                     ))
-                    .await
-                    .map_err_to_string()?
+                    .await?
                     .text()
-                    .await
-                    .map_err_to_string()?;
+                    .await?;
                     if disk_state != mem_state {
-                        return Err(format!(
+                        bail!(
                             "the on-disk state of the catalog does not match its in-memory state\n\
                              disk:{}\n\
                              mem:{}",
-                            disk_state, mem_state
-                        ));
+                            disk_state,
+                            mem_state
+                        );
                     }
                 }
                 _ => (),
             }
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -201,25 +205,25 @@ impl SqlAction {
         &self,
         pgclient: &mut tokio_postgres::Client,
         query: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), anyhow::Error> {
         print_query(&query);
-        match pgclient.query(query, &[]).await {
-            Err(err) => Err(err.to_string()),
-            Ok(_) => Ok(()),
-        }
+        pgclient.query(query, &[]).await?;
+        Ok(())
     }
 
-    async fn try_redo(&self, pgclient: &tokio_postgres::Client, query: &str) -> Result<(), String> {
-        let stmt = pgclient
+    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+        let stmt = state
+            .pgclient
             .prepare(query)
             .await
-            .map_err(|e| format!("preparing query failed: {}", e))?;
-        let mut actual: Vec<_> = pgclient
+            .context("preparing query failed")?;
+        let mut actual: Vec<_> = state
+            .pgclient
             .query(&stmt, &[])
             .await
-            .map_err(|e| format!("executing query failed: {}", e))?
+            .context("executing query failed")?
             .into_iter()
-            .map(|row| decode_row(row, self.context.clone()))
+            .map(|row| decode_row(state, row))
             .collect::<Result<_, _>>()?;
         actual.sort();
 
@@ -231,10 +235,11 @@ impl SqlAction {
                 if let Some(column_names) = column_names {
                     let actual_columns: Vec<_> = stmt.columns().iter().map(|c| c.name()).collect();
                     if actual_columns.iter().ne(column_names) {
-                        return Err(format!(
+                        bail!(
                             "column name mismatch\nexpected: {:?}\nactual:   {:?}",
-                            column_names, actual_columns
-                        ));
+                            column_names,
+                            actual_columns
+                        );
                     }
                 }
                 if &actual == expected_rows {
@@ -266,19 +271,21 @@ impl SqlAction {
                         writeln!(buf, "extra row: {:?}", a).unwrap();
                         right += 1;
                     }
-                    Err(format!(
+                    bail!(
                         "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
-                        expected_rows, actual, buf
-                    ))
+                        expected_rows,
+                        actual,
+                        buf
+                    )
                 }
             }
             SqlOutput::Hashed { num_values, md5 } => {
                 if &actual.len() != num_values {
-                    Err(format!(
+                    bail!(
                         "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
                         actual.len(),
                         num_values,
-                    ))
+                    )
                 } else {
                     let mut hasher = Md5::new();
                     for row in &actual {
@@ -288,10 +295,7 @@ impl SqlAction {
                     }
                     let actual = format!("{:x}", hasher.finalize());
                     if &actual != md5 {
-                        Err(format!(
-                            "wrong hash value: expected:{:?} got:{:?}",
-                            md5, actual
-                        ))
+                        bail!("wrong hash value: expected:{:?} got:{:?}", md5, actual)
                     } else {
                         Ok(())
                     }
@@ -302,34 +306,86 @@ impl SqlAction {
 }
 
 pub struct FailSqlAction {
-    cmd: FailSqlCommand,
-    context: Context,
+    query: String,
+    expected_error: ErrorMatcher,
+    stmt: Option<Statement<Raw>>,
 }
 
-pub fn build_fail_sql(cmd: FailSqlCommand, context: Context) -> Result<FailSqlAction, String> {
+enum ErrorMatcher {
+    Contains(String),
+    Exact(String),
+    Regex(Regex),
+}
+
+impl ErrorMatcher {
+    fn as_str(&self) -> &str {
+        match self {
+            ErrorMatcher::Contains(s) | ErrorMatcher::Exact(s) => s.as_str(),
+            ErrorMatcher::Regex(r) => r.as_str(),
+        }
+    }
+}
+
+pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Error> {
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
+        .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
+
+    // Allow for statements that could not be parsed.
+    // This way such statements can be used for negative testing in .td files
+    let stmt = match stmts {
+        Ok(s) => {
+            if s.len() != 1 {
+                bail!("expected one statement, but got {}", s.len());
+            }
+            Some(s.into_element())
+        }
+        Err(_) => None,
+    };
+
+    let expected_error = match cmd.error_match_type {
+        SqlErrorMatchType::Contains => ErrorMatcher::Contains(cmd.expected_error),
+        SqlErrorMatchType::Exact => ErrorMatcher::Exact(cmd.expected_error),
+        SqlErrorMatchType::Regex => ErrorMatcher::Regex(Regex::new(&cmd.expected_error)?),
+    };
+
     Ok(FailSqlAction {
-        cmd,
-        context: context,
+        query: cmd.query,
+        expected_error,
+        stmt,
     })
 }
 
 #[async_trait]
 impl Action for FailSqlAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let query = &self.cmd.query;
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+        use Statement::{Commit, Rollback};
+
+        let query = &self.query;
         print_query(&query);
 
-        let pgclient = &state.pgclient;
-        Retry::default()
-            .initial_backoff(Duration::from_millis(50))
-            .factor(1.5)
-            .max_duration(self.context.timeout)
-            .retry(|retry_state| async move {
-            match self.try_redo(pgclient, &query).await {
+        let should_retry = match &self.stmt {
+            // Do not retry statements that could not be parsed
+            None => false,
+            // Do not retry COMMIT and ROLLBACK. Once the transaction has errored out and has
+            // been aborted, retrying COMMIT or ROLLBACK will actually start succeeding, which
+            // causes testdrive to emit a confusing "query succeded but expected error" message.
+            Some(Commit(_)) | Some(Rollback(_)) => false,
+            Some(_) => true,
+        };
+
+        let state = &state;
+        match should_retry {
+            true => Retry::default()
+                .initial_backoff(state.initial_backoff)
+                .factor(state.backoff_factor)
+                .max_duration(state.timeout),
+            false => Retry::default().max_tries(1),
+        }.retry_async(|retry_state| async move {
+            match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -338,7 +394,7 @@ impl Action for FailSqlAction {
                     Ok(())
                 }
                 Err(e) => {
-                    if retry_state.i == 0 {
+                    if retry_state.i == 0 && should_retry {
                         print!("query error didn't match; sleeping to see if dataflow produces error shortly");
                     }
                     if let Some(backoff) = retry_state.next_backoff {
@@ -350,54 +406,67 @@ impl Action for FailSqlAction {
                     Err(e)
                 }
             }
-        }).await
+        }).await?;
+        Ok(ControlFlow::Continue)
     }
 }
 
 impl FailSqlAction {
-    async fn try_redo(&self, pgclient: &tokio_postgres::Client, query: &str) -> Result<(), String> {
-        match pgclient.query(query, &[]).await {
-            Ok(_) => Err(format!(
+    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+        match state.pgclient.query(query, &[]).await {
+            Ok(_) => bail!(
                 "query succeeded, but expected error '{}'",
-                self.cmd.expected_error
-            )),
-            Err(err) => {
-                let mut err_string = err.to_string();
-                match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
-                    Some(err) => {
-                        err_string = err.message().to_string();
+                self.expected_error.as_str()
+            ),
+            Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
+                Some(err) => {
+                    let mut err_string = err.message().to_string();
 
-                        if let Some(regex) = &self.context.regex {
-                            err_string = regex
-                                .replace_all(&err_string, self.context.regex_replacement.as_str())
-                                .to_string();
+                    if let Some(regex) = &state.regex {
+                        err_string = regex
+                            .replace_all(&err_string, state.regex_replacement.as_str())
+                            .to_string();
+                    }
+
+                    match &self.expected_error {
+                        ErrorMatcher::Contains(s) => {
+                            if !err_string.contains(s) {
+                                bail!(
+                                    "expected error containing '{}', but got '{}'",
+                                    s,
+                                    err_string
+                                );
+                            }
                         }
-
-                        if err_string.contains(&self.cmd.expected_error) {
-                            Ok(())
-                        } else {
-                            Err(format!(
-                                "expected error containing '{}', but got '{}'",
-                                self.cmd.expected_error, err_string
-                            ))
+                        ErrorMatcher::Exact(s) => {
+                            if &err_string != s {
+                                bail!("expected exact error '{}', but got '{}'", s, err_string);
+                            }
+                        }
+                        ErrorMatcher::Regex(r) => {
+                            if !r.is_match(&err_string) {
+                                bail!(
+                                    "expected error matching regex '{}', but got '{}'",
+                                    r.as_str(),
+                                    err_string
+                                );
+                            }
                         }
                     }
-                    None => Err(err_string),
+
+                    Ok(())
                 }
-            }
+                None => Err(err.into()),
+            },
         }
     }
 }
 
 pub fn print_query(query: &str) {
-    if query.len() > 72 {
-        println!("> {}...", &query[..72]);
-    } else {
-        println!("> {}", &query);
-    }
+    println!("> {}", query);
 }
 
-fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
+pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -472,13 +541,13 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
             Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
             Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
             Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
-            _ => return Err(format!("TESTDRIVE: unable to handle SQL type: {:?}", ty)),
+            _ => bail!("unsupported SQL type in testdrive: {:?}", ty),
         }
         .unwrap_or_else(|| "<null>".into());
 
-        if let Some(regex) = &context.regex {
+        if let Some(regex) = &state.regex {
             value = regex
-                .replace_all(&value, context.regex_replacement.as_str())
+                .replace_all(&value, state.regex_replacement.as_str())
                 .to_string();
         }
 

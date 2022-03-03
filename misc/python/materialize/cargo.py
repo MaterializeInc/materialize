@@ -16,7 +16,7 @@ necessary to support this repository are implemented.
 """
 
 from pathlib import Path
-from typing import Set
+from typing import Dict, Optional, Set
 
 import semver
 import toml
@@ -37,6 +37,7 @@ class Crate:
     Attributes:
         name: The name of the crate.
         version: The version of the crate.
+        rust_version: The minimum Rust version declared in the crate, if any.
     """
 
     def __init__(self, root: Path, path: Path):
@@ -54,16 +55,19 @@ class Crate:
                     for name, c in config[dep_type].items()
                     if "path" in c
                 )
+        self.rust_version: Optional[str] = None
+        if "package" in config:
+            self.rust_version = config["package"].get("rust-version")
         self.bins = []
         if "bin" in config:
             for bin in config["bin"]:
                 self.bins.append(bin["name"])
         if (path / "src" / "main.rs").exists():
             self.bins.append(self.name)
-        for path in (path / "src" / "bin").glob("*.rs"):
-            self.bins.append(path.stem)
-        for path in (path / "src" / "bin").glob("*/main.rs"):
-            self.bins.append(path.parent.stem)
+        for p in (path / "src" / "bin").glob("*.rs"):
+            self.bins.append(p.stem)
+        for p in (path / "src" / "bin").glob("*/main.rs"):
+            self.bins.append(p.parent.stem)
 
     def inputs(self) -> Set[str]:
         """Compute the files that can impact the compilation of this crate.
@@ -82,14 +86,15 @@ class Crate:
         # a Rust toolchain for users running demos. Instead, we assume that all†
         # files in a crate's directory are inputs to that crate.
         #
-        # † As a development convenience, we omit mzcompose and mzcompose.yml
-        # files within a crate. This is technically incorrect if someone writes
+        # † As a development convenience, we omit mzcompose configuration files
+        # within a crate. This is technically incorrect if someone writes
         # `include!("mzcompose.yml")`, but that seems like a crazy thing to do.
         return git.expand_globs(
             self.root,
             f"{self.path}/**",
             f":(exclude){self.path}/mzcompose",
             f":(exclude){self.path}/mzcompose.yml",
+            f":(exclude){self.path}/mzcompose.py",
         )
 
 
@@ -101,13 +106,16 @@ class Workspace:
 
     Args:
         root: The path to the root of the workspace.
+
+    Attributes:
+        crates: A mapping from name to crate definition.
     """
 
     def __init__(self, root: Path):
         with open(root / "Cargo.toml") as f:
             config = toml.load(f)
 
-        self.crates = {}
+        self.crates: Dict[str, Crate] = {}
         for path in config["workspace"]["members"]:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate

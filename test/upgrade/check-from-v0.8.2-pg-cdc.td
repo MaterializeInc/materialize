@@ -21,3 +21,6 @@ INSERT INTO upgrade_pg_cdc_table VALUES (11),(12),(13),(14),(15);
 13
 14
 15
+
+# Drop source so that the replication slot can be reclaimed.
+> DROP SOURCE upgrade_pg_cdc_source CASCADE

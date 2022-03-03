@@ -22,7 +22,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > DECLARE c CURSOR FOR TAIL t1 AS OF -1;
 
 ! FETCH 1 c;
-out of range integral type conversion attempted
+contains:out of range integral type conversion attempted
 
 > COMMIT
 
@@ -31,14 +31,14 @@ out of range integral type conversion attempted
 # (which will happen after t has been compacted) and then we should be
 # able to see the same failure with FETCH.
 ! SELECT * FROM t1 AS OF 0
-Timestamp (0) is not valid for all inputs
+contains:Timestamp (0) is not valid for all inputs
 
 > BEGIN
 
 > DECLARE c CURSOR FOR TAIL t1 AS OF 0;
 
 ! FETCH 1 c;
-Timestamp (0) is not valid for all inputs
+contains:Timestamp (0) is not valid for all inputs
 
 > COMMIT
 

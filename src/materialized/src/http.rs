@@ -17,18 +17,21 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 
 use futures::future::TryFutureExt;
+use headers::authorization::{Authorization, Basic, Bearer};
+use headers::HeaderMapExt;
 use hyper::{service, Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
-use log::error;
+use mz_ore::metrics::MetricsRegistry;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
-use ore::metrics::MetricsRegistry;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
+use tracing::error;
 
-use coord::session::Session;
-use ore::future::OreFutureExt;
-use ore::netio::SniffedStream;
+use mz_coord::session::Session;
+use mz_frontegg_auth::FronteggAuthentication;
+use mz_ore::future::OreFutureExt;
+use mz_ore::netio::SniffedStream;
 
 use crate::http::metrics::MetricsVariant;
 use crate::Metrics;
@@ -56,10 +59,11 @@ fn sniff_tls(buf: &[u8]) -> bool {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub tls: Option<TlsConfig>,
-    pub coord_client: coord::Client,
+    pub frontegg: Option<FronteggAuthentication>,
+    pub coord_client: mz_coord::Client,
     pub metrics_registry: MetricsRegistry,
     pub global_metrics: Metrics,
-    pub pgwire_metrics: pgwire::Metrics,
+    pub pgwire_metrics: mz_pgwire::Metrics,
 }
 
 #[derive(Debug, Clone)]
@@ -77,16 +81,18 @@ pub enum TlsMode {
 #[derive(Debug)]
 pub struct Server {
     tls: Option<TlsConfig>,
-    coord_client: coord::Client,
+    frontegg: Option<FronteggAuthentication>,
+    coord_client: mz_coord::Client,
     metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
-    pgwire_metrics: pgwire::Metrics,
+    pgwire_metrics: mz_pgwire::Metrics,
 }
 
 impl Server {
     pub fn new(config: Config) -> Server {
         Server {
             tls: config.tls,
+            frontegg: config.frontegg,
             coord_client: config.coord_client,
             metrics_registry: config.metrics_registry,
             global_metrics: config.global_metrics,
@@ -134,11 +140,11 @@ impl Server {
         //
         // The match here explicitly spells out all cases to be resilient to
         // future changes to TlsMode.
-        let user = match (self.tls_mode(), &conn) {
-            (None, MaybeHttpsStream::Http(_)) => Ok(SYSTEM_USER.into()),
+        let cert_user: Result<Option<String>, _> = match (self.tls_mode(), &conn) {
+            (None, MaybeHttpsStream::Http(_)) => Ok(None),
             (None, MaybeHttpsStream::Https(_)) => unreachable!(),
             (Some(TlsMode::Require), MaybeHttpsStream::Http(_)) => Err("HTTPS is required"),
-            (Some(TlsMode::Require), MaybeHttpsStream::Https(_)) => Ok(SYSTEM_USER.into()),
+            (Some(TlsMode::Require), MaybeHttpsStream::Https(_)) => Ok(None),
             (Some(TlsMode::AssumeUser), MaybeHttpsStream::Http(_)) => Err("HTTPS is required"),
             (Some(TlsMode::AssumeUser), MaybeHttpsStream::Https(conn)) => conn
                 .ssl()
@@ -146,17 +152,52 @@ impl Server {
                 .as_ref()
                 .and_then(|cert| cert.subject_name().entries_by_nid(Nid::COMMONNAME).next())
                 .and_then(|cn| cn.data().as_utf8().ok())
-                .map(|cn| cn.to_string())
+                .map(|cn| Some(cn.to_string()))
                 .ok_or("invalid user name in client certificate"),
         };
 
         let svc = service::service_fn(move |req| {
-            let user = user.clone();
+            let cert_user = cert_user.clone();
             let coord_client = self.coord_client.clone();
             let metrics_registry = self.metrics_registry.clone();
             let global_metrics = self.global_metrics.clone();
             let pgwire_metrics = self.pgwire_metrics.clone();
+            let frontegg = self.frontegg.clone();
             let future = async move {
+                // There are three places a username may be specified:
+                // - certificate common name
+                // - HTTP Basic authentication
+                // - JWT email address
+                // We verify that if any of these are present, they must match any other that
+                // is also present.
+
+                let user = if let Err(e) = cert_user {
+                    Err(e)
+                } else if let Some(frontegg) = &frontegg {
+                    // If we require mzcloud auth, fetch credentials from the http auth
+                    // header. Basic auth comes with a username/password, where the password
+                    // is the client+secret pair. Bearer auth is an existing JWT that must be
+                    // validated. In either case, if a username was specified in the client cert,
+                    // it must match that of the JWT.
+                    validate_http_frontegg_authentication(&req, &frontegg)
+                        .await
+                        .and_then(|email| {
+                            if let Ok(Some(cert_user)) = cert_user {
+                                if email != cert_user {
+                                    anyhow::bail!(
+                                        "JWT email does not match certificate common name"
+                                    );
+                                }
+                            }
+                            Ok(email)
+                        })
+                        .map_err(|_e| "unauthorized")
+                } else {
+                    // If there was no mzcloud auth, we can use the cert's username if present,
+                    // otherwise the system user.
+                    cert_user.map(|cert_user| cert_user.unwrap_or_else(|| SYSTEM_USER.to_string()))
+                };
+
                 let user = match user {
                     Ok(user) => user,
                     Err(e) => return Ok(util::error_response(StatusCode::UNAUTHORIZED, e)),
@@ -164,15 +205,16 @@ impl Server {
 
                 let coord_client = coord_client.new_conn()?;
                 let session = Session::new(coord_client.conn_id(), user);
-                let (mut coord_client, _) = match coord_client.startup(session).await {
-                    Ok(coord_client) => coord_client,
-                    Err(e) => {
-                        return Ok(util::error_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            e.to_string(),
-                        ))
-                    }
-                };
+                let (mut coord_client, _) =
+                    match coord_client.startup(session, frontegg.is_some()).await {
+                        Ok(coord_client) => coord_client,
+                        Err(e) => {
+                            return Ok(util::error_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                e.to_string(),
+                            ))
+                        }
+                    };
 
                 let res = match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
@@ -219,7 +261,12 @@ impl Server {
             // in the future itself. If Rust ever supports asynchronous
             // destructors ("AsyncDrop"), those will admit a more natural
             // solution to the problem.
-            future.spawn_if_canceled()
+            //
+            // TODO(guswynn): remove this `.to_string`
+            // It appears there is a bug in the rust compiler related to async and/or closures
+            // that prevents even an explicitly-annotated `&'static str` from
+            // being used here
+            future.spawn_if_canceled(|| "hyper_server".to_string())
         });
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await
@@ -237,15 +284,11 @@ impl Server {
 #[derive(Clone)]
 pub struct ThirdPartyServer {
     metrics_registry: MetricsRegistry,
-    global_metrics: Metrics,
 }
 
 impl ThirdPartyServer {
-    pub fn new(metrics_registry: MetricsRegistry, global_metrics: Metrics) -> Self {
-        Self {
-            metrics_registry,
-            global_metrics,
-        }
+    pub fn new(metrics_registry: MetricsRegistry) -> Self {
+        Self { metrics_registry }
     }
 
     pub async fn serve(self, addr: SocketAddr) {
@@ -303,4 +346,33 @@ impl hyper::service::Service<Request<Body>> for ThirdPartyServer {
             }),
         }
     }
+}
+
+// Uses the HTTP Authorization header to fetch a JWT. Basic auth requires a
+// username and password that is "client,secret" that is exchanged for a JWT,
+// and whose username must match the JWT's email. Bearer auth can provide the
+// JWT directly. The JWT is validated and its email address is returned.
+async fn validate_http_frontegg_authentication(
+    req: &Request<Body>,
+    frontegg: &FronteggAuthentication,
+) -> Result<String, anyhow::Error> {
+    let (http_user, jwt) = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+        let jwt = frontegg
+            .exchange_password_for_token(basic.0.password())
+            .await?;
+        (Some(basic.0.username().to_string()), jwt.access_token)
+    } else if let Some(basic) = req.headers().typed_get::<Authorization<Bearer>>() {
+        (None, basic.0.token().to_string())
+    } else {
+        anyhow::bail!("expected authorization");
+    };
+
+    let claims = frontegg.validate_access_token(&jwt)?;
+    // If a username was specified, make sure it matches the JWT email.
+    if let Some(http_user) = http_user {
+        if http_user != claims.email {
+            anyhow::bail!("HTTP Authorization user and JWT email do not match");
+        }
+    }
+    Ok(claims.email)
 }

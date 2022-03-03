@@ -13,9 +13,11 @@ author: "Materialize, Inc."
 requirements: []
 configuration:
   properties:
+    args:
+      type: array
     run:
       type: string
-    config:
+    composition:
       type: string
-  required: ["config", "run"]
+  required: ["composition"]
   additionalProperties: false

@@ -7,20 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::path::Path;
+
+use itertools::Itertools;
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::MzOffset;
-use expr::{GlobalId, PartitionId};
-use ore::cast::CastFrom;
-use repr::Timestamp;
-use sql::catalog::CatalogError as SqlCatalogError;
-use sql::names::{DatabaseSpecifier, FullName};
+use mz_dataflow_types::sources::MzOffset;
+use mz_expr::{GlobalId, PartitionId};
+use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_eq;
+use mz_repr::Timestamp;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql::names::{DatabaseSpecifier, FullName};
 use uuid::Uuid;
 
-use crate::catalog::config::Config;
 use crate::catalog::error::{Error, ErrorKind};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
@@ -120,6 +123,15 @@ const MIGRATIONS: &[&str] = &[
         offset blob NOT NULL,
         PRIMARY KEY (sid, pid, timestamp, offset)
     );",
+    // Makes the information_schema schema literal so it can store functions.
+    //
+    // Introduced in v0.9.12.
+    "INSERT INTO schemas (database_id, name) VALUES
+        (NULL, 'information_schema');",
+    // Adds index to timestamp table to more efficiently compact timestamps.
+    //
+    // Introduced in v0.12.0.
+    "CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -140,11 +152,13 @@ const MIGRATIONS: &[&str] = &[
 #[derive(Debug)]
 pub struct Connection {
     inner: rusqlite::Connection,
+    experimental_mode: bool,
+    cluster_id: Uuid,
 }
 
 impl Connection {
-    pub fn open(config: &Config) -> Result<(Connection, bool, Uuid), Error> {
-        let mut sqlite = rusqlite::Connection::open(&config.path)?;
+    pub fn open(path: &Path, experimental_mode: Option<bool>) -> Result<Connection, Error> {
+        let mut sqlite = rusqlite::Connection::open(path)?;
 
         // Validate application ID.
         let tx = sqlite.transaction()?;
@@ -177,11 +191,11 @@ impl Connection {
             tx.commit()?;
         }
 
-        let experimental_mode =
-            Self::set_or_get_experimental_mode(&mut sqlite, config.experimental_mode)?;
-        let cluster_id = Self::set_or_get_cluster_id(&mut sqlite)?;
-
-        Ok((Connection { inner: sqlite }, experimental_mode, cluster_id))
+        Ok(Connection {
+            experimental_mode: Self::set_or_get_experimental_mode(&mut sqlite, experimental_mode)?,
+            cluster_id: Self::set_or_get_cluster_id(&mut sqlite)?,
+            inner: sqlite,
+        })
     }
 
     /// Sets catalog's `experimental_mode` setting on initialization or gets
@@ -365,6 +379,14 @@ impl Connection {
             inner: self.inner.transaction()?,
         })
     }
+
+    pub fn cluster_id(&self) -> Uuid {
+        self.cluster_id
+    }
+
+    pub fn experimental_mode(&self) -> bool {
+        self.experimental_mode
+    }
 }
 
 pub struct Transaction<'a> {
@@ -427,6 +449,37 @@ impl Transaction<'_> {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    fn validate_timestamp_bindings(&self, source_id: &GlobalId) -> Result<(), String> {
+        let bindings_vec = self
+            .load_timestamp_bindings(*source_id)
+            .map_err(|e| format!("{}", e))?;
+
+        let bindings_by_pid = bindings_vec.iter().group_by(|(pid, _ts, _offset)| pid);
+
+        for (pid, bindings) in &bindings_by_pid {
+            let mut latest_offset = 0;
+            let mut latest_ts = 0;
+            for (_pid, ts, offset) in bindings {
+                if offset.offset < latest_offset {
+                    return Err(format!(
+                        "Unexpected offset {} for pid {}. All bindings: {:?}",
+                        offset, pid, bindings_vec
+                    ));
+                }
+                if *ts < latest_ts {
+                    return Err(format!(
+                        "Timestamps should not be decreasing but got {} for pid {}. All bindings: {:?}",
+                        ts, pid, bindings_vec
+                    ));
+                }
+                latest_offset = offset.offset;
+                latest_ts = *ts;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn load_timestamp_bindings(
@@ -519,24 +572,28 @@ impl Transaction<'_> {
         timestamp: Timestamp,
         offset: i64,
     ) -> Result<(), Error> {
-        match self
+        let result = self
             .inner
             .prepare_cached(
                 "INSERT OR IGNORE INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
             )?
-            .execute(params![SqlVal(source_id), partition_id, timestamp, offset])
-        {
+              .execute(params![SqlVal(source_id), partition_id, timestamp, offset]);
+
+        soft_assert_eq!(self.validate_timestamp_bindings(source_id), Ok(()));
+
+        match result {
             Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }
 
     pub fn delete_timestamp_bindings(&self, source_id: GlobalId) -> Result<(), Error> {
-        match self
+        let result = self
             .inner
             .prepare_cached("DELETE FROM timestamps WHERE sid = ?")?
-            .execute(params![SqlVal(&source_id)])
-        {
+            .execute(params![SqlVal(&source_id)]);
+
+        match result {
             Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }

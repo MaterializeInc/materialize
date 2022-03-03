@@ -39,7 +39,7 @@ Term | Definition
 
 A collection provides a data stream of updates as they happen. To provide fast access to the changes to individual records, the collection can be represented in an alternate form, indexed on `data` to present the sequence of changes (`time, diff`) the collection has undergone. This indexed representation is called an **arrangement**.
 
-Materialize builds and maintains indexes on both the input and output collections as well as for man. Because queries can overlap, Materialize might need to build the exact same indexes for multiple queries. Instead of performing redundant work, Materialize builds the index once and maintains it in memory, sharing the required resources across all queries that use the indexed data. The index is then effectively a sunk cost, and the cost of each query is determined only by the new work it introduces.
+Materialize builds and maintains indexes on both the input and output collections as well as for many intermediate collections created when processing a query. Because queries can overlap, Materialize might need to build the exact same indexes for multiple queries. Instead of performing redundant work, Materialize builds the index once and maintains it in memory, sharing the required resources across all queries that use the indexed data. The index is then effectively a sunk cost, and the cost of each query is determined only by the new work it introduces.
 
 You can find a more detailed analysis of the arrangements built for different types of queries in our blog post on [Joins in Materialize](https://materialize.com/joins-in-materialize).
 
@@ -47,11 +47,11 @@ You can find a more detailed analysis of the arrangements built for different ty
 
 The size of an arrangement, or amount of memory it requires, is roughly proportional to its number of distinct `(data, time)` pairs, which can be small even if the number of records is large. As an illustration, consider a histogram of taxi rides grouped by the number of riders and the fare amount. The number of distinct `(rider, fare)` pairs will be much smaller than the number of total rides that take place.
 
-The amount of memory that the arrangement requires is then further reduced by background [compaction](/ops/deployment/#compaction) of historical data.
+The amount of memory that the arrangement requires is then further reduced by background [compaction](/ops/memory/#compaction) of historical data.
 
 ## Analyzing arrangements
 
-Materialize provides various tools that allow you to analyze arrangements, although they are post hoc tools best used for debugging, rather than planning tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/diagnosing-using-sql/), [Monitoring](/ops/monitoring/), and [`EXPLAIN`](/sql/explain/) for more details.
+Materialize provides various tools that allow you to analyze arrangements, although they are post hoc tools best used for debugging, rather than planning tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/troubleshooting/), [Monitoring](/ops/monitoring/), and [`EXPLAIN`](/sql/explain/) for more details.
 
 ## Reducing memory usage
 
@@ -70,6 +70,6 @@ Currently, Materialize handles implicit casts in a very [memory-intensive way](h
 ## Related topics
 
 * [Joins in Materialize](https://materialize.com/joins-in-materialize/)
-* [Diagnosing Using SQL](/ops/diagnosing-using-sql/)
-* [Deployment](/ops/deployment/)
+* [Diagnosing Using SQL](/ops/troubleshooting/)
+* [Deployment](/ops/memory/)
 * [Differential Dataflow](https://timelydataflow.github.io/differential-dataflow/)

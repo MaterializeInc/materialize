@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package bench;
+package benchmark;
 
 message Value {
   int32 l_orderkey = 1;

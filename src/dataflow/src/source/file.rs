@@ -17,18 +17,19 @@ use anyhow::{Context, Error};
 use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{EventMask, Inotify, WatchMask};
-use log::error;
-use repr::MessagePayload;
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_repr::MessagePayload;
 use timely::scheduling::SyncActivator;
+use tracing::{debug, error, trace};
 
-use dataflow_types::{
-    AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
-    SourceDataEncoding,
-};
-use expr::{PartitionId, SourceInstanceId};
 use mz_avro::Block;
 use mz_avro::BlockIter;
 use mz_avro::{AvroRead, Schema, Skip};
+use mz_dataflow_types::sources::{
+    encoding::AvroOcfEncoding, encoding::DataEncoding, encoding::SourceDataEncoding, Compression,
+    ExternalSourceConnector, MzOffset,
+};
+use mz_expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
@@ -62,19 +63,25 @@ impl From<FileOffset> for MzOffset {
 }
 
 impl SourceReader for FileSourceReader {
+    type Key = ();
+    type Value = MessagePayload;
+
     fn new(
         _name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
+        _worker_count: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
+        _: AwsExternalId,
+        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         _: Option<Logger>,
         _: SourceBaseMetrics,
-    ) -> Result<(FileSourceReader, Option<PartitionId>), anyhow::Error> {
+    ) -> Result<Self, anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
-                log::debug!("creating FileSourceReader worker_id={}", worker_id);
+                debug!("creating FileSourceReader worker_id={}", worker_id);
                 let ctor = |fi| {
                     let mut br = std::io::BufReader::new(fi);
                     Ok(std::iter::from_fn(move || {
@@ -110,7 +117,7 @@ impl SourceReader for FileSourceReader {
                 rx
             }
             ExternalSourceConnector::AvroOcf(fc) => {
-                log::debug!("creating Avro FileSourceReader worker_id={}", worker_id);
+                debug!("creating Avro FileSourceReader worker_id={}", worker_id);
                 let value_encoding = match &encoding {
                     SourceDataEncoding::Single(enc) => enc,
                     SourceDataEncoding::KeyValue { .. } => {
@@ -153,17 +160,14 @@ impl SourceReader for FileSourceReader {
             _ => unreachable!(),
         };
 
-        Ok((
-            FileSourceReader {
-                id: source_id,
-                receiver_stream: receiver,
-                current_file_offset: FileOffset { offset: 0 },
-            },
-            Some(PartitionId::None),
-        ))
+        Ok(FileSourceReader {
+            id: source_id,
+            receiver_stream: receiver,
+            current_file_offset: FileOffset { offset: 0 },
+        })
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;
@@ -171,8 +175,8 @@ impl SourceReader for FileSourceReader {
                     partition: PartitionId::None,
                     offset: self.current_file_offset.into(),
                     upstream_time_millis: None,
-                    key: None,
-                    payload: Some(record),
+                    key: (),
+                    value: record,
                 };
                 Ok(NextMessage::Ready(message))
             }
@@ -199,7 +203,7 @@ pub fn read_file_task<Ctor, I, Err>(
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {
-    log::trace!("reading file {}", path.display());
+    trace!("reading file {}", path.display());
     let file = match std::fs::File::open(&path).with_context(|| {
         format!(
             "file source: unable to open file at path {}",
@@ -415,5 +419,5 @@ fn send_records<I, Out, Err>(
             activator.activate().expect("activation failed");
         }
     }
-    log::trace!("sent {} records to reader", records);
+    trace!("sent {} records to reader", records);
 }

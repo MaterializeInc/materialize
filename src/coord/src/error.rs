@@ -9,10 +9,17 @@
 
 use std::error::Error;
 use std::fmt;
+use std::num::TryFromIntError;
 
-use expr::EvalError;
-use ore::str::StrExt;
-use transform::TransformError;
+use dec::TryFromDecimalError;
+
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_expr::{EvalError, NullaryFunc};
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::StrExt;
+use mz_repr::NotNullViolation;
+use mz_sql::query_model::QGMError;
+use mz_transform::TransformError;
 
 use crate::catalog;
 use crate::session::Var;
@@ -28,41 +35,73 @@ pub enum CoordError {
     },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
-    /// The specified session parameter is constrained to its current value.
-    ConstrainedParameter(&'static (dyn Var + Send + Sync)),
+    /// The cached plan or descriptor changed.
+    ChangedPlan,
+    /// The specified session parameter is constrained to a finite set of values.
+    ConstrainedParameter {
+        parameter: &'static (dyn Var + Send + Sync),
+        value: String,
+        valid_values: Option<Vec<&'static str>>,
+    },
     /// The cursor already exists.
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// The specified parameter is fixed to a single specific value.
+    FixedValueParameter(&'static (dyn Var + Send + Sync)),
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
-    /// At least one input has no complete timestamps yet
-    IncompleteTimestamp(Vec<expr::GlobalId>),
+    /// Unexpected internal state was encountered.
+    Internal(String),
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
+    /// Attempted to build a materialization on a source that does not allow multiple materializations
+    InvalidRematerialization {
+        base_source: String,
+        existing_indexes: Vec<String>,
+        source_type: RematerializedSourceType,
+    },
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    /// The value of the specified parameter is incorrect
+    InvalidParameterValue {
+        parameter: &'static (dyn Var + Send + Sync),
+        value: String,
+        reason: String,
+    },
+    /// The selection value for a table mutation operation refers to an invalid object.
+    InvalidTableMutationSelection,
+    /// Expression violated a column's constraint
+    ConstraintViolation(NotNullViolation),
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
+    /// A persistence-related error.
+    Persistence(mz_persist::error::Error),
+    /// The named prepared statement already exists.
+    PreparedStatementExists(String),
+    /// An error occurred in the QGM stage of the optimizer.
+    QGM(QGMError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
     ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    /// The recursion limit of some operation was exceeded.
+    RecursionLimit(RecursionLimitError),
     /// A query in a transaction referenced a relation outside the first query's
     /// time domain.
     RelationOutsideTimeDomain {
-        relation: String,
+        relations: Vec<String>,
         names: Vec<String>,
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// An error occurred in a SQL catalog operation.
-    SqlCatalog(sql::catalog::CatalogError),
+    SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
     TailOnlyTransaction,
-    /// An error occurred in the optimizer.
+    /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
     /// The named cursor does not exist.
     UnknownCursor(String),
@@ -70,12 +109,15 @@ pub enum CoordError {
     UnknownLoginRole(String),
     /// The named parameter is unknown to the system.
     UnknownParameter(String),
+    UnknownPreparedStatement(String),
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
     Unstructured(anyhow::Error),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
+    /// The specified function cannot be materialized.
+    UnmaterializableFunction(NullaryFunc),
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
 }
@@ -121,11 +163,44 @@ impl CoordError {
             }
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
+            CoordError::RelationOutsideTimeDomain { relations, names } => Some(format!(
+                "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
+                relations
+                    .iter()
+                    .map(|r| r.quoted().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                match names.is_empty() {
+                    true => "No relations are available.".to_string(),
+                    false => format!(
+                        "Only the following relations are available:\n{}",
+                        names
+                            .iter()
+                            .map(|name| name.quoted().to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                }
+            )),
             CoordError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
                     .into(),
             ),
+            CoordError::InvalidRematerialization {
+                existing_indexes, source_type, ..
+            } => {
+                let source_name = match source_type {
+                    RematerializedSourceType::Postgres => "Postgres",
+                    RematerializedSourceType::S3 => "S3 with SQS notification ",
+                    RematerializedSourceType::PersistedSource => "Persisted",
+                };
+                Some(format!(
+                    "{} sources can be materialized by only one set of indexes at a time. \
+                     The following indexes have already materialized this source:\n    {}",
+                    source_name,
+                    existing_indexes.join("\n    ")))
+            }
             _ => None,
         }
     }
@@ -161,6 +236,10 @@ impl CoordError {
                 ))
             }
             CoordError::Catalog(c) => c.hint(),
+            CoordError::ConstrainedParameter {
+                valid_values: Some(valid_values),
+                ..
+            } => Some(format!("Available values: {}.", valid_values.join(", "))),
             CoordError::Eval(e) => e.hint(),
             CoordError::InvalidAlterOnDisabledIndex(idx) => Some(format!(
                 "To perform this ALTER, first enable the index using ALTER \
@@ -177,6 +256,23 @@ impl CoordError {
                 // because that leaks information to unauthenticated clients.)
                 Some("Try connecting as the \"materialize\" user.".into())
             }
+            CoordError::InvalidRematerialization { source_type, .. } => {
+                let doc_page = match source_type {
+                    RematerializedSourceType::Postgres => "postgres",
+                    RematerializedSourceType::S3 => "text-s3",
+                    RematerializedSourceType::PersistedSource => {
+                        // TODO: Make this more helpful once we have documentation for persisted
+                        // sources.
+                        return Some(
+                            "Either create one materialization and base more views on that, or create another source to base this materialization upon.".to_string(),
+                        );
+                    }
+                };
+                Some(format!(
+                    "See the documentation at https://materialize.com/docs/sql/create-source/{}",
+                    doc_page
+                ))
+            }
             _ => None,
         }
     }
@@ -188,25 +284,37 @@ impl fmt::Display for CoordError {
             CoordError::AutomaticTimestampFailure { .. } => {
                 f.write_str("unable to automatically determine a query timestamp")
             }
+            CoordError::ChangedPlan => f.write_str("cached plan must not change result type"),
             CoordError::Catalog(e) => e.fmt(f),
-            CoordError::ConstrainedParameter(p) => write!(
+            CoordError::ConstrainedParameter {
+                parameter, value, ..
+            } => write!(
                 f,
-                "parameter {} can only be set to {}",
-                p.name().quoted(),
-                p.value().quoted()
+                "invalid value for parameter {}: {}",
+                parameter.name().quoted(),
+                value.quoted()
             ),
             CoordError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             CoordError::Eval(e) => e.fmt(f),
-            CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
-            CoordError::IncompleteTimestamp(unstarted) => write!(
+            CoordError::FixedValueParameter(p) => write!(
                 f,
-                "At least one input has no complete timestamps yet: {:?}",
-                unstarted
+                "parameter {} can only be set to {}",
+                p.name().quoted(),
+                p.value().quoted()
             ),
+            CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
+            CoordError::Internal(e) => write!(f, "internal error: {}", e),
             CoordError::InvalidAlterOnDisabledIndex(name) => {
                 write!(f, "invalid ALTER on disabled index {}", name.quoted())
+            }
+            CoordError::InvalidRematerialization {
+                base_source,
+                existing_indexes: _,
+                source_type: _,
+            } => {
+                write!(f, "Cannot re-materialize source {}", base_source)
             }
             CoordError::InvalidParameterType(p) => write!(
                 f,
@@ -214,32 +322,44 @@ impl fmt::Display for CoordError {
                 p.name().quoted(),
                 p.type_name().quoted()
             ),
+            CoordError::InvalidParameterValue {
+                parameter,
+                value,
+                reason,
+            } => write!(
+                f,
+                "parameter {} cannot have value {}: {}",
+                parameter.name().quoted(),
+                value.quoted(),
+                reason,
+            ),
+            CoordError::InvalidTableMutationSelection => {
+                f.write_str("invalid selection: operation may only refer to user-defined tables")
+            }
+            CoordError::ConstraintViolation(not_null_violation) => {
+                write!(f, "{}", not_null_violation)
+            }
             CoordError::OperationProhibitsTransaction(op) => {
                 write!(f, "{} cannot be run inside a transaction block", op)
             }
             CoordError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            CoordError::Persistence(error) => error.fmt(f),
+            CoordError::PreparedStatementExists(name) => {
+                write!(f, "prepared statement {} already exists", name.quoted())
+            }
+            CoordError::QGM(e) => e.fmt(f),
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
             }
-            CoordError::RelationOutsideTimeDomain { relation, names } => {
+            CoordError::RecursionLimit(e) => e.fmt(f),
+            CoordError::RelationOutsideTimeDomain { .. } => {
                 write!(
                     f,
-                    "transactions can only reference nearby relations; {} referenced here, but {}",
-                    relation.quoted(),
-                    match names.is_empty() {
-                        true => "none available".to_string(),
-                        false => format!(
-                            "only the following are available: {}",
-                            names
-                                .iter()
-                                .map(|name| name.quoted().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    }
+                    "Transactions can only reference objects in the same timedomain. \
+                     See https://materialize.com/docs/sql/begin/#same-timedomain-error",
                 )
             }
             CoordError::SafeModeViolation(feature) => {
@@ -259,9 +379,15 @@ impl fmt::Display for CoordError {
             CoordError::UnknownParameter(name) => {
                 write!(f, "unrecognized configuration parameter {}", name.quoted())
             }
+            CoordError::UnmaterializableFunction(func) => {
+                write!(f, "cannot materialize call to {}", func)
+            }
             CoordError::Unsupported(features) => write!(f, "{} are not supported", features),
             CoordError::Unstructured(e) => write!(f, "{:#}", e),
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
+            CoordError::UnknownPreparedStatement(name) => {
+                write!(f, "prepared statement {} does not exist", name.quoted())
+            }
         }
     }
 }
@@ -269,6 +395,18 @@ impl fmt::Display for CoordError {
 impl From<anyhow::Error> for CoordError {
     fn from(e: anyhow::Error) -> CoordError {
         CoordError::Unstructured(e)
+    }
+}
+
+impl From<TryFromIntError> for CoordError {
+    fn from(e: TryFromIntError) -> CoordError {
+        CoordError::Unstructured(e.into())
+    }
+}
+
+impl From<TryFromDecimalError> for CoordError {
+    fn from(e: TryFromDecimalError) -> CoordError {
+        CoordError::Unstructured(e.into())
     }
 }
 
@@ -284,9 +422,15 @@ impl From<EvalError> for CoordError {
     }
 }
 
-impl From<sql::catalog::CatalogError> for CoordError {
-    fn from(e: sql::catalog::CatalogError) -> CoordError {
+impl From<mz_sql::catalog::CatalogError> for CoordError {
+    fn from(e: mz_sql::catalog::CatalogError) -> CoordError {
         CoordError::SqlCatalog(e)
+    }
+}
+
+impl From<QGMError> for CoordError {
+    fn from(e: QGMError) -> CoordError {
+        CoordError::QGM(e)
     }
 }
 
@@ -296,4 +440,46 @@ impl From<TransformError> for CoordError {
     }
 }
 
+impl From<NotNullViolation> for CoordError {
+    fn from(e: NotNullViolation) -> CoordError {
+        CoordError::ConstraintViolation(e)
+    }
+}
+
+impl From<RecursionLimitError> for CoordError {
+    fn from(e: RecursionLimitError) -> CoordError {
+        CoordError::RecursionLimit(e)
+    }
+}
+
 impl Error for CoordError {}
+
+/// Represent a source that is not allowed to be rematerialized
+#[derive(Debug)]
+pub enum RematerializedSourceType {
+    Postgres,
+    S3,
+    PersistedSource,
+}
+
+impl RematerializedSourceType {
+    /// Create a RematerializedSourceType error helper
+    ///
+    /// # Panics
+    ///
+    /// If the source is of a type that is allowed to be rematerialized
+    pub fn for_source(source: &catalog::Source) -> RematerializedSourceType {
+        if source.persist_details.is_some() {
+            return RematerializedSourceType::PersistedSource;
+        }
+
+        match &source.connector {
+            SourceConnector::External { connector, .. } => match connector {
+                ExternalSourceConnector::S3(_) => RematerializedSourceType::S3,
+                ExternalSourceConnector::Postgres(_) => RematerializedSourceType::Postgres,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+}

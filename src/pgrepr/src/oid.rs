@@ -9,7 +9,25 @@
 
 #![allow(missing_docs)]
 
-//! Reserved OIDs through Materialized.
+//! PostgreSQL OID constants.
+
+/// The first OID in PostgreSQL's system catalog that is not pinned during
+/// bootstrapping.
+///
+/// See: <https://github.com/postgres/postgres/blob/aa0105141/src/include/access/transam.h#L173-L175>
+pub const FIRST_UNPINNED_OID: u32 = 12000;
+
+/// The first OID that is assigned by Materialize rather than PostgreSQL.
+pub const FIRST_MATERIALIZE_OID: u32 = 16384;
+
+/// The first OID that is assigned to user objects rather than system builtins.
+pub const FIRST_USER_OID: u32 = 20_000;
+
+// Postgres builtins in the "unpinned" OID range. We get to choose whatever OIDs
+// we like for these builtins.
+pub const FUNC_PG_EXPAND_ARRAY: u32 = 12000;
+
+// Materialize-specific builtin OIDs.
 pub const TYPE_LIST_OID: u32 = 16_384;
 pub const TYPE_MAP_OID: u32 = 16_385;
 pub const FUNC_CEIL_F32_OID: u32 = 16_386;
@@ -21,7 +39,7 @@ pub const FUNC_LIST_APPEND_OID: u32 = 16_392;
 pub const FUNC_LIST_CAT_OID: u32 = 16_393;
 pub const FUNC_LIST_LENGTH_MAX_OID: u32 = 16_394;
 pub const FUNC_LIST_LENGTH_OID: u32 = 16_395;
-pub const FUNC_LIST_NDIMS_OID: u32 = 16_396;
+pub const FUNC_LIST_N_LAYERS_OID: u32 = 16_396;
 pub const FUNC_LIST_PREPEND_OID: u32 = 16_397;
 pub const FUNC_MAX_BOOL_OID: u32 = 16_398;
 pub const FUNC_MIN_BOOL_OID: u32 = 16_399;
@@ -35,7 +53,7 @@ pub const FUNC_MZ_CLASSIFY_OBJECT_ID_OID: u32 = 16_406;
 pub const FUNC_MZ_CLUSTER_ID_OID: u32 = 16_407;
 pub const FUNC_MZ_IS_MATERIALIZED_OID: u32 = 16_408;
 pub const FUNC_MZ_LOGICAL_TIMESTAMP_OID: u32 = 16_409;
-pub const FUNC_MZ_RENDER_TYPEMOD_OID: u32 = 16_410;
+pub const FUNC_MZ_RENDER_TYPMOD_OID: u32 = 16_410;
 pub const FUNC_MZ_VERSION_OID: u32 = 16_411;
 pub const FUNC_REGEXP_EXTRACT_OID: u32 = 16_412;
 pub const FUNC_REPEAT_OID: u32 = 16_413;
@@ -70,4 +88,11 @@ pub const FUNC_MIN_NUMERIC_OID: u32 = 16_442;
 pub const FUNC_MZ_AVG_PROMOTION_I16_OID: u32 = 16_443;
 pub const FUNC_LIST_AGG_OID: u32 = 16_444;
 pub const FUNC_MZ_ERROR_IF_NULL_OID: u32 = 16_445;
-// next ID: 16_446
+pub const FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID: u32 = 16_446;
+pub const FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID: u32 = 16_447;
+pub const FUNC_LIST_REMOVE_OID: u32 = 16_448;
+pub const FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TS_OID: u32 = 16_449;
+pub const FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TSTZ_OID: u32 = 16_450;
+pub const FUNC_MZ_DATE_BIN_HOPPING_TS_OID: u32 = 16_451;
+pub const FUNC_MZ_DATE_BIN_HOPPING_TSTZ_OID: u32 = 16_452;
+pub const FUNC_MZ_TYPE_NAME: u32 = 16_453;

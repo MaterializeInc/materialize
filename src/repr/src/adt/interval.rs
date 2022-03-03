@@ -12,10 +12,13 @@
 use std::fmt::{self, Write};
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
+use lazy_static::lazy_static;
+use num_traits::CheckedMul;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
+use crate::adt::numeric::{DecimalLike, Numeric};
 
 /// An interval of time meant to express SQL intervals.
 ///
@@ -24,54 +27,101 @@ use crate::adt::datetime::DateTimeField;
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
     pub months: i32,
-    /// A timespan represented in nanoseconds.
+    /// A possibly negative number of days.
     ///
-    /// Irrespective of values, `duration` will not be carried over into
+    /// Irrespective of values, `days` will not be carried over into `months`.
+    pub days: i32,
+    /// A timespan represented in microseconds.
+    ///
+    /// Irrespective of values, `micros` will not be carried over into `days` or
     /// `months`.
-    pub duration: i128,
+    pub micros: i64,
 }
 
 impl Default for Interval {
     fn default() -> Self {
         Self {
             months: 0,
-            duration: 0,
+            days: 0,
+            micros: 0,
         }
     }
 }
 
-impl std::ops::Neg for Interval {
-    type Output = Self;
-    fn neg(self) -> Self {
-        Self {
-            months: -self.months,
-            duration: -self.duration,
+impl num_traits::ops::checked::CheckedNeg for Interval {
+    fn checked_neg(&self) -> Option<Self> {
+        if let (Some(months), Some(days), Some(micros)) = (
+            self.months.checked_neg(),
+            self.days.checked_neg(),
+            self.micros.checked_neg(),
+        ) {
+            Self::new(months, days, micros).ok()
+        } else {
+            None
         }
     }
+}
+
+lazy_static! {
+    static ref MONTH_OVERFLOW_ERROR: String = format!(
+        "Overflows maximum months; cannot exceed {}/{} microseconds",
+        i32::MAX,
+        i32::MIN,
+    );
+    static ref DAY_OVERFLOW_ERROR: String = format!(
+        "Overflows maximum days; cannot exceed {}/{} microseconds",
+        i32::MAX,
+        i32::MIN,
+    );
+    static ref USECS_PER_DAY: i64 =
+        Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64)
+            .unwrap();
 }
 
 impl Interval {
+    // Don't let our duration exceed Postgres' min/max for those same fields,
+    // equivalent to:
+    // ```
+    // SELECT INTERVAL '2147483647 hours 59 minutes 59.999999 seconds';
+    // SELECT INTERVAL '-2147483648 hours -59 minutes -59.999999 seconds';
+    // ```
+    pub const MAX_MICROSECONDS: i64 = (((i32::MAX as i64 * 60) + 59) * 60) * 1_000_000 + 59_999_999;
+    pub const MIN_MICROSECONDS: i64 = (((i32::MIN as i64 * 60) - 59) * 60) * 1_000_000 - 59_999_999;
+
+    pub const CENTURY_PER_MILLENNIUM: u16 = 10;
+    pub const DECADE_PER_CENTURY: u16 = 10;
+    pub const YEAR_PER_DECADE: u16 = 10;
+    pub const MONTH_PER_YEAR: u16 = 12;
+    // Interval type considers 30 days == 1 month
+    pub const DAY_PER_MONTH: u16 = 30;
+    // Interval type considers 24 hours == 1 day
+    pub const HOUR_PER_DAY: u16 = 24;
+    pub const MINUTE_PER_HOUR: u16 = 60;
+    pub const SECOND_PER_MINUTE: u16 = 60;
+    pub const MILLISECOND_PER_SECOND: u16 = 1_000;
+    pub const MICROSECOND_PER_MILLISECOND: u16 = 1_000;
+    pub const NANOSECOND_PER_MICROSECOND: u16 = 1_000;
+    // PostgreSQL actually has a bug where when using EXTRACT it truncates this value to 365, but
+    // when using date_part it does not truncate this value. Therefore our EXTRACT function may differ
+    // from PostgreSQL.
+    // EXTRACT: https://github.com/postgres/postgres/blob/c2e8bd27519f47ff56987b30eb34a01969b9a9e8/src/backend/utils/adt/timestamp.c#L5270-L5273
+    // date_part: https://github.com/postgres/postgres/blob/c2e8bd27519f47ff56987b30eb34a01969b9a9e8/src/backend/utils/adt/timestamp.c#L5301
+    pub const EPOCH_DAYS_PER_YEAR: f64 = 365.25;
+
     /// Constructs a new `Interval` with the specified units of time.
-    ///
-    /// `nanos` in excess of `999_999_999` are carried over into seconds.
-    pub fn new(months: i32, seconds: i64, nanos: i64) -> Result<Interval, anyhow::Error> {
+    pub fn new(months: i32, days: i32, micros: i64) -> Result<Interval, anyhow::Error> {
         let i = Interval {
             months,
-            duration: i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
+            days,
+            micros,
         };
-        // Don't let our duration exceed Postgres' min/max for those same fields,
-        // equivalent to:
-        // ```
-        // SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds';
-        // SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds';
-        // ```
-        if i.duration > 193_273_528_233_599_999_999_000
-            || i.duration < -193_273_528_233_599_999_999_000
-        {
-            bail!(
-                "exceeds min/max interval duration +/-(2147483647 days 2147483647 hours \
-                59 minutes 59.999999 seconds)"
-            )
+        if i.micros > Self::MAX_MICROSECONDS || i.micros < Self::MIN_MICROSECONDS {
+            bail!(format!(
+                "exceeds min/max interval duration ({} hours 59 minutes 59.999999 seconds/\
+                {} hours -59 minutes -59.999999 seconds)",
+                i32::MAX,
+                i32::MIN,
+            ))
         } else {
             Ok(i)
         }
@@ -82,178 +132,253 @@ impl Interval {
             Some(m) => m,
             None => return None,
         };
-        let seconds = match self.dur_as_secs().checked_add(other.dur_as_secs()) {
-            Some(s) => s,
+        let days = match self.days.checked_add(other.days) {
+            Some(d) => d,
+            None => return None,
+        };
+        let micros = match self.micros.checked_add(other.micros) {
+            Some(us) => us,
             None => return None,
         };
 
-        match Self::new(
-            months,
-            seconds,
-            i64::from(self.nanoseconds() + other.nanoseconds()),
-        ) {
+        match Self::new(months, days, micros) {
             Ok(i) => Some(i),
             Err(_) => None,
         }
     }
 
     pub fn checked_mul(&self, other: f64) -> Option<Self> {
-        let months = self.months as f64 * other;
-        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
-            return None;
-        }
-
-        let seconds =
-            self.dur_as_secs() as f64 * other + months.fract() * 60.0 * 60.0 * 24.0 * 30.0;
-        if seconds.is_nan() || seconds < i64::MIN as f64 || seconds > i64::MAX as f64 {
-            return None;
-        }
-
-        let nanos = self.nanoseconds() as f64 * other + seconds.fract() * 1e9;
-        if nanos.is_nan() || nanos < i64::MIN as f64 || nanos > i64::MAX as f64 {
-            return None;
-        }
-
-        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+        self.checked_op(other, |f1, f2| f1 * f2)
     }
 
     pub fn checked_div(&self, other: f64) -> Option<Self> {
-        let months = self.months as f64 / other;
-        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
-            return None;
-        }
-
-        let seconds =
-            self.dur_as_secs() as f64 / other + months.fract() * 60.0 * 60.0 * 24.0 * 30.0;
-        if seconds.is_nan() || seconds < i64::MIN as f64 || seconds > i64::MAX as f64 {
-            return None;
-        }
-
-        let nanos = self.nanoseconds() as f64 / other + seconds.fract() * 1e9;
-        if nanos.is_nan() || nanos < i64::MIN as f64 || nanos > i64::MAX as f64 {
-            return None;
-        }
-
-        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+        self.checked_op(other, |f1, f2| f1 / f2)
     }
 
-    /// Returns the total number of whole seconds in the `Interval`'s duration.
-    pub fn dur_as_secs(&self) -> i64 {
-        (self.duration / 1_000_000_000) as i64
+    fn checked_op<F1>(&self, other: f64, op: F1) -> Option<Self>
+    where
+        F1: Fn(f64, f64) -> f64,
+    {
+        let months = op(f64::from(self.months), other);
+        if months.is_nan()
+            || months.is_infinite()
+            || months < i32::MIN.into()
+            || months > i32::MAX.into()
+        {
+            return None;
+        }
+
+        let days =
+            op(f64::from(self.days), other) + months.fract() * f64::from(Self::DAY_PER_MONTH);
+        if days.is_nan() || days.is_infinite() || days < i32::MIN.into() || days > i32::MAX.into() {
+            return None;
+        }
+
+        let micros = op(self.micros as f64, other)
+            + days.fract()
+                * f64::from(Self::HOUR_PER_DAY)
+                * f64::from(Self::MINUTE_PER_HOUR)
+                * f64::from(Self::SECOND_PER_MINUTE)
+                * f64::from(Self::MILLISECOND_PER_SECOND)
+                * f64::from(Self::MICROSECOND_PER_MILLISECOND);
+
+        if micros.is_nan()
+            || micros.is_infinite()
+            || Numeric::from(micros) < Numeric::from(i64::MIN)
+            || Numeric::from(micros) > Numeric::from(i64::MAX)
+        {
+            return None;
+        }
+
+        Self::new(months as i32, days as i32, micros as i64).ok()
     }
 
     /// Computes the millennium part of the interval.
     ///
     /// The millennium part is the number of whole millennia in the interval. For example,
-    /// this function returns `3.0` for the interval `3400 years`.
-    pub fn millennia(&self) -> f64 {
-        (self.months / 12_000) as f64
+    /// this function returns `3` for the interval `3400 years`.
+    pub fn millennia(&self) -> i32 {
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Millennium, self.months)
+            .unwrap()
     }
 
     /// Computes the century part of the interval.
     ///
     /// The century part is the number of whole centuries in the interval. For example,
-    /// this function returns `3.0` for the interval `340 years`.
-    pub fn centuries(&self) -> f64 {
-        (self.months / 1_200) as f64
+    /// this function returns `3` for the interval `340 years`.
+    pub fn centuries(&self) -> i32 {
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Century, self.months)
+            .unwrap()
     }
 
     /// Computes the decade part of the interval.
     ///
     /// The decade part is the number of whole decades in the interval. For example,
-    /// this function returns `3.0` for the interval `34 years`.
-    pub fn decades(&self) -> f64 {
-        (self.months / 120) as f64
+    /// this function returns `3` for the interval `34 years`.
+    pub fn decades(&self) -> i32 {
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Decade, self.months)
+            .unwrap()
     }
 
     /// Computes the year part of the interval.
     ///
     /// The year part is the number of whole years in the interval. For example,
-    /// this function returns `3.0` for the interval `3 years 4 months`.
-    pub fn years(&self) -> f64 {
-        (self.months / 12) as f64
+    /// this function returns `3` for the interval `3 years 4 months`.
+    pub fn years(&self) -> i32 {
+        Self::convert_date_time_unit(DateTimeField::Month, DateTimeField::Year, self.months)
+            .unwrap()
     }
 
     /// Computes the quarter part of the interval.
     ///
     /// The quarter part is obtained from taking the number of whole months modulo 12,
     /// and assigning quarter #1 for months 0-2, #2 for 3-5, #3 for 6-8 and #4 for 9-11.
-    /// For example, this function returns `4.0` for the interval `11 months`.
-    pub fn quarters(&self) -> f64 {
-        ((self.months % 12) / 3 + 1) as f64
+    /// For example, this function returns `4` for the interval `11 months`.
+    pub fn quarters(&self) -> i32 {
+        self.months() / 3 + 1
     }
 
     /// Computes the month part of the interval.
     ///
     /// The month part is the number of whole months in the interval, modulo 12.
-    /// For example, this function returns `4.0` for the interval `3 years 4
+    /// For example, this function returns `4` for the interval `3 years 4
     /// months`.
-    pub fn months(&self) -> f64 {
-        (self.months % 12) as f64
+    pub fn months(&self) -> i32 {
+        self.months % i32::from(Self::MONTH_PER_YEAR)
     }
 
     /// Computes the day part of the interval.
     ///
     /// The day part is the number of whole days in the interval. For example,
-    /// this function returns `5.0` for the interval `5 days 4 hours 3 minutes
+    /// this function returns `5` for the interval `5 days 4 hours 3 minutes
     /// 2.1 seconds`.
-    pub fn days(&self) -> f64 {
-        (self.dur_as_secs() / (60 * 60 * 24)) as f64
+    pub fn days(&self) -> i64 {
+        self.days.into()
     }
 
     /// Computes the hour part of the interval.
     ///
     /// The hour part is the number of whole hours in the interval, modulo 24.
-    /// For example, this function returns `4.0` for the interval `5 days 4
+    /// For example, this function returns `4` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
-    pub fn hours(&self) -> f64 {
-        ((self.dur_as_secs() / (60 * 60)) % 24) as f64
+    pub fn hours(&self) -> i64 {
+        Self::convert_date_time_unit(
+            DateTimeField::Microseconds,
+            DateTimeField::Hour,
+            self.micros,
+        )
+        .unwrap()
+            % i64::from(Self::HOUR_PER_DAY)
     }
 
     /// Computes the minute part of the interval.
     ///
     /// The minute part is the number of whole minutes in the interval, modulo
-    /// 60. For example, this function returns `3.0` for the interval `5 days 4
+    /// 60. For example, this function returns `3` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
-    pub fn minutes(&self) -> f64 {
-        ((self.dur_as_secs() / 60) % 60) as f64
+    pub fn minutes(&self) -> i64 {
+        Self::convert_date_time_unit(
+            DateTimeField::Microseconds,
+            DateTimeField::Minute,
+            self.micros,
+        )
+        .unwrap()
+            % i64::from(Self::MINUTE_PER_HOUR)
     }
 
     /// Computes the second part of the interval.
     ///
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
-    pub fn seconds(&self) -> f64 {
-        (self.duration % 60_000_000_000) as f64 / 1e9
+    pub fn seconds<T>(&self) -> T
+    where
+        T: DecimalLike,
+    {
+        T::lossy_from(self.micros % 60_000_000) / T::from(1e6)
     }
 
     /// Computes the second part of the interval displayed in milliseconds.
     ///
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
-    pub fn milliseconds(&self) -> f64 {
-        (self.duration % 60_000_000_000) as f64 / 1e6
+    pub fn milliseconds<T>(&self) -> T
+    where
+        T: DecimalLike,
+    {
+        T::lossy_from(self.micros % 60_000_000) / T::from(1e3)
     }
 
     /// Computes the second part of the interval displayed in microseconds.
     ///
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
-    pub fn microseconds(&self) -> f64 {
-        (self.duration % 60_000_000_000) as f64 / 1e3
+    pub fn microseconds<T>(&self) -> T
+    where
+        T: DecimalLike,
+    {
+        T::lossy_from(self.micros % 60_000_000)
     }
 
     /// Computes the nanosecond part of the interval.
     pub fn nanoseconds(&self) -> i32 {
-        (self.duration % 1_000_000_000) as i32
+        (self.micros % 1_000_000 * 1_000).try_into().unwrap()
     }
 
-    /// Computes the total number of seconds in the interval.
-    pub fn as_seconds(&self) -> f64 {
-        self.years() * 60.0 * 60.0 * 24.0 * 365.25
-            + self.months() * 60.0 * 60.0 * 24.0 * 30.0
-            + (self.dur_as_secs() as f64)
-            + f64::from(self.nanoseconds()) / 1e9
+    /// Computes the total number of epoch seconds in the interval.
+    /// When extracting an epoch, PostgreSQL considers a year
+    /// 365.25 days.
+    pub fn as_epoch_seconds<T>(&self) -> T
+    where
+        T: DecimalLike,
+    {
+        let days = T::from(self.years()) * T::from(Self::EPOCH_DAYS_PER_YEAR)
+            + T::from(self.months()) * T::from(Self::DAY_PER_MONTH)
+            + T::from(self.days);
+        let seconds = days
+            * T::from(Self::HOUR_PER_DAY)
+            * T::from(Self::MINUTE_PER_HOUR)
+            * T::from(Self::SECOND_PER_MINUTE);
+
+        seconds
+            + T::lossy_from(self.micros)
+                / (T::from(Self::MICROSECOND_PER_MILLISECOND)
+                    * T::from(Self::MILLISECOND_PER_SECOND))
+    }
+
+    /// Computes the total number of microseconds in the interval.
+    pub fn as_microseconds(&self) -> i128 {
+        // unwrap is safe because i32::MAX/i32::MIN number of months will not overflow an i128 when
+        // converted to microseconds.
+        Self::convert_date_time_unit(
+            DateTimeField::Month,
+            DateTimeField::Microseconds,
+            i128::from(self.months),
+        ).unwrap() +
+        // unwrap is safe because i32::MAX/i32::MIN number of days will not overflow an i128 when
+        // converted to microseconds.
+        Self::convert_date_time_unit(
+            DateTimeField::Day,
+            DateTimeField::Microseconds,
+            i128::from(self.days),
+        ).unwrap() +
+        i128::from(self.micros)
+    }
+
+    /// Converts this `Interval`'s duration into `chrono::Duration`.
+    pub fn duration_as_chrono(&self) -> chrono::Duration {
+        use chrono::Duration;
+        Duration::days(self.days.into()) + Duration::microseconds(self.micros)
+    }
+
+    pub fn duration(&self) -> Result<Duration, anyhow::Error> {
+        if self.months != 0 {
+            bail!("cannot convert interval with months to duration");
+        }
+        if self.is_negative() {
+            bail!("cannot convert negative interval to duration");
+        }
+        let micros: u64 = u64::try_from(self.as_microseconds())?;
+        Ok(Duration::from_micros(micros))
     }
 
     /// Truncate the "head" of the interval, removing all time units greater than `f`.
@@ -262,39 +387,25 @@ impl Interval {
             DateTimeField::Year => {}
             DateTimeField::Month => self.months %= 12,
             DateTimeField::Day => self.months = 0,
-            hms => {
+            DateTimeField::Hour | DateTimeField::Minute | DateTimeField::Second => {
                 self.months = 0;
-                self.duration %= hms.next_largest().nanos_multiplier() as i128
+                self.days = 0;
+                self.micros %= f.next_largest().micros_multiplier()
+            }
+            DateTimeField::Millennium
+            | DateTimeField::Century
+            | DateTimeField::Decade
+            | DateTimeField::Milliseconds
+            | DateTimeField::Microseconds => {
+                unreachable!("Cannot truncate interval by {f}");
             }
         }
-    }
-
-    /// Converts this `Interval`'s duration into `chrono::Duration`.
-    pub fn duration_as_chrono(&self) -> chrono::Duration {
-        use chrono::Duration;
-        // This can be converted into a single call with
-        // https://github.com/chronotope/chrono/pull/426
-        Duration::seconds(self.dur_as_secs() as i64)
-            + Duration::nanoseconds(self.nanoseconds() as i64)
-    }
-
-    pub fn duration(&self) -> Result<Duration, anyhow::Error> {
-        if self.duration < 0 {
-            bail!("cannot convert negative interval to duration");
-        }
-        if self.months != 0 {
-            bail!("cannot convert interval with months to duration");
-        }
-        Ok(Duration::new(
-            self.dur_as_secs() as u64,
-            self.nanoseconds() as u32,
-        ))
     }
 
     /// Truncate the "tail" of the interval, removing all time units less than `f`.
     /// # Arguments
     /// - `f`: Round the interval down to the specified time unit.
-    /// - `fsec_max_precision`: If `Some(x)`, keep only `x` places of nanosecond precision.
+    /// - `fsec_max_precision`: If `Some(x)`, keep only `x` places of microsecond precision.
     ///    Must be `(0,6)`.
     ///
     /// # Errors
@@ -308,12 +419,14 @@ impl Interval {
         match f {
             Year => {
                 self.months -= self.months % 12;
-                self.duration = 0;
+                self.days = 0;
+                self.micros = 0;
             }
             Month => {
-                self.duration = 0;
+                self.days = 0;
+                self.micros = 0;
             }
-            // Round nanoseconds.
+            // Round microseconds.
             Second => {
                 let default_precision = 6;
                 let precision = match fsec_max_precision {
@@ -329,18 +442,218 @@ impl Interval {
                 }
 
                 // Check if value should round up to nearest fractional place.
-                let remainder = self.duration % 10_i128.pow(9 - precision as u32);
-                if remainder / 10_i128.pow(8 - precision as u32) > 4 {
-                    self.duration += 10_i128.pow(9 - precision as u32);
+                let precision = match u32::try_from(precision) {
+                    Ok(p) => p,
+                    Err(_) => bail!(
+                        "SECOND precision must be (0, 6), have SECOND({})",
+                        precision
+                    ),
+                };
+                let remainder = self.micros % 10_i64.pow(6 - precision);
+                if u64::from(precision) != default_precision
+                    && remainder / 10_i64.pow(5 - precision) > 4
+                {
+                    self.micros += 10_i64.pow(6 - precision);
                 }
-
-                self.duration -= remainder;
+                self.micros -= remainder;
             }
-            dhm => {
-                self.duration -= self.duration % dhm.nanos_multiplier() as i128;
+            Day => {
+                self.micros = 0;
+            }
+            Hour | Minute => {
+                self.micros -= self.micros % f.micros_multiplier();
+            }
+            Millennium | Century | Decade | Milliseconds | Microseconds => {
+                unreachable!("Cannot truncate interval by {f}");
             }
         }
         Ok(())
+    }
+
+    /// Returns a new Interval with only the time component
+    pub fn as_time_interval(&self) -> Self {
+        Self::new(0, 0, self.micros).unwrap()
+    }
+
+    /// Returns true if combining all fields results in a negative number, false otherwise
+    pub fn is_negative(&self) -> bool {
+        self.as_microseconds() < 0
+    }
+
+    /// Convert val from source unit to dest unit. Does not maintain fractional values.
+    /// Returns None if the result overflows/underflows.
+    ///
+    /// WARNING: Due to the fact that Intervals consider months to have 30 days, you may get
+    /// unexpected and incorrect results when trying to convert from a non-year type to a year type
+    /// and vice versa. For example from years to days.
+    pub fn convert_date_time_unit<T>(
+        source: DateTimeField,
+        dest: DateTimeField,
+        val: T,
+    ) -> Option<T>
+    where
+        T: From<u16> + CheckedMul + std::ops::DivAssign,
+    {
+        if source < dest {
+            Self::convert_date_time_unit_increasing(source, dest, val)
+        } else if source > dest {
+            Self::convert_date_time_unit_decreasing(source, dest, val)
+        } else {
+            Some(val)
+        }
+    }
+
+    fn convert_date_time_unit_increasing<T>(
+        source: DateTimeField,
+        dest: DateTimeField,
+        val: T,
+    ) -> Option<T>
+    where
+        T: From<u16> + std::ops::DivAssign,
+    {
+        let mut cur_unit = source;
+        let mut res = val;
+        while cur_unit < dest {
+            let divisor: T = match cur_unit {
+                DateTimeField::Millennium => 1.into(),
+                DateTimeField::Century => Self::CENTURY_PER_MILLENNIUM.into(),
+                DateTimeField::Decade => Self::DECADE_PER_CENTURY.into(),
+                DateTimeField::Year => Self::YEAR_PER_DECADE.into(),
+                DateTimeField::Month => Self::MONTH_PER_YEAR.into(),
+                DateTimeField::Day => Self::DAY_PER_MONTH.into(),
+                DateTimeField::Hour => Self::HOUR_PER_DAY.into(),
+                DateTimeField::Minute => Self::MINUTE_PER_HOUR.into(),
+                DateTimeField::Second => Self::SECOND_PER_MINUTE.into(),
+                DateTimeField::Milliseconds => Self::MILLISECOND_PER_SECOND.into(),
+                DateTimeField::Microseconds => Self::MICROSECOND_PER_MILLISECOND.into(),
+            };
+            res /= divisor;
+            cur_unit = cur_unit.next_largest();
+        }
+
+        Some(res)
+    }
+
+    fn convert_date_time_unit_decreasing<T>(
+        source: DateTimeField,
+        dest: DateTimeField,
+        val: T,
+    ) -> Option<T>
+    where
+        T: From<u16> + CheckedMul,
+    {
+        let mut cur_unit = source;
+        let mut res = val;
+        while cur_unit > dest {
+            let multiplier: T = match cur_unit {
+                DateTimeField::Millennium => Self::CENTURY_PER_MILLENNIUM.into(),
+                DateTimeField::Century => Self::DECADE_PER_CENTURY.into(),
+                DateTimeField::Decade => Self::YEAR_PER_DECADE.into(),
+                DateTimeField::Year => Self::MONTH_PER_YEAR.into(),
+                DateTimeField::Month => Self::DAY_PER_MONTH.into(),
+                DateTimeField::Day => Self::HOUR_PER_DAY.into(),
+                DateTimeField::Hour => Self::MINUTE_PER_HOUR.into(),
+                DateTimeField::Minute => Self::SECOND_PER_MINUTE.into(),
+                DateTimeField::Second => Self::MILLISECOND_PER_SECOND.into(),
+                DateTimeField::Milliseconds => Self::MICROSECOND_PER_MILLISECOND.into(),
+                DateTimeField::Microseconds => 1.into(),
+            };
+            res = match res.checked_mul(&multiplier) {
+                Some(r) => r,
+                None => return None,
+            };
+            cur_unit = cur_unit.next_smallest();
+        }
+
+        Some(res)
+    }
+
+    /// Adjust interval so 'days' contains less than 30 days, adding the excess to 'months'.
+    pub fn justify_days(&self) -> Result<Self, anyhow::Error> {
+        let days_per_month = i32::from(Self::DAY_PER_MONTH);
+        let (mut months, mut days) = Self::justify_days_inner(self.months, self.days)?;
+        if months > 0 && days < 0 {
+            days += days_per_month;
+            months -= 1;
+        } else if months < 0 && days > 0 {
+            days -= days_per_month;
+            months += 1;
+        }
+
+        Self::new(months, days, self.micros)
+    }
+
+    fn justify_days_inner(months: i32, days: i32) -> Result<(i32, i32), anyhow::Error> {
+        let days_per_month = i32::from(Self::DAY_PER_MONTH);
+        let whole_month = days / days_per_month;
+        let days = days - whole_month * days_per_month;
+
+        let months = months
+            .checked_add(whole_month)
+            .ok_or(anyhow!(&*MONTH_OVERFLOW_ERROR))?;
+
+        Ok((months, days))
+    }
+
+    /// Adjust interval so 'micros' contains less than a whole day, adding the excess to 'days'.
+    pub fn justify_hours(&self) -> Result<Self, anyhow::Error> {
+        let (mut days, mut micros) = Self::justify_hours_inner(self.days, self.micros)?;
+        if days > 0 && micros < 0 {
+            micros += &*USECS_PER_DAY;
+            days -= 1;
+        } else if days < 0 && micros > 0 {
+            micros -= &*USECS_PER_DAY;
+            days += 1;
+        }
+
+        Self::new(self.months, days, micros)
+    }
+
+    fn justify_hours_inner(days: i32, micros: i64) -> Result<(i32, i64), anyhow::Error> {
+        let days = i32::try_from(micros / &*USECS_PER_DAY)
+            .ok()
+            .and_then(|d| days.checked_add(d))
+            .ok_or(anyhow!(&*DAY_OVERFLOW_ERROR))?;
+        let micros = micros % &*USECS_PER_DAY;
+
+        Ok((days, micros))
+    }
+
+    /// Adjust interval so 'days' contains less than 30 days, adding the excess to 'months'.
+    /// Adjust interval so 'micros' contains less than a whole day, adding the excess to 'days'.
+    /// Also, the sign bit on all three fields is made equal, so either all three fields are negative or all are positive.
+    pub fn justify_interval(&self) -> Result<Self, anyhow::Error> {
+        let days_per_month = i32::from(Self::DAY_PER_MONTH);
+        let mut months = self.months;
+        let mut days = self.days;
+        let micros = self.micros;
+        // We justify days twice to try to avoid an intermediate overflow of days if it would be
+        // able to fit in months.
+        if (days > 0 && micros > 0) || (days < 0 && micros < 0) {
+            let (m, d) = Self::justify_days_inner(self.months, self.days)?;
+            months = m;
+            days = d;
+        }
+        let (days, mut micros) = Self::justify_hours_inner(days, micros)?;
+        let (mut months, mut days) = Self::justify_days_inner(months, days)?;
+
+        if months > 0 && (days < 0 || (days == 0 && micros < 0)) {
+            days += days_per_month;
+            months -= 1;
+        } else if months < 0 && (days > 0 || (days == 0 && micros > 0)) {
+            days -= days_per_month;
+            months += 1;
+        }
+
+        if days > 0 && micros < 0 {
+            micros += &*USECS_PER_DAY;
+            days -= 1;
+        } else if days < 0 && micros > 0 {
+            micros -= &*USECS_PER_DAY;
+            days += 1;
+        }
+
+        Self::new(months, days, micros)
     }
 }
 
@@ -353,26 +666,30 @@ impl Interval {
 /// * 00:00:00
 impl fmt::Display for Interval {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut months = self.months;
-        let neg_mos = months < 0;
-        months = months.abs();
-        let years = months / 12;
-        months %= 12;
-        let mut secs = self.dur_as_secs().abs();
+        let neg_months = self.months < 0;
+        let years = (self.months / 12).abs();
+        let months = (self.months % 12).abs();
+
+        let neg_days = self.days < 0;
+        let days = i64::from(self.days).abs();
+
         let mut nanos = self.nanoseconds().abs();
-        let days = secs / (24 * 60 * 60);
-        secs %= 24 * 60 * 60;
-        let hours = secs / (60 * 60);
-        secs %= 60 * 60;
-        let minutes = secs / 60;
-        secs %= 60;
+        let mut secs = (self.micros / 1_000_000).abs();
+
+        let sec_per_hr = 60 * 60;
+        let hours = secs / sec_per_hr;
+        secs %= sec_per_hr;
+
+        let sec_per_min = 60;
+        let minutes = secs / sec_per_min;
+        secs %= sec_per_min;
 
         if years > 0 {
-            if neg_mos {
+            if neg_months {
                 f.write_char('-')?;
             }
             write!(f, "{} year", years)?;
-            if years > 1 {
+            if years > 1 || neg_months {
                 f.write_char('s')?;
             }
         }
@@ -381,26 +698,24 @@ impl fmt::Display for Interval {
             if years != 0 {
                 f.write_char(' ')?;
             }
-            if neg_mos {
+            if neg_months {
                 f.write_char('-')?;
             }
             write!(f, "{} month", months)?;
-            if months > 1 {
+            if months > 1 || neg_months {
                 f.write_char('s')?;
             }
         }
 
-        if days > 0 {
+        if days != 0 {
             if years > 0 || months > 0 {
                 f.write_char(' ')?;
             }
-            if self.duration < 0 {
-                f.write_char('-')?;
-            } else if neg_mos {
+            if neg_months && !neg_days {
                 f.write_char('+')?;
             }
-            write!(f, "{} day", days)?;
-            if days != 1 {
+            write!(f, "{} day", self.days)?;
+            if self.days != 1 {
                 f.write_char('s')?;
             }
         }
@@ -411,9 +726,9 @@ impl fmt::Display for Interval {
             if years > 0 || months > 0 || days > 0 {
                 f.write_char(' ')?;
             }
-            if self.duration < 0 && non_zero_hmsn {
+            if self.micros < 0 && non_zero_hmsn {
                 f.write_char('-')?;
-            } else if neg_mos {
+            } else if neg_days || (days == 0 && neg_months) {
                 f.write_char('+')?;
             }
             write!(f, "{:02}:{:02}:{:02}", hours, minutes, secs)?;
@@ -452,126 +767,232 @@ mod test {
         assert_eq!(mon(25), "2 years 1 month");
         assert_eq!(mon(26), "2 years 2 months");
 
-        fn dur(d: i64) -> String {
-            Interval::new(0, d, 0).unwrap().to_string()
+        fn dur(days: i32, micros: i64) -> String {
+            Interval::new(0, days, micros).unwrap().to_string()
         }
-        assert_eq!(&dur(86_400 * 2), "2 days");
-        assert_eq!(&dur(86_400 * 2 + 3_600 * 3), "2 days 03:00:00");
+        assert_eq!(&dur(2, 0), "2 days");
+        assert_eq!(&dur(2, 3 * 60 * 60 * 1_000_000), "2 days 03:00:00");
         assert_eq!(
-            &dur(86_400 * 2 + 3_600 * 3 + 60 * 45 + 6),
+            &dur(
+                2,
+                (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
+            ),
             "2 days 03:45:06"
         );
-        assert_eq!(&dur(86_400 * 2 + 3_600 * 3 + 60 * 45), "2 days 03:45:00");
-        assert_eq!(&dur(86_400 * 2 + 6), "2 days 00:00:06");
-        assert_eq!(&dur(86_400 * 2 + 60 * 45 + 6), "2 days 00:45:06");
-        assert_eq!(&dur(86_400 * 2 + 3_600 * 3 + 6), "2 days 03:00:06");
-        assert_eq!(&dur(3_600 * 3 + 60 * 45 + 6), "03:45:06");
-        assert_eq!(&dur(3_600 * 3 + 6), "03:00:06");
-        assert_eq!(&dur(3_600 * 3), "03:00:00");
-        assert_eq!(&dur(60 * 45 + 6), "00:45:06");
-        assert_eq!(&dur(60 * 45), "00:45:00");
-        assert_eq!(&dur(6), "00:00:06");
-
-        assert_eq!(&dur(-(86_400 * 2 + 6)), "-2 days -00:00:06");
-        assert_eq!(&dur(-(86_400 * 2 + 60 * 45 + 6)), "-2 days -00:45:06");
-        assert_eq!(&dur(-(86_400 * 2 + 3_600 * 3 + 6)), "-2 days -03:00:06");
-        assert_eq!(&dur(-(3_600 * 3 + 60 * 45 + 6)), "-03:45:06");
-        assert_eq!(&dur(-(3_600 * 3 + 6)), "-03:00:06");
-        assert_eq!(&dur(-(3_600 * 3)), "-03:00:00");
-        assert_eq!(&dur(-(60 * 45 + 6)), "-00:45:06");
-        assert_eq!(&dur(-(60 * 45)), "-00:45:00");
-        assert_eq!(&dur(-6), "-00:00:06");
-
-        fn mon_dur(mon: i32, d: i64) -> String {
-            Interval::new(mon, d, 0).unwrap().to_string()
-        }
-        assert_eq!(&mon_dur(1, 86_400 * 2 + 6), "1 month 2 days 00:00:06");
         assert_eq!(
-            &mon_dur(1, 86_400 * 2 + 60 * 45 + 6),
+            &dur(2, (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000)),
+            "2 days 03:45:00"
+        );
+        assert_eq!(&dur(2, 6 * 1_000_000), "2 days 00:00:06");
+        assert_eq!(
+            &dur(2, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "2 days 00:45:06"
+        );
+        assert_eq!(
+            &dur(2, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "2 days 03:00:06"
+        );
+        assert_eq!(
+            &dur(
+                0,
+                (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
+            ),
+            "03:45:06"
+        );
+        assert_eq!(
+            &dur(0, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "03:00:06"
+        );
+        assert_eq!(&dur(0, 3 * 60 * 60 * 1_000_000), "03:00:00");
+        assert_eq!(&dur(0, (45 * 60 * 1_000_000) + (6 * 1_000_000)), "00:45:06");
+        assert_eq!(&dur(0, 45 * 60 * 1_000_000), "00:45:00");
+        assert_eq!(&dur(0, 6 * 1_000_000), "00:00:06");
+
+        assert_eq!(&dur(-2, -6 * 1_000_000), "-2 days -00:00:06");
+        assert_eq!(
+            &dur(-2, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
+            "-2 days -00:45:06"
+        );
+        assert_eq!(
+            &dur(-2, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
+            "-2 days -03:00:06"
+        );
+        assert_eq!(
+            &dur(
+                0,
+                (-3 * 60 * 60 * 1_000_000) + (-45 * 60 * 1_000_000) + (-6 * 1_000_000)
+            ),
+            "-03:45:06"
+        );
+        assert_eq!(
+            &dur(0, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
+            "-03:00:06"
+        );
+        assert_eq!(&dur(0, -3 * 60 * 60 * 1_000_000), "-03:00:00");
+        assert_eq!(
+            &dur(0, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
+            "-00:45:06"
+        );
+        assert_eq!(&dur(0, -45 * 60 * 1_000_000), "-00:45:00");
+        assert_eq!(&dur(0, -6 * 1_000_000), "-00:00:06");
+
+        fn mon_dur(mon: i32, days: i32, micros: i64) -> String {
+            Interval::new(mon, days, micros).unwrap().to_string()
+        }
+        assert_eq!(&mon_dur(1, 2, 6 * 1_000_000), "1 month 2 days 00:00:06");
+        assert_eq!(
+            &mon_dur(1, 2, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
             "1 month 2 days 00:45:06"
         );
         assert_eq!(
-            &mon_dur(1, 86_400 * 2 + 3_600 * 3 + 6),
+            &mon_dur(1, 2, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
             "1 month 2 days 03:00:06"
         );
         assert_eq!(
-            &mon_dur(26, 3_600 * 3 + 60 * 45 + 6),
+            &mon_dur(
+                26,
+                0,
+                (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
+            ),
             "2 years 2 months 03:45:06"
         );
-        assert_eq!(&mon_dur(26, 3_600 * 3 + 6), "2 years 2 months 03:00:06");
-        assert_eq!(&mon_dur(26, 3_600 * 3), "2 years 2 months 03:00:00");
-        assert_eq!(&mon_dur(26, 60 * 45 + 6), "2 years 2 months 00:45:06");
-        assert_eq!(&mon_dur(26, 60 * 45), "2 years 2 months 00:45:00");
-        assert_eq!(&mon_dur(26, 6), "2 years 2 months 00:00:06");
+        assert_eq!(
+            &mon_dur(26, 0, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "2 years 2 months 03:00:06"
+        );
+        assert_eq!(
+            &mon_dur(26, 0, 3 * 60 * 60 * 1_000_000),
+            "2 years 2 months 03:00:00"
+        );
+        assert_eq!(
+            &mon_dur(26, 0, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "2 years 2 months 00:45:06"
+        );
+        assert_eq!(
+            &mon_dur(26, 0, 45 * 60 * 1_000_000),
+            "2 years 2 months 00:45:00"
+        );
+        assert_eq!(&mon_dur(26, 0, 6 * 1_000_000), "2 years 2 months 00:00:06");
 
         assert_eq!(
-            &mon_dur(26, -(86_400 * 2 + 6)),
+            &mon_dur(26, -2, -6 * 1_000_000),
             "2 years 2 months -2 days -00:00:06"
         );
         assert_eq!(
-            &mon_dur(26, -(86_400 * 2 + 60 * 45 + 6)),
+            &mon_dur(26, -2, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
             "2 years 2 months -2 days -00:45:06"
         );
         assert_eq!(
-            &mon_dur(26, -(86_400 * 2 + 3_600 * 3 + 6)),
+            &mon_dur(26, -2, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
             "2 years 2 months -2 days -03:00:06"
         );
         assert_eq!(
-            &mon_dur(26, -(3_600 * 3 + 60 * 45 + 6)),
+            &mon_dur(
+                26,
+                0,
+                (-3 * 60 * 60 * 1_000_000) + (-45 * 60 * 1_000_000) + (-6 * 1_000_000)
+            ),
             "2 years 2 months -03:45:06"
         );
-        assert_eq!(&mon_dur(26, -(3_600 * 3 + 6)), "2 years 2 months -03:00:06");
-        assert_eq!(&mon_dur(26, -(3_600 * 3)), "2 years 2 months -03:00:00");
-        assert_eq!(&mon_dur(26, -(60 * 45 + 6)), "2 years 2 months -00:45:06");
-        assert_eq!(&mon_dur(26, -(60 * 45)), "2 years 2 months -00:45:00");
-        assert_eq!(&mon_dur(26, -6), "2 years 2 months -00:00:06");
+        assert_eq!(
+            &mon_dur(26, 0, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
+            "2 years 2 months -03:00:06"
+        );
+        assert_eq!(
+            &mon_dur(26, 0, -3 * 60 * 60 * 1_000_000),
+            "2 years 2 months -03:00:00"
+        );
+        assert_eq!(
+            &mon_dur(26, 0, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
+            "2 years 2 months -00:45:06"
+        );
+        assert_eq!(
+            &mon_dur(26, 0, -45 * 60 * 1_000_000),
+            "2 years 2 months -00:45:00"
+        );
+        assert_eq!(
+            &mon_dur(26, 0, -6 * 1_000_000),
+            "2 years 2 months -00:00:06"
+        );
 
-        assert_eq!(&mon_dur(-1, 86_400 * 2 + 6), "-1 month +2 days +00:00:06");
+        assert_eq!(&mon_dur(-1, 2, 6 * 1_000_000), "-1 months +2 days 00:00:06");
         assert_eq!(
-            &mon_dur(-1, 86_400 * 2 + 60 * 45 + 6),
-            "-1 month +2 days +00:45:06"
+            &mon_dur(-1, 2, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "-1 months +2 days 00:45:06"
         );
         assert_eq!(
-            &mon_dur(-1, 86_400 * 2 + 3_600 * 3 + 6),
-            "-1 month +2 days +03:00:06"
+            &mon_dur(-1, 2, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "-1 months +2 days 03:00:06"
         );
         assert_eq!(
-            &mon_dur(-26, 3_600 * 3 + 60 * 45 + 6),
+            &mon_dur(
+                -26,
+                0,
+                (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
+            ),
             "-2 years -2 months +03:45:06"
         );
-        assert_eq!(&mon_dur(-26, 3_600 * 3 + 6), "-2 years -2 months +03:00:06");
-        assert_eq!(&mon_dur(-26, 3_600 * 3), "-2 years -2 months +03:00:00");
-        assert_eq!(&mon_dur(-26, 60 * 45 + 6), "-2 years -2 months +00:45:06");
-        assert_eq!(&mon_dur(-26, 60 * 45), "-2 years -2 months +00:45:00");
-        assert_eq!(&mon_dur(-26, 6), "-2 years -2 months +00:00:06");
+        assert_eq!(
+            &mon_dur(-26, 0, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "-2 years -2 months +03:00:06"
+        );
+        assert_eq!(
+            &mon_dur(-26, 0, 3 * 60 * 60 * 1_000_000),
+            "-2 years -2 months +03:00:00"
+        );
+        assert_eq!(
+            &mon_dur(-26, 0, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
+            "-2 years -2 months +00:45:06"
+        );
+        assert_eq!(
+            &mon_dur(-26, 0, 45 * 60 * 1_000_000),
+            "-2 years -2 months +00:45:00"
+        );
+        assert_eq!(
+            &mon_dur(-26, 0, 6 * 1_000_000),
+            "-2 years -2 months +00:00:06"
+        );
 
         assert_eq!(
-            &mon_dur(-26, -(86_400 * 2 + 6)),
+            &mon_dur(-26, -2, -6 * 1_000_000),
             "-2 years -2 months -2 days -00:00:06"
         );
         assert_eq!(
-            &mon_dur(-26, -(86_400 * 2 + 60 * 45 + 6)),
+            &mon_dur(-26, -2, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
             "-2 years -2 months -2 days -00:45:06"
         );
         assert_eq!(
-            &mon_dur(-26, -(86_400 * 2 + 3_600 * 3 + 6)),
+            &mon_dur(-26, -2, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
             "-2 years -2 months -2 days -03:00:06"
         );
         assert_eq!(
-            &mon_dur(-26, -(3_600 * 3 + 60 * 45 + 6)),
+            &mon_dur(
+                -26,
+                0,
+                (-3 * 60 * 60 * 1_000_000) + (-45 * 60 * 1_000_000) + (-6 * 1_000_000)
+            ),
             "-2 years -2 months -03:45:06"
         );
         assert_eq!(
-            &mon_dur(-26, -(3_600 * 3 + 6)),
+            &mon_dur(-26, 0, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
             "-2 years -2 months -03:00:06"
         );
-        assert_eq!(&mon_dur(-26, -(3_600 * 3)), "-2 years -2 months -03:00:00");
         assert_eq!(
-            &mon_dur(-26, -(60 * 45 + 6)),
+            &mon_dur(-26, 0, -3 * 60 * 60 * 1_000_000),
+            "-2 years -2 months -03:00:00"
+        );
+        assert_eq!(
+            &mon_dur(-26, 0, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
             "-2 years -2 months -00:45:06"
         );
-        assert_eq!(&mon_dur(-26, -(60 * 45)), "-2 years -2 months -00:45:00");
-        assert_eq!(&mon_dur(-26, -6), "-2 years -2 months -00:00:06");
+        assert_eq!(
+            &mon_dur(-26, 0, -45 * 60 * 1_000_000),
+            "-2 years -2 months -00:45:00"
+        );
+        assert_eq!(
+            &mon_dur(-26, 0, -6 * 1_000_000),
+            "-2 years -2 months -00:00:06"
+        );
     }
 
     #[test]
@@ -579,43 +1000,97 @@ mod test {
         use DateTimeField::*;
 
         let mut test_cases = [
-            (Year, None, (321, 654_321, 321_000_000), (26 * 12, 0, 0)),
-            (Month, None, (321, 654_321, 321_000_000), (321, 0, 0)),
+            (
+                Year,
+                None,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (26 * 12, 0, 0),
+            ),
+            (
+                Month,
+                None,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (321, 0, 0),
+            ),
             (
                 Day,
                 None,
-                (321, 654_321, 321_000_000),
-                (321, 7 * 60 * 60 * 24, 0), // months: 321, duration: 604800s, is_positive_dur: true
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (321, 7, 0),
             ),
             (
                 Hour,
                 None,
-                (321, 654_321, 321_000_000),
-                (321, 181 * 60 * 60, 0),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (321, 7, 13 * 60 * 60 * 1_000_000),
             ),
             (
                 Minute,
                 None,
-                (321, 654_321, 321_000_000),
-                (321, 10905 * 60, 0),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (321, 7, (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000)),
             ),
             (
                 Second,
                 None,
-                (321, 654_321, 321_000_000),
-                (321, 654_321, 321_000_000),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
             ),
             (
                 Second,
                 Some(1),
-                (321, 654_321, 321_000_000),
-                (321, 654_321, 300_000_000),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 300_000,
+                ),
             ),
             (
                 Second,
                 Some(0),
-                (321, 654_321, 321_000_000),
-                (321, 654_321, 0),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000) + 321_000,
+                ),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
             ),
         ];
 
@@ -638,18 +1113,83 @@ mod test {
     fn test_interval_value_truncate_high_fields() {
         use DateTimeField::*;
 
+        // (month, day, microsecond) tuples
         let mut test_cases = [
-            (Year, (321, 654_321), (321, 654_321)),
-            (Month, (321, 654_321), (9, 654_321)),
-            (Day, (321, 654_321), (0, 654_321)),
-            (Hour, (321, 654_321), (0, 654_321 % (60 * 60 * 24))),
-            (Minute, (321, 654_321), (0, 654_321 % (60 * 60))),
-            (Second, (321, 654_321), (0, 654_321 % 60)),
+            (
+                Year,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+            ),
+            (
+                Month,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+                (
+                    9,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+            ),
+            (
+                Day,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+                (
+                    0,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+            ),
+            (
+                Hour,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+                (
+                    0,
+                    0,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+            ),
+            (
+                Minute,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+                (0, 0, (45 * 60 * 1_000_000) + (21 * 1_000_000)),
+            ),
+            (
+                Second,
+                (
+                    321,
+                    7,
+                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
+                ),
+                (0, 0, 21 * 1_000_000),
+            ),
         ];
 
         for test in test_cases.iter_mut() {
-            let mut i = Interval::new((test.1).0, (test.1).1, 123).unwrap();
-            let j = Interval::new((test.2).0, (test.2).1, 123).unwrap();
+            let mut i = Interval::new((test.1).0, (test.1).1, (test.1).2).unwrap();
+            let j = Interval::new((test.2).0, (test.2).1, (test.2).2).unwrap();
 
             i.truncate_high_fields(test.0);
 
@@ -660,5 +1200,46 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_convert_date_time_unit() {
+        assert_eq!(
+            Some(1_123_200_000_000),
+            Interval::convert_date_time_unit(
+                DateTimeField::Day,
+                DateTimeField::Microseconds,
+                13i64
+            )
+        );
+
+        assert_eq!(
+            Some(3_558_399_705),
+            Interval::convert_date_time_unit(
+                DateTimeField::Milliseconds,
+                DateTimeField::Month,
+                i64::MAX
+            )
+        );
+
+        assert_eq!(
+            None,
+            Interval::convert_date_time_unit(
+                DateTimeField::Minute,
+                DateTimeField::Second,
+                i32::MAX
+            )
+        );
+
+        assert_eq!(
+            Some(1),
+            Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Year, 365)
+        );
+
+        // Strange behavior due to months having 30 days
+        assert_eq!(
+            Some(360),
+            Interval::convert_date_time_unit(DateTimeField::Year, DateTimeField::Day, 1)
+        );
     }
 }

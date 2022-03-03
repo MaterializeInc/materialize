@@ -30,4 +30,7 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${union-int-string} pu
 {"f1": {"string": "abc" } }
 
 ! SELECT f1 FROM resolution_unions
-avro deserialization error: Schema resolution error: Failed to match String against any variant in the reader
+contains:Failed to match writer union variant `String` against any variant in the reader for field `schema_union.f1`
+
+! SELECT f1 FROM resolution_unions
+contains:unable to decode row (Avro schema id =

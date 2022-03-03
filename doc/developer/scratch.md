@@ -16,7 +16,7 @@ the account; if you don't have access and believe you should, check with your on
 If you are a member of a different org but feel that access to AWS resources could
 be useful to you, ask in #eng-infra on Slack.
 
-To access scratch resources from the AWS console, use [our SSO app](materialize.awsapps.com/start/).
+To access scratch resources from the AWS console, use [our SSO app](https://materialize.awsapps.com/start/).
 
 To access scratch resources from the command line, follow the instructions [here](https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md#cli-and-api-access).
 
@@ -32,7 +32,7 @@ This subcommand expects a series of JSON objects on standard input, each of whic
 ```
 {
     "name": "chbench",
-    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find chbench run cloud-load-test",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --find chbench run cloud-load-test",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0b29b6e62f2343b46",
     "size_gb": 200,
@@ -47,6 +47,17 @@ This subcommand expects a series of JSON objects on standard input, each of whic
 }
 ```
 
+See [Grafana Integration](#grafana-integration), below, for some details about the tags.
+
+`bin/scratch create` takes in configs from stdin, or by passing a name as a positional arg, like:
+
+```
+$ bin/scratch create dev-box
+```
+It looks for the name as a json file in `misc/scratch`, a good starter to just do some plain, personal testing is `dev-box`.
+
+---
+
 All of the keys are required (though `tags` can be an empty dictionary). Their meanings should largely be self-explanatory.
 
 Any number of JSON objects may be specified, one after the other. The script creates a "cluster" of machines identified by a random
@@ -56,15 +67,21 @@ is run in the background. After kicking off the launch script (but without waiti
 Each cluster's `/etc/hosts` file is modified to point to the other members of the cluster by name; for example, from another machine
 the operator could ping the above-described machine with `ping chbench`.
 
-#### Access
+#### SSH access
 
-By default, `bin/scratch` arranges machines for SSM access. Developers may use the AWS SSM command-line tool to access machines given their instance IDs. For example:
+SSH access to the instances is provided by [EC2 instance connect]. If you
+specify a custom AMI, you need to make sure it's an AMI that supports EC2
+instance connect.
+
+To SSH to an instance:
 
 ```
-AWS_PROFILE=mz-scratch-admin AWS_DEFAULT_REGION=us-east-2 aws ssm start-session --target   i-064432ea480ef7e10
+bin/scratch ssh INSTANCE-ID
 ```
 
-Once the remote shell is opened, run `sudo su - ubuntu` to access the main (`ubuntu`) account on the host.
+If you need to, you can install and use the `mssh` command provided by the
+underlying [EC2 connect CLI] directly, but it's usually much easier to go
+through `bin/scratch ssh`.
 
 ### `bin/scratch mine`
 
@@ -82,6 +99,15 @@ brennan@New-Orleans ~ ❯❯❯ ~/code/materialize/bin/scratch mine
 Important options include `--all`, which lists machines for all users, and `--output-format csv`, which does what it looks like. To look up
 machines for someone other than yourself, list their email addresses at the end of the command, like so: `scratch mine eli@materialize.com`.
 
+### `bin/scratch push`
+
+```
+bin/scratch push <instance_id>
+```
+
+`push` re-pushes your git `HEAD` to the specified instance. You can override the commit to checkout
+with `--rev`
+
 ### `bin/scratch destroy`
 
 This subcommand terminates a list of machines given by Instance ID on the command line. For example:
@@ -89,3 +115,95 @@ This subcommand terminates a list of machines given by Instance ID on the comman
 ```
 bin/scratch destroy i-02790a4efb77b06b4
 ```
+
+As a convenience, you can also destroy all of your instances with the
+`--all-mine` option:
+
+```
+bin/scratch destroy --all-mine
+```
+
+Pass `--dry-run` if you want to see what instances `bin/scratch destroy` would
+destroy without actually destroyin them.
+
+### Grafana integration
+
+The `materialized` process always exposes metrics at its primary port's HTTP server on the
+prometheus-standard `/metrics` path, but the scratch instance needs to be configured correctly for
+our Prometheus server to actually scrape the metrics and thereby expose them to Grafana.
+
+The tl;dr is that you must configure mzcompose with `--preserve-ports` and the EC2 instance with
+the `"scrape_benchmark_numbers": "true"` tag. Thus a bare-minimum Grafana-integrated config looks
+like:
+
+```javascript
+{
+    "launch_script": "bin/mzcompose --preserve-ports ..<remainder of args>"
+    // .. snip config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true"
+    }
+}
+```
+
+Read on for more details and some other items that can be configured.
+
+#### Prometheus config
+
+There are three tags on the EC2 instance that configure our Prometheus integration:
+
+* `scrape_benchmark_numbers`: must be set to exactly the string `"true"` in order for Prometheus
+  to observe the instance.
+* `purpose`: is used as a filter in the Grafana UI. You can use this to group all your instances
+  (e.g. set it to `myname-debugging`) or set it to `load-test` or `benchmark`.
+* `test` displays as an additional filter inside of the Grafana UI.
+
+So the minimum scratch config to get metrics into Grafana looks like:
+
+```javascript
+{
+    // .. snip general config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true"
+    }
+}
+```
+
+And a slightly more complete one could be:
+
+```javascript
+{
+    // .. snip general config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "purpose": "bwm-debugging",
+        "test": "chbench"
+    }
+}
+
+{
+    // .. snip general config ..
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "purpose": "bwm-debugging",
+        "test": "billing"
+    }
+}
+```
+
+#### mzcompose config
+
+Prometheus only looks for Materialize metrics on port 6875. The canonical way to ensure that
+Materialize is available on port 6875 on a host is to pass the `--preserve-ports` argument to
+mzcompose. (Without this flag, mzcompose chooses a random host port for Materialize, which
+will be unknown to Prometheus.)
+
+```javascript
+{
+    "launch_script": "bin/mzcompose --preserve-ports ..<remainder of args>"
+    // .. snip config ..
+}
+```
+
+[EC2 instance connect]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Connect-using-EC2-Instance-Connect.html
+[ec2instanceconnectcli]: https://github.com/aws/aws-ec2-instance-connect-cli

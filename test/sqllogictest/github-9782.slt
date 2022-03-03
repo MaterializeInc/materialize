@@ -1,0 +1,119 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/9782.
+
+statement ok
+CREATE TABLE table_f1 (f1 INTEGER);
+
+statement ok
+CREATE TAble table_f4 (f4 INTEGER);
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+statement ok
+CREATE TAble table_f4_f5_f6 (f4 INTEGER, f5 INTEGER, f6 INTEGER);
+
+statement ok
+CREATE TAble table_f5_f6 (f5 INTEGER, f6 INTEGER);
+
+query T multiline
+EXPLAIN  SELECT *  FROM table_f1 , ( table_f4_f5_f6 AS a2 LEFT JOIN table_f5_f6 AS a3 USING ( f5 , f6  ) ) WHERE f5 = f6 AND  f4 = f6;
+----
+%0 = Let l0 =
+| Get materialize.public.table_f4_f5_f6 (u5)
+| Filter (#0 = #1), (#0 = #2), (#1 = #2)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.table_f5_f6 (u7)
+| Filter (#0 = #1)
+| Project (#0)
+
+%3 = Let l1 =
+| Join %1 %2 (= #0 #3)
+| | implementation = Differential %2 %1.(#0)
+| Project (#0..=#2)
+
+%4 =
+| Get materialize.public.table_f1 (u1)
+| ArrangeBy ()
+
+%5 =
+| Get %3 (l1)
+| Distinct group=(#0, #1, #2)
+| Negate
+
+%6 =
+| Get %0 (l0)
+| Distinct group=(#0, #1, #2)
+
+%7 =
+| Union %5 %6
+| ArrangeBy (#0)
+
+%8 =
+| Get %0 (l0)
+| Project (#0)
+
+%9 =
+| Join %7 %8 (= #0 #3)
+| | implementation = Differential %8 %7.(#0)
+| Project (#0..=#2)
+
+%10 =
+| Union %3 %9
+
+%11 =
+| Join %4 %10
+| | implementation = Differential %10 %4.()
+| Project (#0, #2, #3, #1)
+
+EOF

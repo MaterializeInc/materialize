@@ -42,7 +42,7 @@ build apply=FilterFusion
 ----
 %0 =
 | Get x (u0)
-| Filter false, (#0 = 1)
+| Filter false
 
 build apply=(FilterFusion,FoldConstants)
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_binary eq #0 1)])
@@ -55,11 +55,11 @@ build apply=FilterFusion
 ----
 %0 =
 | Get x (u0)
-| Filter false, (#0 = #1)
+| Filter false
 
 build apply=FilterFusion
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_unary not (call_unary is_null #0))])
 ----
 %0 =
 | Get x (u0)
-| Filter false, !(isnull(#0))
+| Filter false

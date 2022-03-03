@@ -1,24 +1,55 @@
+[advisories]
+ignore = [
+    # chrono calls localtime_r, which can result in memory unsafety if another
+    # thread is simultaneously calling setenv. The likelihood of this happening
+    # in Materialize is exceptionally low (we don't call setenv directly
+    # anywhere, and it is unlikely that our dependencies do either). There is
+    # no easy fix for chrono (https://github.com/chronotope/chrono/issues/499),
+    # so we're just ignoring the advisory for now.
+    "RUSTSEC-2020-0159",
+
+    # flatbuffers exposes pub methods that are unsafe but not marked as unsafe.
+    # These methods are not part of the "true" public API but are intended to be
+    # used only by flatbuffers generated code. This is a transitive dependency
+    # of ours and the issue has been mitigated by the arrow2 direct dependency
+    # with additional miri testing.
+    #
+    # https://github.com/jorgecarleitao/arrow2/blob/v0.8.1/.github/workflows/security.yml
+    "RUSTSEC-2021-0122",
+]
+
 [bans]
 multiple-versions = "deny"
 skip = [
     # Do not add to this list without good reason! Duplicate dependencies slow
     # down compilation and bloat the binary.
 
-    # Waiting for clap to upgrade to v0.12.
-    { name = "ansi_term", version = "0.11.0" },
-    # Waiting for clap to upgrade to v0.10.
-    { name = "strsim", version = "0.8.0" },
+    # Waiting for csv, http, and aws_smithy_types to upgrade to v1.0.
+    { name = "itoa", version = "0.4.1" },
 
-    # Waiting on https://github.com/hyperium/headers/pull/83.
-    { name = "time", version = "0.1.44" },
+    # Waiting for pprof and prometheus to upgrade.
+    { name = "parking_lot_core", version = "0.8.3" },
+    { name = "parking_lot", version = "0.11.1" },
+
+    # Waiting for vte to upgrade to v0.7.0.
+    { name = "arrayvec", version = "0.5.2" },
 ]
 
-skip-tree = [
-    # tiberius, the SQL Server driver, depends on an outdated version of a bunch of
-    # random-related crates. However, they are only compiled under Windows, so
-    # should not be increasing the compilation times on Linux
-    { name = "winauth", version = "0.0.4" },
-]
+# Use `tracing` instead.
+[[bans.deny]]
+name = "env_logger"
+
+# Use `prost` or `protobuf-native` instead.
+[[bans.deny]]
+name = "protobuf"
+
+# The `md5` and `sha1` crates are not part of the RustCrypto project. Use
+# `md-5` and `sha-1` instead, despite their somewhat suspicious names.
+[[bans.deny]]
+name = "md5"
+wrappers = ["aws-sdk-s3"]
+[[bans.deny]]
+name = "sha1"
 
 # Strum has suspect code quality and includes many unneeded features. Use
 # more targeted enum macro crates, e.g. `enum-kinds`.
@@ -34,15 +65,63 @@ name = "thiserror"
 wrappers = [
     # Only list third-party crates here.
     "async-native-tls",
+    "aws-http",
+    "aws-smithy-xml",
+    "aws-sig-auth",
+    "flatbuffers",
+    "junit-report",
+    "mysql_async",
+    "mysql_common",
     "pprof",
     "proc-macro-crate",
     "prometheus",
+    "protoc",
+    "protobuf-codegen",
+    "protobuf-codegen-pure",
+    "protobuf-parse",
     "pubnub-core",
     "pubnub-hyper",
-    "serde-protobuf",
+    "simple_asn1",
     "sysctl",
     "tiberius",
+    "zip",
 ]
+
+[[bans.deny]]
+name = "log"
+wrappers = [
+    "wasm-bindgen-backend",
+    "want",
+    "tracing-log",
+    "tracing",
+    "tokio-util",
+    "tokio-postgres",
+    "reqwest",
+    # TODO(guswynn): switch to tracing in rdkafka
+    "rdkafka",
+    "pubnub-hyper",
+    "pubnub-core",
+    "prost-build",
+    "pprof",
+    "postgres",
+    "os_info",
+    "opentls",
+    "native-tls",
+    "mio",
+    "globset",
+    "fail",
+    "env_logger",
+
+
+    # TODO(guswynn): switch to `tracing:enabled!` when its released
+    "mz-dataflow",
+    "mz-coord",
+]
+
+# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
+# mature and more widely used.
+[[bans.deny]]
+name = "rustls"
 
 # The `uncased` crate serves the same purpose as `unicase` and is more
 # actively maintained.
@@ -60,20 +139,50 @@ allow = [
     "ICU",
     "ISC",
     "MIT",
+    "Zlib",
 ]
 copyleft = "deny"
 private = { ignore = true }
+
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 }
+]
 
 [sources]
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    "https://github.com/MaterializeInc/cloud-sdks.git",
+    # Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into
+    # a release.
+    "https://github.com/lu-zero/autotools-rs.git",
+
+    # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55
+    "https://github.com/blackbeam/rust_mysql_common.git",
+
+    # Waiting on several PRs to a mostly-abandoned upstream library.
     "https://github.com/MaterializeInc/pubnub-rust.git",
-    # Until https://github.com/sfackler/rust-postgres/pull/752 is merged and released
+
+    # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
+
+    # Waiting on https://github.com/tokio-rs/prost/pull/576.
+    "https://github.com/MaterializeInc/prost.git",
+
+    # Waiting on https://github.com/bheisler/criterion.rs/pull/543.
+    "https://github.com/MaterializeInc/criterion.rs.git",
+
+    # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
+    "https://github.com/MaterializeInc/parquet-format-rs.git",
+
+    # Dependencies that we control upstream whose official releases we don't
+    # care about.
+    "https://github.com/MaterializeInc/cloud-sdks.git",
+    "https://github.com/frankmcsherry/columnation",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",

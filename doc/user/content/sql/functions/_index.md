@@ -5,7 +5,7 @@ menu:
   main:
     identifier: sql-functions
     parent: sql
-    weight: 2
+    weight: 20
 disable_list: true
 disable_toc: true
 ---
@@ -15,6 +15,21 @@ This page details Materialize's supported SQL [functions](#functions) and [opera
 ## Functions
 
 {{< fnlist >}}
+
+### Pure and nonpure functions
+
+Most functions in Materialize are **pure** functions, which means their output
+is wholly determined by their inputs. Pure functions can be used in all
+contexts.
+
+Several functions in Materialize are **nonpure** functions, which means their
+output depends upon state besides their input parameters, like the value of a
+session parameter or the timestamp of the current transaction. You cannot create
+an [index](/sql/create-index) or materialized view that depends on a nonpure
+function, but you can use nonpure functions in unmaterialized views and one-off
+[`SELECT`](/sql/select) statements.
+
+Nonpure functions are marked as such in the table above.
 
 ## Operators
 
@@ -42,8 +57,14 @@ Operator | Computes
 `a IS NULL` | `a = NULL`
 `a ISNULL` | `a = NULL`
 `a IS NOT NULL` | `a != NULL`
-`a LIKE match_expr` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
-`a ILIKE match_expr` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`a IS TRUE` | `a` is true, requiring `a` to be a boolean
+`a IS NOT TRUE` | `a` is not true, requiring `a` to be a boolean
+`a IS FALSE` | `a` is false, requiring `a` to be a boolean
+`a IS NOT FALSE` | `a` is not false, requiring `a` to be a boolean
+`a IS UNKNOWN` | `a = NULL`, requiring `a` to be a boolean
+`a IS NOT UNKNOWN` | `a != NULL`, requiring `a` to be a boolean
+`a LIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`a ILIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 
 ### Numbers
 

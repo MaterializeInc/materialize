@@ -13,10 +13,10 @@ true
 > SELECT mz_version() != '';
 true
 
-> SELECT mz_workers() > 0 AND mz_workers() < 256;
+> SELECT current_user = current_role AND current_user != '';
 true
 
-> SELECT current_user = current_role AND current_user != '';
+> SELECT session_user = current_role AND session_user != '';
 true
 
 > SELECT now() - pg_postmaster_start_time() > interval '1 second' AND now() - pg_postmaster_start_time() < interval '1 year';

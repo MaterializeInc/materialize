@@ -7,22 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Maintains a catalog of valid casts between [`repr::ScalarType`]s, as well as
+//! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
+use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::fmt;
-use std::rc::Rc;
 
-use anyhow::bail;
 use lazy_static::lazy_static;
 
-use expr::func;
-use expr::VariadicFunc;
-use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
+use mz_expr::func;
+use mz_expr::VariadicFunc;
+use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
+use crate::func::TypeCategory;
+
+use super::error::PlanError;
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
@@ -79,6 +80,20 @@ impl From<UnaryFunc> for CastTemplate {
     }
 }
 
+impl<const N: usize> From<[UnaryFunc; N]> for CastTemplate {
+    fn from(funcs: [UnaryFunc; N]) -> CastTemplate {
+        CastTemplate::new(move |_ecx, _ccx, _from, _to| {
+            let funcs = funcs.clone();
+            Some(move |mut expr: HirScalarExpr| {
+                for func in funcs {
+                    expr = expr.call_unary(func.clone());
+                }
+                expr
+            })
+        })
+    }
+}
+
 /// Describes the context of a cast.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CastContext {
@@ -126,53 +141,126 @@ lazy_static! {
 
         casts! {
             // BOOL
-            (Bool, Int32) => Explicit: CastBoolToInt32,
-            (Bool, String) => Assignment: CastBoolToString,
+            (Bool, Int32) => Explicit: CastBoolToInt32(func::CastBoolToInt32),
+            (Bool, String) => Assignment: CastBoolToString(func::CastBoolToString),
 
             //INT16
-            (Int16, Int32) => Implicit: CastInt16ToInt32,
-            (Int16, Int64) => Implicit: CastInt16ToInt64,
-            (Int16, Float32) => Implicit: CastInt16ToFloat32,
-            (Int16, Float64) => Implicit: CastInt16ToFloat64,
+            (Int16, Int32) => Implicit: CastInt16ToInt32(func::CastInt16ToInt32),
+            (Int16, Int64) => Implicit: CastInt16ToInt64(func::CastInt16ToInt64),
+            (Int16, Float32) => Implicit: CastInt16ToFloat32(func::CastInt16ToFloat32),
+            (Int16, Float64) => Implicit: CastInt16ToFloat64(func::CastInt16ToFloat64),
             (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(s)))
+                let s = to_type.unwrap_numeric_max_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(func::CastInt16ToNumeric(s))))
             }),
-            (Int16, String) => Assignment: CastInt16ToString,
+            (Int16, Oid) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+            ],
+            (Int16, RegClass) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegClass(func::CastOidToRegClass),
+            ],
+            (Int16, RegProc) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegProc(func::CastOidToRegProc),
+            ],
+            (Int16, RegType) => Implicit: [
+                CastInt16ToInt32(func::CastInt16ToInt32),
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegType(func::CastOidToRegType),
+            ],
+            (Int16, String) => Assignment: CastInt16ToString(func::CastInt16ToString),
 
             //INT32
-            (Int32, Bool) => Explicit: CastInt32ToBool,
-            (Int32, Oid) => Implicit: CastInt32ToOid,
-            (Int32, RegProc) => Implicit: CastInt32ToRegProc,
-            (Int32, Int16) => Assignment: CastInt32ToInt16,
-            (Int32, Int64) => Implicit: CastInt32ToInt64,
-            (Int32, Float32) => Implicit: CastInt32ToFloat32,
-            (Int32, Float64) => Implicit: CastInt32ToFloat64,
+            (Int32, Bool) => Explicit: CastInt32ToBool(func::CastInt32ToBool),
+            (Int32, Oid) => Implicit: CastInt32ToOid(func::CastInt32ToOid),
+            (Int32, RegClass) => Implicit: [
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegClass(func::CastOidToRegClass),
+            ],
+            (Int32, RegProc) => Implicit: [
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegProc(func::CastOidToRegProc),
+            ],
+            (Int32, RegType) => Implicit: [
+                CastInt32ToOid(func::CastInt32ToOid),
+                CastOidToRegType(func::CastOidToRegType),
+            ],
+            (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
+            (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
+            (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
+            (Int32, Float64) => Implicit: CastInt32ToFloat64(func::CastInt32ToFloat64),
             (Int32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToNumeric(s)))
+                let s = to_type.unwrap_numeric_max_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToNumeric(func::CastInt32ToNumeric(s))))
             }),
-            (Int32, String) => Assignment: CastInt32ToString,
+            (Int32, String) => Assignment: CastInt32ToString(func::CastInt32ToString),
 
             // INT64
-            (Int64, Bool) => Explicit: CastInt64ToBool,
-            (Int64, Int16) => Assignment: CastInt64ToInt16,
-            (Int64, Int32) => Assignment: CastInt64ToInt32,
+            (Int64, Bool) => Explicit: CastInt64ToBool(func::CastInt64ToBool),
+            (Int64, Int16) => Assignment: CastInt64ToInt16(func::CastInt64ToInt16),
+            (Int64, Int32) => Assignment: CastInt64ToInt32(func::CastInt64ToInt32),
             (Int64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToNumeric(s)))
+                let s = to_type.unwrap_numeric_max_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToNumeric(func::CastInt64ToNumeric(s))))
             }),
-            (Int64, Float32) => Implicit: CastInt64ToFloat32,
-            (Int64, Float64) => Implicit: CastInt64ToFloat64,
-            (Int64, String) => Assignment: CastInt64ToString,
+            (Int64, Float32) => Implicit: CastInt64ToFloat32(func::CastInt64ToFloat32),
+            (Int64, Float64) => Implicit: CastInt64ToFloat64(func::CastInt64ToFloat64),
+            (Int64, Oid) => Implicit: CastInt64ToOid(func::CastInt64ToOid),
+            (Int64, RegClass) => Implicit: [
+                CastInt64ToOid(func::CastInt64ToOid),
+                CastOidToRegClass(func::CastOidToRegClass),
+            ],
+            (Int64, RegProc) => Implicit: [
+                CastInt64ToOid(func::CastInt64ToOid),
+                CastOidToRegProc(func::CastOidToRegProc),
+            ],
+            (Int64, RegType) => Implicit: [
+                CastInt64ToOid(func::CastInt64ToOid),
+                CastOidToRegType(func::CastOidToRegType),
+            ],
+            (Int64, String) => Assignment: CastInt64ToString(func::CastInt64ToString),
 
             // OID
-            (Oid, Int32) => Assignment: CastOidToInt32,
-            (Oid, String) => Explicit: CastInt32ToString,
-            (Oid, RegProc) => Assignment: CastOidToRegProc,
+            (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
+            (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
+            (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
+            (Oid, RegClass) => Assignment: CastOidToRegClass(func::CastOidToRegClass),
+            (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
+            (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
+
+            // REGCLASS
+            (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),
+            (RegClass, String) => Explicit: sql_impl_cast("(
+                SELECT COALESCE(t.name, v.x::pg_catalog.text)
+                FROM (
+                    VALUES ($1::pg_catalog.oid)) AS v(x)
+                    LEFT JOIN mz_catalog.mz_objects AS t
+                    ON t.oid = v.x
+            )"),
 
             // REGPROC
-            (RegProc,Oid) => Implicit: CastRegProcToOid,
+            (RegProc, Oid) => Implicit: CastRegProcToOid(func::CastRegProcToOid),
+            (RegProc, String) => Explicit: sql_impl_cast("(
+                SELECT COALESCE(t.name, v.x::pg_catalog.text)
+                FROM (
+                    VALUES ($1::pg_catalog.oid)) AS v(x)
+                    LEFT JOIN mz_catalog.mz_functions AS t
+                    ON t.oid = v.x
+            )"),
+
+            // REGTYPE
+            (RegType, Oid) => Implicit: CastRegTypeToOid(func::CastRegTypeToOid),
+            (RegType, String) => Explicit: sql_impl_cast("(
+                SELECT COALESCE(t.name, v.x::pg_catalog.text)
+                FROM (
+                    VALUES ($1::pg_catalog.oid)) AS v(x)
+                    LEFT JOIN mz_catalog.mz_types AS t
+                    ON t.oid = v.x
+            )"),
 
             // FLOAT32
             (Float32, Int16) => Assignment: CastFloat32ToInt16(func::CastFloat32ToInt16),
@@ -180,8 +268,8 @@ lazy_static! {
             (Float32, Int64) => Assignment: CastFloat32ToInt64(func::CastFloat32ToInt64),
             (Float32, Float64) => Implicit: CastFloat32ToFloat64(func::CastFloat32ToFloat64),
             (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(s)))
+                let s = to_type.unwrap_numeric_max_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(func::CastFloat32ToNumeric(s))))
             }),
             (Float32, String) => Assignment: CastFloat32ToString(func::CastFloat32ToString),
 
@@ -191,53 +279,71 @@ lazy_static! {
             (Float64, Int64) => Assignment: CastFloat64ToInt64(func::CastFloat64ToInt64),
             (Float64, Float32) => Assignment: CastFloat64ToFloat32(func::CastFloat64ToFloat32),
             (Float64, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(s)))
+                let s = to_type.unwrap_numeric_max_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(func::CastFloat64ToNumeric(s))))
             }),
-            (Float64, String) => Assignment: CastFloat64ToString,
+            (Float64, String) => Assignment: CastFloat64ToString(func::CastFloat64ToString),
 
             // DATE
-            (Date, Timestamp) => Implicit: CastDateToTimestamp,
-            (Date, TimestampTz) => Implicit: CastDateToTimestampTz,
-            (Date, String) => Assignment: CastDateToString,
+            (Date, Timestamp) => Implicit: CastDateToTimestamp(func::CastDateToTimestamp),
+            (Date, TimestampTz) => Implicit: CastDateToTimestampTz(func::CastDateToTimestampTz),
+            (Date, String) => Assignment: CastDateToString(func::CastDateToString),
 
             // TIME
-            (Time, Interval) => Implicit: CastTimeToInterval,
-            (Time, String) => Assignment: CastTimeToString,
+            (Time, Interval) => Implicit: CastTimeToInterval(func::CastTimeToInterval),
+            (Time, String) => Assignment: CastTimeToString(func::CastTimeToString),
 
             // TIMESTAMP
-            (Timestamp, Date) => Assignment: CastTimestampToDate,
-            (Timestamp, TimestampTz) => Implicit: CastTimestampToTimestampTz,
-            (Timestamp, String) => Assignment: CastTimestampToString,
+            (Timestamp, Date) => Assignment: CastTimestampToDate(func::CastTimestampToDate),
+            (Timestamp, TimestampTz) => Implicit: CastTimestampToTimestampTz(func::CastTimestampToTimestampTz),
+            (Timestamp, Time) => Assignment: CastTimestampToTime(func::CastTimestampToTime),
+            (Timestamp, String) => Assignment: CastTimestampToString(func::CastTimestampToString),
 
             // TIMESTAMPTZ
-            (TimestampTz, Date) => Assignment: CastTimestampTzToDate,
-            (TimestampTz, Timestamp) => Assignment: CastTimestampTzToTimestamp,
-            (TimestampTz, String) => Assignment: CastTimestampTzToString,
+            (TimestampTz, Date) => Assignment: CastTimestampTzToDate(func::CastTimestampTzToDate),
+            (TimestampTz, Timestamp) => Assignment: CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp),
+            (TimestampTz, Time) => Assignment: CastTimestampTzToTime(func::CastTimestampTzToTime),
+            (TimestampTz, String) => Assignment: CastTimestampTzToString(func::CastTimestampTzToString),
 
             // INTERVAL
-            (Interval, Time) => Assignment: CastIntervalToTime,
-            (Interval, String) => Assignment: CastIntervalToString,
+            (Interval, Time) => Assignment: CastIntervalToTime(func::CastIntervalToTime),
+            (Interval, String) => Assignment: CastIntervalToString(func::CastIntervalToString),
 
             // BYTES
-            (Bytes, String) => Assignment: CastBytesToString,
+            (Bytes, String) => Assignment: CastBytesToString(func::CastBytesToString),
 
             // STRING
-            (String, Bool) => Explicit: CastStringToBool,
-            (String, Int16) => Explicit: CastStringToInt16,
-            (String, Int32) => Explicit: CastStringToInt32,
-            (String, Int64) => Explicit: CastStringToInt64,
-            (String, Oid) => Explicit: CastStringToInt32,
-            // A regproc represents a function by oid. Converting from string to regproc
-            // does a lookup of the function name and expects exactly one function to
-            // match it. You can also specify (in postgres) a string that's a valid
+            (String, Bool) => Explicit: CastStringToBool(func::CastStringToBool),
+            (String, Int16) => Explicit: CastStringToInt16(func::CastStringToInt16),
+            (String, Int32) => Explicit: CastStringToInt32(func::CastStringToInt32),
+            (String, Int64) => Explicit: CastStringToInt64(func::CastStringToInt64),
+            (String, Oid) => Explicit: CastStringToOid(func::CastStringToOid),
+
+            // STRING to REG*
+            // A reg* type represents a specific type of object by oid.
+            // Converting from string to reg* does a lookup of the object name
+            // in the corresponding mz_catalog table and expects exactly one object to match it.
+            // You can also specify (in postgres) a string that's a valid
             // int4 and it'll happily cast it (without verifying that the int4 matches
-            // a function oid). To support this, use a SQL expression that checks if
+            // an object oid). To support this, use a SQL expression that checks if
             // the input might be a valid int4 with a regex, otherwise try to lookup in
-            // mz_functions. CASE will return NULL if the subquery returns zero results,
+            // the table. CASE will return NULL if the subquery returns zero results,
             // so use mz_error_if_null to coerce that into an error. This is hacky and
             // incomplete in a few ways, but gets us close enough to making drivers happy.
             // TODO: Support the correct error code for does not exist (42883).
+            (String, RegClass) => Explicit: sql_impl_cast("(
+                SELECT
+                    CASE
+                    WHEN $1 IS NULL THEN NULL
+                    WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regclass
+                    ELSE (
+                        mz_internal.mz_error_if_null(
+                            (SELECT oid::pg_catalog.regclass FROM mz_catalog.mz_objects WHERE name = $1),
+                            'object \"' || $1 || '\" does not exist'
+                        )
+                    )
+                    END
+            )"),
             (String, RegProc) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE
@@ -251,77 +357,90 @@ lazy_static! {
                     )
                     END
             )"),
+            (String, RegType) => Explicit: sql_impl_cast("(
+                SELECT
+                    CASE
+                    WHEN $1 IS NULL THEN NULL
+                    WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regtype
+                    ELSE (
+                        mz_internal.mz_error_if_null(
+                            (SELECT oid::pg_catalog.regtype FROM mz_catalog.mz_types WHERE name = $1),
+                            'type \"' || $1 || '\" does not exist'
+                        )
+                    )
+                    END
+            )"),
 
-            (String, Float32) => Explicit: CastStringToFloat32,
-            (String, Float64) => Explicit: CastStringToFloat64,
+            (String, Float32) => Explicit: CastStringToFloat32(func::CastStringToFloat32),
+            (String, Float64) => Explicit: CastStringToFloat64(func::CastStringToFloat64),
             (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
+                let s = to_type.unwrap_numeric_max_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(func::CastStringToNumeric(s))))
             }),
-            (String, Date) => Explicit: CastStringToDate,
-            (String, Time) => Explicit: CastStringToTime,
-            (String, Timestamp) => Explicit: CastStringToTimestamp,
-            (String, TimestampTz) => Explicit: CastStringToTimestampTz,
-            (String, Interval) => Explicit: CastStringToInterval,
-            (String, Bytes) => Explicit: CastStringToBytes,
+            (String, Date) => Explicit: CastStringToDate(func::CastStringToDate),
+            (String, Time) => Explicit: CastStringToTime(func::CastStringToTime),
+            (String, Timestamp) => Explicit: CastStringToTimestamp(func::CastStringToTimestamp),
+            (String, TimestampTz) => Explicit: CastStringToTimestampTz(func::CastStringToTimestampTz),
+            (String, Interval) => Explicit: CastStringToInterval(func::CastStringToInterval),
+            (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
             (String, Jsonb) => Explicit: CastStringToJsonb,
-            (String, Uuid) => Explicit: CastStringToUuid,
+            (String, Uuid) => Explicit: CastStringToUuid(func::CastStringToUuid),
             (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_array_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToArray {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToArray(func::CastStringToArray {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
             (String, List) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_list_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToList {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToList(func::CastStringToList {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
             (String, Map) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_val_type = to_type.unwrap_map_value_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_val_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToMap {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToMap(func::CastStringToMap {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
-            (String, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            (String, Int2Vector) => Explicit: CastStringToInt2Vector(func::CastStringToInt2Vector),
+            (String, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
-            (String, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            (String, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_varchar_max_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
-
             // CHAR
-            (Char, String) => Implicit: CastCharToString,
+            (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                let length = to_type.unwrap_char_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
-            (Char, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            (Char, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_varchar_max_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
             // VARCHAR
-            (VarChar, String) => Implicit: CastVarCharToString,
+            (VarChar, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
             (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                let length = to_type.unwrap_char_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
             (VarChar, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-                let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                let length = to_type.unwrap_varchar_max_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
             // RECORD
@@ -329,12 +448,31 @@ lazy_static! {
                 let ty = from_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastRecordToString { ty }))
             }),
+            (Record, Record) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+                if from_type.unwrap_record_element_type().len() != to_type.unwrap_record_element_type().len() {
+                    return None;
+                }
+                let cast_exprs = from_type.unwrap_record_element_type()
+                    .iter()
+                    .zip_eq(to_type.unwrap_record_element_type())
+                    .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
+                    .collect::<Option<Vec<_>>>()?;
+                let to = to_type.clone();
+                Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2{ return_ty: to, cast_exprs }))
+            }),
 
             // ARRAY
             (Array, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastArrayToString { ty }))
             }),
+            (Array, List) => Explicit: CastArrayToListOneDim(func::CastArrayToListOneDim),
+
+            // INT2VECTOR
+            (Int2Vector, Array) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastInt2VectorToArray(func::CastInt2VectorToArray)))
+            }),
+            (Int2Vector, String) => Explicit: CastInt2VectorToString,
 
             // LIST
             (List, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
@@ -366,28 +504,28 @@ lazy_static! {
             (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
             (Jsonb, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
+                let s = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(s)))
             }),
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
-            (Uuid, String) => Assignment: CastUuidToString,
+            (Uuid, String) => Assignment: CastUuidToString(func::CastUuidToString),
 
             // Numeric
             (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let scale = to_type.unwrap_numeric_scale();
+                let scale = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| match scale {
                     None => e,
                     Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
                 })
             }),
-            (Numeric, Float32) => Implicit: CastNumericToFloat32,
-            (Numeric, Float64) => Implicit: CastNumericToFloat64,
-            (Numeric, Int16) => Assignment: CastNumericToInt16,
-            (Numeric, Int32) => Assignment: CastNumericToInt32,
-            (Numeric, Int64) => Assignment: CastNumericToInt64,
-            (Numeric, String) => Assignment: CastNumericToString
+            (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),
+            (Numeric, Float64) => Implicit: CastNumericToFloat64(func::CastNumericToFloat64),
+            (Numeric, Int16) => Assignment: CastNumericToInt16(func::CastNumericToInt16),
+            (Numeric, Int32) => Assignment: CastNumericToInt32(func::CastNumericToInt32),
+            (Numeric, Int64) => Assignment: CastNumericToInt64(func::CastNumericToInt64),
+            (Numeric, String) => Assignment: CastNumericToString(func::CastNumericToString)
         }
     };
 }
@@ -427,6 +565,30 @@ fn get_cast(
                     custom_oid: oid_r,
                 },
             ) => oid_l == oid_r && embedded_value_equality(&ccx, &l, &r),
+            (
+                Record {
+                    fields: fields_l,
+                    custom_oid: oid_l,
+                    ..
+                },
+                Record {
+                    fields: fields_r,
+                    custom_oid: oid_r,
+                    ..
+                },
+            ) => {
+                oid_l == oid_r
+                    && fields_l.len() == fields_r.len()
+                    && fields_l
+                        .into_iter()
+                        .map(|(_, ColumnType { scalar_type: t, .. })| t)
+                        .zip(
+                            fields_r
+                                .into_iter()
+                                .map(|(_, ColumnType { scalar_type: t, .. })| t),
+                        )
+                        .all(|(l, r)| embedded_value_equality(&ccx, l, r))
+            }
             (l, r) if ccx == &Implicit => l.base_eq(r),
             (l, r) => l == r,
         }
@@ -450,6 +612,25 @@ fn get_cast(
                 },
             )
             | (Map { value_type: l, .. }, Map { value_type: r, .. }) => structural_equality(&l, &r),
+            (
+                Record {
+                    fields: fields_l, ..
+                },
+                Record {
+                    fields: fields_r, ..
+                },
+            ) => {
+                fields_l.len() == fields_r.len()
+                    && fields_l
+                        .into_iter()
+                        .map(|(_, ColumnType { scalar_type: t, .. })| t)
+                        .zip(
+                            fields_r
+                                .into_iter()
+                                .map(|(_, ColumnType { scalar_type: t, .. })| t),
+                        )
+                        .all(|(l, r)| structural_equality(l, r))
+            }
             (l, r) => l == r,
         }
     }
@@ -479,14 +660,7 @@ fn get_cast(
 ///
 /// All types are convertible to string, so this never fails.
 pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
-    plan_cast(
-        "to_string",
-        ecx,
-        CastContext::Explicit,
-        expr,
-        &ScalarType::String,
-    )
-    .expect("cast known to exist")
+    plan_cast(ecx, CastContext::Explicit, expr, &ScalarType::String).expect("cast known to exist")
 }
 
 /// Converts an expression to `ScalarType::Jsonb`.
@@ -504,15 +678,15 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
-        Bool | Jsonb | Int64 | Float64 => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Int16 | Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
-            .expect("cast known to exist")
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Float32 | Numeric { .. } => {
-            plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
-                .expect("cast known to exist")
-                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
-        }
+        Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Int16 | Int32 | Float32 | Float64 => plan_cast(
+            ecx,
+            CastContext::Explicit,
+            expr,
+            &Numeric { max_scale: None },
+        )
+        .expect("cast known to exist")
+        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
@@ -552,70 +726,56 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 /// Postgres' ["`UNION`, `CASE`, and Related Constructs"][union-type-conv] type
 /// conversion.
 ///
-/// ## Type hints
-/// Some types contain embedded values, e.g. [`ScalarType::Numeric`] contains
-/// the values' scales. When choosing a common type, and the `type_hint` is of
-/// the type chosen, you should guess _it_ because the given type hint can
-/// contain a distinct embedded value necessary to retain type invariants.
-///
-/// [union-type-conv]:
-/// https://www.postgresql.org/docs/12/typeconv-union-case.html
+/// [union-type-conv]: https://www.postgresql.org/docs/12/typeconv-union-case.html
 pub fn guess_best_common_type(
+    ecx: &ExprContext,
     types: &[Option<ScalarType>],
-    type_hint: Option<&ScalarType>,
-) -> Option<ScalarType> {
-    // Remove unknown types and chain type_hint
-    let known_types: Vec<_> = types
-        .into_iter()
-        .filter_map(|v| match v {
-            None => type_hint.cloned(),
-            v => v.clone(),
-        })
-        .collect();
+) -> Result<ScalarType, PlanError> {
+    // This function is a direct translation of `select_common_type` in
+    // PostgreSQL.
+    // https://github.com/postgres/postgres/blob/d1b307eef/src/backend/parser/parse_coerce.c#L1288-L1308
 
-    if known_types.is_empty() {
-        return Some(ScalarType::String);
+    // Remove unknown types.
+    let types: Vec<_> = types.into_iter().filter_map(|v| v.as_ref()).collect();
+
+    // If no known types, fall back to `String`.
+    if types.is_empty() {
+        return Ok(ScalarType::String);
     }
 
-    // Tracks order of preferences for implicit casts for each [`TypeCategory`] that
-    // contains multiple types, but does so irrespective of [`TypeCategory`].
-    //
-    // We could make this deterministic, but it offers no real benefit because the
-    // information it provides is used in fallible functions anyway, so a bad guess
-    // just gets caught elsewhere.
-    let r = known_types
-        .iter()
-        .max_by_key(|scalar_type| match scalar_type {
-            // TypeCategory::String
-            ScalarType::VarChar { .. } => 0,
-            ScalarType::Char { .. } => 1,
-            ScalarType::String => 2,
-            // TypeCategory::Numeric
-            ScalarType::Int16 => 3,
-            ScalarType::Int32 => 4,
-            ScalarType::Int64 => 5,
-            ScalarType::Numeric { .. } => 6,
-            ScalarType::Float32 => 7,
-            ScalarType::Float64 => 8,
-            // TypeCategory::DateTime
-            ScalarType::Date => 9,
-            ScalarType::Timestamp => 10,
-            ScalarType::TimestampTz => 11,
-            _ => 12,
-        })
-        .unwrap();
+    let mut types = types.into_iter();
 
-    match type_hint {
-        Some(th) if r.base_eq(th) => type_hint.cloned(),
-        _ => Some(r.default_embedded_value()),
+    // Start by guessing the first type, then look at each following type in
+    // turn.
+    let mut candidate = types.next().unwrap();
+    for typ in types {
+        if TypeCategory::from_type(candidate) != TypeCategory::from_type(typ) {
+            // The next type is in a different category; give up.
+            sql_bail!(
+                "{} types {} and {} cannot be matched",
+                ecx.name,
+                ecx.humanize_scalar_type(&candidate),
+                ecx.humanize_scalar_type(&typ),
+            );
+        } else if TypeCategory::from_type(candidate).preferred_type().as_ref() != Some(candidate)
+            && can_cast(ecx, CastContext::Implicit, &candidate, &typ)
+            && !can_cast(ecx, CastContext::Implicit, &typ, &candidate)
+        {
+            // The current candidate is not the preferred type for its category
+            // and the next type is implicitly convertible to the current
+            // candidate, but not vice-versa, so take the next type as the new
+            // candidate.
+            candidate = typ;
+        }
     }
+    Ok(candidate.without_modifiers())
 }
 
 pub fn plan_coerce<'a>(
     ecx: &'a ExprContext,
     e: CoercibleScalarExpr,
     coerce_to: &ScalarType,
-) -> Result<HirScalarExpr, anyhow::Error> {
+) -> Result<HirScalarExpr, PlanError> {
     use CoercibleScalarExpr::*;
 
     Ok(match e {
@@ -632,7 +792,7 @@ pub fn plan_coerce<'a>(
                 ScalarType::Char { .. } | ScalarType::VarChar { .. } => CastContext::Assignment,
                 _ => CastContext::Explicit,
             };
-            plan_cast("string literal", ecx, ccx, lit, coerce_to)?
+            plan_cast(ecx, ccx, lit, coerce_to)?
         }
 
         LiteralRecord(exprs) => {
@@ -678,11 +838,11 @@ pub fn plan_hypothetical_cast(
     ccx: CastContext,
     from: &ScalarType,
     to: &ScalarType,
-) -> Option<::expr::MirScalarExpr> {
+) -> Option<mz_expr::MirScalarExpr> {
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
     let mut scx = ecx.qcx.scx.clone();
-    scx.param_types = Rc::new(RefCell::new(BTreeMap::new()));
+    scx.param_types = RefCell::new(BTreeMap::new());
     let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
     let relation_type = RelationType {
         column_types: vec![ColumnType {
@@ -694,10 +854,11 @@ pub fn plan_hypothetical_cast(
     let ecx = ExprContext {
         qcx: &qcx,
         name: "plan_hypothetical_cast",
-        scope: &Scope::empty(None),
+        scope: &Scope::empty(),
         relation_type: &relation_type,
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_windows: false,
     };
 
     let col_expr = HirScalarExpr::Column(ColumnRef {
@@ -708,7 +869,7 @@ pub fn plan_hypothetical_cast(
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
     Some(
-        plan_cast("plan_hypothetical_cast", &ecx, ccx, col_expr, to)
+        plan_cast(&ecx, ccx, col_expr, to)
             .ok()?
             .lower_uncorrelated()
             .expect(
@@ -727,16 +888,12 @@ pub fn plan_hypothetical_cast(
 /// - Not possible, e.g. `Bytes` to `Interval`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
 /// - Not implemented yet
-pub fn plan_cast<D>(
-    caller_name: D,
+pub fn plan_cast(
     ecx: &ExprContext,
     ccx: CastContext,
     expr: HirScalarExpr,
     cast_to: &ScalarType,
-) -> Result<HirScalarExpr, anyhow::Error>
-where
-    D: fmt::Display,
-{
+) -> Result<HirScalarExpr, PlanError> {
     use ScalarType::*;
 
     let cast_from = ecx.scalar_type(&expr);
@@ -745,9 +902,9 @@ where
     // face of intermediate expressions.
     let cast_inner = |from, to, expr| match get_cast(ecx, ccx, from, to) {
         Some(cast) => Ok(cast(expr)),
-        None => bail!(
+        None => sql_bail!(
             "{} does not support {}casting from {} to {}",
-            caller_name,
+            ecx.name,
             if ccx == CastContext::Implicit {
                 "implicitly "
             } else {
@@ -784,17 +941,17 @@ where
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    cast_from: ScalarType,
-    cast_to: ScalarType,
+    cast_from: &ScalarType,
+    cast_to: &ScalarType,
 ) -> bool {
     // All char values are cast to strings during casts, so this transformation
     // is equivalent.
     let cast_from = match cast_from {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
         from => from,
     };
     let cast_to = match cast_to {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
         to => to,
     };
     get_cast(ecx, ccx, &cast_from, &cast_to).is_some()

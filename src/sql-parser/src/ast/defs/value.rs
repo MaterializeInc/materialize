@@ -21,8 +21,8 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::ast::defs::AstInfo;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::RawName;
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -137,23 +137,33 @@ impl_display!(Value);
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
+    Millennium,
+    Century,
+    Decade,
     Year,
     Month,
     Day,
     Hour,
     Minute,
     Second,
+    Milliseconds,
+    Microseconds,
 }
 
 impl fmt::Display for DateTimeField {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
+            DateTimeField::Millennium => "MILLENNIUM",
+            DateTimeField::Century => "CENTURY",
+            DateTimeField::Decade => "DECADE",
             DateTimeField::Year => "YEAR",
             DateTimeField::Month => "MONTH",
             DateTimeField::Day => "DAY",
             DateTimeField::Hour => "HOUR",
             DateTimeField::Minute => "MINUTE",
             DateTimeField::Second => "SECOND",
+            DateTimeField::Milliseconds => "MILLISECONDS",
+            DateTimeField::Microseconds => "MICROSECONDS",
         })
     }
 }
@@ -163,12 +173,19 @@ impl FromStr for DateTimeField {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_uppercase().as_ref() {
-            "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
+            "MILLENNIUM" | "MILLENNIA" | "MIL" | "MILS" => Ok(Self::Millennium),
+            "CENTURY" | "CENTURIES" | "CENT" | "C" => Ok(Self::Century),
+            "DECADE" | "DECADES" | "DEC" | "DECS" => Ok(Self::Decade),
+            "YEAR" | "YEARS" | "YR" | "YRS" | "Y" => Ok(Self::Year),
             "MONTH" | "MONTHS" | "MON" | "MONS" => Ok(Self::Month),
             "DAY" | "DAYS" | "D" => Ok(Self::Day),
-            "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
-            "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
-            "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
+            "HOUR" | "HOURS" | "HR" | "HRS" | "H" => Ok(Self::Hour),
+            "MINUTE" | "MINUTES" | "MIN" | "MINS" | "M" => Ok(Self::Minute),
+            "SECOND" | "SECONDS" | "SEC" | "SECS" | "S" => Ok(Self::Second),
+            "MILLISECOND" | "MILLISECONDS" | "MILLISECON" | "MILLISECONS" | "MSECOND"
+            | "MSECONDS" | "MSEC" | "MSECS" | "MS" => Ok(Self::Milliseconds),
+            "MICROSECOND" | "MICROSECONDS" | "MICROSECON" | "MICROSECONS" | "USECOND"
+            | "USECONDS" | "USEC" | "USECS" | "US" => Ok(Self::Microseconds),
             _ => Err(format!("invalid DateTimeField: {}", s)),
         }
     }
@@ -207,36 +224,36 @@ impl Default for IntervalValue {
 
 /// SQL data types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DataType<T: AstInfo> {
+pub enum UnresolvedDataType {
     /// Array
-    Array(Box<DataType<T>>),
+    Array(Box<UnresolvedDataType>),
     /// List
-    List(Box<DataType<T>>),
+    List(Box<UnresolvedDataType>),
     /// Map
     Map {
-        key_type: Box<DataType<T>>,
-        value_type: Box<DataType<T>>,
+        key_type: Box<UnresolvedDataType>,
+        value_type: Box<UnresolvedDataType>,
     },
     /// Types who don't embed other types, e.g. INT
     Other {
-        name: T::ObjectName,
+        name: RawName,
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
-        typ_mod: Vec<u64>,
+        typ_mod: Vec<i64>,
     },
 }
 
-impl<T: AstInfo> AstDisplay for DataType<T> {
+impl AstDisplay for UnresolvedDataType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            DataType::Array(ty) => {
+            UnresolvedDataType::Array(ty) => {
                 f.write_node(&ty);
                 f.write_str("[]");
             }
-            DataType::List(ty) => {
+            UnresolvedDataType::List(ty) => {
                 f.write_node(&ty);
                 f.write_str(" list");
             }
-            DataType::Map {
+            UnresolvedDataType::Map {
                 key_type,
                 value_type,
             } => {
@@ -246,7 +263,7 @@ impl<T: AstInfo> AstDisplay for DataType<T> {
                 f.write_node(&value_type);
                 f.write_str("]");
             }
-            DataType::Other { name, typ_mod } => {
+            UnresolvedDataType::Other { name, typ_mod } => {
                 f.write_node(name);
                 if typ_mod.len() > 0 {
                     f.write_str("(");
@@ -257,4 +274,4 @@ impl<T: AstInfo> AstDisplay for DataType<T> {
         }
     }
 }
-impl_display_t!(DataType);
+impl_display!(UnresolvedDataType);

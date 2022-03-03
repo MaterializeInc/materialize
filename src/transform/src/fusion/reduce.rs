@@ -9,7 +9,7 @@
 
 //! Fuses reduce operators with parent operators if possible.
 use crate::TransformArgs;
-use expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{MirRelationExpr, MirScalarExpr};
 
 /// Fuses reduce operators with parent operators if possible.
 #[derive(Debug)]
@@ -21,10 +21,7 @@ impl crate::Transform for Reduce {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)))
     }
 }
 
@@ -50,7 +47,7 @@ impl Reduce {
                 // Collect all columns referenced by outer
                 let mut outer_cols = vec![];
                 for expr in group_key.iter() {
-                    expr.visit(&mut |e| {
+                    expr.visit_post(&mut |e| {
                         if let MirScalarExpr::Column(i) = e {
                             outer_cols.push(*i);
                         }

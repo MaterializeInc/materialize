@@ -1,0 +1,151 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement OK
+CREATE TABLE tbl(string text);
+
+statement OK
+INSERT INTO  tbl(string)
+SELECT x::text FROM generate_series(1, 10000) x;
+
+query I
+select 2 OPERATOR(*) 2;
+----
+4
+
+query I
+select 2 OPERATOR(+) 2;
+----
+4
+
+query I
+select 2 OPERATOR(-) 2;
+----
+0
+
+query I
+select 2 OPERATOR(/) 2
+----
+1
+
+query I
+select 2 OPERATOR(pg_catalog.*) 2;
+----
+4
+
+query I
+select 2 OPERATOR(pg_catalog.+) 2;
+----
+4
+
+query I
+select 2 OPERATOR(pg_catalog.-) 2;
+----
+0
+
+query I
+select 2 OPERATOR(pg_catalog./) 2
+----
+1
+
+query error operator does not exist: mz_catalog.*
+select 2 OPERATOR(mz_catalog.*) 2;
+
+query error operator does not exist: mz_catalog.public.*
+select 2 OPERATOR(mz_catalog.public.*) 2;
+
+query error Expected operator, found number "5."
+select 2 OPERATOR(5.*) 2;
+
+# confirm the precedence of the OPERATOR
+query I
+select 2 OPERATOR(*) 2 + 2;
+----
+8
+
+query I
+select 2 OPERATOR(*) 2 OPERATOR(+) 2;
+----
+6
+
+query I
+select 2 * 2 OPERATOR(+) 2;
+----
+6
+
+query T
+SELECT * FROM tbl WHERE string ~ '^1234'
+----
+1234
+
+query T
+SELECT * FROM tbl WHERE string OPERATOR(~) '^1234'
+----
+1234
+
+query T
+SELECT * FROM tbl WHERE string OPERATOR(pg_catalog.~) '^1234'
+----
+1234
+
+query T
+SELECT * FROM tbl WHERE string ~ '^123$'
+----
+123
+
+query T
+SELECT * FROM tbl WHERE string OPERATOR(~) '^123$'
+----
+123
+
+query T
+SELECT * FROM tbl WHERE string OPERATOR(pg_catalog.~) '^123$'
+----
+123
+
+# Confirm that operators can be used in views
+
+statement ok
+CREATE VIEW PG_ADDER AS SELECT 2 OPERATOR(pg_catalog.+) 2;
+
+query TT
+SHOW CREATE VIEW PG_ADDER
+----
+materialize.public.pg_adder
+CREATE VIEW "materialize"."public"."pg_adder" AS SELECT 2 OPERATOR(pg_catalog.+) 2
+
+statement ok
+CREATE VIEW ADDER AS SELECT 2 OPERATOR(+) 2;
+
+query TT
+SHOW CREATE VIEW ADDER
+----
+materialize.public.adder
+CREATE VIEW "materialize"."public"."adder" AS SELECT 2 + 2
+
+statement ok
+CREATE VIEW MULTIPLIER AS SELECT 2 OPERATOR(*) 2;
+
+query TT
+SHOW CREATE VIEW MULTIPLIER
+----
+materialize.public.multiplier
+CREATE VIEW "materialize"."public"."multiplier" AS SELECT 2 * 2
+
+statement ok
+CREATE VIEW PG_MULTIPLIER AS SELECT 2 OPERATOR(pg_catalog.*) 2;
+
+query TT
+SHOW CREATE VIEW PG_MULTIPLIER
+----
+materialize.public.pg_multiplier
+CREATE VIEW "materialize"."public"."pg_multiplier" AS SELECT 2 OPERATOR(pg_catalog.*) 2
+
+query error Expected operator, found number "5."
+CREATE VIEW INVALID_FIVE AS select 2 OPERATOR(5.*) 2;

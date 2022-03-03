@@ -9,6 +9,27 @@
 
 mode cockroach
 
+query T
+SELECT 1::oid::text
+----
+1
+
+query T
+SELECT (-1)::oid
+----
+4294967295
+
+query T
+SELECT (-1)::oid
+----
+4294967295
+
+query error OID out of range
+SELECT 4294967296::oid
+
+query error OID out of range
+SELECT (-1)::int8::oid
+
 query B
 SELECT 1::oid = 2::oid
 ----
@@ -16,6 +37,16 @@ false
 
 query B
 SELECT 1::oid < 2::oid
+----
+true
+
+query B
+SELECT (-1)::oid < 2::oid
+----
+false
+
+query B
+SELECT 0::oid < 4294967295::oid
 ----
 true
 

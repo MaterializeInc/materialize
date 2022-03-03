@@ -19,22 +19,19 @@ from pathlib import Path
 
 from setuptools import find_packages
 
-# This adapter's version, and its required dbt-postgres version, track the
-# target dbt version. If you need to release a new version of this adapter
-# without bumping the dbt-postgres version, change version_suffix to ".post1",
-# ".post2", etc. Reset version_suffix back to "" when bumping the
-# dbt_postgres_version.
-dbt_postgres_version = "0.20.2"
-version_suffix = ""
-
 setup(
     name="dbt-materialize",
-    version=f"{dbt_postgres_version}{version_suffix}",
+    # This adapter's version should match the required dbt-postgres version. If
+    # you need to release a new version of this adapter without bumping the
+    # dbt-postgres version, change version_suffix to ".post1", ".post2", etc.
+    #
+    # If you bump this version, bump it in __version__.py too.
+    version="1.0.1.post3",
     description="The Materialize adapter plugin for dbt (data build tool).",
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
     author="Materialize, Inc.",
-    author_email="support@materialize.io",
+    author_email="support@materialize.com",
     url="https://github.com/MaterializeInc/dbt-materialize",
     packages=find_packages(),
     package_data={
@@ -44,5 +41,8 @@ setup(
             "include/materialize/macros/**/*.sql",
         ]
     },
-    install_requires=["dbt-postgres=={}".format(dbt_postgres_version)],
+    install_requires=["dbt-postgres==1.0.1"],
+    extras_require={
+        "dev": ["pytest-dbt-adapter==0.6.0"],
+    },
 )

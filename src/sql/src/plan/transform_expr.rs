@@ -14,8 +14,8 @@ use std::mem;
 
 use lazy_static::lazy_static;
 
-use expr::func;
-use repr::{ColumnType, RelationType, ScalarType};
+use mz_expr::func;
+use mz_repr::{ColumnType, RelationType, ScalarType};
 
 use crate::plan::expr::{
     AbstractExpr, AggregateFunc, BinaryFunc, HirRelationExpr, HirScalarExpr, UnaryFunc,
@@ -53,7 +53,7 @@ use crate::plan::expr::{
 /// subquery, especially when the original conjunction contains join keys.
 pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     fn walk_relation(expr: &mut HirRelationExpr) {
-        expr.visit_mut(&mut |expr| match expr {
+        expr.visit_mut(0, &mut |expr, _| match expr {
             HirRelationExpr::Map { scalars, .. } => {
                 for scalar in scalars {
                     walk_scalar(scalar);
@@ -80,7 +80,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
                 }
             }
             _ => (),
-        })
+        });
     }
 
     fn walk_scalar(expr: &mut HirScalarExpr) {
@@ -159,11 +159,11 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
             HirRelationExpr::Map { scalars, input } => {
                 walk_relation(input, outers);
                 let mut outers = outers.to_vec();
-                outers.push(input.typ(&outers, &NO_PARAMS));
+                outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for scalar in scalars {
                     walk_scalar(scalar, &outers, false);
                     let (inner, outers) = outers
-                        .split_last_mut()
+                        .split_first_mut()
                         .expect("outers known to have at least one element");
                     let scalar_type = scalar.typ(&outers, inner, &NO_PARAMS);
                     inner.column_types.push(scalar_type);
@@ -172,25 +172,30 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
             HirRelationExpr::Filter { predicates, input } => {
                 walk_relation(input, outers);
                 let mut outers = outers.to_vec();
-                outers.push(input.typ(&outers, &NO_PARAMS));
+                outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for pred in predicates {
                     walk_scalar(pred, &outers, true);
                 }
             }
             HirRelationExpr::CallTable { exprs, .. } => {
+                let mut outers = outers.to_vec();
+                outers.insert(0, RelationType::empty());
                 for scalar in exprs {
                     walk_scalar(scalar, &outers, false);
                 }
             }
-            HirRelationExpr::Join {
-                kind, left, right, ..
-            } if kind.is_lateral() => {
+            HirRelationExpr::Join { left, right, .. } => {
                 walk_relation(left, outers);
                 let mut outers = outers.to_vec();
-                outers.push(left.typ(&outers, &NO_PARAMS));
+                outers.insert(0, left.typ(&outers, &NO_PARAMS));
                 walk_relation(right, &outers);
             }
-            expr => expr.visit1_mut(&mut |expr| walk_relation(expr, outers)),
+            expr => {
+                let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), ()> {
+                    walk_relation(expr, outers);
+                    Ok(())
+                });
+            }
         }
     }
 

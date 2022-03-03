@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -75,9 +77,10 @@ impl ClientConfig {
 
         let inner = builder
             .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(60))
             .build()
             .unwrap();
 
-        Ok(Client::new(inner, self.url, self.auth))
+        Client::new(inner, self.url, self.auth)
     }
 }

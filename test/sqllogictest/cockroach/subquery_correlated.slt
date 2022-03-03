@@ -367,9 +367,19 @@ WHERE EXISTS
 2  TX
 4  TX
 
-# #1546
-statement error supported
+query II rowsort
 SELECT c_id, generate_series(1, (SELECT count(*) FROM o WHERE o.c_id=c.c_id)) FROM c
+----
+1  1
+1  2
+1  3
+2  1
+2  2
+2  3
+4  1
+4  2
+6  1
+
 
 # Customers that have no orders with a NULL ship state.
 # Note: Result differs from Cockroach but matches Postgres.

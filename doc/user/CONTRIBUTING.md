@@ -40,7 +40,7 @@ to `git pull` the latest version of Materialize.
 
     ```shell
     cd doc/user
-    hugo serve -D
+    hugo server -D
     ```
 
     If you're making changes to the site, you might want a more cache-busting

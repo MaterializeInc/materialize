@@ -11,25 +11,27 @@
 
 //! Catalog abstraction layer.
 
+use std::error::Error;
 use std::fmt;
 use std::time::{Duration, Instant};
-use std::{error::Error, unimplemented};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
-use dataflow_types::SourceConnector;
 use lazy_static::lazy_static;
+use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 
-use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
-use ore::now::{now_zero, EpochMillis, NowFn};
-use repr::{RelationDesc, ScalarType};
-use sql_parser::ast::{Expr, Raw};
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
+use mz_repr::{ColumnName, RelationDesc, ScalarType};
+use mz_sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{FullName, PartialName, SchemaName};
+use crate::plan::statement::StatementDesc;
 
-/// A catalog keeps track of SQL objects available to the planner.
+/// A catalog keeps track of SQL objects and session state available to the
+/// planner.
 ///
 /// The `sql` crate is agnostic to any particular catalog implementation. This
 /// trait describes the required interface.
@@ -44,7 +46,7 @@ use crate::names::{FullName, PartialName, SchemaName};
 ///     components based upon connection defaults, e.g., resolving the partial
 ///     name `view42` to the fully-specified name `materialize.public.view42`.
 ///
-///   * Lookup operations, like [`Catalog::list_items`] or [`Catalog::get_item_by_id`]. These retrieve
+///   * Lookup operations, like [`SessionCatalog::get_item_by_id`]. These retrieve
 ///     metadata about a catalog entity based on a fully-specified name that is
 ///     known to be valid (i.e., because the name was successfully resolved,
 ///     or was constructed based on the output of a prior lookup operation).
@@ -52,13 +54,14 @@ use crate::names::{FullName, PartialName, SchemaName};
 ///
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
-/// [`resolve_item`]: Catalog::resolve_item
-pub trait Catalog: fmt::Debug + ExprHumanizer {
-    /// Returns the search path used by the catalog.
-    fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
-
+/// [`resolve_item`]: SessionCatalog::resolve_item
+pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Returns the name of the user who is issuing the query.
     fn user(&self) -> &str;
+
+    /// Returns the descriptor of the named prepared statement on the session, or
+    /// None if the prepared statement does not exist.
+    fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc>;
 
     /// Returns the database to use if one is not explicitly specified.
     fn default_database(&self) -> &str;
@@ -99,17 +102,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// of the search schemas. The catalog implementation must choose one.
     fn resolve_item(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
-    /// Performs the same operation as [`Catalog::resolve_item`] but for
+    /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
-
-    /// Lists the items in the specified schema in the specified database.
-    ///
-    /// Panics if `schema_name` does not specify a valid schema.
-    fn list_items<'a>(
-        &'a self,
-        schema: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a>;
 
     /// Gets an item by its ID.
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
@@ -126,13 +121,6 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
 
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &FullName) -> bool;
-
-    /// Returns a lossy `ScalarType` associated with `id` if one exists.
-    ///
-    /// For example `pg_catalog.numeric` returns `ScalarType::Numeric { scale: None}`,
-    /// meaning that its precision and scale need to be associated with values
-    /// from elsewhere.
-    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType>;
 
     /// Finds a name like `name` that is not already in use.
     ///
@@ -178,8 +166,8 @@ pub struct CatalogConfig {
     pub safe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// The number of worker in use by the server.
-    pub num_workers: usize,
+    /// An external ID to be supplied to all AWS AssumeRole operations.
+    pub aws_external_id: AwsExternalId,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
@@ -189,25 +177,31 @@ pub struct CatalogConfig {
     pub disable_user_indexes: bool,
 }
 
-/// A database in a [`Catalog`].
+/// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.
     fn name(&self) -> &str;
 
     /// Returns a stable ID for the database.
     fn id(&self) -> i64;
+
+    /// Returns whether the database contains schemas.
+    fn has_schemas(&self) -> bool;
 }
 
-/// A schema in a [`Catalog`].
+/// A schema in a [`SessionCatalog`].
 pub trait CatalogSchema {
     /// Returns a fully-specified name of the schema.
     fn name(&self) -> &SchemaName;
 
     /// Returns a stable ID for the schema.
     fn id(&self) -> i64;
+
+    /// Lists the `CatalogItem`s for the schema.
+    fn has_items(&self) -> bool;
 }
 
-/// A role in a [`Catalog`].
+/// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
     fn name(&self) -> &str;
@@ -216,7 +210,7 @@ pub trait CatalogRole {
     fn id(&self) -> i64;
 }
 
-/// An item in a [`Catalog`].
+/// An item in a [`SessionCatalog`].
 ///
 /// Note that "item" has a very specific meaning in the context of a SQL
 /// catalog, and refers to the various entities that belong to a schema.
@@ -269,6 +263,10 @@ pub trait CatalogItem {
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
     fn table_details(&self) -> Option<&[Expr<Raw>]>;
+
+    /// Returns the type information associated with the catalog item, if the
+    /// catalog item is a type.
+    fn type_details(&self) -> Option<&CatalogTypeDetails>;
 }
 
 /// The type of a [`CatalogItem`].
@@ -304,8 +302,65 @@ impl fmt::Display for CatalogItemType {
     }
 }
 
+/// Details about a type in the catalog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogTypeDetails {
+    /// The ID of the type with this type as the array element, if available.
+    pub array_id: Option<GlobalId>,
+    /// The description of this type.
+    pub typ: CatalogType,
+}
+
+/// A type stored in the catalog.
+///
+/// The variants correspond one-to-one with [`ScalarType`], but with type
+/// modifiers removed and with embedded types replaced with references to other
+/// types in the catalog.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogType {
+    Array {
+        element_id: GlobalId,
+    },
+    Bool,
+    Bytes,
+    Char,
+    Char1,
+    Date,
+    Float32,
+    Float64,
+    Int16,
+    Int32,
+    Int64,
+    Interval,
+    Jsonb,
+    List {
+        element_id: GlobalId,
+    },
+    Map {
+        key_id: GlobalId,
+        value_id: GlobalId,
+    },
+    Numeric,
+    Oid,
+    Pseudo,
+    Record {
+        fields: Vec<(ColumnName, GlobalId)>,
+    },
+    RegClass,
+    RegProc,
+    RegType,
+    String,
+    Time,
+    Timestamp,
+    TimestampTz,
+    Uuid,
+    VarChar,
+    Int2Vector,
+}
+
 /// An error returned by the catalog.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
     /// Unknown database.
     UnknownDatabase(String),
@@ -354,7 +409,7 @@ impl fmt::Display for CatalogError {
 
 impl Error for CatalogError {}
 
-/// A dummy [`Catalog`] implementation.
+/// A dummy [`SessionCatalog`] implementation.
 ///
 /// This implementation is suitable for use in tests that plan queries which are
 /// not demanding of the catalog, as many methods are unimplemented.
@@ -368,23 +423,23 @@ lazy_static! {
         nonce: 0,
         cluster_id: Uuid::from_u128(0),
         session_id: Uuid::from_u128(0),
-        experimental_mode: false,
+        experimental_mode: true,
         safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
-        num_workers: 0,
+        aws_external_id: AwsExternalId::NotProvided,
         timestamp_frequency: Duration::from_secs(1),
-        now: now_zero,
+        now: NOW_ZERO.clone(),
         disable_user_indexes: false,
     };
 }
 
-impl Catalog for DummyCatalog {
-    fn search_path(&self, _: bool) -> Vec<&str> {
-        vec!["dummy"]
-    }
-
+impl SessionCatalog for DummyCatalog {
     fn user(&self) -> &str {
         "dummy"
+    }
+
+    fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
+        None
     }
 
     fn default_database(&self) -> &str {
@@ -415,13 +470,6 @@ impl Catalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn list_items<'a>(
-        &'a self,
-        _: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a> {
-        unimplemented!();
-    }
-
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
         unimplemented!();
     }
@@ -436,10 +484,6 @@ impl Catalog for DummyCatalog {
 
     fn item_exists(&self, _: &FullName) -> bool {
         false
-    }
-
-    fn try_get_lossy_scalar_type_by_id(&self, _: &GlobalId) -> Option<ScalarType> {
-        None
     }
 
     fn config(&self) -> &CatalogConfig {

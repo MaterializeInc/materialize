@@ -14,6 +14,8 @@ use std::future::Future;
 use askama::Template;
 use futures::future;
 use hyper::{Body, Method, Request, Response, StatusCode};
+#[cfg(feature = "dev-web")]
+use tracing::debug;
 
 use crate::http::util;
 use crate::BUILD_INFO;
@@ -28,7 +30,7 @@ struct HomeTemplate<'a> {
 
 pub fn handle_home(
     _: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
     future::ok(util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
@@ -39,7 +41,7 @@ pub fn handle_home(
 
 pub fn handle_static(
     req: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     if req.method() == Method::GET {
         let path = req.uri().path();
@@ -54,7 +56,8 @@ pub fn handle_static(
 }
 
 #[cfg(not(feature = "dev-web"))]
-const STATIC_DIR: include_dir::Dir = include_dir::include_dir!("src/http/static");
+const STATIC_DIR: include_dir::Dir =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static");
 
 #[cfg(not(feature = "dev-web"))]
 fn get_static_file(path: &str) -> Option<Body> {
@@ -78,7 +81,7 @@ fn get_static_file(path: &str) -> Option<Body> {
     match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
         Ok(contents) => Some(Body::from(contents)),
         Err(e) => {
-            log::debug!("dev-web failed to load static file: {}: {}", path, e);
+            debug!("dev-web failed to load static file: {}: {}", path, e);
             None
         }
     }

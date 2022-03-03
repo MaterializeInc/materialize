@@ -25,10 +25,10 @@
 # the frontier
 
 ! SELECT * FROM t1 AS OF NOW() - INTERVAL '1 second';
-is not valid for all inputs
+contains:is not valid for all inputs
 
 ! SELECT * FROM v1 AS OF NOW() - INTERVAL '1 second';
-is not valid for all inputs
+contains:is not valid for all inputs
 
 ! SELECT * FROM v2 AS OF NOW() - INTERVAL '1 second';
-is not valid for all inputs
+contains:is not valid for all inputs

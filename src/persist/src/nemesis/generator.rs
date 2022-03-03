@@ -63,14 +63,11 @@ impl Default for GeneratorConfig {
         // NB: If we need to temporarily disable an operation in all the nemesis
         // tests, set it to 0 here. (As opposed to clearing it in the impl of
         // `all_operations`, which will break the Generator tests.)
-
-        // TODO: re-enable when we can figure out how to make this work with
-        // trace compaction.
-        ops.read_output_weight = 0;
         ops
     }
 }
 
+#[derive(Debug)]
 struct GeneratorState {
     running: bool,
     seal_frontier: HashMap<String, u64>,
@@ -162,7 +159,7 @@ impl ReqGenerator {
         // This is expected to error so it doesn't matter what diff is.
         let diff = 1;
         Req::Write(WriteReq::Single(WriteReqSingle {
-            stream: stream,
+            stream,
             update: ((key, ()), ts, diff),
         }))
     }
@@ -211,30 +208,17 @@ impl ReqGenerator {
     fn allow_compaction(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let stream = state.rng_stream(rng);
         let bonus = rng.gen_range(0..5);
-        let ts = if rng.gen_bool(0.5) {
-            let base = state
-                .since_frontier
-                .get(&stream)
-                .copied()
-                .unwrap_or_default();
-            let ts = base + bonus;
-            // This allow_compaction request might end up failing if (e.g.
-            // storage is down), but, unlike in Validator, optimistically
-            // updating the since frontier here does no harm, it just bumps up
-            // the time at which we'll issue future allow_compaction requests.
-            state.since_frontier.insert(stream.to_string(), ts);
-            ts
-        } else {
-            let base = state
-                .seal_frontier
-                .get(&stream)
-                .copied()
-                .unwrap_or_default();
-            let ts = base + bonus;
-            // This allow_compaction request is expected to fail, so don't
-            // update the since frontier.
-            ts
-        };
+        let base = state
+            .since_frontier
+            .get(&stream)
+            .copied()
+            .unwrap_or_default();
+        let ts = base + bonus;
+        // This allow_compaction request might end up failing if (e.g.
+        // storage is down), but, unlike in Validator, optimistically
+        // updating the since frontier here does no harm, it just bumps up
+        // the time at which we'll issue future allow_compaction requests.
+        state.since_frontier.insert(stream.to_string(), ts);
         Req::AllowCompaction(AllowCompactionReq { stream, ts })
     }
 
@@ -289,6 +273,7 @@ impl ReqGenerator {
     }
 }
 
+#[derive(Debug)]
 pub struct Generator {
     seed: u64,
     config: GeneratorConfig,
@@ -344,9 +329,8 @@ impl Generator {
                 self.config.storage_available,
                 ReqGenerator::StorageAvailable,
             ))
-            .filter(|_| self.state.storage_available == false),
-            Some((self.config.start_weight, ReqGenerator::Start))
-                .filter(|_| self.state.running == false),
+            .filter(|_| !self.state.storage_available),
+            Some((self.config.start_weight, ReqGenerator::Start)).filter(|_| !self.state.running),
         ];
 
         // Most operations just error if the runtime is down and this is fairly

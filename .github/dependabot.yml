@@ -18,15 +18,6 @@ updates:
     interval: daily
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
-- package-ecosystem: pip
-  directory: /misc/python
-  schedule:
-    # These dependencies get baked into the CI builder image, which we don't
-    # want to rebuild more often than we need to.
-    interval: monthly
-    time: "22:00"
-  reviewers: [MaterializeInc/dependency-czars]
-  labels: [A-dependencies]
 - package-ecosystem: docker
   directory: /misc/ubuntu-base-image
   schedule:
@@ -37,6 +28,15 @@ updates:
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
 - package-ecosystem: docker
+  directory: /ci/builder
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  open-pull-requests-limit: 10
+  reviewers: [MaterializeInc/dependency-czars]
+  labels: [A-dependencies]
+- package-ecosystem: pip
   directory: /ci/builder
   schedule:
     interval: weekly

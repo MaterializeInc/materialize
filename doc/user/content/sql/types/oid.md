@@ -29,14 +29,16 @@ documentation for more details.
 
 You can [cast](../../functions/cast) `oid` to:
 
-- [`int`](../integer) (by assignment)
+- [`integer`](../integer) (by assignment)
+- [`bigint`](../integer) (by assignment)
 - [`text`](../text) (explicitly)
 
 #### To `oid`
 
 You can [cast](../../functions/cast) from the following types to `oid`:
 
-- [`int`](../integer) (implicitly)
+- [`integer`](../integer) (implicitly)
+- [`bigint`](../integer) (implicitly)
 - [`text`](../text) (explicitly)
 
 [pg-oid]: https://www.postgresql.org/docs/current/datatype-oid.html

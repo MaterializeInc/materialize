@@ -7,15 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! TopK planning and execution logic.
+//! TopK execution logic.
 //!
-//! We provide a plan ([TopKPlan]) encoding variants of the TopK operator, and provide
-//! implementations specific to plan variants.
-//!
-//! The TopK variants can be distinguished as follows:
-//! * A [MonotonicTop1Plan] maintains a single row per key and is suitable for monotonic inputs.
-//! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
-//! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
+//! Consult [TopKPlan] documentation for details.
+
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -24,144 +19,27 @@ use differential_dataflow::operators::Consolidate;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 
-use expr::ColumnOrder;
-use repr::{Diff, Row};
+use mz_dataflow_types::plan::top_k::{
+    BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
+};
+use mz_repr::{Diff, Row};
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
-/// A plan encapsulating different variants to compute a TopK operation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum TopKPlan {
-    /// A plan for Top1 for monotonic inputs.
-    MonotonicTop1(MonotonicTop1Plan),
-    /// A plan for TopK for monotonic inputs.
-    MonotonicTopK(MonotonicTopKPlan),
-    /// A plan for generic TopK operations.
-    Basic(BasicTopKPlan),
-}
-
-impl TopKPlan {
-    /// Create a plan from the information provided. Here we decide on which of the TopK plan
-    /// variants to select.
-    ///
-    /// * `group_key` - The columns serving as the group key.
-    /// * `order_key` - The columns specifying an ordering withing each group.
-    /// * `offset` - The number of rows to skip at the top. Provide 0 to reveal all rows.
-    /// * `limit` - An optional limit of how many rows should be revealed.
-    /// * `arity` - The number of columns in the input and output.
-    /// * `monotonic` - `true` if the input is monotonic.
-    pub(crate) fn create_from(
-        group_key: Vec<usize>,
-        order_key: Vec<ColumnOrder>,
-        offset: usize,
-        limit: Option<usize>,
-        arity: usize,
-        monotonic: bool,
-    ) -> Self {
-        if monotonic && offset == 0 && limit == Some(1) {
-            TopKPlan::MonotonicTop1(MonotonicTop1Plan {
-                group_key,
-                order_key,
-            })
-        } else if monotonic && offset == 0 {
-            // For monotonic inputs, we are able to retract inputs that can no longer be produced
-            // as outputs. Any inputs beyond `offset + limit` will never again be produced as
-            // outputs, and can be removed. The simplest form of this is when `offset == 0` and
-            // these removeable records are those in the input not produced in the output.
-            // TODO: consider broadening this optimization to `offset > 0` by first filtering
-            // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
-            // of `offset` and `limit`, discarding only the records not produced in the intermediate
-            // stage.
-            TopKPlan::MonotonicTopK(MonotonicTopKPlan {
-                group_key,
-                order_key,
-                limit,
-                arity,
-            })
-        } else {
-            // A plan for all other inputs
-            TopKPlan::Basic(BasicTopKPlan {
-                group_key,
-                order_key,
-                offset,
-                limit,
-                arity,
-            })
-        }
-    }
-}
-
-/// A plan for monotonic TopKs with an offset of 0 and a limit of 1.
-///
-/// If the input to a TopK is monotonic (aka append-only aka no retractions) then we
-/// don't have to worry about keeping every row we've seen around forever. Instead,
-/// the reduce can incrementally compute a new answer by looking at just the old TopK
-/// for a key and the incremental data.
-///
-/// This optimization generalizes to any TopK over a monotonic source, but we special
-/// case only TopK with offset=0 and limit=1 (aka Top1) for now. This is because (1)
-/// Top1 can merge in each incremental row in constant space and time while the
-/// generalized solution needs something like a priority queue and (2) we expect Top1
-/// will be a common pattern used to turn a Kafka source's "upsert" semantics into
-/// differential's semantics. (2) is especially interesting because Kafka is
-/// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
-/// Materialize and commonly used by users.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MonotonicTop1Plan {
-    /// The columns that form the key for each group.
-    group_key: Vec<usize>,
-    /// Ordering that is used within each group.
-    order_key: Vec<expr::ColumnOrder>,
-}
-
-/// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MonotonicTopKPlan {
-    /// The columns that form the key for each group.
-    group_key: Vec<usize>,
-    /// Ordering that is used within each group.
-    order_key: Vec<expr::ColumnOrder>,
-    /// Optionally, an upper bound on the per-group ordinal position of the
-    /// records to produce from each group.
-    limit: Option<usize>,
-    /// The number of columns in the input and output.
-    arity: usize,
-}
-
-/// A plan for generic TopKs that don't fit any more specific category.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BasicTopKPlan {
-    /// The columns that form the key for each group.
-    group_key: Vec<usize>,
-    /// Ordering that is used within each group.
-    order_key: Vec<expr::ColumnOrder>,
-    /// Optionally, an upper bound on the per-group ordinal position of the
-    /// records to produce from each group.
-    limit: Option<usize>,
-    /// A lower bound on the per-group ordinal position of the records to
-    /// produce from each group.
-    ///
-    /// This can be set to zero to have no effect.
-    offset: usize,
-    /// The number of columns in the input and output.
-    arity: usize,
-}
-
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, Row, repr::Timestamp>
+impl<G> Context<G, Row, mz_repr::Timestamp>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     pub fn render_topk(
         &mut self,
         input: CollectionBundle<G, Row, G::Timestamp>,
         top_k_plan: TopKPlan,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
-        let (ok_input, err_input) = input.as_collection();
+        let (ok_input, err_input) = input.as_specific_collection(None);
 
         // We create a new region to compartmentalize the topk logic.
         let ok_result = ok_input.scope().region_named("TopK", |inner| {
@@ -212,7 +90,7 @@ where
         fn build_topk<G>(
             collection: Collection<G, Row, Diff>,
             group_key: Vec<usize>,
-            order_key: Vec<expr::ColumnOrder>,
+            order_key: Vec<mz_expr::ColumnOrder>,
             offset: usize,
             limit: Option<usize>,
             arity: usize,
@@ -221,14 +99,18 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
+            let mut datum_vec = mz_repr::DatumVec::new();
             let mut collection = collection.map({
                 move |row| {
                     let row_hash = row.hashed();
-                    let datums = row.unpack();
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    let total_size = repr::datums_size(iterator.clone());
-                    let mut group_row = Row::with_capacity(total_size);
-                    group_row.extend(iterator);
+                    let group_row = {
+                        let datums = datum_vec.borrow_with(&row);
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        let total_size = mz_repr::datums_size(iterator.clone());
+                        let mut group_row = Row::with_capacity(total_size);
+                        group_row.packer().extend(iterator);
+                        group_row
+                    };
                     ((group_row, row_hash), row)
                 }
             });
@@ -274,7 +156,7 @@ where
         // a larger number of arrangements when this optimization does nothing beneficial.
         fn build_topk_stage<G>(
             collection: Collection<G, ((Row, u64), Row), Diff>,
-            order_key: Vec<expr::ColumnOrder>,
+            order_key: Vec<mz_expr::ColumnOrder>,
             modulus: u64,
             offset: usize,
             limit: Option<usize>,
@@ -290,11 +172,11 @@ where
             // We only want to arrange parts of the input that are not part of the actual output
             // such that `input.concat(&negated_output.negate())` yields the correct TopK
             let negated_output = input.reduce_named("TopK", {
-                move |_key, source, target: &mut Vec<(Row, isize)>| {
+                move |_key, source, target: &mut Vec<(Row, Diff)>| {
                     // Determine if we must actually shrink the result set.
                     let must_shrink = offset > 0
                         || limit
-                            .map(|l| source.iter().map(|(_, d)| *d).sum::<isize>() as usize > l)
+                            .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
                             .unwrap_or(false);
                     if must_shrink {
                         // First go ahead and emit all records
@@ -321,7 +203,9 @@ where
                             indexes.sort_by(|left, right| {
                                 let left = &buffer[left * width..][..width];
                                 let right = &buffer[right * width..][..width];
-                                expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                                mz_expr::compare_columns(&order_key, left, right, || {
+                                    left.cmp(right)
+                                })
                             });
                         }
 
@@ -332,13 +216,14 @@ where
                             if diff > 0 {
                                 // If we are still skipping early records ...
                                 if offset > 0 {
-                                    let to_skip = std::cmp::min(offset, diff as usize);
+                                    let to_skip =
+                                        std::cmp::min(offset, usize::try_from(diff).unwrap());
                                     offset -= to_skip;
-                                    diff -= to_skip as isize;
+                                    diff -= Diff::try_from(to_skip).unwrap();
                                 }
                                 // We should produce at most `limit` records.
                                 if let Some(limit) = &mut limit {
-                                    diff = std::cmp::min(diff, *limit as isize);
+                                    diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
                                     *limit -= diff as usize;
                                 }
                                 // Output the indicated number of rows.
@@ -359,7 +244,7 @@ where
         fn render_top1_monotonic<G>(
             collection: Collection<G, Row, Diff>,
             group_key: Vec<usize>,
-            order_key: Vec<expr::ColumnOrder>,
+            order_key: Vec<mz_expr::ColumnOrder>,
         ) -> Collection<G, Row, Diff>
         where
             G: Scope,
@@ -371,12 +256,16 @@ where
             use timely::dataflow::operators::Map;
 
             let collection = collection.map({
+                let mut datum_vec = mz_repr::DatumVec::new();
                 move |row| {
-                    let datums = row.unpack();
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    let total_size = repr::datums_size(iterator.clone());
-                    let mut group_key = Row::with_capacity(total_size);
-                    group_key.extend(iterator);
+                    let group_key = {
+                        let datums = datum_vec.borrow_with(&row);
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        let total_size = mz_repr::datums_size(iterator.clone());
+                        let mut group_key = Row::with_capacity(total_size);
+                        group_key.packer().extend(iterator);
+                        group_key
+                    };
                     (group_key, row)
                 }
             });
@@ -424,8 +313,8 @@ pub mod monoids {
     use differential_dataflow::difference::Semigroup;
     use serde::{Deserialize, Serialize};
 
-    use expr::ColumnOrder;
-    use repr::Row;
+    use mz_expr::ColumnOrder;
+    use mz_repr::Row;
 
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
@@ -442,7 +331,7 @@ pub mod monoids {
             // have to store the decoded Datums in the same struct as the Row, which gets tricky.
             let left: Vec<_> = self.row.unpack();
             let right: Vec<_> = other.row.unpack();
-            expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
+            mz_expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
         }
     }
     impl PartialOrd for Top1Monoid {

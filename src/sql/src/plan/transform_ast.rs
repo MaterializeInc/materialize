@@ -13,30 +13,34 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
-use anyhow::bail;
 use uuid::Uuid;
 
-use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, OrderByExpr, Query, Raw, Select, SelectItem, TableAlias,
-    TableFactor, TableWithJoins, UnresolvedObjectName, Value,
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{
+    Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Raw, Select, SelectItem,
+    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
 
 use crate::normalize;
-use crate::plan::StatementContext;
+use crate::plan::{PlanError, StatementContext};
 
 pub fn transform_query<'a>(
     scx: &StatementContext,
     query: &'a mut Query<Raw>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     run_transforms(scx, |t, query| t.visit_query_mut(query), query)
 }
 
-pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {
+pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
     run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
 }
 
-fn run_transforms<F, A>(scx: &StatementContext, mut f: F, ast: &mut A) -> Result<(), anyhow::Error>
+pub(crate) fn run_transforms<F, A>(
+    scx: &StatementContext,
+    mut f: F,
+    ast: &mut A,
+) -> Result<(), PlanError>
 where
     F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Raw>, &'ast mut A),
 {
@@ -71,7 +75,7 @@ where
 // TODO(sploiselle): rewrite these in terms of func::sql_op!
 struct FuncRewriter<'a> {
     scx: &'a StatementContext<'a>,
-    status: Result<(), anyhow::Error>,
+    status: Result<(), PlanError>,
 }
 
 impl<'a> FuncRewriter<'a> {
@@ -246,7 +250,9 @@ impl<'a> FuncRewriter<'a> {
                 let ident = normalize::ident(ident[0].clone());
                 let fn_ident = match ident.as_str() {
                     "current_role" => Some("current_user"),
-                    "current_schema" | "current_timestamp" | "current_user" => Some(ident.as_str()),
+                    "current_schema" | "current_timestamp" | "current_user" | "session_user" => {
+                        Some(ident.as_str())
+                    }
                     _ => None,
                 };
                 match fn_ident {
@@ -290,23 +296,45 @@ impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
 struct Desugarer {
-    status: Result<(), anyhow::Error>,
+    status: Result<(), PlanError>,
+    recursion_guard: RecursionGuard,
+}
+
+impl CheckedRecursion for Desugarer {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
 }
 
 impl<'ast> VisitMut<'ast, Raw> for Desugarer {
     fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
-        if self.status.is_ok() {
-            self.status = self.visit_expr_mut_internal(expr);
-        }
+        self.visit_internal(Self::visit_expr_mut_internal, expr);
     }
 }
 
 impl Desugarer {
-    fn new() -> Desugarer {
-        Desugarer { status: Ok(()) }
+    fn visit_internal<F, X>(&mut self, f: F, x: X)
+    where
+        F: Fn(&mut Self, X) -> Result<(), PlanError>,
+    {
+        if self.status.is_ok() {
+            // self.status could have changed from a deeper call, so don't blindly
+            // overwrite it with the result of this call.
+            let status = self.checked_recur_mut(|d| f(d, x));
+            if self.status.is_ok() {
+                self.status = status;
+            }
+        }
     }
 
-    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {
+    fn new() -> Desugarer {
+        Desugarer {
+            status: Ok(()),
+            recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
+        }
+    }
+
+    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
         // `($expr)` => `$expr`
         while let Expr::Nested(e) = expr {
             *expr = e.take();
@@ -359,13 +387,13 @@ impl Desugarer {
             if *negated {
                 *expr = Expr::AllSubquery {
                     left: Box::new(e.take()),
-                    op: "<>".into(),
+                    op: Op::bare("<>"),
                     right: Box::new(subquery.take()),
                 };
             } else {
                 *expr = Expr::AnySubquery {
                     left: Box::new(e.take()),
-                    op: "=".into(),
+                    op: Op::bare("="),
                     right: Box::new(subquery.take()),
                 };
             }
@@ -383,16 +411,19 @@ impl Desugarer {
                 Select::default()
                     .from(TableWithJoins {
                         relation: TableFactor::Function {
-                            name: UnresolvedObjectName(vec![
-                                Ident::new("mz_catalog"),
-                                Ident::new("unnest"),
-                            ]),
-                            args: FunctionArgs::args(vec![right.take()]),
+                            function: TableFunction {
+                                name: UnresolvedObjectName(vec![
+                                    Ident::new("mz_catalog"),
+                                    Ident::new("unnest"),
+                                ]),
+                                args: FunctionArgs::args(vec![right.take()]),
+                            },
                             alias: Some(TableAlias {
                                 name: Ident::new("_"),
                                 columns: vec![binding.clone()],
                                 strict: true,
                             }),
+                            with_ordinality: false,
                         },
                         joins: vec![],
                     })
@@ -456,7 +487,7 @@ impl Desugarer {
                 .project(SelectItem::Expr {
                     expr: left
                         .binop(
-                            &op,
+                            op.clone(),
                             Expr::Row {
                                 exprs: bindings
                                     .into_iter()
@@ -499,38 +530,38 @@ impl Desugarer {
             if let (Expr::Row { exprs: left }, Expr::Row { exprs: right }) =
                 (&mut **left, &mut **right)
             {
-                if matches!(op.as_str(), "=" | "<>" | "<" | "<=" | ">" | ">=") {
+                if matches!(normalize::op(op)?, "=" | "<>" | "<" | "<=" | ">" | ">=") {
                     if left.len() != right.len() {
-                        bail!("unequal number of entries in row expressions");
+                        sql_bail!("unequal number of entries in row expressions");
                     }
                     if left.is_empty() {
                         assert!(right.is_empty());
-                        bail!("cannot compare rows of zero length");
+                        sql_bail!("cannot compare rows of zero length");
                     }
                 }
-                match op.as_str() {
+                match normalize::op(op)? {
                     "=" | "<>" => {
                         let mut new = Expr::Value(Value::Boolean(true));
                         for (l, r) in left.iter_mut().zip(right) {
                             new = l.take().equals(r.take()).and(new);
                         }
-                        if op == "<>" {
+                        if normalize::op(op)? == "<>" {
                             new = new.negate();
                         }
                         *expr = new;
                     }
                     "<" | "<=" | ">" | ">=" => {
-                        let strict_op = match op.as_str() {
+                        let strict_op = match normalize::op(op)? {
                             "<" | "<=" => "<",
                             ">" | ">=" => ">",
                             _ => unreachable!(),
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
-                        let mut new = l.take().binop(&op, r.take());
+                        let mut new = l.take().binop(op.clone(), r.take());
                         for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
                             new = l
                                 .clone()
-                                .binop(strict_op, r.clone())
+                                .binop(Op::bare(strict_op), r.clone())
                                 .or(l.take().equals(r.take()).and(new));
                         }
                         *expr = new;

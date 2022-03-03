@@ -9,27 +9,18 @@
 
 //! Now utilities.
 
-use std::convert::TryInto;
+use std::fmt;
+use std::ops::Deref;
+use std::sync::Arc;
 use std::time::SystemTime;
+
+use lazy_static::lazy_static;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
 
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;
-
-/// A function that returns system or mocked time.
-pub type NowFn = fn() -> EpochMillis;
-
-/// Returns the current system time.
-pub fn system_time() -> EpochMillis {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("failed to get millis since epoch")
-        .as_millis()
-        .try_into()
-        .expect("current time did not fit into u64")
-}
 
 /// Converts epoch milliseconds to a DateTime.
 #[cfg(feature = "chrono")]
@@ -38,7 +29,54 @@ pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
     Utc.timestamp(dur.as_secs() as i64, dur.subsec_nanos())
 }
 
-/// Returns zero.
-pub const fn now_zero() -> EpochMillis {
+/// A function that returns system or mocked time.
+// This is a newtype so that it can implement `Debug`, as closures don't
+// implement `Debug` by default. It derefs to a callable so that it is
+// ergonomically equivalent to a closure.
+#[derive(Clone)]
+pub struct NowFn(Arc<dyn Fn() -> EpochMillis + Send + Sync>);
+
+impl fmt::Debug for NowFn {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("<now_fn>")
+    }
+}
+
+impl Deref for NowFn {
+    type Target = dyn Fn() -> EpochMillis;
+
+    fn deref(&self) -> &Self::Target {
+        &(*self.0)
+    }
+}
+
+impl<F> From<F> for NowFn
+where
+    F: Fn() -> EpochMillis + Send + Sync + 'static,
+{
+    fn from(f: F) -> NowFn {
+        NowFn(Arc::new(f))
+    }
+}
+
+fn system_time() -> EpochMillis {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("failed to get millis since epoch")
+        .as_millis()
+        .try_into()
+        .expect("current time did not fit into u64")
+}
+fn now_zero() -> EpochMillis {
     0
+}
+
+lazy_static! {
+    /// A [`NowFn`] that returns the actual system time.
+    pub static ref SYSTEM_TIME: NowFn = NowFn::from(system_time);
+
+    /// A [`NowFn`] that always returns zero.
+    ///
+    /// For use in tests.
+    pub static ref NOW_ZERO: NowFn = NowFn::from(now_zero);
 }

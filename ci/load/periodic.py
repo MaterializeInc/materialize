@@ -10,24 +10,19 @@
 import datetime
 
 from materialize import scratch
-from materialize.cli.scratch import (
-    DEFAULT_INSTPROF_NAME,
-    DEFAULT_SG_ID,
-    DEFAULT_SUBNET_ID,
-)
 
 
 def main() -> None:
     desc = scratch.MachineDesc(
         name="chbench monthly",
-        launch_script="MZ_WORKERS=4 bin/mzcompose --mz-find chbench run cloud-load-test",
+        launch_script="MZ_WORKERS=4 bin/mzcompose --preserve-ports --find chbench run load-test",
         instance_type="r5ad.4xlarge",
         ami="ami-0b29b6e62f2343b46",
         tags={
             "scrape_benchmark_numbers": "true",
             "lt_name": "monthly-chbench",
             "purpose": "load_test_monthly",
-            "mzconduct_workflow": "cloud-load-test",
+            "mzconduct_workflow": "load-test",
             "test": "chbench",
             "environment": "scratch",
         },
@@ -36,16 +31,9 @@ def main() -> None:
     now = datetime.datetime.utcnow()
     scratch.launch_cluster(
         [desc],
-        now.replace(tzinfo=datetime.timezone.utc).isoformat(),
-        DEFAULT_SUBNET_ID,
-        None,
-        DEFAULT_SG_ID,
-        DEFAULT_INSTPROF_NAME,
-        {},
-        # Keep alive for at least a day
-        int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600 * 24,
-        "HEAD",
-        {},
+        nonce=now.replace(tzinfo=datetime.timezone.utc).isoformat(),
+        # Keep alive for at least a day.
+        delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
     )
 
 

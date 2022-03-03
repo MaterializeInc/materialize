@@ -11,13 +11,14 @@ use std::collections::{HashSet, VecDeque};
 use std::str;
 use std::time::Instant;
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
+use aws_sdk_kinesis::Client as KinesisClient;
 use itertools::Itertools;
-use rusoto_kinesis::{GetRecordsInput, Kinesis, KinesisClient};
 
-use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
+use mz_aws_util::kinesis;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct VerifyAction {
@@ -25,25 +26,22 @@ pub struct VerifyAction {
     expected_records: HashSet<String>,
 }
 
-pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
     let stream_prefix = cmd.args.string("stream")?;
-    let expected_records: HashSet<String> = cmd.input.into_iter().collect();
-
     cmd.args.done()?;
-
     Ok(VerifyAction {
         stream_prefix,
-        expected_records,
+        expected_records: cmd.input.into_iter().collect(),
     })
 }
 
 #[async_trait]
 impl Action for VerifyAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
 
         let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;
@@ -53,17 +51,15 @@ impl Action for VerifyAction {
             if let Some(iterator) = &iterator {
                 let output = state
                     .kinesis_client
-                    .get_records(GetRecordsInput {
-                        limit: None,
-                        shard_iterator: iterator.clone(),
-                    })
+                    .get_records()
+                    .shard_iterator(iterator)
+                    .send()
                     .await
-                    .map_err(|e| format!("getting Kinesis records: {}", e))?;
-                for record in output.records {
+                    .context("getting Kinesis records")?;
+                for record in output.records.unwrap() {
                     records.insert(
-                        String::from_utf8(record.data.to_vec()).map_err(|e| {
-                            format!("converting Kinesis record bytes to utf8: {}", e)
-                        })?,
+                        String::from_utf8(record.data.unwrap().into_inner())
+                            .context("converting Kinesis record bytes to string")?,
                     );
                 }
                 match output.millis_behind_latest {
@@ -78,10 +74,7 @@ impl Action for VerifyAction {
                 if timer.elapsed() > state.default_timeout {
                     // Unable to read all Kinesis records in the default
                     // time allotted -- fail.
-                    return Err(format!(
-                        "timeout reading from Kinesis stream: {}",
-                        stream_name
-                    ));
+                    bail!("timeout reading from Kinesis stream: {}", stream_name);
                 }
             }
         }
@@ -90,30 +83,30 @@ impl Action for VerifyAction {
         if records != self.expected_records {
             let missing_records = &self.expected_records - &records;
             let extra_records = &records - &self.expected_records;
-            return Err(format!(
+            bail!(
                 "kinesis records did not match:\nmissing:\n{}\nextra:\n{}",
                 missing_records.iter().join("\n"),
                 extra_records.iter().join("\n")
-            ));
+            );
         }
 
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
 async fn get_shard_iterators(
     kinesis_client: &KinesisClient,
     stream_name: &str,
-) -> Result<VecDeque<Option<String>>, String> {
+) -> Result<VecDeque<Option<String>>, anyhow::Error> {
     let mut iterators: VecDeque<Option<String>> = VecDeque::new();
-    for shard_id in get_shard_ids(kinesis_client, stream_name)
+    for shard_id in kinesis::get_shard_ids(kinesis_client, stream_name)
         .await
-        .map_err(|e| format!("listing Kinesis shards: {:#?}", e))?
+        .context("listing Kinesis shards")?
     {
         iterators.push_back(
-            get_shard_iterator(kinesis_client, stream_name, &shard_id)
+            kinesis::get_shard_iterator(kinesis_client, stream_name, &shard_id)
                 .await
-                .map_err(|e| format!("unable to get Kinesis shard iterator: {:#?}", e))?,
+                .context("getting Kinesis shard iterator")?,
         );
     }
 

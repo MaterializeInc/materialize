@@ -16,6 +16,8 @@
     clippy::cast_sign_loss
 )]
 
+use bytes::BufMut;
+
 mod codec_impls;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
@@ -25,20 +27,15 @@ pub trait Codec: Sized + 'static {
     ///
     /// This name is stored for the key and value when a stream is first created
     /// and the same key and value codec must be used for that stream afterward.
-    fn codec_name() -> &'static str;
-    /// A hint of the encoded size of self.
-    ///
-    /// No correctness guarantees are made about the return value of this
-    /// function, it's used purely to pre-size buffers.
-    //
-    // TODO: Give this the same signature and semantics as Iterator::size_hint.
-    fn size_hint(&self) -> usize;
+    fn codec_name() -> String;
     /// Encode a key or value for permanent storage.
     ///
     /// This must perfectly round-trip Self through [Codec::decode]. If the
     /// encode function for this codec ever changes, decode must be able to
     /// handle bytes output by all previous versions of encode.
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E);
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut;
     /// Decode a key or value previous encoded with this codec's
     /// [Codec::encode].
     ///

@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 //! This module houses a pretty printer for [`HirRelationExpr`],
-//! which is the SQL-specific relation expression (as opposed to [`expr::MirRelationExpr`]).
-//! See also [`expr::explain`].
+//! which is the SQL-specific relation expression (as opposed to [`mz_expr::MirRelationExpr`]).
+//! See also [`mz_expr::explain`].
 //!
 //! The format is the same, except for the following extensions:
 //!
@@ -21,12 +21,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use expr::explain::Indices;
-use expr::{ExprHumanizer, Id, IdGen, RowSetFinishing};
-use ore::str::{bracketed, separated};
-use repr::{RelationType, ScalarType};
+use mz_expr::explain::Indices;
+use mz_expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
+use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen::IdGen;
+use mz_ore::str::{bracketed, separated};
+use mz_repr::{RelationType, ScalarType};
 
-use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr};
+use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 
 /// An `Explanation` facilitates pretty-printing of a [`HirRelationExpr`].
 ///
@@ -43,6 +45,10 @@ pub struct Explanation<'a> {
     finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
     expr_chains: HashMap<*const HirRelationExpr, u64>,
+    /// Records the chain ID that was assigned to each let.
+    local_id_chains: HashMap<LocalId, (String, u64)>,
+    /// Records the local ID that corresponds to a chain ID, if any.
+    chain_local_ids: HashMap<u64, (String, LocalId)>,
     /// The ID of the current chain. Incremented while constructing the
     /// `Explanation`.
     chain: u64,
@@ -69,6 +75,9 @@ impl<'a> fmt::Display for Explanation<'a> {
                     writeln!(f)?;
                 }
                 write!(f, "%{} =", node.chain)?;
+                if let Some((name, local_id)) = self.chain_local_ids.get(&node.chain) {
+                    write!(f, " Let {} ({}) =", name, local_id)?;
+                }
                 writeln!(f)?;
             }
             prev_chain = node.chain;
@@ -100,13 +109,14 @@ impl<'a> Explanation<'a> {
         expr: &'a HirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
     ) -> Explanation<'a> {
-        Self::new_internal(expr, expr_humanizer, &mut IdGen::default())
+        Self::new_internal(expr, expr_humanizer, &mut IdGen::default(), HashMap::new())
     }
 
     pub fn new_internal(
         expr: &'a HirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
         id_gen: &mut IdGen,
+        local_id_chains: HashMap<LocalId, (String, u64)>,
     ) -> Explanation<'a> {
         use HirRelationExpr::*;
 
@@ -135,19 +145,34 @@ impl<'a> Explanation<'a> {
                 | DeclareKeys { input, .. }
                 | Threshold { input, .. } => walk(input, explanation, id_gen),
                 // For join and union, each input needs to go in its own chain.
-                Join { left, right, .. } => {
-                    walk(left, explanation, id_gen);
-                    explanation.chain = id_gen.allocate_id();
-                    walk(right, explanation, id_gen);
-                    explanation.chain = id_gen.allocate_id();
-                }
+                Join { left, right, .. } => walk_many(
+                    std::iter::once(&**left).chain(std::iter::once(&**right)),
+                    explanation,
+                    id_gen,
+                ),
                 Union { base, inputs, .. } => {
-                    walk(base, explanation, id_gen);
+                    walk_many(std::iter::once(&**base).chain(inputs), explanation, id_gen)
+                }
+                Let {
+                    name,
+                    id,
+                    body,
+                    value,
+                } => {
+                    // Similarly the definition of a let goes in its own chain.
+                    walk(value, explanation, id_gen);
                     explanation.chain = id_gen.allocate_id();
-                    for input in inputs {
-                        walk(input, explanation, id_gen);
-                        explanation.chain = id_gen.allocate_id();
-                    }
+
+                    // Keep track of the chain ID <-> local ID correspondence.
+                    let value_chain = explanation.expr_chain(value);
+                    explanation
+                        .local_id_chains
+                        .insert(*id, (name.clone(), value_chain));
+                    explanation
+                        .chain_local_ids
+                        .insert(value_chain, (name.clone(), *id));
+
+                    walk(body, explanation, id_gen);
                 }
             }
 
@@ -156,6 +181,7 @@ impl<'a> Explanation<'a> {
             match expr {
                 Constant { .. }
                 | Get { .. }
+                | Let { .. }
                 | Project { .. }
                 | Distinct { .. }
                 | Negate { .. }
@@ -179,8 +205,12 @@ impl<'a> Explanation<'a> {
             for scalar in scalars {
                 scalar.visit(&mut |scalar| match scalar {
                     HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
-                        let subquery =
-                            Explanation::new_internal(expr, explanation.expr_humanizer, id_gen);
+                        let subquery = Explanation::new_internal(
+                            expr,
+                            explanation.expr_humanizer,
+                            id_gen,
+                            explanation.local_id_chains.clone(),
+                        );
                         explanation.expr_chains.insert(
                             &**expr as *const HirRelationExpr,
                             subquery.nodes.last().unwrap().chain,
@@ -203,11 +233,34 @@ impl<'a> Explanation<'a> {
                 .insert(expr as *const HirRelationExpr, explanation.chain);
         }
 
+        fn walk_many<'a, E>(exprs: E, explanation: &mut Explanation<'a>, id_gen: &mut IdGen)
+        where
+            E: IntoIterator<Item = &'a HirRelationExpr>,
+        {
+            for expr in exprs {
+                // Elide chains that would consist only a of single Get node.
+                if let HirRelationExpr::Get {
+                    id: Id::Local(id), ..
+                } = expr
+                {
+                    explanation.expr_chains.insert(
+                        expr as *const HirRelationExpr,
+                        explanation.local_id_chains[id].1,
+                    );
+                } else {
+                    walk(expr, explanation, id_gen);
+                    explanation.chain = id_gen.allocate_id();
+                }
+            }
+        }
+
         let mut explanation = Explanation {
             expr_humanizer,
             nodes: vec![],
             finishing: None,
             expr_chains: HashMap::new(),
+            local_id_chains,
+            chain_local_ids: HashMap::new(),
             chain: id_gen.allocate_id(),
         };
         walk(expr, &mut explanation, id_gen);
@@ -228,11 +281,11 @@ impl<'a> Explanation<'a> {
             // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
             let typ = node.expr.typ(outers, params);
             let mut outers = outers.to_vec();
-            outers.push(typ);
+            outers.insert(0, typ);
             for subquery in &mut node.subqueries {
                 subquery.explain_types_internal(&outers, params);
             }
-            node.typ = outers.pop();
+            node.typ = Some(outers.into_first());
         }
     }
 
@@ -245,6 +298,8 @@ impl<'a> Explanation<'a> {
         use HirRelationExpr::*;
 
         match node.expr {
+            // Lets are annotated on the chain ID that they correspond to.
+            Let { .. } => (),
             Constant { rows, .. } => {
                 write!(f, "| Constant")?;
                 for row in rows {
@@ -253,8 +308,18 @@ impl<'a> Explanation<'a> {
                 writeln!(f)?;
             }
             Get { id, .. } => match id {
-                Id::Local(_) => {
-                    unreachable!("SQL expressions do not support Lets yet")
+                Id::Local(local_id) => {
+                    let get_info = self.local_id_chains.get(local_id);
+                    writeln!(
+                        f,
+                        "| Get {} ({}) (%{})",
+                        // The name of the CTE,
+                        get_info.map_or_else(|| "?".to_owned(), |i| i.0.clone()),
+                        // the local ID,
+                        local_id,
+                        // and the chain ID.
+                        get_info.map_or_else(|| "?".to_owned(), |i| i.1.to_string()),
+                    )?
                 }
                 Id::LocalBareSource => writeln!(f, "| Get Local Bare Source")?,
                 Id::Global(id) => writeln!(
@@ -451,6 +516,33 @@ impl<'a> Explanation<'a> {
             }
             Exists(expr) => write!(f, "exists(%{})", self.expr_chain(expr)),
             Select(expr) => write!(f, "select(%{})", self.expr_chain(expr)),
+            Windowing(expr) => {
+                match &expr.func {
+                    WindowExprType::Scalar(scalar) => {
+                        write!(f, "{}()", scalar.clone().into_expr())?
+                    }
+                }
+                write!(f, " over (")?;
+                for (i, e) in expr.partition.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    self.fmt_scalar_expr(f, e)?;
+                }
+                write!(f, ")")?;
+
+                if !expr.order_by.is_empty() {
+                    write!(f, " order by (")?;
+                    for (i, e) in expr.order_by.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        self.fmt_scalar_expr(f, e)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
         }
     }
 

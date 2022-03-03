@@ -21,7 +21,7 @@ fn test_missing_file() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            r#"error: opening noexist: No such file or directory"#,
+            r#"testdrive: glob did not match any patterns: noexist"#,
         ));
 }
 
@@ -155,19 +155,4 @@ fn test_cmd_arg_bad_nesting_intersect2() {
      |                                ^
 "#,
         ));
-}
-
-// --ci-output tests
-
-#[test]
-fn test_ci_output_bad_file() {
-    cmd()
-        .arg("tests")
-        .arg("--ci-output")
-        .assert()
-        .failure()
-        .stderr(predicate::str::starts_with(
-            "error: reading tests: Is a directory",
-        ))
-        .stdout(predicate::str::contains("^^^ +++"));
 }

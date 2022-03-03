@@ -11,18 +11,24 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use ore::cast::CastFrom;
-use ore::metrics::MetricsRegistry;
+use async_trait::async_trait;
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
+use tokio::runtime::Runtime as AsyncRuntime;
+use tracing::warn;
 
+use crate::client::RuntimeClient;
 use crate::error::Error;
+use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Indexed;
-use crate::storage::{Blob, LockInfo, Log, SeqNo};
+use crate::runtime::{self, RuntimeConfig};
+use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
+#[derive(Debug)]
 struct MemLogCore {
     seqno: Range<SeqNo>,
     dataz: Vec<Vec<u8>>,
@@ -106,15 +112,16 @@ impl MemLogCore {
 }
 
 /// An in-memory implementation of [Log].
+#[derive(Debug)]
 pub struct MemLog {
-    core: Arc<Mutex<MemLogCore>>,
+    core: Option<Arc<Mutex<MemLogCore>>>,
 }
 
 impl MemLog {
     /// Constructs a new, empty MemLog.
     pub fn new(lock_info: LockInfo) -> Self {
         MemLog {
-            core: Arc::new(Mutex::new(MemLogCore::new(lock_info))),
+            core: Some(Arc::new(Mutex::new(MemLogCore::new(lock_info)))),
         }
     }
 
@@ -130,7 +137,14 @@ impl MemLog {
     /// Open a pre-existing MemLog.
     fn open(core: Arc<Mutex<MemLogCore>>, lock_info: LockInfo) -> Result<Self, Error> {
         core.lock()?.open(lock_info)?;
-        Ok(Self { core })
+        Ok(Self { core: Some(core) })
+    }
+
+    fn core_lock<'c>(&'c self) -> Result<MutexGuard<'c, MemLogCore>, Error> {
+        match self.core.as_ref() {
+            None => return Err("MemLog has been closed".into()),
+            Some(core) => Ok(core.lock()?),
+        }
     }
 }
 
@@ -140,32 +154,36 @@ impl Drop for MemLog {
         // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
-            log::warn!("MemLog dropped without close");
+            warn!("MemLog dropped without close");
         }
     }
 }
 
 impl Log for MemLog {
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
-        self.core.lock()?.write_sync(buf)
+        self.core_lock()?.write_sync(buf)
     }
 
     fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
     where
         F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
     {
-        self.core.lock()?.snapshot(logic)
+        self.core_lock()?.snapshot(logic)
     }
 
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
-        self.core.lock()?.truncate(upper)
+        self.core_lock()?.truncate(upper)
     }
 
     fn close(&mut self) -> Result<bool, Error> {
-        self.core.lock()?.close()
+        match self.core.take() {
+            None => Ok(false), // Someone already called close.
+            Some(core) => core.lock()?.close(),
+        }
     }
 }
 
+#[derive(Debug)]
 struct MemBlobCore {
     dataz: HashMap<String, Vec<u8>>,
     lock: Option<LockInfo>,
@@ -176,6 +194,14 @@ impl MemBlobCore {
         MemBlobCore {
             dataz: HashMap::new(),
             lock: Some(lock_info),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_read() -> Self {
+        MemBlobCore {
+            dataz: HashMap::new(),
+            lock: None,
         }
     }
 
@@ -202,42 +228,82 @@ impl MemBlobCore {
     }
 
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        self.ensure_open()?;
         Ok(self.dataz.get(key).cloned())
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    fn set(&mut self, key: &str, value: Vec<u8>) -> Result<(), Error> {
         self.ensure_open()?;
-        if allow_overwrite {
-            self.dataz.insert(key.to_owned(), value);
-        } else if self.dataz.contains_key(key) {
-            return Err(format!("not allowed to overwrite: {}", key).into());
-        } else {
-            self.dataz.insert(key.to_owned(), value);
-        };
+        self.dataz.insert(key.to_owned(), value);
         Ok(())
+    }
+
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        Ok(self.dataz.keys().cloned().collect())
     }
 
     fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.ensure_open()?;
-        match self.dataz.remove(key) {
-            Some(_) => Ok(()),
-            None => Err(format!("key does not exist: {}", key).into()),
+        self.dataz.remove(key);
+        Ok(())
+    }
+}
+
+/// Configuration for opening a [MemBlob] or [MemBlobRead].
+#[derive(Debug)]
+pub struct MemBlobConfig {
+    core: Arc<Mutex<MemBlobCore>>,
+}
+
+/// An in-memory implementation of [BlobRead].
+#[derive(Debug)]
+pub struct MemBlobRead {
+    core: Option<Arc<Mutex<MemBlobCore>>>,
+}
+
+impl MemBlobRead {
+    fn open(config: MemBlobConfig) -> MemBlobRead {
+        MemBlobRead {
+            core: Some(config.core),
+        }
+    }
+
+    fn core_lock<'c>(&'c self) -> Result<MutexGuard<'c, MemBlobCore>, Error> {
+        match self.core.as_ref() {
+            None => return Err("MemBlob has been closed".into()),
+            Some(core) => Ok(core.lock()?),
+        }
+    }
+}
+
+#[async_trait]
+impl BlobRead for MemBlobRead {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core_lock()?.get(key)
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core_lock()?.list_keys()
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        match self.core.take() {
+            None => Ok(false), // Someone already called close.
+            Some(core) => core.lock()?.close(),
         }
     }
 }
 
 /// An in-memory implementation of [Blob].
+#[derive(Debug)]
 pub struct MemBlob {
-    core: Arc<Mutex<MemBlobCore>>,
+    core: Option<Arc<Mutex<MemBlobCore>>>,
 }
 
 impl MemBlob {
     /// Constructs a new, empty MemBlob.
     pub fn new(lock_info: LockInfo) -> Self {
-        MemBlob {
-            core: Arc::new(Mutex::new(MemBlobCore::new(lock_info))),
-        }
+        let core = Some(Arc::new(Mutex::new(MemBlobCore::new(lock_info))));
+        MemBlob { core }
     }
 
     /// Constructs a new, empty MemBlob with a unique reentrance id.
@@ -249,15 +315,16 @@ impl MemBlob {
         Self::new(LockInfo::new_no_reentrance(lock_info_details.to_owned()))
     }
 
-    /// Open a pre-existing MemBlob.
-    fn open(core: Arc<Mutex<MemBlobCore>>, lock_info: LockInfo) -> Result<Self, Error> {
-        core.lock()?.open(lock_info)?;
-        Ok(Self { core })
+    fn core_lock<'c>(&'c self) -> Result<MutexGuard<'c, MemBlobCore>, Error> {
+        match self.core.as_ref() {
+            None => return Err("MemBlob has been closed".into()),
+            Some(core) => Ok(core.lock()?),
+        }
     }
 
     #[cfg(test)]
     pub fn all_blobs(&self) -> Result<Vec<(String, Vec<u8>)>, Error> {
-        let core = self.core.lock()?;
+        let core = self.core_lock()?;
         Ok(core
             .dataz
             .iter()
@@ -268,36 +335,62 @@ impl MemBlob {
 
 impl Drop for MemBlob {
     fn drop(&mut self) {
-        let did_work = self.close().expect("closing MemBlob cannot fail");
+        let did_work =
+            futures_executor::block_on(self.close()).expect("closing MemBlob cannot fail");
         // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
-            log::warn!("MemBlob dropped without close");
+            warn!("MemBlob dropped without close");
         }
     }
 }
 
+#[async_trait]
+impl BlobRead for MemBlob {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core_lock()?.get(key)
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core_lock()?.list_keys()
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        match self.core.take() {
+            None => Ok(false), // Someone already called close.
+            Some(core) => core.lock()?.close(),
+        }
+    }
+}
+
+#[async_trait]
 impl Blob for MemBlob {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        self.core.lock()?.get(key)
+    type Config = MemBlobConfig;
+    type Read = MemBlobRead;
+
+    fn open_exclusive(config: MemBlobConfig, lock_info: LockInfo) -> Result<Self, Error> {
+        let core = config.core;
+        core.lock()?.open(lock_info)?;
+        Ok(MemBlob { core: Some(core) })
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
-        self.core.lock()?.set(key, value, allow_overwrite)
+    fn open_read(config: MemBlobConfig) -> Result<MemBlobRead, Error> {
+        Ok(MemBlobRead::open(config))
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), Error> {
-        self.core.lock()?.delete(key)
+    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
+        // NB: This is always atomic, so we're free to ignore the atomic param.
+        self.core_lock()?.set(key, value)
     }
 
-    fn close(&mut self) -> Result<bool, Error> {
-        self.core.lock()?.close()
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
+        self.core_lock()?.delete(key)
     }
 }
 
 /// An in-memory representation of a [Log] and [Blob] that can be reused
 /// across dataflows
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemRegistry {
     log: Arc<Mutex<MemLogCore>>,
     blob: Arc<Mutex<MemBlobCore>>,
@@ -306,30 +399,32 @@ pub struct MemRegistry {
 impl MemRegistry {
     /// Constructs a new, empty [MemRegistry]
     pub fn new() -> Self {
-        let mut log = MemLog::new(LockInfo::new_no_reentrance("".into()));
+        let mut log = MemLogCore::new(LockInfo::new_no_reentrance("".into()));
         log.close()
-            .expect("newly opened MemLog close is infallible");
-        let mut blob = MemBlob::new(LockInfo::new_no_reentrance("".into()));
+            .expect("newly opened MemLogCore close is infallible");
+        let mut blob = MemBlobCore::new(LockInfo::new_no_reentrance("".into()));
         blob.close()
-            .expect("newly opened MemBlob close is infallible");
+            .expect("newly opened MemBlobCore close is infallible");
         MemRegistry {
-            log: log.core.clone(),
-            blob: blob.core.clone(),
+            log: Arc::new(Mutex::new(log)),
+            blob: Arc::new(Mutex::new(blob)),
         }
     }
 
     /// Opens the [MemLog] contained by this registry.
     pub fn log_no_reentrance(&self) -> Result<MemLog, Error> {
         MemLog::open(
-            self.log.clone(),
+            Arc::clone(&self.log),
             LockInfo::new_no_reentrance("MemRegistry".to_owned()),
         )
     }
 
     /// Opens the [MemBlob] contained by this registry.
     pub fn blob_no_reentrance(&self) -> Result<MemBlob, Error> {
-        MemBlob::open(
-            self.blob.clone(),
+        MemBlob::open_exclusive(
+            MemBlobConfig {
+                core: Arc::clone(&self.blob),
+            },
             LockInfo::new_no_reentrance("MemRegistry".to_owned()),
         )
     }
@@ -338,8 +433,37 @@ impl MemRegistry {
     /// this registry.
     pub fn indexed_no_reentrance(&mut self) -> Result<Indexed<MemLog, MemBlob>, Error> {
         let log = self.log_no_reentrance()?;
+        let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
+        let blob = BlobCache::new(
+            mz_build_info::DUMMY_BUILD_INFO,
+            Arc::clone(&metrics),
+            async_runtime,
+            self.blob_no_reentrance()?,
+            None,
+        );
+        Indexed::new(log, blob, metrics)
+    }
+
+    /// Returns a [RuntimeClient] with unreliable storage backed by the given
+    /// [`UnreliableHandle`].
+    pub fn indexed_unreliable(
+        &mut self,
+        unreliable: UnreliableHandle,
+    ) -> Result<Indexed<UnreliableLog<MemLog>, UnreliableBlob<MemBlob>>, Error> {
+        let log = self.log_no_reentrance()?;
+        let log = UnreliableLog::from_handle(log, unreliable.clone());
+        let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let blob = self.blob_no_reentrance()?;
-        let metrics = Metrics::register_with(&MetricsRegistry::new());
+        let blob = UnreliableBlob::from_handle(blob, unreliable);
+        let blob = BlobCache::new(
+            mz_build_info::DUMMY_BUILD_INFO,
+            Arc::clone(&metrics),
+            async_runtime,
+            blob,
+            None,
+        );
         Indexed::new(log, blob, metrics)
     }
 
@@ -352,7 +476,9 @@ impl MemRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
+            None,
         )
     }
 
@@ -370,7 +496,9 @@ impl MemRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }
@@ -378,6 +506,7 @@ impl MemRegistry {
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
 #[cfg(test)]
+#[derive(Debug)]
 pub struct MemMultiRegistry {
     log_by_path: HashMap<String, Arc<Mutex<MemLogCore>>>,
     blob_by_path: HashMap<String, Arc<Mutex<MemBlobCore>>>,
@@ -393,26 +522,47 @@ impl MemMultiRegistry {
         }
     }
 
-    /// Opens the [MemLog] associated with `path`.
+    /// Opens a [MemLog] associated with `path`.
     pub fn log(&mut self, path: &str, lock_info: LockInfo) -> Result<MemLog, Error> {
         if let Some(log) = self.log_by_path.get(path) {
-            MemLog::open(log.clone(), lock_info)
+            MemLog::open(Arc::clone(&log), lock_info)
         } else {
-            let log = MemLog::new(lock_info);
-            self.log_by_path.insert(path.to_string(), log.core.clone());
+            let log = Arc::new(Mutex::new(MemLogCore::new(lock_info)));
+            self.log_by_path.insert(path.to_string(), Arc::clone(&log));
+            let log = MemLog { core: Some(log) };
             Ok(log)
         }
     }
 
-    /// Opens the [MemBlob] associated with `path`.
+    /// Opens a [MemBlob] associated with `path`.
     pub fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
         if let Some(blob) = self.blob_by_path.get(path) {
-            MemBlob::open(blob.clone(), lock_info)
+            MemBlob::open_exclusive(
+                MemBlobConfig {
+                    core: Arc::clone(&blob),
+                },
+                lock_info,
+            )
         } else {
-            let blob = MemBlob::new(lock_info);
+            let blob = Arc::new(Mutex::new(MemBlobCore::new(lock_info)));
             self.blob_by_path
-                .insert(path.to_string(), blob.core.clone());
+                .insert(path.to_string(), Arc::clone(&blob));
+            let blob = MemBlob { core: Some(blob) };
             Ok(blob)
+        }
+    }
+
+    /// Opens a [MemBlobRead] associated with `path`.
+    pub fn blob_read(&mut self, path: &str) -> MemBlobRead {
+        if let Some(blob) = self.blob_by_path.get(path) {
+            MemBlobRead::open(MemBlobConfig {
+                core: Arc::clone(&blob),
+            })
+        } else {
+            let blob = Arc::new(Mutex::new(MemBlobCore::new_read()));
+            self.blob_by_path
+                .insert(path.to_string(), Arc::clone(&blob));
+            MemBlobRead::open(MemBlobConfig { core: blob })
         }
     }
 
@@ -425,7 +575,9 @@ impl MemMultiRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
+            mz_build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }
@@ -433,6 +585,7 @@ impl MemMultiRegistry {
 #[cfg(test)]
 mod tests {
     use crate::storage::tests::{blob_impl_test, log_impl_test};
+    use crate::storage::Atomicity::RequireAtomic;
 
     use super::*;
 
@@ -442,9 +595,82 @@ mod tests {
         log_impl_test(move |t| registry.log(t.path, (t.reentrance_id, "log_impl_test").into()))
     }
 
-    #[test]
-    fn mem_blob() -> Result<(), Error> {
-        let mut registry = MemMultiRegistry::new();
-        blob_impl_test(move |t| registry.blob(t.path, (t.reentrance_id, "blob_impl_test").into()))
+    #[tokio::test]
+    async fn mem_blob() -> Result<(), Error> {
+        let registry = Arc::new(Mutex::new(MemMultiRegistry::new()));
+        let registry_read = Arc::clone(&registry);
+        blob_impl_test(
+            move |t| {
+                registry
+                    .lock()?
+                    .blob(t.path, (t.reentrance_id, "blob_impl_test").into())
+            },
+            move |path| Ok(registry_read.lock()?.blob_read(path)),
+        )
+        .await
+    }
+
+    // This test covers a regression that was affecting the nemesis tests where
+    // async fetches happening in background threads could race with a close and
+    // re-open of MemBlob and then incorrectly still affect the newly open
+    // MemBlob though the handler for the previous (now-closed) MemBlob.
+    //
+    // This is really only a problem for tests, but it's a common pattern in
+    // tests to model restarts, so it's worth getting right.
+    #[tokio::test]
+    async fn regression_delayed_close() -> Result<(), Error> {
+        let registry = MemRegistry::new();
+
+        // Put a blob in an Arc<Mutex<..>> and copy it (like we do to in
+        // BlobCache to share it between the main persist loop and maintenance).
+        let blob_gen1_1 = Arc::new(Mutex::new(registry.blob_no_reentrance()?));
+        let blob_gen1_2 = Arc::clone(&blob_gen1_1);
+
+        // Close one of them because the runtime is shutting down, but keep the
+        // other around (to simulate an async fetch in maintenance).
+        assert_eq!(blob_gen1_1.lock()?.close().await?, true);
+        drop(blob_gen1_1);
+
+        // Now "restart" everything and reuse this blob like nemesis does.
+        let blob_gen2 = Arc::new(Mutex::new(registry.blob_no_reentrance()?));
+
+        // Write some data with the new handle.
+        blob_gen2
+            .lock()?
+            .set("a", "1".into(), RequireAtomic)
+            .await?;
+
+        // The old handle should not be usable anymore. Writes and reads using
+        // it should fail and the value set by blob_gen2 should not be affected.
+        assert_eq!(
+            blob_gen1_2.lock()?.get("a").await,
+            Err(Error::from("MemBlob has been closed"))
+        );
+        assert_eq!(
+            blob_gen1_2
+                .lock()?
+                .set("a", "2".as_bytes().to_vec(), RequireAtomic)
+                .await,
+            Err(Error::from("MemBlob has been closed"))
+        );
+        assert_eq!(
+            blob_gen1_2.lock()?.delete("a").await,
+            Err(Error::from("MemBlob has been closed"))
+        );
+        assert_eq!(blob_gen2.lock()?.get("a").await?, Some("1".into()));
+
+        // The async fetch finishes. This causes the Arc to run the MemBlob Drop
+        // impl because it's the last copy of the original Arc.
+        drop(blob_gen1_2);
+
+        // There was a regression where the previous drop closed the current
+        // MemBlob, make sure it's still usable.
+        blob_gen2
+            .lock()?
+            .set("b", "3".into(), RequireAtomic)
+            .await
+            .expect("blob_take2 should still be open");
+
+        Ok(())
     }
 }

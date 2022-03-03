@@ -7,113 +7,48 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::iter;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use ::regex::Regex;
-use dataflow_types::AvroEncoding;
-use dataflow_types::AvroOcfEncoding;
-use dataflow_types::ProtobufEncoding;
+use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use prometheus::UIntGauge;
-use repr::MessagePayload;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pact::Pipeline;
+use mz_expr::PartitionId;
+use mz_repr::MessagePayload;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{DataEncoding, DebeziumMode, DecodeError, RegexEncoding, SourceEnvelope};
-use dataflow_types::{DataflowError, LinearOperator};
-use interchange::avro::ConfluentAvroResolver;
-use log::error;
-use repr::Datum;
-use repr::{Diff, Row, Timestamp};
+use mz_dataflow_types::{
+    sources::{
+        encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
+        IncludedColumnSource, SourceEnvelope,
+    },
+    DecodeError, LinearOperator,
+};
+use mz_interchange::avro::ConfluentAvroResolver;
+use mz_repr::Datum;
+use mz_repr::{Diff, Row, Timestamp};
+use tracing::error;
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::metrics::Metrics;
-use crate::source::DecodeResult;
-use crate::source::SourceOutput;
+use crate::source::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
 mod protobuf;
 
-/// Update row to blank out retractions of rows that we have never seen
-pub fn rewrite_for_upsert(
-    val: Result<Row, DataflowError>,
-    keys: &mut HashMap<Row, Row>,
-    key: Row,
-    metrics: &UIntGauge,
-) -> Result<Row, DataflowError> {
-    if let Ok(row) = val {
-        // often off by one, but is only tracked every N seconds so it will always be off
-        metrics.set(keys.len() as u64);
-
-        let entry = keys.entry(key.into());
-
-        let mut rowiter = row.iter();
-        let before = rowiter.next().expect("must have a before list");
-        let after = rowiter.next().expect("must have an after list");
-
-        assert!(
-            matches!(before, Datum::List { .. } | Datum::Null),
-            "[customer-data] Debezium logic should be a List or absent, got {:?}",
-            before
-        );
-
-        match entry {
-            Entry::Vacant(vacant) => {
-                // if the key is new, then we know that we always need to ignore the "before" part,
-                // so zero it out
-                vacant.insert(Row::pack_slice(&[after]));
-
-                if before.is_null() {
-                    Ok(row)
-                } else {
-                    Ok(Row::pack_slice(&[Datum::Null, after]))
-                }
-            }
-            Entry::Occupied(mut occupied) => {
-                if occupied.get().iter().next() == Some(before) {
-                    if after.is_null() {
-                        occupied.remove_entry();
-                    } else {
-                        occupied.insert(Row::pack_slice(&[after]));
-                    }
-                    // this matches the modifications we'd make in the next step
-                    Ok(row)
-                } else {
-                    let previous_insert = if after.is_null() {
-                        // We are trying to retract something that doesn't exist, so just assume
-                        // that the key is supposed to be empty at this point
-                        let (_k, v) = occupied.remove_entry();
-                        v
-                    } else {
-                        occupied.insert(Row::pack_slice(&[after]))
-                    };
-
-                    Ok(Row::pack_slice(&[previous_insert.unpack_first(), after]))
-                }
-            }
-        }
-    } else {
-        val
-    }
-}
-
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
     schema: &str,
-    registry: Option<ccsr::ClientConfig>,
+    registry: Option<mz_ccsr::ClientConfig>,
     confluent_wire_format: bool,
 ) -> (Collection<G, Row, Diff>, Box<dyn Any>) {
     // We will have already checked validity of the schema by now, so this can't fail.
@@ -122,20 +57,20 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
     stream.sink(
-        SourceOutput::<Vec<u8>, MessagePayload>::position_value_contract(),
+        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>>::position_value_contract(),
         "CDCv2-Decode",
         {
-            let channel = channel.clone();
-            let activator = activator.clone();
+            let channel = Rc::clone(&channel);
+            let activator = Rc::clone(&activator);
             move |input| {
                 input.for_each(|_time, data| {
                     data.swap(&mut vector);
                     for data in vector.drain(..) {
                         let value = match &data.value {
-                            MessagePayload::Data(value) => value,
-                            MessagePayload::EOF => continue,
+                            Some(value) => value,
+                            None => continue,
                         };
-                        let (mut data, schema) = match block_on(resolver.resolve(&*value)) {
+                        let (mut data, schema, _) = match block_on(resolver.resolve(&*value)) {
                             Ok(ok) => ok,
                             Err(e) => {
                                 error!("Failed to get schema info for CDCv2 record: {}", e);
@@ -145,7 +80,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                         let d = GeneralDeserializer {
                             schema: schema.top_node(),
                         };
-                        let dec = interchange::avro::cdc_v2::Decoder;
+                        let dec = mz_interchange::avro::cdc_v2::Decoder;
                         let message = match d.deserialize(&mut data, dec) {
                             Ok(ok) => ok,
                             Err(e) => {
@@ -189,52 +124,30 @@ pub(crate) enum PreDelimitedFormat {
 }
 
 impl PreDelimitedFormat {
-    pub fn decode(
-        &mut self,
-        bytes: &[u8],
-        upstream_coord: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeError> {
         match self {
-            PreDelimitedFormat::Bytes => Ok(Some(if push_metadata {
-                Row::pack(
-                    iter::once(Datum::Bytes(bytes)).chain(iter::once(Datum::from(upstream_coord))),
-                )
-            } else {
-                Row::pack(Some(Datum::Bytes(bytes)))
-            })),
+            PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeError::Text("Failed to decode UTF-8".to_string()))?;
-                Ok(Some(if push_metadata {
-                    Row::pack(
-                        iter::once(Datum::String(s)).chain(iter::once(Datum::from(upstream_coord))),
-                    )
-                } else {
-                    Row::pack(Some(Datum::String(s)))
-                }))
+                Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
-            PreDelimitedFormat::Regex(regex, row_packer) => {
+            PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeError::Text("Failed to decode UTF-8".to_string()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
                     None => return Ok(None),
                 };
-                row_packer.extend(
+                row_buf.packer().extend(
                     captures
                         .iter()
                         .skip(1)
                         .map(|c| Datum::from(c.map(|c| c.as_str()))),
                 );
-                if push_metadata {
-                    row_packer.push(Datum::from(upstream_coord));
-                }
-                Ok(Some(row_packer.finish_and_reuse()))
+                Ok(Some(row_buf.clone()))
             }
-            PreDelimitedFormat::Protobuf(pb) => pb
-                .get_value(bytes, upstream_coord, push_metadata)
-                .transpose(),
+            PreDelimitedFormat::Protobuf(pb) => pb.get_value(bytes).transpose(),
         }
     }
 }
@@ -258,13 +171,7 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub fn next(
-        &mut self,
-        bytes: &mut &[u8],
-        upstream_coord: Option<i64>,
-        upstream_time_millis: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
+    pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -274,14 +181,12 @@ impl DataDecoder {
                 };
                 let data = &bytes[0..chunk_idx];
                 *bytes = &bytes[chunk_idx + 1..];
-                format.decode(data, upstream_coord, push_metadata)
+                format.decode(data)
             }
-            DataDecoderInner::Avro(avro) => {
-                avro.decode(bytes, upstream_coord, upstream_time_millis, push_metadata)
-            }
-            DataDecoderInner::Csv(csv) => csv.decode(bytes, upstream_coord, push_metadata),
+            DataDecoderInner::Avro(avro) => avro.decode(bytes),
+            DataDecoderInner::Csv(csv) => csv.decode(bytes),
             DataDecoderInner::PreDelimited(format) => {
-                let result = format.decode(*bytes, upstream_coord, push_metadata);
+                let result = format.decode(*bytes);
                 *bytes = &[];
                 result
             }
@@ -292,15 +197,10 @@ impl DataDecoder {
     ///
     /// This is distinct from `next` because, for example, a CSV record should be returned even if it
     /// does not end in a newline.
-    pub fn eof(
-        &mut self,
-        bytes: &mut &[u8],
-        upstream_coord: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
+    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         match &mut self.inner {
             DataDecoderInner::Csv(csv) => {
-                let result = csv.decode(bytes, upstream_coord, push_metadata);
+                let result = csv.decode(bytes);
                 csv.reset_for_new_object();
                 result
             }
@@ -311,7 +211,7 @@ impl DataDecoder {
                 if data.is_empty() {
                     Ok(None)
                 } else {
-                    format.decode(data, upstream_coord, push_metadata)
+                    format.decode(data)
                 }
             }
             _ => Ok(None),
@@ -330,12 +230,10 @@ impl DataDecoder {
 fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,
-    envelope: &SourceEnvelope,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    fast_forwarded: bool,
     is_connector_delimited: bool,
     metrics: Metrics,
 ) -> DataDecoder {
@@ -345,22 +243,13 @@ fn get_decoder(
             schema_registry_config,
             confluent_wire_format,
         }) => {
-            let reject_non_inserts = match envelope {
-                SourceEnvelope::Debezium(_, mode) => {
-                    // `start_offset` should work fine for `DEBEZIUM UPSERT`
-                    fast_forwarded && !matches!(mode, DebeziumMode::Upsert)
-                }
-                _ => false,
-            };
             let state = avro::AvroDecoderState::new(
                 &schema,
                 schema_registry_config,
-                envelope.get_avro_envelope_type(),
-                reject_non_inserts,
                 debug_name.to_string(),
                 confluent_wire_format,
             )
-            .expect("Failed to create avro decoder");
+            .expect("Failed to create avro decoder, even though we validated ccsr client creation in purification.");
             DataDecoder {
                 inner: DataDecoderInner::Avro(state),
                 metrics,
@@ -372,15 +261,14 @@ fn get_decoder(
         | DataEncoding::Regex(_) => {
             let after_delimiting = match encoding {
                 DataEncoding::Regex(RegexEncoding { regex }) => {
-                    PreDelimitedFormat::Regex(regex, Default::default())
+                    PreDelimitedFormat::Regex(regex.0, Default::default())
                 }
-                DataEncoding::Protobuf(ProtobufEncoding {
-                    descriptors,
-                    message_name,
-                }) => PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(
-                    &descriptors,
-                    message_name,
-                )),
+                DataEncoding::Protobuf(encoding) => {
+                    PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(
+                        "Failed to create protobuf decoder, even though we validated ccsr \
+                                    client creation in purification.",
+                    ))
+                }
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
@@ -395,39 +283,15 @@ fn get_decoder(
             };
             DataDecoder { inner, metrics }
         }
-        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => match envelope {
-            SourceEnvelope::Debezium(..) => {
-                let state = avro::AvroDecoderState::new(
-                    &reader_schema,
-                    None,
-                    envelope.get_avro_envelope_type(),
-                    fast_forwarded,
-                    debug_name.to_string(),
-                    false,
-                )
-                .expect("Schema was verified to be correct during purification");
-                DataDecoder {
-                    inner: DataDecoderInner::Avro(state),
-                    metrics,
-                }
+        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
+            let state =
+                avro::AvroDecoderState::new(&reader_schema, None, debug_name.to_string(), false)
+                    .expect("Schema was verified to be correct during purification");
+            DataDecoder {
+                inner: DataDecoderInner::Avro(state),
+                metrics,
             }
-
-            _ => {
-                let state = avro::AvroDecoderState::new(
-                    &reader_schema,
-                    None,
-                    envelope.get_avro_envelope_type(),
-                    false,
-                    debug_name.to_string(),
-                    false,
-                )
-                .expect("Schema was verified to be correct during purification");
-                DataDecoder {
-                    inner: DataDecoderInner::Avro(state),
-                    metrics,
-                }
-            }
-        },
+        }
         DataEncoding::Csv(enc) => {
             let state = CsvDecoderState::new(enc, operators);
             DataDecoder {
@@ -439,6 +303,24 @@ fn get_decoder(
             unreachable!("Postgres sources should not go through the general decoding path.")
         }
     }
+}
+
+fn try_decode(
+    decoder: &mut DataDecoder,
+    value: Option<&Vec<u8>>,
+) -> Option<Result<Row, DecodeError>> {
+    let value_buf = &mut value?.as_slice();
+    let value = decoder.next(value_buf);
+    if value.is_ok() && !value_buf.is_empty() {
+        let err = format!(
+            "Unexpected bytes remaining for decoded value: {:?}",
+            value_buf
+        );
+        return Some(Err(DecodeError::Text(err)));
+    }
+    value
+        .transpose()
+        .or_else(|| decoder.eof(&mut &[][..]).transpose())
 }
 
 /// Decode already delimited records of data.
@@ -454,16 +336,16 @@ fn get_decoder(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
+    metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    fast_forwarded: bool,
     metrics: Metrics,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
 where
@@ -478,141 +360,65 @@ where
         value_encoding.op_name()
     );
     let mut key_decoder = key_encoding.map(|key_encoding| {
-        get_decoder(
-            key_encoding,
-            debug_name,
-            &SourceEnvelope::None,
-            operators,
-            false,
-            true,
-            metrics.clone(),
-        )
+        get_decoder(key_encoding, debug_name, operators, true, metrics.clone())
     });
 
-    // push the `mz_offset` column for everything but Kafka/Avro _OR_ Debezium.
-    // There is no logical reason for this but historical practice
-    let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_))
-        && !matches!(envelope, SourceEnvelope::Debezium(..));
+    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
 
-    let mut value_decoder = get_decoder(
-        value_encoding,
-        debug_name,
-        envelope,
-        operators,
-        fast_forwarded,
-        true,
-        metrics,
-    );
+    let dist: fn(&SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>) -> _ = match envelope {
+        SourceEnvelope::Debezium(_) => |x| x.partition.hashed(),
+        _ => |x| x.position.hashed(),
+    };
+    let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
+        move |input, output| {
+            let mut n_errors = 0;
+            let mut n_successes = 0;
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for SourceOutput {
+                    key,
+                    value,
+                    position,
+                    upstream_time_millis,
+                    partition,
+                } in data.iter()
+                {
+                    let key = key_decoder
+                        .as_mut()
+                        .and_then(|decoder| try_decode(decoder, key.as_ref()));
 
-    // The Debezium deduplication and upsert logic rely on elements for the same key going to the same worker.
-    // Other decoders don't care; so we distribute things round-robin (i.e., by "position"), and
-    // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
-    let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
-    let results = stream.unary_frontier(
-        Exchange::new(move |x: &SourceOutput<Vec<u8>, MessagePayload>| {
-            if use_key_contract {
-                x.key.hashed()
-            } else if let Some(position) = x.position {
-                position.hashed()
-            } else {
-                x.value.hashed()
-            }
-        }),
-        &op_name,
-        move |_, _| {
-            move |input, output| {
-                let mut n_errors = 0;
-                let mut n_successes = 0;
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for SourceOutput {
+                    let value = try_decode(&mut value_decoder, value.as_ref());
+
+                    if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                        n_errors += 1;
+                    } else if matches!(&value, Some(Ok(_))) {
+                        n_successes += 1;
+                    }
+
+                    session.give(DecodeResult {
                         key,
                         value,
-                        position,
-                        upstream_time_millis,
-                    } in data.iter()
-                    {
-                        let key_cursor = &mut key.as_slice();
-                        let key = if let (Some(key_decoder), false) =
-                            (key_decoder.as_mut(), key.is_empty())
-                        {
-                            let mut key = key_decoder
-                                .next(key_cursor, None, *upstream_time_millis, false)
-                                .transpose();
-                            if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
-                                key = Some(Err(DecodeError::Text(format!(
-                                    "Unexpected bytes remaining for decoded key: {:?}",
-                                    key_cursor
-                                ))
-                                .into()));
-                            }
-                            key.or_else(|| key_decoder.eof(&mut &[][..], None, false).transpose())
-                        } else {
-                            None
-                        };
-
-                        if value == &MessagePayload::Data(vec![]) {
-                            session.give(DecodeResult {
-                                key,
-                                value: None,
-                                position: *position,
-                            });
-                        } else {
-                            let value = match &value {
-                                MessagePayload::Data(value) => {
-                                    let value_bytes_remaining = &mut value.as_slice();
-                                    let mut value = value_decoder
-                                        .next(
-                                            value_bytes_remaining,
-                                            *position,
-                                            *upstream_time_millis,
-                                            push_metadata,
-                                        )
-                                        .transpose();
-                                    if let (Some(Ok(_)), false) =
-                                        (&value, value_bytes_remaining.is_empty())
-                                    {
-                                        value = Some(Err(DecodeError::Text(format!(
-                                            "Unexpected bytes remaining for decoded value: {:?}",
-                                            value_bytes_remaining
-                                        ))
-                                        .into()));
-                                    }
-                                    value.or_else(|| {
-                                        value_decoder
-                                            .eof(&mut &[][..], *position, push_metadata)
-                                            .transpose()
-                                    })
-                                }
-                                MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
-                                    "Unexpected EOF in delimited stream"
-                                ))
-                                .into())),
-                            };
-
-                            if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                                n_errors += 1;
-                            } else if matches!(&value, Some(Ok(_))) {
-                                n_successes += 1;
-                            }
-                            session.give(DecodeResult {
-                                key,
-                                value,
-                                position: *position,
-                            });
-                        }
-                    }
-                });
-                // Matching historical practice, we only log metrics on the value decoder.
-                if n_errors > 0 {
-                    value_decoder.log_errors(n_errors);
+                        position: *position,
+                        upstream_time_millis: *upstream_time_millis,
+                        partition: partition.clone(),
+                        metadata: to_metadata_row(
+                            &metadata_items,
+                            partition.clone(),
+                            *position,
+                            *upstream_time_millis,
+                        ),
+                    });
                 }
-                if n_successes > 0 {
-                    value_decoder.log_successes(n_successes);
-                }
+            });
+            // Matching historical practice, we only log metrics on the value decoder.
+            if n_errors > 0 {
+                value_decoder.log_errors(n_errors);
             }
-        },
-    );
+            if n_successes > 0 {
+                value_decoder.log_successes(n_successes);
+            }
+        }
+    });
     (results, None)
 }
 
@@ -632,124 +438,84 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
-    key_encoding: Option<DataEncoding>,
+    stream: &Stream<G, SourceOutput<(), MessagePayload>>,
     value_encoding: DataEncoding,
     debug_name: &str,
-    envelope: &SourceEnvelope,
+    metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    fast_forwarded: bool,
     metrics: Metrics,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let op_name = format!(
-        "{}{}Decode",
-        key_encoding
-            .as_ref()
-            .map(|key_encoding| key_encoding.op_name())
-            .unwrap_or(""),
-        value_encoding.op_name()
-    );
-    let mut key_decoder = key_encoding.map(|key_encoding| {
-        get_decoder(
-            key_encoding,
-            debug_name,
-            &SourceEnvelope::None,
-            operators,
-            false,
-            false,
-            metrics.clone(),
-        )
-    });
+    let op_name = format!("{}Decode", value_encoding.op_name());
 
-    // push the `mz_offset` column for everything but Kafka/Avro _OR_ Debezium.
-    // There is no logical reason for this but historical practice
-    let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_))
-        && !matches!(envelope, SourceEnvelope::Debezium(..));
-
-    let mut value_decoder = get_decoder(
-        value_encoding,
-        debug_name,
-        envelope,
-        operators,
-        fast_forwarded,
-        false,
-        metrics,
-    );
+    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, false, metrics);
 
     let mut value_buf = vec![];
 
     // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    let mut n_seen = 0;
+    // Historically, non-delimited sources have their offset start at 1
+    let mut n_seen = 1..;
     let results = stream.unary_frontier(Pipeline, &op_name, move |_, _| {
+        let metadata_items = metadata_items;
         move |input, output| {
             let mut n_errors = 0;
             let mut n_successes = 0;
             input.for_each(|cap, data| {
+                // Currently Kafka is the only kind of source that can have metadata, and it is
+                // always delimited, so we will never have metadata in `render_decode`
                 let mut session = output.session(&cap);
                 for SourceOutput {
-                    key,
+                    key: _,
                     value,
                     position: _,
                     upstream_time_millis,
+                    partition,
                 } in data.iter()
                 {
-                    let key_cursor = &mut key.as_slice();
-                    let key = if let (Some(key_decoder), false) =
-                        (key_decoder.as_mut(), key.is_empty())
-                    {
-                        let mut key = key_decoder
-                            .next(key_cursor, None, *upstream_time_millis, false)
-                            .transpose();
-                        if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
-                            // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
-                            key = Some(Err(DecodeError::Text(format!(
-                                "Unexpected bytes remaining for decoded key: {:?}",
-                                key_cursor
-                            ))
-                            .into()));
-                        }
-                        key
-                    } else {
-                        None
-                    };
-
                     let value = match value {
                         MessagePayload::Data(data) => data,
                         MessagePayload::EOF => {
                             let data = &mut &value_buf[..];
-                            let mut result = value_decoder
-                                .eof(data, Some(n_seen + 1), push_metadata)
-                                .transpose();
-                            if !data.is_empty() && !matches!(&result, Some(Err(_))) {
-                                result = Some(Err(DecodeError::Text(format!(
+                            let mut result = value_decoder.eof(data);
+                            if result.is_ok() && !data.is_empty() {
+                                result = Err(DecodeError::Text(format!(
                                     "Saw unexpected EOF with bytes remaining in buffer: {:?}",
                                     data
-                                ))
-                                .into()));
+                                )));
                             }
                             value_buf.clear();
 
-                            match result {
+                            match result.transpose() {
                                 None => continue,
                                 Some(value) => {
-                                    if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
+                                    if value.is_err() {
                                         n_errors += 1;
                                     } else if matches!(&value, Ok(_)) {
                                         n_successes += 1;
                                     }
+                                    // `RangeFrom` `Iterator`'s never end
+                                    let position = n_seen.next().unwrap();
+                                    let metadata = to_metadata_row(
+                                        &metadata_items,
+                                        partition.clone(),
+                                        position,
+                                        *upstream_time_millis,
+                                    );
+
                                     session.give(DecodeResult {
-                                        key,
+                                        key: None,
                                         value: Some(value),
-                                        position: Some(n_seen),
+                                        position,
+                                        upstream_time_millis: *upstream_time_millis,
+                                        partition: partition.clone(),
+                                        metadata,
                                     });
-                                    n_seen += 1;
                                 }
                             }
                             continue;
@@ -765,67 +531,68 @@ where
                         &value_buf
                     };
 
-                    if value.is_empty() {
-                        session.give(DecodeResult {
-                            key,
-                            value: None,
-                            position: None,
-                        });
-                    } else {
-                        let value_bytes_remaining = &mut value.as_slice();
-                        // The intent is that the below loop runs as long as there are more bytes to decode.
-                        //
-                        // We'd like to be able to write `while !value_cursor.empty()`
-                        // here, but that runs into borrow checker issues, so we use `loop`
-                        // and break manually.
-                        loop {
-                            let old_value_cursor = *value_bytes_remaining;
-                            let value = match value_decoder.next(
-                                value_bytes_remaining,
-                                Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
-                                *upstream_time_millis,
-                                push_metadata,
-                            ) {
-                                Err(e) => Err(e),
-                                Ok(None) => {
-                                    let leftover = value_bytes_remaining.to_vec();
-                                    value_buf = leftover;
-                                    break;
-                                }
-                                Ok(Some(value)) => Ok(value),
-                            };
-                            n_seen += 1;
-
-                            // If the decoders decoded a message, they need to have made progress consuming the bytes.
-                            // Otherwise, we risk going into an infinite loop.
-                            assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
-
-                            let is_err = value.is_err();
-                            if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
-                                n_errors += 1;
-                            } else if matches!(&value, Ok(_)) {
-                                n_successes += 1;
-                            }
-                            if value_bytes_remaining.is_empty() {
-                                session.give(DecodeResult {
-                                    key,
-                                    value: Some(value),
-                                    position: Some(n_seen),
-                                });
-                                value_buf = vec![];
-                                break;
-                            } else {
-                                session.give(DecodeResult {
-                                    key: key.clone(),
-                                    value: Some(value),
-                                    position: Some(n_seen),
-                                });
-                            }
-                            if is_err {
-                                // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
-                                // makes no sense to keep going.
+                    let value_bytes_remaining = &mut value.as_slice();
+                    // The intent is that the below loop runs as long as there are more bytes to decode.
+                    //
+                    // We'd like to be able to write `while !value_cursor.empty()`
+                    // here, but that runs into borrow checker issues, so we use `loop`
+                    // and break manually.
+                    loop {
+                        let old_value_cursor = *value_bytes_remaining;
+                        let value = match value_decoder.next(value_bytes_remaining) {
+                            Err(e) => Err(e),
+                            Ok(None) => {
+                                let leftover = value_bytes_remaining.to_vec();
+                                value_buf = leftover;
                                 break;
                             }
+                            Ok(Some(value)) => Ok(value),
+                        };
+
+                        // If the decoders decoded a message, they need to have made progress consuming the bytes.
+                        // Otherwise, we risk going into an infinite loop.
+                        assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
+
+                        let is_err = value.is_err();
+                        if is_err {
+                            n_errors += 1;
+                        } else if matches!(&value, Ok(_)) {
+                            n_successes += 1;
+                        }
+                        // `RangeFrom` `Iterator`'s never end
+                        let position = n_seen.next().unwrap();
+                        let metadata = to_metadata_row(
+                            &metadata_items,
+                            partition.clone(),
+                            position,
+                            *upstream_time_millis,
+                        );
+
+                        if value_bytes_remaining.is_empty() {
+                            session.give(DecodeResult {
+                                key: None,
+                                value: Some(value),
+                                position,
+                                upstream_time_millis: *upstream_time_millis,
+                                partition: partition.clone(),
+                                metadata,
+                            });
+                            value_buf = vec![];
+                            break;
+                        } else {
+                            session.give(DecodeResult {
+                                key: None,
+                                value: Some(value),
+                                position,
+                                upstream_time_millis: *upstream_time_millis,
+                                partition: partition.clone(),
+                                metadata,
+                            });
+                        }
+                        if is_err {
+                            // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
+                            // makes no sense to keep going.
+                            break;
                         }
                     }
                 }
@@ -840,4 +607,49 @@ where
         }
     });
     (results, None)
+}
+
+fn to_metadata_row(
+    metadata_items: &[IncludedColumnSource],
+    partition: PartitionId,
+    position: i64,
+    upstream_time_millis: Option<i64>,
+) -> Row {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    match partition {
+        PartitionId::Kafka(partition) => {
+            for item in metadata_items.iter() {
+                match item {
+                    IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
+                    IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => {
+                        packer.push(Datum::from(position))
+                    }
+                    IncludedColumnSource::Timestamp => {
+                        let ts =
+                            upstream_time_millis.expect("kafka sources always have upstream_time");
+                        let (secs, mut millis) = (ts / 1000, (ts.abs() % 1000) as u32);
+                        if secs < 0 {
+                            millis = 1000 - millis;
+                        }
+
+                        packer.push(Datum::from(NaiveDateTime::from_timestamp(
+                            secs,
+                            millis * 1_000_000,
+                        )))
+                    }
+                    IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
+                }
+            }
+        }
+        PartitionId::None => {
+            for item in metadata_items.iter() {
+                match item {
+                    IncludedColumnSource::DefaultPosition => packer.push(Datum::from(position)),
+                    _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
+                }
+            }
+        }
+    }
+    row
 }

@@ -15,8 +15,8 @@
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
 use crate::TransformArgs;
-use expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
-use repr::{Datum, RelationType, ScalarType};
+use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use mz_repr::{Datum, RelationType, ScalarType};
 
 /// Harvests information about non-nullability of columns from sources.
 #[derive(Debug)]
@@ -28,19 +28,16 @@ impl crate::Transform for NonNullable {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_pre(&mut |e| self.action(e))
     }
 }
 
 impl NonNullable {
     /// Harvests information about non-nullability of columns from sources.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         match relation {
             MirRelationExpr::Map { input, scalars } => {
-                if scalars.iter().any(|s| scalar_contains_isnull(s)) {
+                if scalars.iter().any(scalar_contains_isnull) {
                     let mut metadata = input.typ();
                     for scalar in scalars.iter_mut() {
                         scalar_nonnullable(scalar, &metadata);
@@ -50,7 +47,7 @@ impl NonNullable {
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
-                if predicates.iter().any(|s| scalar_contains_isnull(s)) {
+                if predicates.iter().any(scalar_contains_isnull) {
                     let metadata = input.typ();
                     for predicate in predicates.iter_mut() {
                         scalar_nonnullable(predicate, &metadata);
@@ -76,13 +73,14 @@ impl NonNullable {
             }
             _ => {}
         }
+        Ok(())
     }
 }
 
 /// True if the expression contains a "is null" test.
 fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
     let mut result = false;
-    expr.visit(&mut |e| {
+    expr.visit_post(&mut |e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             ..
@@ -97,7 +95,7 @@ fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
 /// Transformations to scalar functions, based on nonnullability of columns.
 fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
     // Tests for null can be replaced by "false" for non-nullable columns.
-    expr.visit_mut(&mut |e| {
+    expr.visit_mut_post(&mut |e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             expr,

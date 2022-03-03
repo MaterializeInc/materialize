@@ -25,7 +25,7 @@ Detail | Info
 
 Record types can be used to represent nested data.
 
-The fields of a record are named `field1`, `field2`, and so on. To access a
+The fields of a record are named `f1`, `f2`, and so on. To access a
 field of a record, use the `.` operator. Note that you need to parenthesize the
 record expression to ensure that the `.` is interpreted as the field selection
 operator, rather than part of a database- or schema-qualified table name.

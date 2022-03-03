@@ -103,7 +103,8 @@ impl Client {
     /// The underlying API call is `GET /database`.
     pub async fn databases(&self) -> Result<Vec<Database>, reqwest::Error> {
         let url = self.api_url(&["database"]);
-        self.send_request(self.inner.get(url)).await
+        let res: ListWrapper<_> = self.send_request(self.inner.get(url)).await?;
+        Ok(res.data)
     }
 
     /// Fetches metadata about a particular database.
@@ -168,8 +169,14 @@ impl fmt::Display for Error {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+struct ListWrapper<T> {
+    data: Vec<T>,
+}
+
 /// The response to [`Client::session_properties`].
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
 pub struct SessionPropertiesResponse {
     pub setup_token: Option<String>,
 }
@@ -247,6 +254,7 @@ pub struct DatabaseMetadata {
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct Table {
     pub name: String,
+    pub schema: String,
     pub fields: Vec<TableField>,
 }
 

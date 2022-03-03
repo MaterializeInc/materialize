@@ -212,6 +212,9 @@ SELECT 'Infinity'::numeric
 query error invalid input syntax for type numeric: "-Infinity"
 SELECT '-Infinity'::numeric
 
+query error invalid input syntax for type numeric: "sNaN"
+SELECT 'sNaN'::numeric
+
 # Casts
 
 ## int4 to numeric
@@ -808,13 +811,13 @@ SELECT 'NaN'::numeric(39,1);
 ----
 NaN
 
-query error precision for type numeric must be within \[1-39\], have 40
+query error precision for type numeric must be between 1 and 39
 SELECT 0.2::numeric(40,1);
 
-query error scale for type numeric must be within \[0-39\], have 40
+query error scale for type numeric must be between 0 and precision 39
 SELECT 0.2::numeric(39,40);
 
-query error numeric scale 39 must be between 0 and precision 1
+query error scale for type numeric must be between 0 and precision 1
 SELECT 0.2::numeric(1,39);
 
 query error numeric field overflow
@@ -1183,16 +1186,38 @@ SELECT log(-100.000)
 query error function log10 is not defined for zero
 SELECT log(0::numeric)
 
-# This documented behavior of the library:
-# > Inexact results will almost always be correctly rounded, but may be up to 1
-# > ulp (unit in last place) in error in rare cases.
-# See decNumberLog10 at http://speleotrove.com/decimal/dnnumb.html
+# These results used to end up with some errant digits in the least significant digit.
 query R
 SELECT log(2::numeric, 64)
 ----
-5.99999999999999999999999999999999999999
+6
 
-# However, doesn't happen everywhere
+query R
+SELECT log(4::numeric, 4096);
+----
+6
+
+query R
+SELECT log(6::numeric, 279936);
+----
+7
+
+query R
+SELECT log(6::numeric, 1679616);
+----
+8
+
+query R
+SELECT log(8::numeric, 16777216);
+----
+8
+
+query R
+SELECT log(8::numeric, 134217728);
+----
+9
+
+# This result has never been incorrect
 query R
 SELECT log(2::numeric, 128)
 ----

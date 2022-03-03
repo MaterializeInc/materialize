@@ -13,16 +13,17 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use anyhow::bail;
 
-use expr::GlobalId;
-use ore::collections::CollectionExt;
-use repr::{ColumnType, RelationDesc, ScalarType};
+use mz_expr::GlobalId;
+use mz_ore::collections::CollectionExt;
+use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
-use crate::catalog::{Catalog, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema};
+use crate::catalog::{
+    CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
+};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -31,18 +32,19 @@ use crate::plan::{Params, Plan, PlanContext};
 
 mod ddl;
 mod dml;
+mod raise;
 mod scl;
 mod show;
 mod tcl;
 
 /// Describes the output of a SQL statement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StatementDesc {
     /// The shape of the rows produced by the statement, if the statement
     /// produces rows.
     pub relation_desc: Option<RelationDesc>,
     /// The determined types of the parameters in the statement, if any.
-    pub param_types: Vec<pgrepr::Type>,
+    pub param_types: Vec<ScalarType>,
     /// Whether the statement is a `COPY` statement.
     pub is_copy: bool,
 }
@@ -66,11 +68,6 @@ impl StatementDesc {
     }
 
     fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
-        self.param_types = param_types.iter().map(pgrepr::Type::from).collect();
-        self
-    }
-
-    fn with_pgrepr_params(mut self, param_types: Vec<pgrepr::Type>) -> Self {
         self.param_types = param_types;
         self
     }
@@ -86,21 +83,21 @@ impl StatementDesc {
 /// See the documentation of [`StatementDesc`] for details.
 pub fn describe(
     pcx: &PlanContext,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
-    param_types_in: &[Option<pgrepr::Type>],
+    param_types_in: &[Option<ScalarType>],
 ) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
-            param_types.insert(i + 1, query::scalar_type_from_pg(ty)?);
+            param_types.insert(i + 1, ty.clone());
         }
     }
 
     let scx = StatementContext {
         pcx: Some(pcx),
         catalog,
-        param_types: Rc::new(RefCell::new(param_types)),
+        param_types: RefCell::new(param_types),
     };
 
     let desc = match stmt {
@@ -138,6 +135,9 @@ pub fn describe(
         Statement::Declare(stmt) => scl::describe_declare(&scx, stmt)?,
         Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
         Statement::Close(stmt) => scl::describe_close(&scx, stmt)?,
+        Statement::Prepare(stmt) => scl::describe_prepare(&scx, stmt)?,
+        Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
+        Statement::Deallocate(stmt) => scl::describe_deallocate(&scx, stmt)?,
 
         // DML statements.
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -153,6 +153,9 @@ pub fn describe(
         Statement::SetTransaction(stmt) => tcl::describe_set_transaction(&scx, stmt)?,
         Statement::Rollback(stmt) => tcl::describe_rollback(&scx, stmt)?,
         Statement::Commit(stmt) => tcl::describe_commit(&scx, stmt)?,
+
+        // RAISE statements.
+        Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -170,7 +173,7 @@ pub fn describe(
 /// guaranteed.
 pub fn plan(
     pcx: Option<&PlanContext>,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
@@ -184,7 +187,7 @@ pub fn plan(
     let scx = &StatementContext {
         pcx,
         catalog,
-        param_types: Rc::new(RefCell::new(param_types)),
+        param_types: RefCell::new(param_types),
     };
 
     match stmt {
@@ -231,23 +234,29 @@ pub fn plan(
         Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
+        Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
+        Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
+        Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
 
         // TCL statements.
         Statement::StartTransaction(stmt) => tcl::plan_start_transaction(scx, stmt),
         Statement::SetTransaction(stmt) => tcl::plan_set_transaction(scx, stmt),
         Statement::Rollback(stmt) => tcl::plan_rollback(scx, stmt),
         Statement::Commit(stmt) => tcl::plan_commit(scx, stmt),
+
+        // RAISE statements.
+        Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
     }
 }
 
 pub fn plan_copy_from(
     pcx: &PlanContext,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     id: GlobalId,
     columns: Vec<usize>,
-    rows: Vec<repr::Row>,
+    rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, anyhow::Error> {
-    query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
+    Ok(query::plan_copy_from_rows(pcx, catalog, id, columns, rows)?)
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
@@ -284,22 +293,21 @@ pub struct StatementContext<'a> {
     /// awkward field and should probably be relocated to a place that fits our
     /// execution model more closely.
     pcx: Option<&'a PlanContext>,
-    pub catalog: &'a dyn Catalog,
+    pub catalog: &'a dyn SessionCatalog,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
-    pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+    pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
 }
 
 impl<'a> StatementContext<'a> {
     pub fn new(
         pcx: Option<&'a PlanContext>,
-        catalog: &'a dyn Catalog,
-        param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+        catalog: &'a dyn SessionCatalog,
     ) -> StatementContext<'a> {
         StatementContext {
             pcx,
             catalog,
-            param_types,
+            param_types: Default::default(),
         }
     }
 
@@ -395,7 +403,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, anyhow::Error> {
-        let param_types = Rc::try_unwrap(self.param_types).unwrap().into_inner();
+        let param_types = self.param_types.into_inner();
         let mut out = vec![];
         for (i, (n, typ)) in param_types.into_iter().enumerate() {
             if n != i + 1 {

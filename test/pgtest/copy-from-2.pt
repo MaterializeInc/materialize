@@ -19,6 +19,8 @@ CommandComplete {"tag":"CREATE TABLE"}
 ReadyForQuery {"status":"I"}
 
 # COPY with both empty string and \N for NULL.
+# Note that after receiving the terminating char, no other data should be
+# accepted.
 send
 Query {"query": "COPY t FROM STDIN"}
 CopyData "1\tblah\n"
@@ -296,4 +298,61 @@ DataRow {"fields":["3",""]}
 DataRow {"fields":["4","NULL"]}
 DataRow {"fields":["5","NULL"]}
 CommandComplete {"tag":"SELECT 5"}
+ReadyForQuery {"status":"I"}
+
+# ignore junk data after end of copy marker
+send
+Query {"query": "COPY t FROM STDIN"}
+CopyData "\\.\n"
+CopyData "invalid data\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 0"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","blah"]}
+DataRow {"fields":["2","NULL"]}
+DataRow {"fields":["3",""]}
+DataRow {"fields":["4","NULL"]}
+DataRow {"fields":["5","NULL"]}
+CommandComplete {"tag":"SELECT 5"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN WITH (DELIMITER '||')"}
+----
+
+until
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY delimiter must be a single one-byte character"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN WITH (QUOTE '||')"}
+Query {"query": "COPY t FROM STDIN WITH (ESCAPE '||')"}
+Query {"query": "COPY t FROM STDIN WITH (HEADER true)"}
+----
+
+until
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY quote available only in CSV mode"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY escape available only in CSV mode"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY HEADER available only in CSV mode"}]}
 ReadyForQuery {"status":"I"}

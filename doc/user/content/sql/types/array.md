@@ -65,6 +65,18 @@ SELECT ARRAY[ARRAY['a', 'b'], ARRAY['c', 'd']]
  {{a,b},{c,d}}
 ```
 
+Alternatively, you can construct an array from the results subquery.  These subqueries must return a single column. Note
+that, in this form of the `ARRAY` expression, parentheses are used rather than square brackets.
+
+```sql
+SELECT ARRAY(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
+```
+```nofmt
+    x
+---------
+ {4,3,2}
+```
+
 Arrays cannot be "ragged." The length of each array expression must equal the
 length of all other array constructors in the same dimension. For example, the
 following ragged array is rejected:
@@ -132,15 +144,30 @@ Array element | Catalog name | OID
 
 ### Valid casts
 
-You can [cast](/sql/functions/cast) all array types to
-[`text`](/sql/types/text) by assignment.
-
+You can [cast](/sql/functions/cast) all array types to:
+- [`text`](../text) (by assignment)
+- [`list`](../list) (explicit)
 
 {{< version-added v0.7.4 >}}
 You can cast `text` to any array type. The input must conform to the [textual
 format](#textual-format) described above, with the additional restriction that
 you cannot yet use a cast to construct a multidimensional array.
 {{< /version-added >}}
+
+### Array to `list` casts
+
+{{< version-added v0.20.0 >}}
+
+You can cast any type of array to a list of the same element type, as long as
+the array has only 0 or 1 dimensions, i.e. you can cast `integer[]` to `integer
+list`, as long as the array is empty or does not contain any arrays itself.
+
+```sql
+SELECT pg_typeof('{1,2,3}`::integer[]::integer list);
+```
+```
+integer list
+```
 
 ## Examples
 

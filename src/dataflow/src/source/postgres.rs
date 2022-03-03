@@ -7,16 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use futures::TryStreamExt;
+use futures::{pin_mut, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
@@ -26,10 +24,17 @@ use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
+use tracing::{info, warn};
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
-use dataflow_types::{PostgresSourceConnector, SourceErrorDetails};
-use repr::{Datum, Row};
+use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
+use mz_expr::SourceInstanceId;
+use mz_repr::{Datum, Row};
+
+use self::metrics::PgSourceMetrics;
+use super::metrics::SourceBaseMetrics;
+
+mod metrics;
 
 lazy_static! {
     /// Postgres epoch is 2000-01-01T00:00:00Z
@@ -38,11 +43,11 @@ lazy_static! {
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    /// Used to produce useful error messages
-    source_name: String,
+    source_id: SourceInstanceId,
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
+    metrics: PgSourceMetrics,
 }
 
 trait ErrorExt {
@@ -118,11 +123,16 @@ macro_rules! try_recoverable {
 
 impl PostgresSourceReader {
     /// Constructs a new instance
-    pub fn new(source_name: String, connector: PostgresSourceConnector) -> Self {
+    pub fn new(
+        source_id: SourceInstanceId,
+        connector: PostgresSourceConnector,
+        metrics: &SourceBaseMetrics,
+    ) -> Self {
         Self {
-            source_name,
+            source_id,
             connector,
             lsn: 0.into(),
+            metrics: PgSourceMetrics::new(metrics, source_id),
         }
     }
 
@@ -136,7 +146,7 @@ impl PostgresSourceReader {
         buffer: &mut W,
     ) -> Result<(), ReplicationError> {
         let client =
-            try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
+            try_recoverable!(mz_postgres_util::connect_replication(&self.connector.conn).await);
 
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
@@ -149,7 +159,7 @@ impl PostgresSourceReader {
 
         // Get all the relevant tables for this publication
         let publication_tables = try_recoverable!(
-            postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
+            mz_postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
                 .await
         );
 
@@ -186,29 +196,44 @@ impl PostgresSourceReader {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-
         for info in publication_tables {
-            // TODO(petrosagg): use a COPY statement here for more efficient network transfer
-            let data = client
-                .simple_query(&format!(
-                    "SELECT * FROM {:?}.{:?}",
-                    info.namespace, info.name
-                ))
+            let relation_id: Datum = (info.rel_id as i32).into();
+            let reader = client
+                .copy_out_simple(
+                    format!(
+                        "COPY {:?}.{:?} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
+                        info.namespace, info.name
+                    )
+                    .as_str(),
+                )
                 .await?;
-            for msg in data {
-                if let SimpleQueryMessage::Row(row) = msg {
-                    let mut mz_row = Row::default();
-                    let rel_id: Datum = (info.rel_id as i32).into();
-                    mz_row.push(rel_id);
-                    mz_row.push_list((0..row.len()).map(|n| {
-                        let a: Datum = row.get(n).into();
-                        a
-                    }));
-                    try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
-                }
+
+            pin_mut!(reader);
+            let mut mz_row = Row::default();
+            while let Some(Ok(b)) = reader.next().await {
+                let mut packer = mz_row.packer();
+                packer.push(relation_id);
+                // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
+                // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
+                let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+
+                let mut raw_values = parser.iter_raw(info.schema.len() as i32);
+                try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
+                    while let Some(raw_value) = raw_values.next() {
+                        match raw_value? {
+                            Some(value) => rp.push(Datum::String(std::str::from_utf8(value)?)),
+                            None => rp.push(Datum::Null),
+                        }
+                    }
+                    Ok(())
+                }));
+                try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
+                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
             }
+
+            self.metrics.tables.inc();
         }
+        self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
         Ok(())
     }
@@ -243,14 +268,19 @@ impl PostgresSourceReader {
         T: IntoIterator<Item = &'a TupleData>,
     {
         let mut row = Row::default();
+        let mut packer = row.packer();
 
         let rel_id: Datum = (rel_id as i32).into();
-        row.push(rel_id);
-        row.push_list_with(move |packer| {
+        packer.push(rel_id);
+        packer.push_list_with(move |packer| {
             for val in tuple_data.into_iter() {
                 let datum = match val {
                     TupleData::Null => Datum::Null,
-                    TupleData::UnchangedToast => bail!("Unsupported TOAST value"),
+                    TupleData::UnchangedToast => bail!(
+                        "Missing TOASTed value from table with OID = {}. \
+                        Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                        rel_id
+                    ),
                     TupleData::Text(b) => std::str::from_utf8(&b)?.into(),
                 };
                 packer.push(datum);
@@ -268,13 +298,13 @@ impl PostgresSourceReader {
         use ReplicationError::*;
 
         let client =
-            try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
+            try_recoverable!(mz_postgres_util::connect_replication(&self.connector.conn).await);
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
             name = &self.connector.slot_name,
-            lsn = self.lsn.to_string(),
+            lsn = self.lsn,
             publication = self.connector.publication
         );
         let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
@@ -314,6 +344,7 @@ impl PostgresSourceReader {
             }
             match item {
                 XLogData(xlog_data) => {
+                    self.metrics.total.inc();
                     use LogicalReplicationMessage::*;
 
                     match xlog_data.data() {
@@ -325,16 +356,19 @@ impl PostgresSourceReader {
                             }
                         }
                         Insert(insert) => {
+                            self.metrics.inserts.inc();
                             let rel_id = insert.rel_id();
                             let new_tuple = insert.tuple().tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(row);
                         }
                         Update(update) => {
+                            self.metrics.updates.inc();
                             let rel_id = update.rel_id();
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from update")))
+                                .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
+                                        Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
                             .tuple_data();
                             let old_row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(old_row);
@@ -354,15 +388,18 @@ impl PostgresSourceReader {
                             inserts.push(new_row);
                         }
                         Delete(delete) => {
+                            self.metrics.deletes.inc();
                             let rel_id = delete.rel_id();
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from delete")))
+                                .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
+                                        Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
                             .tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(row);
                         }
                         Commit(commit) => {
+                            self.metrics.transactions.inc();
                             self.lsn = commit.end_lsn().into();
 
                             let tx = timestamper.start_tx().await;
@@ -373,8 +410,11 @@ impl PostgresSourceReader {
                             for row in inserts.drain(..) {
                                 try_fatal!(tx.insert(row).await);
                             }
+                            self.metrics.lsn.set(self.lsn.into());
                         }
-                        Origin(_) | Relation(_) | Type(_) => (),
+                        Origin(_) | Relation(_) | Type(_) => {
+                            self.metrics.ignored.inc();
+                        }
                         Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
@@ -402,39 +442,38 @@ impl SimpleSource for PostgresSourceReader {
             loop {
                 let file =
                     tokio::fs::File::from_std(tempfile::tempfile().map_err(|e| SourceError {
-                        source_name: self.source_name.clone(),
+                        source_id: self.source_id,
                         error: SourceErrorDetails::FileIO(e.to_string()),
                     })?);
                 let mut writer = tokio::io::BufWriter::new(file);
                 match self.produce_snapshot(&mut snapshot_tx, &mut writer).await {
                     Ok(_) => {
-                        log::info!(
+                        info!(
                             "replication snapshot for source {} succeeded",
-                            &self.source_name
+                            &self.source_id
                         );
                         break;
                     }
                     Err(ReplicationError::Recoverable(e)) => {
                         writer.flush().await.map_err(|e| SourceError {
-                            source_name: self.source_name.clone(),
+                            source_id: self.source_id,
                             error: SourceErrorDetails::Initialization(e.to_string()),
                         })?;
-                        log::warn!(
+                        warn!(
                             "replication snapshot for source {} failed, retrying: {}",
-                            &self.source_name,
-                            e
+                            &self.source_id, e
                         );
                         let reader = BufReader::new(writer.into_inner().into_std().await);
                         self.revert_snapshot(&mut snapshot_tx, reader)
                             .await
                             .map_err(|e| SourceError {
-                                source_name: self.source_name.clone(),
+                                source_id: self.source_id,
                                 error: SourceErrorDetails::FileIO(e.to_string()),
                             })?;
                     }
                     Err(ReplicationError::Fatal(e)) => {
                         return Err(SourceError {
-                            source_name: self.source_name,
+                            source_id: self.source_id,
                             error: SourceErrorDetails::Initialization(e.to_string()),
                         })
                     }
@@ -448,15 +487,14 @@ impl SimpleSource for PostgresSourceReader {
         loop {
             match self.produce_replication(timestamper).await {
                 Err(ReplicationError::Recoverable(e)) => {
-                    log::warn!(
+                    warn!(
                         "replication for source {} interrupted, retrying: {}",
-                        &self.source_name,
-                        e
+                        self.source_id, e
                     )
                 }
                 Err(ReplicationError::Fatal(e)) => {
                     return Err(SourceError {
-                        source_name: self.source_name,
+                        source_id: self.source_id,
                         error: SourceErrorDetails::FileIO(e.to_string()),
                     })
                 }
@@ -465,7 +503,7 @@ impl SimpleSource for PostgresSourceReader {
 
             // TODO(petrosagg): implement exponential back-off
             tokio::time::sleep(Duration::from_secs(3)).await;
-            log::info!("resuming replication for source {}", &self.source_name);
+            info!("resuming replication for source {}", self.source_id);
         }
     }
 }

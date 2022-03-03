@@ -13,14 +13,15 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use log::trace;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
+use tracing::trace;
 
-use ore::cast::CastFrom;
-use ore::metrics::MetricsRegistry;
-use ore::netio::AsyncReady;
+use mz_frontegg_auth::FronteggAuthentication;
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
@@ -31,13 +32,18 @@ use crate::protocol;
 #[derive(Debug)]
 pub struct Config<'a> {
     /// A client for the coordinator with which the server will communicate.
-    pub coord_client: coord::Client,
+    pub coord_client: mz_coord::Client,
     /// The TLS configuration for the server.
     ///
     /// If not present, then TLS is not enabled, and clients requests to
     /// negotiate TLS will be rejected.
     pub tls: Option<TlsConfig>,
-
+    /// The Frontegg authentication configuration.
+    ///
+    /// If present, Frontegg authentication is enabled, and users may present
+    /// a valid Frontegg API token as a password to authenticate. Otherwise,
+    /// password authentication is disabled.
+    pub frontegg: Option<FronteggAuthentication>,
     /// The registry that the pg wire server uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
 }
@@ -64,8 +70,9 @@ pub enum TlsMode {
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     tls: Option<TlsConfig>,
-    coord_client: coord::Client,
+    coord_client: mz_coord::Client,
     metrics: Metrics,
+    frontegg: Option<FronteggAuthentication>,
 }
 
 impl Server {
@@ -75,6 +82,7 @@ impl Server {
             metrics: Metrics::register_into(config.metrics_registry),
             tls: config.tls,
             coord_client: config.coord_client,
+            frontegg: config.frontegg,
         }
     }
 
@@ -111,6 +119,7 @@ impl Server {
                         version,
                         params,
                         metrics: &self.metrics,
+                        frontegg: self.frontegg.as_ref(),
                     })
                     .await?;
                     conn.flush().await?;

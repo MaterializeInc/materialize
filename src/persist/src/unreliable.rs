@@ -12,16 +12,19 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use crate::error::Error;
-use crate::storage::{Blob, Log, SeqNo};
+use async_trait::async_trait;
 
+use crate::error::Error;
+use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+
+#[derive(Debug)]
 struct UnreliableCore {
     unavailable: bool,
     // TODO: Delays, what else?
 }
 
 /// A handle for controlling the behavior of an unreliable delegate.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UnreliableHandle {
     core: Arc<Mutex<UnreliableCore>>,
 }
@@ -68,6 +71,7 @@ impl UnreliableHandle {
 }
 
 /// An unreliable delegate to [Log].
+#[derive(Debug)]
 pub struct UnreliableLog<L> {
     handle: UnreliableHandle,
     log: L,
@@ -118,13 +122,21 @@ impl<L: Log> Log for UnreliableLog<L> {
     }
 }
 
+/// Configuration for opening an [UnreliableBlob].
+#[derive(Debug)]
+pub struct UnreliableBlobConfig<B: Blob> {
+    handle: UnreliableHandle,
+    blob: B::Config,
+}
+
 /// An unreliable delegate to [Blob].
+#[derive(Debug)]
 pub struct UnreliableBlob<B> {
     handle: UnreliableHandle,
     blob: B,
 }
 
-impl<B: Blob> UnreliableBlob<B> {
+impl<B: BlobRead> UnreliableBlob<B> {
     /// Returns a new [UnreliableBlob] and a handle for controlling it.
     pub fn new(blob: B) -> (Self, UnreliableHandle) {
         let h = UnreliableHandle::default();
@@ -138,37 +150,70 @@ impl<B: Blob> UnreliableBlob<B> {
     }
 }
 
-impl<B: Blob> Blob for UnreliableBlob<B> {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+#[async_trait]
+impl<B: BlobRead + Sync> BlobRead for UnreliableBlob<B> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         self.handle.check_unavailable("blob get")?;
-        self.blob.get(key)
+        self.blob.get(key).await
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
-        self.handle.check_unavailable("blob set")?;
-        self.blob.set(key, value, allow_overwrite)
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.handle.check_unavailable("blob list keys")?;
+        self.blob.list_keys().await
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), Error> {
-        self.handle.check_unavailable("blob delete")?;
-        self.blob.delete(key)
-    }
-
-    fn close(&mut self) -> Result<bool, Error> {
+    async fn close(&mut self) -> Result<bool, Error> {
         // TODO: This check_unavailable is a different order from the others
         // mostly for convenience in the nemesis tests. While we do want to
         // prevent a normal read/write from going though when the storage is
         // unavailable, it makes for a very uninteresting test if we can't clean
         // up LOCK files. OTOH this feels like a smell, revisit.
-        let did_work = self.blob.close()?;
+        let did_work = self.blob.close().await?;
         self.handle.check_unavailable("blob close")?;
         Ok(did_work)
+    }
+}
+
+#[async_trait]
+impl<B> Blob for UnreliableBlob<B>
+where
+    B: Blob + Sync,
+    B::Read: Sync,
+{
+    type Config = UnreliableBlobConfig<B>;
+    type Read = UnreliableBlob<B::Read>;
+
+    fn open_exclusive(config: UnreliableBlobConfig<B>, lock_info: LockInfo) -> Result<Self, Error> {
+        let blob = B::open_exclusive(config.blob, lock_info)?;
+        Ok(UnreliableBlob {
+            blob,
+            handle: config.handle,
+        })
+    }
+
+    fn open_read(config: UnreliableBlobConfig<B>) -> Result<UnreliableBlob<B::Read>, Error> {
+        let blob = B::open_read(config.blob)?;
+        Ok(UnreliableBlob {
+            blob,
+            handle: config.handle,
+        })
+    }
+
+    async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
+        self.handle.check_unavailable("blob set")?;
+        self.blob.set(key, value, atomic).await
+    }
+
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
+        self.handle.check_unavailable("blob delete")?;
+        self.blob.delete(key).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::mem::{MemBlob, MemLog};
+    use crate::storage::Atomicity::RequireAtomic;
 
     use super::*;
 
@@ -194,22 +239,22 @@ mod tests {
         assert!(log.truncate(SeqNo(2)).is_ok());
     }
 
-    #[test]
-    fn blob() {
+    #[tokio::test]
+    async fn blob() {
         let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new_no_reentrance("unreliable"));
 
         // Initially starts reliable.
-        assert!(blob.set("a", b"1".to_vec(), true).is_ok());
-        assert!(blob.get("a").is_ok());
+        assert!(blob.set("a", b"1".to_vec(), RequireAtomic).await.is_ok());
+        assert!(blob.get("a").await.is_ok());
 
         // Setting it to unavailable causes all operations to fail.
         handle.make_unavailable();
-        assert!(blob.set("a", b"2".to_vec(), true).is_err());
-        assert!(blob.get("a").is_err());
+        assert!(blob.set("a", b"2".to_vec(), RequireAtomic).await.is_err());
+        assert!(blob.get("a").await.is_err());
 
         // Can be set back to working.
         handle.make_available();
-        assert!(blob.set("a", b"3".to_vec(), true).is_ok());
-        assert!(blob.get("a").is_ok());
+        assert!(blob.set("a", b"3".to_vec(), RequireAtomic).await.is_ok());
+        assert!(blob.get("a").await.is_ok());
     }
 }

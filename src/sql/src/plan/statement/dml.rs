@@ -12,26 +12,27 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
-use std::convert::TryFrom;
+use std::collections::HashMap;
 
 use anyhow::bail;
 
-use expr::MirRelationExpr;
-use ore::collections::CollectionExt;
-use repr::{RelationDesc, ScalarType};
+use mz_expr::MirRelationExpr;
+use mz_ore::collections::CollectionExt;
+use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
     ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, Raw, SelectStatement,
-    Statement, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
+    Statement, TailRelation, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, Params, PeekPlan, PeekWhen,
-    Plan, TailPlan,
+    CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
+    PeekWhen, Plan, ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -64,39 +65,72 @@ pub fn plan_insert(
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
-    let expr = expr.lower();
+    let expr = expr.optimize_and_lower(&scx.into());
 
     Ok(Plan::Insert(InsertPlan { id, values: expr }))
 }
 
-pub fn describe_update(
-    _: &StatementContext,
-    _: UpdateStatement<Raw>,
-) -> Result<StatementDesc, anyhow::Error> {
-    bail_unsupported!("UPDATE statements")
-}
-
-pub fn plan_update(
-    _: &StatementContext,
-    _: UpdateStatement<Raw>,
-    _: &Params,
-) -> Result<Plan, anyhow::Error> {
-    bail_unsupported!("UPDATE statements")
-}
-
 pub fn describe_delete(
-    _: &StatementContext,
-    _: DeleteStatement<Raw>,
+    scx: &StatementContext,
+    stmt: DeleteStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    bail_unsupported!("DELETE statements")
+    query::plan_delete_query(scx, stmt)?;
+    Ok(StatementDesc::new(None))
 }
 
 pub fn plan_delete(
-    _: &StatementContext,
-    _: DeleteStatement<Raw>,
-    _: &Params,
+    scx: &StatementContext,
+    stmt: DeleteStatement<Raw>,
+    params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    bail_unsupported!("DELETE statements")
+    let rtw_plan = query::plan_delete_query(scx, stmt)?;
+    plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
+}
+
+pub fn describe_update(
+    scx: &StatementContext,
+    stmt: UpdateStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    query::plan_update_query(scx, stmt)?;
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_update(
+    scx: &StatementContext,
+    stmt: UpdateStatement<Raw>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    let rtw_plan = query::plan_update_query(scx, stmt)?;
+    plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
+}
+
+pub fn plan_read_then_write(
+    kind: MutationKind,
+    scx: &StatementContext,
+    params: &Params,
+    query::ReadThenWritePlan {
+        id,
+        mut selection,
+        finishing,
+        assignments,
+    }: query::ReadThenWritePlan,
+) -> Result<Plan, anyhow::Error> {
+    selection.bind_parameters(&params)?;
+    let selection = selection.optimize_and_lower(&scx.into());
+    let mut assignments_outer = HashMap::new();
+    for (idx, mut set) in assignments {
+        set.bind_parameters(&params)?;
+        let set = set.lower_uncorrelated()?;
+        assignments_outer.insert(idx, set);
+    }
+
+    Ok(Plan::ReadThenWrite(ReadThenWritePlan {
+        id,
+        selection,
+        finishing,
+        assignments: assignments_outer,
+        kind,
+    }))
 }
 
 pub fn describe_select(
@@ -118,7 +152,7 @@ pub fn plan_select(
         expr, finishing, ..
     } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
 
-    let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
+    let when = match as_of.map(|e| query::plan_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
     };
@@ -137,29 +171,30 @@ pub fn describe_explain(
         stage, explainee, ..
     }: ExplainStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    Ok(
-        StatementDesc::new(Some(RelationDesc::empty().with_named_column(
-            match stage {
-                ExplainStage::RawPlan => "Raw Plan",
-                ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-                ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-            },
-            ScalarType::String.nullable(false),
-        )))
-        .with_pgrepr_params(match explainee {
-            Explainee::Query(q) => {
-                describe_select(
-                    scx,
-                    SelectStatement {
-                        query: q,
-                        as_of: None,
-                    },
-                )?
-                .param_types
-            }
-            _ => vec![],
-        }),
-    )
+    Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
+        match stage {
+            ExplainStage::RawPlan => "Raw Plan",
+            ExplainStage::QueryGraph => "Query Graph",
+            ExplainStage::OptimizedQueryGraph => "Optimized Query Graph",
+            ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+            ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
+            ExplainStage::PhysicalPlan => "Physical Plan",
+        },
+        ScalarType::String.nullable(false),
+    )))
+    .with_params(match explainee {
+        Explainee::Query(q) => {
+            describe_select(
+                scx,
+                SelectStatement {
+                    query: q,
+                    as_of: None,
+                },
+            )?
+            .param_types
+        }
+        _ => vec![],
+    }))
 }
 
 pub fn plan_explain(
@@ -209,10 +244,8 @@ pub fn plan_explain(
         Some(finishing)
     };
     expr.bind_parameters(&params)?;
-    let decorrelated_expr = expr.clone().lower();
     Ok(Plan::Explain(ExplainPlan {
         raw_plan: expr,
-        decorrelated_plan: decorrelated_expr,
         row_set_finishing: finishing,
         stage,
         options,
@@ -220,7 +253,7 @@ pub fn plan_explain(
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
-/// an `::expr::MirRelationExpr`, which cannot include correlated expressions.
+/// an `mz_expr::MirRelationExpr`, which cannot include correlated expressions.
 pub fn plan_query(
     scx: &StatementContext,
     query: Query<Raw>,
@@ -235,7 +268,7 @@ pub fn plan_query(
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
     Ok(query::PlannedQuery {
-        expr: expr.lower(),
+        expr: expr.optimize_and_lower(&scx.into()),
         desc,
         finishing,
         depends_on,
@@ -251,25 +284,36 @@ with_options! {
 
 pub fn describe_tail(
     scx: &StatementContext,
-    TailStatement { name, options, .. }: TailStatement<Raw>,
+    TailStatement {
+        relation, options, ..
+    }: TailStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let sql_object = scx.resolve_item(name)?;
+    let relation_desc = match relation {
+        TailRelation::Name(name) => scx.resolve_item(name)?.desc()?.clone(),
+        TailRelation::Query(query) => {
+            let query::PlannedQuery { desc, .. } =
+                query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+            desc
+        }
+    };
     let options = TailOptions::try_from(options)?;
     let progress = options.progress.unwrap_or(false);
-    let mut desc = RelationDesc::empty().with_named_column(
+    let mut desc = RelationDesc::empty().with_column(
         "mz_timestamp",
-        ScalarType::Numeric { scale: Some(0) }.nullable(false),
+        ScalarType::Numeric {
+            max_scale: Some(NumericMaxScale::ZERO),
+        }
+        .nullable(false),
     );
     if progress {
-        desc = desc.with_named_column("mz_progressed", ScalarType::Bool.nullable(false));
+        desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
-    desc = desc.with_named_column("mz_diff", ScalarType::Int64.nullable(true));
-    for (name, ty) in sql_object.desc()?.iter() {
-        let mut ty = ty.clone();
+    desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
+    for (name, mut ty) in relation_desc.into_iter() {
         if progress {
             ty.nullable = true;
         }
-        desc = desc.with_column(name.clone(), ty);
+        desc = desc.with_column(name, ty);
     }
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -277,38 +321,59 @@ pub fn describe_tail(
 pub fn plan_tail(
     scx: &StatementContext,
     TailStatement {
-        name,
+        relation,
         options,
         as_of,
     }: TailStatement<Raw>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
-    let entry = scx.resolve_item(name)?;
-    let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
-    let options = TailOptions::try_from(options)?;
-    let desc = entry.desc()?.clone();
-
-    match entry.item_type() {
-        CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
-            Ok(Plan::Tail(TailPlan {
-                id: entry.id(),
-                ts,
-                with_snapshot: options.snapshot.unwrap_or(true),
-                copy_to,
-                emit_progress: options.progress.unwrap_or(false),
-                object_columns: entry.desc()?.arity(),
-                desc,
-            }))
+    let from = match relation {
+        TailRelation::Name(name) => {
+            let entry = scx.resolve_item(name)?;
+            match entry.item_type() {
+                CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
+                    TailFrom::Id(entry.id())
+                }
+                CatalogItemType::Func
+                | CatalogItemType::Index
+                | CatalogItemType::Sink
+                | CatalogItemType::Type => bail!(
+                    "'{}' cannot be tailed because it is a {}",
+                    entry.name(),
+                    entry.item_type(),
+                ),
+            }
         }
-        CatalogItemType::Func
-        | CatalogItemType::Index
-        | CatalogItemType::Sink
-        | CatalogItemType::Type => bail!(
-            "'{}' cannot be tailed because it is a {}",
-            entry.name(),
-            entry.item_type(),
-        ),
-    }
+        TailRelation::Query(query) => {
+            // There's no way to apply finishing operations to a `TAIL`
+            // directly. So we wrap the query in another query so that the
+            // user-supplied query is planned as a subquery whose `ORDER
+            // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
+            let query = Query::query(query);
+            let query = plan_query(
+                scx,
+                query,
+                &Params::empty(),
+                QueryLifetime::OneShot(scx.pcx()?),
+            )?;
+            assert!(query.finishing.is_trivial(query.desc.arity()));
+            TailFrom::Query {
+                expr: query.expr,
+                desc: query.desc,
+                depends_on: query.depends_on,
+            }
+        }
+    };
+
+    let ts = as_of.map(|e| query::plan_as_of(scx, e)).transpose()?;
+    let options = TailOptions::try_from(options)?;
+    Ok(Plan::Tail(TailPlan {
+        from,
+        ts,
+        with_snapshot: options.snapshot.unwrap_or(true),
+        copy_to,
+        emit_progress: options.progress.unwrap_or(false),
+    }))
 }
 
 pub fn describe_table(
@@ -325,6 +390,9 @@ with_options! {
         format: String,
         delimiter: String,
         null: String,
+        escape: String,
+        quote: String,
+        header: bool,
     }
 }
 
@@ -368,6 +436,9 @@ pub fn plan_copy(
         format: CopyFormat::Text,
         delimiter: options.delimiter,
         null: options.null,
+        escape: options.escape,
+        quote: options.quote,
+        header: options.header,
     };
     if let Some(format) = options.format {
         copy_params.format = match format.to_lowercase().as_str() {

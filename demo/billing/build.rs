@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    protoc::Protoc::new()
-        .include("resources")
-        .input("resources/billing.proto")
-        .build_script_exec();
+    prost_build::Config::new()
+        .compile_protos(&["billing.proto"], &["resources"])
+        .unwrap();
 }

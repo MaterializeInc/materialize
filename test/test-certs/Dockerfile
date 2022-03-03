@@ -8,9 +8,13 @@
 # by the Apache License, Version 2.0.
 
 MZFROM ubuntu-base
-RUN apt-get update && apt-get install openjdk-8-jdk openssl -y
-COPY . /
+
+RUN apt-get update && apt-get install -y openjdk-8-jdk openssl
+
+COPY create-certs.sh /
+
 RUN ./create-certs.sh
 
 MZFROM ubuntu-base
+
 COPY --from=0 /secrets /secrets

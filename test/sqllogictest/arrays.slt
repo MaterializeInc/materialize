@@ -38,7 +38,7 @@ SELECT '{{1}, {2}}'::int[]
 
 # Test coercion behavior of multidimensional arrays.
 
-query error ARRAY expression cannot be cast to uniform type: integer\[\] vs text\[\]
+query error ARRAY could not convert type text\[\] to integer\[\]
 SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]
 
 query T
@@ -105,7 +105,7 @@ SELECT 'hi'::text = ANY(ARRAY[]::text[])
 ----
 false
 
-query error ARRAY expression cannot be cast to uniform type: integer vs boolean
+query error ARRAY types integer and boolean cannot be matched
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
 query B
@@ -247,6 +247,15 @@ SELECT array_agg('a'::char)
 query error array_agg on char
 SELECT array_agg('a'::char(2))
 
+# array_agg with nested arrays
+statement ok
+CREATE TABLE t3 (a int[])
+
+statement ok
+INSERT INTO t3 VALUES (ARRAY[1]), (ARRAY[2]), (ARRAY[3])
+
+query error arrays not yet supported
+SELECT array_agg(a) FROM t3
 
 # Duplicates of cockroach/array.slt. todo@jldlaughlin: Remove when we support that file.
 # array subscript access
@@ -306,9 +315,55 @@ SELECT ARRAY[1, 2, 3][1.5 + 1.5]
 ----
 3
 
-# Error different than Cockroach.
-query error cannot subscript type text
+query T
 SELECT ARRAY['a', 'b', 'c'][4][2]
+----
+NULL
+
+query T
+SELECT ARRAY[['a'], ['b'], ['c']][2][1]
+----
+b
+
+query T
+SELECT ARRAY[['a'], ['b'], ['c']][2]
+----
+NULL
+
+statement ok
+CREATE TABLE array_t (a int[]);
+
+statement ok
+INSERT INTO array_t VALUES (ARRAY[[[1,2],[3,4]],[[5,6],[7,8]]]);
+
+query TTTTTTTT
+SELECT
+    a[1][1][1],
+	a[1][1][2],
+	a[1][2][1],
+	a[1][2][2],
+	a[2][1][1],
+	a[2][1][2],
+	a[2][2][1],
+	a[2][2][2]
+FROM array_t;
+----
+1 2 3 4 5 6 7 8
+
+query T
+SELECT ARRAY[[1,2,3], [4,5,6]][2][-1]
+----
+NULL
+
+query T
+SELECT ARRAY[1][null];
+----
+NULL
+
+query T
+SELECT ARRAY[[1]][1][null];
+----
+NULL
 
 # This differs from Cockroach, but matches Postgres.
 query T
@@ -418,3 +473,367 @@ SELECT ARRAY[1,2,3] > ARRAY['1','2','3']
 
 query error no overload for integer\[\] >= text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT ARRAY[1,2,3] >= ARRAY['1','2','3']
+
+query T
+SELECT array_remove(ARRAY[1,2,3,2], 2)
+----
+{1,3}
+
+query T
+SELECT array_remove(ARRAY[1,2,3,2], 5)
+----
+{1,2,3,2}
+
+query T
+SELECT array_remove(ARRAY[1,2,3,NULL::INT], NULL::INT)
+----
+{1,2,3}
+
+query T
+SELECT array_remove(ARRAY[1,NULL::INT,2,3,NULL::INT], NULL::INT)
+----
+{1,2,3}
+
+query T
+SELECT array_remove(NULL::INT[], NULL::INT)
+----
+NULL
+
+query T
+SELECT array_remove(NULL::INT[], 1)
+----
+NULL
+
+query T
+SELECT array_remove(ARRAY[1,1,1], 1)
+----
+{}
+
+query error removing elements from multidimensional arrays is not supported
+SELECT array_remove(ARRAY[[1]], 1)
+
+# array_cat
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[3, 4])
+----
+{1,2,3,4}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[3])
+----
+{1,2,3}
+
+query T
+SELECT array_cat(ARRAY[1], ARRAY[2, 3])
+----
+{1,2,3}
+
+query T
+SELECT array_cat(ARRAY[]::INT[], ARRAY[]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[[]]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[[[[]]]]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[[[[]]]]::INT[], ARRAY[[]]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[]::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[[]]::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[[[[[]]]]]::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[[1, 2]], ARRAY[]::INT[])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[1, 2]], ARRAY[[]]::INT[])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[1, 2]], ARRAY[[[[[]]]]]::INT[])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[]::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[[[[[[]]]]]]::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[]::INT[], ARRAY[[1,2]])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[[1,2]])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[[[[[]]]]]]::INT[], ARRAY[[1,2]])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[1,2], NULL::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(NULL::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(NULL::INT[], NULL::INT[])
+----
+NULL
+
+query T
+SELECT array_cat(ARRAY[[1,2],[3,4]], ARRAY[[5,6]])
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT array_cat(ARRAY[[1,2]], ARRAY[[3,4],[5,6]])
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT array_cat(ARRAY[[1,2],[3,4]], ARRAY[5,6])
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT array_cat(ARRAY[1,2], ARRAY[[3,4],[5,6]])
+----
+{{1,2},{3,4},{5,6}}
+
+simple
+SELECT array_cat(ARRAY[[1,2]], ARRAY[[3,4,5]]);
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays with differing dimensions are not compatible for concatenation.
+
+simple
+SELECT array_cat(ARRAY[[[1,2]]], ARRAY[3,4]);
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays of 3 and 1 dimensions are not compatible for concatenation.
+
+query error
+SELECT array_cat(ARRAY[1,2], ARRAY['3'])
+
+# array concatenation operator
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[3, 4]
+----
+{1,2,3,4}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[3]
+----
+{1,2,3}
+
+query T
+SELECT ARRAY[1] || ARRAY[2, 3]
+----
+{1,2,3}
+
+query T
+SELECT ARRAY[]::INT[] || ARRAY[]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[[]]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[[[[]]]]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[[[[]]]]::INT[] || ARRAY[[]]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[]::INT[]
+----
+{1,2}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[[]]::INT[]
+----
+{1,2}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[[[[[]]]]]::INT[]
+----
+{1,2}
+
+query T
+SELECT ARRAY[[1, 2]] || ARRAY[]::INT[]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[1, 2]] || ARRAY[[]]::INT[]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[1, 2]] || ARRAY[[[[[]]]]]::INT[]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[]::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT ARRAY[[[[[[]]]]]]::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT ARRAY[]::INT[] || ARRAY[[1,2]]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[[1,2]]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[[[[[]]]]]]::INT[] || ARRAY[[1,2]]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[1,2] || NULL::INT[]
+----
+{1,2}
+
+query T
+SELECT NULL::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT NULL::INT[] || NULL::INT[]
+----
+NULL
+
+query T
+SELECT ARRAY[[1,2],[3,4]] || ARRAY[[5,6]]
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT ARRAY[[1,2]] || ARRAY[[3,4],[5,6]]
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT ARRAY[[1,2],[3,4]] || ARRAY[5,6]
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT ARRAY[1,2] || ARRAY[[3,4],[5,6]]
+----
+{{1,2},{3,4},{5,6}}
+
+simple
+SELECT ARRAY[[1,2]] || ARRAY[[3,4,5]];
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays with differing dimensions are not compatible for concatenation.
+
+simple
+SELECT ARRAY[[[1,2]]] || ARRAY[3,4];
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays of 3 and 1 dimensions are not compatible for concatenation.
+
+query error no overload for integer\[\] || text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT ARRAY[1,2] || ARRAY['3'])
+
+# array_agg with maps
+statement ok
+CREATE TABLE t4 (a MAP[text=>int])
+
+statement ok
+INSERT INTO t4 VALUES ('{a=>123}'), ('{b=>456}')
+
+query error array_agg on map\[text=>integer\] not yet supported
+SELECT array_agg(a) FROM t4
+
+# Verify nested arrays
+statement ok
+CREATE TABLE users (id int not null, other_field int not null)
+
+statement ok
+CREATE TABLE customer (id int not null, first_name string not null, last_name string not null, zip string not null)
+
+statement ok
+INSERT INTO users VALUES (1, 10), (2, 5), (3, 8);
+
+statement ok
+INSERT INTO customer VALUES (1, 'alice', 'lasta', '10003'::text), (2, 'bob', 'lastb', '10013'::text), (3, 'charlie', 'lastc', '11217'::text);
+
+query error ARRAY could not convert type integer\[\] to text\[\]
+SELECT ARRAY[ARRAY[customer.first_name, customer.last_name], ARRAY[customer.zip], ARRAY[customer.id]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+
+query T
+SELECT ARRAY[ARRAY[customer.first_name], ARRAY[customer.zip], ARRAY[customer.id::text]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+----
+{{alice},{10003},{1}}
+{{charlie},{11217},{3}}

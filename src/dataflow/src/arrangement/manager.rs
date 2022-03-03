@@ -16,16 +16,16 @@ use std::rc::Rc;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::trace::TraceReader;
-use ore::metric;
-use ore::metrics::{
+use mz_ore::metric;
+use mz_ore::metrics::{
     CounterVec, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
     MetricsRegistry, UIntGaugeVec,
 };
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use dataflow_types::DataflowError;
-use expr::GlobalId;
-use repr::{Diff, Row, Timestamp};
+use mz_dataflow_types::DataflowError;
+use mz_expr::GlobalId;
+use mz_repr::{Diff, Row, Timestamp};
 
 pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
@@ -197,8 +197,9 @@ impl TraceManager {
 }
 
 /// Bundles together traces for the successful computations (`oks`), the
-/// failed computations (`errs`), and additional tokens that should share
-/// the lifetime of the bundled traces (`to_drop`).
+/// failed computations (`errs`), additional tokens that should share
+/// the lifetime of the bundled traces (`to_drop`), and a permutation
+/// describing how to reconstruct the original row (`permutation`).
 #[derive(Clone)]
 pub struct TraceBundle {
     oks: KeysValsHandle,
@@ -222,9 +223,8 @@ impl TraceBundle {
         T: 'static,
     {
         TraceBundle {
-            oks: self.oks,
-            errs: self.errs,
             to_drop: Some(Rc::new(Box::new(to_drop))),
+            ..self
         }
     }
 

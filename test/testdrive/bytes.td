@@ -9,7 +9,7 @@
 
 # Test ingestion of and selection from a simple bytes-formatted topic.
 
-$ kafka-create-topic topic=bytes
+$ kafka-create-topic topic=bytes partitions=1
 
 $ kafka-ingest format=bytes topic=bytes timestamp=1
 ©1

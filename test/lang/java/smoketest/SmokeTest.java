@@ -8,16 +8,19 @@
 // by the Apache License, Version 2.0.
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.sql.Types;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.AfterEach;
+import org.postgresql.jdbc.PgConnection;
 import org.postgresql.jdbc.TypeInfoCache;
 
 class SmokeTest {
@@ -82,5 +85,39 @@ class SmokeTest {
         TypeInfoCache ic = new TypeInfoCache(conn.unwrap(org.postgresql.core.BaseConnection.class), 0);
         Assertions.assertEquals(ic.getSQLType("int2"), Types.SMALLINT);
         Assertions.assertEquals(ic.getSQLType("_int2"), Types.ARRAY);
+    }
+
+    @Test
+    void testPgJDBCgetColumns() throws SQLException, ClassNotFoundException {
+        Statement stmt = conn.createStatement();
+        stmt.execute("CREATE TABLE materialize.public.getcols (a INT, b STRING)");
+        stmt.close();
+
+        ResultSet columns = conn.getMetaData().getColumns("materialize", "public", "getcols", null);
+        Assertions.assertTrue(columns.next());
+        Assertions.assertEquals("a", columns.getString("COLUMN_NAME"));
+        Assertions.assertTrue(columns.next());
+        Assertions.assertEquals("b", columns.getString("COLUMN_NAME"));
+        Assertions.assertFalse(columns.next());
+        columns.close();
+
+        stmt = conn.createStatement();
+        stmt.execute("DROP TABLE materialize.public.getcols");
+        stmt.close();
+    }
+
+    @Test
+    void testPgJDBCgetPrimaryKeys() throws SQLException, ClassNotFoundException {
+        Statement stmt = conn.createStatement();
+        stmt.execute("CREATE TABLE materialize.public.getpks (a INT, b STRING)");
+        stmt.close();
+
+        ResultSet columns = conn.getMetaData().getPrimaryKeys("materialize", "public", "getpks");
+        Assertions.assertFalse(columns.next());
+        columns.close();
+
+        stmt = conn.createStatement();
+        stmt.execute("DROP TABLE materialize.public.getpks");
+        stmt.close();
     }
 }

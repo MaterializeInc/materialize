@@ -17,7 +17,7 @@ use crate::strconv;
 ///
 /// The accepted syntax for a [`Duration`] is exactly the same syntax accepted
 /// by the SQL interval type, i.e., as parsed by [`strconv::parse_interval`],
-/// except that negative intervals are rejected as they are not representible in
+/// except that negative intervals are rejected as they are not representable in
 /// Rust's duration type.
 ///
 // NOTE: This does not belong in the `strconv` module, which is only for

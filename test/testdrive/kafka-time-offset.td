@@ -20,25 +20,19 @@ $ kafka-create-topic topic=t0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'missing_topic'
   WITH (kafka_time_offset=1)
   FORMAT TEXT
-topic missing_topic does not exist
+contains:topic missing_topic does not exist
 
 ! CREATE MATERIALIZED SOURCE pick_one
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset=1, start_offset=1)
   FORMAT TEXT
-`start_offset` and `kafka_time_offset` cannot be set at the same time.
-
-! CREATE MATERIALIZED SOURCE byo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
-  WITH (kafka_time_offset=1, consistency_topic="t0")
-  FORMAT TEXT
-`start_offset` is not yet implemented for non-realtime consistency sources.
+contains:`start_offset` and `kafka_time_offset` cannot be set at the same time.
 
 ! CREATE MATERIALIZED SOURCE not_a_number
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset="not_a_number")
   FORMAT TEXT
-`kafka_time_offset` must be a number
+contains:`kafka_time_offset` must be a number
 
 #
 # Append-Only
@@ -304,3 +298,121 @@ cherry    3
 text      mz_offset
 -------------------
 cherry    3
+
+# Make sure that we don't fetch any messages that we don't want to fetch
+
+$ kafka-create-topic topic=t4 partitions=1
+
+$ kafka-ingest format=bytes topic=t4 timestamp=1
+apple
+pie
+
+# A time offset of -1 specifies that we want to start from the end of the topic
+# (negative offsets are relative from the end).
+> CREATE MATERIALIZED SOURCE verify_no_fetch
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t4-${testdrive.seed}'
+  WITH (kafka_time_offset = -1)
+  FORMAT TEXT
+
+
+> SELECT * FROM verify_no_fetch
+text      mz_offset
+-------------------
+
+> SELECT SUM((statistics->'topics'->'testdrive-t4-${testdrive.seed}'->'partitions'->'0'->'msgs')::int) from mz_kafka_source_statistics;
+0
+
+$ kafka-ingest format=bytes topic=t4 timestamp=2
+mud
+pie
+
+> SELECT * FROM verify_no_fetch
+text      mz_offset
+-------------------
+mud       3
+pie       4
+
+> SELECT SUM((statistics->'topics'->'testdrive-t4-${testdrive.seed}'->'partitions'->'0'->'msgs')::int) from mz_kafka_source_statistics;
+2
+
+#
+# UPSERT + AVRO
+#
+
+$ set keyschema={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+        {"name": "id", "type": "long"}
+    ]
+  }
+
+$ set schema={
+    "type" : "record",
+    "name" : "envelope",
+    "fields" : [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {
+                  "name": "id",
+                  "type": "long"
+              },
+              {
+                "name": "creature",
+                "type": "string"
+              }]
+           },
+           "null"
+         ]
+      },
+      {
+        "name": "after",
+        "type": ["row", "null"]
+      }
+    ]
+  }
+
+$ kafka-create-topic topic=dbzupsert
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
+{"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
+{"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}}
+{"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=2
+{"id": 1} {"before": {"row": {"id": 1, "creature": "lizard"}}, "after": {"row": {"id": 1, "creature": "dino"}}}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=3
+{"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "archeopteryx"}}}
+{"id": 2} {"before": {"row": {"id": 2, "creature": "archeopteryx"}}, "after": {"row": {"id": 2, "creature": "velociraptor"}}}
+
+# test duplicates
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=4
+{"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}}
+{"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}}
+
+# test removal and reinsertion
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=5
+{"id": 4} {"before": null, "after": {"row": {"id": 4, "creature": "moros"}}}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=6
+{"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null}
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=7
+{"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
+
+> CREATE MATERIALIZED SOURCE upsert_time_skip
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  WITH (kafka_time_offset = 6)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * FROM upsert_time_skip
+id creature
+-----------
+4  chicken

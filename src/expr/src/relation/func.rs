@@ -19,15 +19,15 @@ use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzEnumReflect;
-use ore::cast::CastFrom;
-use repr::adt::array::ArrayDimension;
-use repr::adt::numeric;
-use repr::adt::regex::Regex as ReprRegex;
-use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use mz_lowertest::MzReflect;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::numeric::{self, NumericMaxScale};
+use mz_repr::adt::regex::Regex as ReprRegex;
+use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::relation::{compare_columns, ColumnOrder};
-use crate::scalar::func::jsonb_stringify;
+use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 
 // TODO(jamii) be careful about overflow in sum/avg
@@ -523,12 +523,15 @@ where
             Some((expr, order_row))
         })
         .collect();
+
+    let mut left_datum_vec = mz_repr::DatumVec::new();
+    let mut right_datum_vec = mz_repr::DatumVec::new();
     let mut sort_by = |left: &(_, Row), right: &(_, Row)| {
         let left = &left.1;
         let right = &right.1;
-        compare_columns(&order_by, &left.unpack(), &right.unpack(), || {
-            left.cmp(&right)
-        })
+        let left_datums = left_datum_vec.borrow_with(left);
+        let right_datums = right_datum_vec.borrow_with(right);
+        compare_columns(&order_by, &left_datums, &right_datums, || left.cmp(&right))
     };
     rows.sort_by(&mut sort_by);
     rows.into_iter().map(|(expr, _order_row)| expr)
@@ -563,7 +566,28 @@ where
     })
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
+fn row_number<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let datums = order_aggregate_datums(datums, order_by);
+    let datums = datums
+        .into_iter()
+        .map(|d| d.unwrap_list().iter())
+        .flatten()
+        .zip(1i64..)
+        .map(|(d, i)| {
+            temp_storage.make_datum(|packer| {
+                packer.push_list(vec![Datum::Int64(i), d]);
+            })
+        });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(datums);
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -614,17 +638,20 @@ pub enum AggregateFunc {
     JsonbObjectAgg {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates `Datum::List`s whose first element is a `Datum::Array` into a
-    /// single `Datum::Array`. The other elements are columns used by `order_by`.
+    /// Accumulates `Datum::Array`s of `ScalarType::Record` whose first element is a `Datum::Array`
+    /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates `Datum::List`s whose first element is a `Datum::List` into a
-    /// single `Datum::List`. The other elements are columns used by `order_by`.
+    /// Accumulates `Datum::List`s of `ScalarType::Record` whose first field is a `Datum::List`
+    /// into a single `Datum::List` (the remaining fields are used by `order_by`).
     ListConcat {
         order_by: Vec<ColumnOrder>,
     },
     StringAgg {
+        order_by: Vec<ColumnOrder>,
+    },
+    RowNumber {
         order_by: Vec<ColumnOrder>,
     },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
@@ -678,6 +705,7 @@ impl AggregateFunc {
             AggregateFunc::ArrayConcat { order_by } => array_concat(datums, temp_storage, order_by),
             AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
             AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
+            AggregateFunc::RowNumber { order_by } => row_number(datums, temp_storage, order_by),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -703,6 +731,7 @@ impl AggregateFunc {
             AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
+            AggregateFunc::RowNumber { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -721,7 +750,9 @@ impl AggregateFunc {
             AggregateFunc::JsonbObjectAgg { .. } => ScalarType::Jsonb,
             AggregateFunc::SumInt16 => ScalarType::Int64,
             AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
+            AggregateFunc::SumInt64 => ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
@@ -730,6 +761,29 @@ impl AggregateFunc {
                 }
             }
             AggregateFunc::StringAgg { .. } => ScalarType::String,
+            AggregateFunc::RowNumber { .. } => match input_type.scalar_type {
+                ScalarType::Record { fields, .. } => ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (
+                                ColumnName::from("?row_number?"),
+                                ScalarType::Int64.nullable(false),
+                            ),
+                            (ColumnName::from("?record?"), {
+                                let inner = match &fields[0].1.scalar_type {
+                                    ScalarType::List { element_type, .. } => element_type.clone(),
+                                    _ => unreachable!(),
+                                };
+                                inner.nullable(false)
+                            }),
+                        ],
+                        custom_oid: None,
+                        custom_name: None,
+                    }),
+                    custom_oid: None,
+                },
+                _ => unreachable!(),
+            },
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -794,7 +848,7 @@ fn jsonb_each<'a>(
     // First produce a map, so that a common iterator can be returned.
     let map = match a {
         Datum::Map(dict) => dict,
-        _ => repr::DatumMap::empty(),
+        _ => mz_repr::DatumMap::empty(),
     };
 
     map.iter().map(move |(k, mut v)| {
@@ -808,7 +862,7 @@ fn jsonb_each<'a>(
 fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     let map = match a {
         Datum::Map(dict) => dict,
-        _ => repr::DatumMap::empty(),
+        _ => mz_repr::DatumMap::empty(),
     };
 
     map.iter()
@@ -822,7 +876,7 @@ fn jsonb_array_elements<'a>(
 ) -> impl Iterator<Item = (Row, Diff)> + 'a {
     let list = match a {
         Datum::List(list) => list,
-        _ => repr::DatumList::empty(),
+        _ => mz_repr::DatumList::empty(),
     };
     list.iter().map(move |mut e| {
         if stringify {
@@ -859,6 +913,99 @@ where
     }
     Ok(num::range_step_inclusive(start, stop, step)
         .map(move |i| (Row::pack_slice(&[Datum::from(i)]), 1)))
+}
+
+/// Like
+/// [`num::range_step_inclusive`](https://github.com/rust-num/num-iter/blob/ddb14c1e796d401014c6c7a727de61d8109ad986/src/lib.rs#L279),
+/// but for our timestamp types using [`Interval`] for `step`.xwxw
+#[derive(Clone)]
+pub struct TimestampRangeStepInclusive {
+    state: NaiveDateTime,
+    stop: NaiveDateTime,
+    step: Interval,
+    rev: bool,
+    done: bool,
+}
+
+impl Iterator for TimestampRangeStepInclusive {
+    type Item = NaiveDateTime;
+
+    #[inline]
+    fn next(&mut self) -> Option<NaiveDateTime> {
+        if !self.done
+            && ((self.rev && self.state >= self.stop) || (!self.rev && self.state <= self.stop))
+        {
+            let result = self.state.clone();
+            match add_timestamp_months(self.state, self.step.months) {
+                Ok(state) => match state.checked_add_signed(self.step.duration_as_chrono()) {
+                    Some(v) => {
+                        self.state = v;
+                    }
+                    None => self.done = true,
+                },
+                Err(..) => {
+                    self.done = true;
+                }
+            }
+
+            Some(result)
+        } else {
+            None
+        }
+    }
+}
+
+fn generate_series_ts(
+    start: NaiveDateTime,
+    stop: NaiveDateTime,
+    step: Interval,
+    conv: fn(NaiveDateTime) -> Datum<'static>,
+) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
+    let normalized_step = step.as_microseconds();
+    if normalized_step == 0 {
+        return Err(EvalError::InvalidParameterValue(
+            "step size cannot equal zero".to_owned(),
+        ));
+    }
+    let rev = normalized_step < 0;
+
+    let tsri = TimestampRangeStepInclusive {
+        state: start,
+        stop,
+        step,
+        rev,
+        done: false,
+    };
+
+    Ok(tsri.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
+}
+
+fn generate_subscripts_array(
+    a: Datum,
+    dim: i32,
+) -> Result<Box<dyn Iterator<Item = (Row, Diff)>>, EvalError> {
+    if dim <= 0 {
+        return Ok(Box::new(iter::empty()));
+    }
+
+    match a.unwrap_array().dims().into_iter().nth(
+        (dim - 1)
+            .try_into()
+            .map_err(|_| EvalError::Int32OutOfRange)?,
+    ) {
+        Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
+            requested_dim
+                .lower_bound
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange)?,
+            requested_dim
+                .length
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange)?,
+            1,
+        )?)),
+        None => Ok(Box::new(iter::empty())),
+    }
 }
 
 fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
@@ -913,19 +1060,20 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::ArrayConcat { .. } => f.write_str("array_agg"),
             AggregateFunc::ListConcat { .. } => f.write_str("list_agg"),
             AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
+            AggregateFunc::RowNumber { .. } => f.write_str("row_number"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CaptureGroupDesc {
     pub index: u32,
     pub name: Option<String>,
     pub nullable: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>);
 
 impl AnalyzedRegex {
@@ -968,15 +1116,15 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
         .from_reader(bytes);
     csv_reader.into_records().filter_map(move |res| match res {
         Ok(sr) if sr.len() == n_cols => {
-            row.extend(sr.iter().map(|s| Datum::String(s)));
-            Some((row.finish_and_reuse(), 1))
+            row.packer().extend(sr.iter().map(Datum::String));
+            Some((row.clone(), 1))
         }
         _ => None,
     })
 }
 
 pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
-    let n = Diff::cast_from(a.unwrap_int64());
+    let n = a.unwrap_int64();
     if n != 0 {
         Some((Row::default(), n))
     } else {
@@ -984,31 +1132,52 @@ pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
+fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum TableFunc {
-    JsonbEach { stringify: bool },
+    JsonbEach {
+        stringify: bool,
+    },
     JsonbObjectKeys,
-    JsonbArrayElements { stringify: bool },
+    JsonbArrayElements {
+        stringify: bool,
+    },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
-    // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
+    GenerateSeriesTimestamp,
+    GenerateSeriesTimestampTz,
     Repeat,
-    UnnestArray { el_typ: ScalarType },
-    UnnestList { el_typ: ScalarType },
+    UnnestArray {
+        el_typ: ScalarType,
+    },
+    UnnestList {
+        el_typ: ScalarType,
+    },
+    /// Given `n` input expressions, wraps them into `n / width` rows, each of
+    /// `width` columns.
+    ///
+    /// This function is not intended to be called directly by end users, but
+    /// is useful in the planning of e.g. VALUES clauses.
+    Wrap {
+        types: Vec<ColumnType>,
+        width: usize,
+    },
+    GenerateSubscriptsArray,
 }
 
 impl TableFunc {
     pub fn eval<'a>(
         &'a self,
-        datums: Vec<Datum<'a>>,
+        datums: &'a [Datum<'a>],
         temp_storage: &'a RowArena,
     ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
-        if self.empty_on_null_input() {
-            if datums.iter().any(|d| d.is_null()) {
-                return Ok(Box::new(vec![].into_iter()));
-            }
+        if self.empty_on_null_input() && datums.iter().any(|d| d.is_null()) {
+            return Ok(Box::new(vec![].into_iter()));
         }
         match self {
             TableFunc::JsonbEach { stringify } => {
@@ -1021,9 +1190,7 @@ impl TableFunc {
                 *stringify,
             ))),
             TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
-            TableFunc::CsvExtract(n_cols) => {
-                Ok(Box::new(csv_extract(datums[0], *n_cols).into_iter()))
-            }
+            TableFunc::CsvExtract(n_cols) => Ok(Box::new(csv_extract(datums[0], *n_cols))),
             TableFunc::GenerateSeriesInt32 => {
                 let res = generate_series(
                     datums[0].unwrap_int32(),
@@ -1040,9 +1207,37 @@ impl TableFunc {
                 )?;
                 Ok(Box::new(res))
             }
+            TableFunc::GenerateSeriesTimestamp => {
+                fn pass_through<'a>(d: NaiveDateTime) -> Datum<'a> {
+                    Datum::from(d)
+                }
+                let res = generate_series_ts(
+                    datums[0].unwrap_timestamp(),
+                    datums[1].unwrap_timestamp(),
+                    datums[2].unwrap_interval(),
+                    pass_through,
+                )?;
+                Ok(Box::new(res))
+            }
+            TableFunc::GenerateSeriesTimestampTz => {
+                fn gen_ts_tz<'a>(d: NaiveDateTime) -> Datum<'a> {
+                    Datum::from(DateTime::<Utc>::from_utc(d, Utc))
+                }
+                let res = generate_series_ts(
+                    datums[0].unwrap_timestamptz().naive_utc(),
+                    datums[1].unwrap_timestamptz().naive_utc(),
+                    datums[2].unwrap_interval(),
+                    gen_ts_tz,
+                )?;
+                Ok(Box::new(res))
+            }
+            TableFunc::GenerateSubscriptsArray => {
+                generate_subscripts_array(datums[0], datums[1].unwrap_int32())
+            }
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
+            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(&datums, *width))),
         }
     }
 
@@ -1076,9 +1271,15 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt64 => {
                 vec![ScalarType::Int64.nullable(false)]
             }
+            TableFunc::GenerateSeriesTimestamp => vec![ScalarType::Timestamp.nullable(false)],
+            TableFunc::GenerateSeriesTimestampTz => vec![ScalarType::TimestampTz.nullable(false)],
+            TableFunc::GenerateSubscriptsArray => {
+                vec![ScalarType::Int32.nullable(false)]
+            }
             TableFunc::Repeat => vec![],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
+            TableFunc::Wrap { types, .. } => types.clone(),
         })
     }
 
@@ -1091,29 +1292,32 @@ impl TableFunc {
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
+            TableFunc::GenerateSeriesTimestamp => 1,
+            TableFunc::GenerateSeriesTimestampTz => 1,
+            TableFunc::GenerateSubscriptsArray => 1,
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
+            TableFunc::Wrap { width, .. } => *width,
         }
     }
 
     pub fn empty_on_null_input(&self) -> bool {
-        // Warning: this returns currently "true" for all TableFuncs.
-        // If adding a TableFunc for which this function will return "false",
-        // check the places where `empty_on_null_input` is called to ensure,
-        // such as NonNullRequirements that the case this function returns
-        // false is properly handled.
         match self {
             TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys
             | TableFunc::JsonbArrayElements { .. }
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesTimestamp
+            | TableFunc::GenerateSeriesTimestampTz
+            | TableFunc::GenerateSubscriptsArray
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
+            TableFunc::Wrap { .. } => false,
         }
     }
 
@@ -1129,9 +1333,13 @@ impl TableFunc {
             TableFunc::CsvExtract(_) => true,
             TableFunc::GenerateSeriesInt32 => true,
             TableFunc::GenerateSeriesInt64 => true,
+            TableFunc::GenerateSeriesTimestamp => true,
+            TableFunc::GenerateSeriesTimestampTz => true,
+            TableFunc::GenerateSubscriptsArray => true,
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
+            TableFunc::Wrap { .. } => true,
         }
     }
 }
@@ -1146,9 +1354,13 @@ impl fmt::Display for TableFunc {
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
+            TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
+            TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
         }
     }
 }

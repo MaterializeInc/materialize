@@ -16,10 +16,13 @@ set -euo pipefail
 aws s3 cp misc/www/index.html s3://materialize-dev-website/index.html
 
 bin/doc
-aws s3 sync --size-only target/doc/ s3://materialize-dev-website/api/rust
+aws s3 sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust
 
-bin/doc --document-private-items
-aws s3 sync --size-only target/doc/ s3://materialize-dev-website/api/rust-private
+# Documenting private items causes broken links in many crates we don't control.
+# So exclude all the pages from search engine indexes to avoid harming our
+# SEO score with a number of broken links.
+RUSTDOCFLAGS="--html-in-header $PWD/ci/deploy/noindex.html" bin/doc --document-private-items
+aws s3 sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust-private
 
 bin/pydoc
 aws s3 sync --size-only target/pydoc/ s3://materialize-dev-website/api/python

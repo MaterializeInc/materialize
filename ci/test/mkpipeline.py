@@ -19,17 +19,19 @@ For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_pipeline` below.
 """
 
+import copy
 import os
 import subprocess
 import sys
 from collections import OrderedDict
 from pathlib import Path
-from tempfile import TemporaryFile
 from typing import Any, Iterable, Set
 
 import yaml
 
 from materialize import mzbuild, mzcompose, spawn
+
+from ..deploy.deploy_util import materialized_rust_version
 
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so
@@ -52,26 +54,38 @@ def main() -> int:
     spawn.runv(["git", "diff", "--stat", "origin/main..."])
 
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
-        pipeline = yaml.safe_load(f)
+        raw = f.read()
+    raw = raw.replace("$MATERIALIZED_RUST_VERSION", materialized_rust_version())
+    pipeline = yaml.safe_load(raw)
 
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         print("On main branch or tag, so not trimming pipeline")
     elif have_paths_changed(CI_GLUE_GLOBS):
-        print("Repository glue code has changed, so not trimming pipeline")
+        # We still execute pipeline trimming on a copy of the pipeline to
+        # protect against bugs in the pipeline trimming itself.
+        print("--- [DRY RUN] Trimming unchanged steps from pipeline")
+        print(
+            "Repository glue code has changed, so the trimmed pipeline below does not apply"
+        )
+        trim_pipeline(copy.deepcopy(pipeline))
     else:
         print("--- Trimming unchanged steps from pipeline")
         trim_pipeline(pipeline)
 
+    # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
+    # if we trim away all the JUnit report-generating steps.
+    Path("junit-dummy.xml").write_text("")
+    spawn.runv(["buildkite-agent", "artifact", "upload", "junit-dummy.xml"])
+
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline.
     for step in pipeline["steps"]:
-        step.pop("inputs", None)
-        step.pop("exclude_image_dependencies", None)
+        if "inputs" in step:
+            del step["inputs"]
 
-    f = TemporaryFile()
-    yaml.dump(pipeline, f, encoding="utf-8")  # type: ignore
-    f.seek(0)
-    spawn.runv(["buildkite-agent", "pipeline", "upload"], stdin=f)
+    spawn.runv(
+        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
+    )
 
     return 0
 
@@ -106,10 +120,11 @@ def trim_pipeline(pipeline: Any) -> None:
     no other untrimmed steps that depend on it.
     """
     repo = mzbuild.Repository(Path("."))
-    images = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
     for config in pipeline["steps"]:
+        if "wait" in config:
+            continue
         step = PipelineStep(config["id"])
         if "inputs" in config:
             for inp in config["inputs"]:
@@ -122,20 +137,15 @@ def trim_pipeline(pipeline: Any) -> None:
                 step.step_dependencies.update(d)
             else:
                 raise ValueError(f"unexpected non-str non-list for depends_on: {d}")
-        image_blocklist = set()
-        if "exclude_image_dependencies" in config:
-            image_blocklist.update(config["exclude_image_dependencies"])
         if "plugins" in config:
             for plugin in config["plugins"]:
                 for plugin_name, plugin_config in plugin.items():
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
                         composition = mzcompose.Composition(repo, name)
-                        for image in composition.images:
-                            if image not in image_blocklist:
-                                step.image_dependencies.add(images[image.name])
+                        for dep in composition.dependencies:
+                            step.image_dependencies.add(dep)
                         step.extra_inputs.add(str(repo.compositions[name]))
-
         steps[step.id] = step
 
     # Find all the steps whose inputs have changed with respect to main.
@@ -177,15 +187,23 @@ def trim_pipeline(pipeline: Any) -> None:
             )
 
     # Restrict the pipeline to the needed steps.
-    pipeline["steps"] = [step for step in pipeline["steps"] if step["id"] in needed]
+    pipeline["steps"] = [
+        step for step in pipeline["steps"] if "wait" in step or step["id"] in needed
+    ]
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
     """Reports whether the specified globs have diverged from origin/main."""
     diff = subprocess.run(
-        ["git", "diff", "--no-patch", "--quiet", "origin/main...", *globs]
+        ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
     )
-    return diff.returncode != 0
+    if diff.returncode == 0:
+        return False
+    elif diff.returncode == 1:
+        return True
+    else:
+        diff.check_returncode()
+        raise RuntimeError("unreachable")
 
 
 if __name__ == "__main__":

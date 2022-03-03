@@ -19,8 +19,8 @@ use differential_dataflow::{
 };
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
-use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, Diff, RelationDesc, RelationType, Row, ScalarType};
+use mz_ore::collections::CollectionExt;
+use mz_repr::{ColumnType, Datum, Diff, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
 
 /// Given a stream of batches, produce a stream of (vectors of) DiffPairs, in timestamp order.
@@ -125,10 +125,10 @@ pub fn dbz_desc(desc: RelationDesc) -> RelationDesc {
         },
     };
     let typ = RelationType::new(vec![row.clone(), row]);
-    RelationDesc::new(typ, vec![Some("before"), Some("after")])
+    RelationDesc::new(typ, ["before", "after"])
 }
 
-pub fn dbz_format(rp: &mut Row, dp: DiffPair<Row>) -> Row {
+pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
     if let Some(before) = dp.before {
         rp.push_list_with(|rp| rp.extend_by_row(&before));
     } else {
@@ -139,7 +139,6 @@ pub fn dbz_format(rp: &mut Row, dp: DiffPair<Row>) -> Row {
     } else {
         rp.push(Datum::Null);
     }
-    rp.finish_and_reuse()
 }
 
 pub fn upsert_format(dps: Vec<DiffPair<Row>>) -> Option<Row> {

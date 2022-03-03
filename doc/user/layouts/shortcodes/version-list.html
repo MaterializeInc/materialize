@@ -1,24 +1,32 @@
-<table>
-  <thead>
-    <th>Version</th>
-    <th>Release date</th>
-    <th>Binary tarball links</th>
-    <th>Supported</th>
-  </thead>
+<div class="table-scrollable" style="height: 310px;">
+  <table>
+    <thead>
+      <th>Version</th>
+      <th>Release date</th>
+      <th>Binary tarball links</th>
+      <th>Supported</th>
+    </thead>
 
-  <tbody>
-    {{range $i, $version := .Site.Params.Versions}}
-      <tr>
-        <td>
-          <strong><a href="../release-notes/#{{$version.name}}">{{$version.name}}</a></strong>
-        </td>
-        <td>{{$version.date}}</td>
-        <td>
-          <a href="https://binaries.materialize.com/materialized-{{$version.name}}-x86_64-unknown-linux-gnu.tar.gz">Linux</a>
-          /
-          <a href="https://binaries.materialize.com/materialized-{{$version.name}}-x86_64-apple-darwin.tar.gz">macOS</a>
-        </td>
-        <td style="text-align: center"><span class="symbol">{{if lt $i 2}}✓{{end}}</span></td>
-    {{end}}
-  </tbody>
-</table>
+    <tbody>
+      {{range $i, $version := .Site.Params.Versions}}
+        <tr>
+          <td>
+            <strong><a href="../release-notes/#{{$version.name}}">{{$version.name}}</a></strong>
+          </td>
+          <td>{{$version.date}}</td>
+          <td>
+            {{range $j, $target := $version.targets}}
+              {{if gt $j 0}}/{{end}}
+              <a href="https://binaries.materialize.com/materialized-{{$version.name}}-{{$target}}.tar.gz">
+                {{if eq $target "x86_64-unknown-linux-gnu"}}Linux Intel{{end}}
+                {{if eq $target "aarch64-unknown-linux-gnu"}}Linux ARM{{end}}
+                {{if eq $target "x86_64-apple-darwin"}}macOS Intel{{end}}
+                {{if eq $target "aarch64-apple-darwin"}}macOS ARM{{end}}
+              </a>
+            {{end}}
+          </td>
+          <td><span class="symbol">{{if lt $i 2}}✓{{end}}</span></td>
+      {{end}}
+    </tbody>
+  </table>
+</div>

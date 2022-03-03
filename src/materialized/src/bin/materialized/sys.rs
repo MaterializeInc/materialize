@@ -10,16 +10,15 @@
 //! System support functions.
 
 use std::alloc::{self, Layout};
-use std::convert::TryInto;
 use std::io::{self, Write};
 use std::process;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{bail, Context};
-use log::trace;
 use nix::errno;
 use nix::sys::signal;
+use tracing::trace;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
 pub fn adjust_rlimits() {
@@ -29,8 +28,8 @@ pub fn adjust_rlimits() {
 /// Attempts to increase the soft nofile rlimit to the maximum possible value.
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
 pub fn adjust_rlimits() {
-    use log::warn;
     use rlimit::Resource;
+    use tracing::warn;
 
     // getrlimit/setrlimit can have surprisingly different behavior across
     // platforms, even with the rlimit wrapper crate that we use. This function
@@ -48,9 +47,8 @@ pub fn adjust_rlimits() {
 
     #[cfg(target_os = "macos")]
     let hard = {
-        use ore::result::ResultExt;
+        use mz_ore::result::ResultExt;
         use std::cmp;
-        use std::convert::TryFrom;
         use sysctl::Sysctl;
 
         // On macOS, getrlimit by default reports that the hard limit is
@@ -167,6 +165,19 @@ pub fn enable_sigbus_sigsegv_backtraces() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+pub fn enable_sigusr2_coverage_dump() -> Result<(), anyhow::Error> {
+    let action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_sigusr2_signal),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+
+    unsafe { signal::sigaction(signal::SIGUSR2, &action) }
+        .context("failed to install SIGUSR2 handler")?;
+
+    Ok(())
+}
+
 extern "C" fn handle_sigbus_sigsegv(_: i32) {
     // SAFETY: this is is a signal handler function and technically must be
     // "async-signal safe" [0]. That typically means no memory allocation, which
@@ -212,7 +223,6 @@ pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
         signal::SIGALRM,
         signal::SIGTERM,
         signal::SIGUSR1,
-        signal::SIGUSR2,
     ] {
         unsafe { signal::sigaction(*signum, &action) }
             .with_context(|| format!("failed to install handler for {}", signum))?;
@@ -223,6 +233,10 @@ pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
 
 extern "C" {
     fn __llvm_profile_write_file() -> libc::c_int;
+}
+
+extern "C" fn handle_sigusr2_signal(_: i32) {
+    let _ = unsafe { __llvm_profile_write_file() };
 }
 
 extern "C" fn handle_termination_signal(signum: i32) {

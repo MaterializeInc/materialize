@@ -11,11 +11,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
-use log::{debug, error};
 use tokio::io::{self, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tracing::{debug, error};
 
-use ore::netio::{self, SniffedStream, SniffingStream};
+use mz_ore::netio::{self, SniffedStream, SniffingStream};
+use mz_ore::task;
 
 use crate::http;
 
@@ -71,7 +72,10 @@ impl Mux {
             //
             // [0]: https://news.ycombinator.com/item?id=10608356
             conn.set_nodelay(true).expect("set_nodelay failed");
-            tokio::spawn(handle_connection(handlers.clone(), conn));
+            task::spawn(
+                || "mux_serve",
+                handle_connection(Arc::clone(&handlers), conn),
+            );
         }
     }
 }
@@ -125,20 +129,20 @@ pub trait ConnectionHandler {
 }
 
 #[async_trait]
-impl ConnectionHandler for pgwire::Server {
+impl ConnectionHandler for mz_pgwire::Server {
     fn name(&self) -> &str {
         "pgwire server"
     }
 
     fn match_handshake(&self, buf: &[u8]) -> bool {
-        pgwire::match_handshake(buf)
+        mz_pgwire::match_handshake(buf)
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
         // Using fully-qualified syntax means we won't accidentally call
         // ourselves (i.e., silently infinitely recurse) if the name or type of
         // `pgwire::Server::handle_connection` changes.
-        pgwire::Server::handle_connection(self, conn).await
+        mz_pgwire::Server::handle_connection(self, conn).await
     }
 }
 

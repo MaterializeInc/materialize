@@ -1,0 +1,464 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This test may seem simple, but it is surprisingly good at verifying that
+# logical timestamp handling for internal inputs is sane.
+
+mode cockroach
+
+statement error window function row_number requires an OVER clause
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT row_number() FROM t
+
+statement error aggregate window functions not yet supported
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT array_agg(x) OVER () FROM t
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT row_number() OVER (ORDER BY x), x FROM t
+ORDER BY row_number
+----
+1  a
+2  b
+3  c
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT row_number() OVER (ORDER BY x DESC), x FROM t
+ORDER BY row_number
+----
+1  c
+2  b
+3  a
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
+SELECT row_number() OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+1  a
+1  b
+2  c
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
+ORDER BY row_number, x
+----
+1  b
+1  c
+2  a
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+1  a
+1  b
+1  c
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
+FROM t AS a1, t AS a2
+ORDER BY q DESC
+----
+9  c
+8  c
+7  c
+6  b
+5  b
+4  b
+3  a
+2  a
+1  a
+
+# Make sure a non-column expression following the window function is correctly
+# handled.
+query ITT
+WITH t (x) AS (VALUES ('a'))
+SELECT row_number() OVER (PARTITION BY NULL) AS q, x, 'b'
+FROM t
+----
+1 a b
+
+# Blocked on #8963
+#query II
+#SELECT row_number() OVER (), row_number() OVER ()
+#----
+#1 1
+
+# Blocked on #8963
+#query II
+#WITH t (x) AS (VALUES ('a'), ('b'))
+#SELECT row_number() OVER (), row_number() OVER () from t
+#----
+#1 1
+#2 2
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+%0 = Let t (l0) =
+| CallTable wrap2("a", 1, "b", 2, "c", 1)
+
+%1 =
+| Get t (l0) (%0)
+| Map row_number() over (#0) order by (#0)
+| Project (#2, #0)
+
+Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 = Let l1 =
+| Get %0 (l0)
+| FlatMap wrap2("a", 1, "b", 2, "c", 1)
+
+%2 =
+| Get %1 (l1)
+| Reduce group=(#0)
+| | agg row_number(record_create(list_create(record_create(#0, #1)), #0))
+| FlatMap unnest_list(#1)
+| Map record_get[0](record_get[1](#2))
+| Map record_get[1](record_get[1](#2))
+| Map record_get[0](#2)
+| Project (#3..=#5)
+| Map #2
+| Project (#0, #1, #3)
+| Project (#2, #0)
+
+Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0, #1)
+
+EOF
+
+#
+# Regression test for #9077
+#
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+----
+
+statement ok
+----
+INSERT INTO t1 VALUES (1, 1), (2, 2), (4, 4);
+
+statement ok
+CREATE TABLE t2 (f1 INTEGER, f2 INTEGER);
+----
+
+statement ok
+INSERT INTO t2 VALUES (1, 1), (1, 2), (2, 2);
+----
+
+query I
+SELECT f1 FROM t1
+WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
+----
+1
+2
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR SELECT f1 FROM t1
+WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Filter true
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.t2 (u3)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+
+%6 = Let l4 =
+| Get %5 (l3)
+
+%7 =
+| Get %6 (l4)
+| Reduce group=(#0)
+| | agg row_number(record_create(list_create(record_create(#0, #1, #2))))
+| FlatMap unnest_list(#1)
+| Map record_get[0](record_get[1](#2))
+| Map record_get[1](record_get[1](#2))
+| Map record_get[2](record_get[1](#2))
+| Map record_get[0](#2)
+| Project (#3..=#6)
+| Map #3
+| Project (#0..=#2, #4)
+| Project (#0, #3)
+| Filter ((i32toi64(#0) = #1) && true)
+| Distinct group=(#0)
+
+%8 =
+| Constant (true)
+
+%9 = Let l5 =
+| Join %7 %8
+| | implementation = Unimplemented
+
+%10 =
+| Get %9 (l5)
+| Distinct group=(#0)
+| Negate
+
+%11 =
+| Get %3 (l2)
+| Distinct group=(#0)
+
+%12 =
+| Union %10 %11
+
+%13 =
+| Join %12 %3 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+
+%14 =
+| Constant (false)
+
+%15 =
+| Join %13 %14
+| | implementation = Unimplemented
+
+%16 =
+| Union %9 %15
+
+%17 =
+| Join %2 %16 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3)
+| Filter #2
+| Project (#0, #1)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT f1 FROM t1
+WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Project (#0)
+
+%1 =
+| Get %0 (l0)
+| Distinct group=(#0)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t2 (u3)
+
+%3 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| Reduce group=(#0)
+| | agg row_number(record_create(list_create(record_create(#0, #1, #2))))
+| Project (#1)
+| FlatMap unnest_list(#0)
+| Filter (i32toi64(record_get[0](record_get[1](#1))) = record_get[0](#1))
+| Project (#1)
+| Distinct group=(record_get[0](record_get[1](#0)))
+| ArrangeBy (#0)
+
+%4 =
+| Join %0 %3 (= #0 #1)
+| | implementation = Differential %0 %3.(#0)
+| Project (#0)
+
+EOF
+
+query IIIII
+SELECT * FROM t1, LATERAL(SELECT t2.*, ROW_NUMBER() OVER() FROM t2 WHERE t1.f1 = t2.f1) AS foo;
+----
+1  1  1  1  1
+1  1  1  2  2
+2  2  2  2  1
+
+query IIIII
+SELECT * FROM t1, LATERAL(SELECT t2.*, ROW_NUMBER() OVER() FROM t2 WHERE t1.f1 = t2.f1 AND t1.f2 = t2.f2) AS foo;
+----
+1  1  1  1  1
+2  2  2  2  1
+
+query IIIII
+SELECT * FROM t1, LATERAL(SELECT t2.*, ROW_NUMBER() OVER() FROM t2 WHERE t1.f2 = t2.f2) AS foo;
+----
+1  1  1  1  1
+2  2  1  2  1
+2  2  2  2  2
+
+query IIIII
+SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f1 = t2.f1) AS foo;
+----
+1  1  1  1  1
+1  2  1  1  1
+2  2  2  2  1
+
+query IIIII
+SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f1 = t2.f1 AND t1.f2 = t2.f2) AS foo;
+----
+1  1  1  1  1
+2  2  2  2  1
+
+query IIIII
+SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 = t2.f2) AS foo;
+----
+1  1  1  1  1
+1  2  2  2  1
+2  2  2  2  1
+
+# Check that the partition key comes after the outer columns in the grouping key
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 = t2.f2) AS foo;
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#1)
+
+%4 =
+| Get materialize.public.t1 (u1)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+| Filter (#2 = #0)
+
+%6 = Let l4 =
+| Get %5 (l3)
+
+%7 =
+| Get %6 (l4)
+| Reduce group=(#0)
+| | agg row_number(record_create(list_create(record_create(#0, #1, #2))))
+| FlatMap unnest_list(#1)
+| Map record_get[0](record_get[1](#2))
+| Map record_get[1](record_get[1](#2))
+| Map record_get[2](record_get[1](#2))
+| Map record_get[0](#2)
+| Project (#3..=#6)
+| Map #3
+| Project (#0..=#2, #4)
+
+%8 =
+| Join %2 %7 (= #1 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3..=#5)
+| Filter true
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER(PARTITION BY f1) FROM t1 WHERE t1.f2 = t2.f2) AS foo;
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 = Let l2 =
+| Get %2 (l1)
+| Distinct group=(#1)
+
+%4 =
+| Get materialize.public.t1 (u1)
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Unimplemented
+| Filter (#2 = #0)
+
+%6 = Let l4 =
+| Get %5 (l3)
+
+%7 =
+| Get %6 (l4)
+| Reduce group=(#0, #1)
+| | agg row_number(record_create(list_create(record_create(#0, #1, #2))))
+| FlatMap unnest_list(#2)
+| Map record_get[0](record_get[1](#3))
+| Map record_get[1](record_get[1](#3))
+| Map record_get[2](record_get[1](#3))
+| Map record_get[0](#3)
+| Project (#4..=#7)
+| Map #3
+| Project (#0..=#2, #4)
+
+%8 =
+| Join %2 %7 (= #1 #2)
+| | implementation = Unimplemented
+| Project (#0, #1, #3..=#5)
+| Filter true
+
+EOF
+
+# Regression for #9749
+query error window functions are not allowed in ON
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT * FROM t AS v JOIN t ON row_number() over () > 1;
+
+query error window functions are not allowed in WHERE
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT * FROM t
+WHERE row_number() over () > 1;
+
+query T
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT DISTINCT ON (row_number() OVER ()) *
+FROM t
+ORDER BY row_number() OVER ()
+----
+a
+b
+c

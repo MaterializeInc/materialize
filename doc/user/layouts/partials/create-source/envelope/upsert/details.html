@@ -8,9 +8,9 @@ and can be useful for users who want to compact
 
 The upsert envelope format has slower data ingestion and is more memory intensive
 than other formats. To correctly handle data sources that do not publish their own
-retractions the upsert format must maintain state proportional to the number of
+retractions, in most cases the upsert format must maintain state proportional to the number of
 unique rows in the source, and it must perform extra work to generate the implied
-retractions based on that state.
+retractions based on that state. In some queries on unmaterialized sources, Materialize is able to filter out rows before the upsert occurs, resulting in a smaller amount of state to maintain.
 
 #### Inserts, updates, deletes
 

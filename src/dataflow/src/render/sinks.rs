@@ -18,14 +18,12 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::Scope;
 
-use dataflow_types::*;
-use expr::GlobalId;
-use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
+use mz_dataflow_types::sinks::*;
+use mz_expr::{permutation_for_arrangement, GlobalId, MapFilterProject};
+use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
+use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
-use crate::render::{RelevantTokens, RenderState};
-use crate::sink::SinkBaseMetrics;
 
 impl<G> Context<G, Row, Timestamp>
 where
@@ -34,32 +32,45 @@ where
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &mut self,
-        render_state: &mut RenderState,
-        tokens: &mut RelevantTokens,
+        compute_state: &mut crate::server::ComputeState,
+        tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
-        metrics: &SinkBaseMetrics,
     ) {
         let sink_render = get_sink_render_for(&sink.connector);
 
         // put together tokens that belong to the export
-        let mut needed_source_tokens = Vec::new();
-        let mut needed_additional_tokens = Vec::new();
-        let mut needed_sink_tokens = Vec::new();
+        let mut needed_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(addls) = tokens.additional_tokens.get(&import_id) {
-                needed_additional_tokens.extend_from_slice(addls);
-            }
-            if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(source_token.clone());
+            if let Some(token) = tokens.get(&import_id) {
+                needed_tokens.push(Rc::clone(&token))
             }
         }
 
-        let (collection, _err_collection) = self
-            .lookup_id(expr::Id::Global(sink.from))
-            .expect("Sink source collection not loaded")
-            .as_collection();
+        // TODO[btv] - We should determine the key and permutation to use during planning,
+        // rather than at runtime.
+        //
+        // This is basically an inlined version of the old `as_collection`.
+        let bundle = self
+            .lookup_id(mz_expr::Id::Global(sink.from))
+            .expect("Sink source collection not loaded");
+        let collection = if let Some((collection, _err_collection)) = &bundle.collection {
+            collection.clone()
+        } else {
+            let (key, _arrangement) = bundle
+                .arranged
+                .iter()
+                .next()
+                .expect("Invariant violated: at least one collection must be present.");
+            let unthinned_arity = sink.from_desc.arity();
+            let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
+            let mut mfp = MapFilterProject::new(unthinned_arity);
+            mfp.permute(permutation, thinning.len() + key.len());
+            let (collection, _err_collection) =
+                bundle.as_collection_core(mfp, Some((key.clone(), None)));
+            collection
+        };
 
         let collection = apply_sink_envelope(sink, &sink_render, collection);
 
@@ -67,23 +78,19 @@ where
         // if we figure out a protocol for that.
 
         let sink_token =
-            sink_render.render_continuous_sink(render_state, sink, sink_id, collection, metrics);
+            sink_render.render_continuous_sink(compute_state, sink, sink_id, collection);
 
         if let Some(sink_token) = sink_token {
-            needed_sink_tokens.push(sink_token);
+            needed_tokens.push(sink_token);
         }
 
-        let tokens = Rc::new((
-            needed_sink_tokens,
-            needed_source_tokens,
-            needed_additional_tokens,
-        ));
-        render_state
+        compute_state
             .dataflow_tokens
-            .insert(sink_id, Box::new(tokens));
+            .insert(sink_id, Box::new(needed_tokens));
     }
 }
 
+#[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
     sink: &SinkDesc,
     sink_render: &Box<dyn SinkRender<G>>,
@@ -111,22 +118,26 @@ where
         // 3. if none of the above, use the whole row as key to
         //  consolidate and distribute work but don't write to the sink
 
-        let keyed = if user_key_indices.is_some() {
-            let key_indices = user_key_indices.expect("known to exist");
+        let keyed = if let Some(key_indices) = user_key_indices {
+            let mut datum_vec = mz_repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
                 // Does it matter?
-                let datums = row.unpack();
-                let key = Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()));
+                let key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
+                };
                 (Some(key), row)
             })
-        } else if relation_key_indices.is_some() {
-            let relation_key_indices = relation_key_indices.expect("known to exist");
+        } else if let Some(relation_key_indices) = relation_key_indices {
+            let mut datum_vec = mz_repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
                 // Does it matter?
-                let datums = row.unpack();
-                let key = Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()));
+                let key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()))
+                };
                 (Some(key), row)
             })
         } else {
@@ -147,7 +158,6 @@ where
     //   It then renders those as Avro.
     // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
-    // * "Tail" writes some metadata.
     let collection = match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
             let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
@@ -162,13 +172,15 @@ where
             };
 
             // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
-            let rp = Rc::new(RefCell::new(Row::default()));
+            let row_buf = Rc::new(RefCell::new(Row::default()));
             let collection = combined.flat_map(move |(mut k, v)| {
                 let max_idx = v.len() - 1;
-                let rp = rp.clone();
+                let row_buf = Rc::clone(&row_buf);
                 v.into_iter().enumerate().map(move |(idx, dp)| {
                     let k = if idx == max_idx { k.take() } else { k.clone() };
-                    (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))
+                    let mut row_buf = row_buf.borrow_mut();
+                    dbz_format(&mut row_buf.packer(), dp);
+                    (k, Some(row_buf.clone()))
                 })
             });
             collection
@@ -196,22 +208,17 @@ where
 {
     fn uses_keys(&self) -> bool;
 
-    fn get_key_desc(&self) -> Option<&RelationDesc>;
-
     fn get_key_indices(&self) -> Option<&[usize]>;
 
     fn get_relation_key_indices(&self) -> Option<&[usize]>;
 
-    fn get_value_desc(&self) -> &RelationDesc;
-
     fn render_continuous_sink(
         &self,
-        render_state: &mut RenderState,
+        compute_state: &mut crate::server::ComputeState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
-        metrics: &SinkBaseMetrics,
-    ) -> Option<Box<dyn Any>>
+    ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>;
 }

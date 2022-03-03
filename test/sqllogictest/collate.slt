@@ -1,0 +1,48 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+query T
+SELECT '12:00:00' COLLATE pg_catalog.default
+----
+12:00:00
+
+statement OK
+CREATE TABLE test1 (a text, b text)
+
+statement OK
+INSERT INTO test1 VALUES('a', 'b')
+
+query B
+SELECT a < b FROM test1
+----
+true
+
+query B
+SELECT a < b COLLATE pg_catalog.default FROM test1
+----
+true
+
+query B
+SELECT a COLLATE pg_catalog.default < b FROM test1
+----
+true
+
+# verify that other types are not supported
+
+query error COLLATE not yet supported
+SELECT '12:00:00' COLLATE "en_US"
+
+query error COLLATE not yet supported
+SELECT '12:00:00' COLLATE "de_DE"
+
+query error COLLATE not yet supported
+SELECT '12:00:00' COLLATE pg_catalog.de_DE
+
+query error COLLATE not yet supported
+SELECT '12:00:00' COLLATE mz_catalog.default

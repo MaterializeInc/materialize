@@ -1,62 +1,76 @@
 [package]
-name = "testdrive"
+name = "mz-testdrive"
 description = "Integration test driver for Materialize."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
-async-trait = "0.1.51"
+anyhow = "1.0.55"
+async-compression = { version = "0.3.12", features = ["tokio", "gzip"] }
+async-trait = "0.1.52"
 atty = "0.2.0"
-aws-util = { path = "../aws-util" }
+aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.8.0", default-features = false }
+aws-sdk-s3 = { version = "0.8.0", default-features = false }
+aws-sdk-sqs = { version = "0.8.0", default-features = false }
+aws-smithy-http = "0.38.0"
+aws-types = { version = "0.8.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.1.0"
-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-coord = { path = "../coord" }
+clap = { version = "3.1.2", features = ["derive"] }
 flate2 = "1.0.22"
-futures = "0.3.17"
-interchange = { path = "../interchange" }
-itertools = "0.10.1"
-kafka-util = { path = "../kafka-util" }
-krb5-src = { version = "0.2.3", features = ["binaries"] }
+futures = "0.3.21"
+globset = "0.4.8"
+http = "0.2.6"
+itertools = "0.10.3"
+junit-report = "0.7.0"
+krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
-md-5 = "0.9.0"
+maplit = "1.0.2"
+md-5 = "0.10.1"
+mysql_async = "0.29.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
-ore = { path = "../ore" }
-pgrepr = { path = "../pgrepr" }
+mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs", "sts"] }
+mz-ccsr = { path = "../ccsr" }
+mz-coord = { path = "../coord" }
+mz-interchange = { path = "../interchange" }
+mz-kafka-util = { path = "../kafka-util" }
+mz-ore = { path = "../ore", features = ["task"] }
+mz-pgrepr = { path = "../pgrepr" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
-protobuf = { version = "2.23.0", features = ["with-serde"] }
-rand = "0.8.4"
+prost = "0.9.0"
+prost-reflect = { version = "0.6.1", features = ["serde"] }
+protobuf-src = "1.0.4"
+rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
-repr = { path = "../repr" }
-reqwest = { version = "0.11.4", features = ["native-tls-vendored"] }
-rusoto_core = "0.47.0"
-rusoto_credential = "0.47.0"
-rusoto_kinesis = "0.47.0"
-rusoto_s3 = "0.47.0"
-rusoto_sqs = "0.47.0"
-rusoto_sts = "0.47.0"
-serde = "1.0.130"
-serde-protobuf = "0.8.2"
-serde_json = "1.0.68"
-sql-parser = { path = "../sql-parser" }
-structopt = "0.3.23"
+reqwest = { version = "0.11.9", features = ["native-tls-vendored"] }
+serde = "1.0.136"
+serde_json = { version = "1.0.79", features = ["raw_value"] }
+similar = "2.1.0"
 tempfile = "3.2.0"
 termcolor = "1.1.2"
-tiberius = "0.6.4"
-tokio = "1.11.0"
+tiberius = { version = "0.7.1", default-features = false }
+time = "0.3.7"
+tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
+tokio = { version = "1.17.0", features = ["process"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
-tokio-stream = "0.1.7"
-tokio-util = { version = "0.6.8", features = ['compat'] }
+tokio-stream = "0.1.8"
+tokio-util = { version = "0.6.9", features = ["compat"] }
 url = "2.2.2"
 uuid = "0.8.2"
+walkdir = "2.3.2"
 
 [dev-dependencies]
-assert_cmd = "2.0.1"
-predicates = "2.0.2"
+assert_cmd = "2.0.4"
+predicates = "2.1.1"
 
-[build-dependencies]
-protoc = { path = "../protoc" }
+[package.metadata.cargo-udeps.ignore]
+# used to build a binary
+normal = ["krb5-src"]

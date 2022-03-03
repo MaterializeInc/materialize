@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![cfg_attr(nightly_doc_features, feature(doc_cfg))]
+
 //! Coordinates client requests with the dataflow layer.
 //!
 //! This crate hosts the "coordinator", an object which sits at the center of
@@ -37,15 +39,16 @@ mod error;
 mod id_alloc;
 mod persistcfg;
 mod sink_connector;
-mod timestamp;
+mod tail;
 mod util;
 
 pub mod catalog;
 pub mod session;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
-pub use crate::command::{Cancelled, ExecuteResponse, StartupMessage, StartupResponse};
-pub use crate::coord::{serve, serve_debug, Config, LoggingConfig};
+pub use crate::command::{Canceled, ExecuteResponse, StartupMessage, StartupResponse};
+pub use crate::coord::{serve, Config, LoggingConfig};
 pub use crate::error::CoordError;
-pub use crate::persistcfg::{PersistConfig, PersisterWithConfig};
-pub use crate::timestamp::Timestamper;
+pub use crate::persistcfg::{
+    PersistConfig, PersistFileStorage, PersistS3Storage, PersistStorage, PersisterWithConfig,
+};

@@ -10,15 +10,16 @@
 use std::cmp;
 use std::time::Duration;
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ore::result::ResultExt;
 use rdkafka::admin::NewPartitions;
 use rdkafka::producer::Producer;
 
-use ore::collections::CollectionExt;
-use ore::retry::Retry;
+use mz_ore::collections::CollectionExt;
+use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct AddPartitionsAction {
@@ -26,7 +27,7 @@ pub struct AddPartitionsAction {
     partitions: usize,
 }
 
-pub fn build_add_partitions(mut cmd: BuiltinCommand) -> Result<AddPartitionsAction, String> {
+pub fn build_add_partitions(mut cmd: BuiltinCommand) -> Result<AddPartitionsAction, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partitions = cmd.args.opt_parse("total-partitions")?.unwrap_or(1);
     cmd.args.done()?;
@@ -39,11 +40,11 @@ pub fn build_add_partitions(mut cmd: BuiltinCommand) -> Result<AddPartitionsActi
 
 #[async_trait]
 impl Action for AddPartitionsAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
         println!(
             "Raising partition count of Kafka topic {} to {}",
@@ -53,17 +54,18 @@ impl Action for AddPartitionsAction {
         match state.kafka_topics.get(&topic_name) {
             Some(partitions) => {
                 if self.partitions <= *partitions {
-                    return Err(format!(
+                    bail!(
                         "new partition count {} is not greater than current partition count {}",
-                        self.partitions, partitions
-                    ));
+                        self.partitions,
+                        partitions
+                    );
                 }
             }
             None => {
-                return Err(format!(
+                bail!(
                     "topic {} not created by kafka-create-topic",
-                    topic_name
-                ))
+                    topic_name.quoted(),
+                )
             }
         }
 
@@ -72,45 +74,41 @@ impl Action for AddPartitionsAction {
             .kafka_admin
             .create_partitions(&[partitions], &state.kafka_admin_opts)
             .await
-            .map_err_to_string()?;
+            .context("creating partitions")?;
         if res.len() != 1 {
-            return Err(format!(
+            bail!(
                 "kafka partition addition returned {} results, but exactly one result was expected",
                 res.len()
-            ));
+            );
         }
         if let Err((_topic_name, e)) = res.into_element() {
-            return Err(e.to_string());
+            return Err(e.into());
         }
 
         Retry::default()
             .max_duration(state.default_timeout)
-            .retry(|_| async {
-                let metadata = state
-                    .kafka_producer
-                    .client()
-                    .fetch_metadata(
-                        Some(&topic_name),
-                        Some(cmp::max(state.default_timeout, Duration::from_secs(1))),
-                    )
-                    .map_err_to_string()?;
+            .retry_async(|_| async {
+                let metadata = state.kafka_producer.client().fetch_metadata(
+                    Some(&topic_name),
+                    Some(cmp::max(state.default_timeout, Duration::from_secs(1))),
+                )?;
                 if metadata.topics().len() != 1 {
-                    return Err("metadata fetch returned no topics".to_string());
+                    bail!("metadata fetch returned no topics");
                 }
                 let topic = metadata.topics().into_element();
                 if topic.partitions().len() != self.partitions {
-                    return Err(format!(
+                    bail!(
                         "topic {} has {} partitions when exactly {} was expected",
                         topic_name,
                         topic.partitions().len(),
                         self.partitions,
-                    ));
+                    );
                 }
                 Ok(())
             })
             .await?;
 
         state.kafka_topics.insert(topic_name, self.partitions);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

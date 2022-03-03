@@ -64,24 +64,39 @@ $ set pg-dbz-schema={
             }
           ]
         }
+      },
+      {
+        "name": "transaction",
+        "type": {
+          "type": "record",
+          "name": "Transaction",
+          "namespace": "whatever",
+          "fields": [
+            {
+              "name": "total_order",
+              "type": ["long", "null"]
+            }
+          ]
+        }
       }
     ]
   }
 
-$ kafka-create-topic topic=pg-dbz-data
+$ kafka-create-topic topic=pg-dbz-data partitions=1
 
 $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
-{"before": null, "after": {"row":{"val": "foo"}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[null, \"3\"]"}, "snapshot": {"string": "false"}}}
-{"before": {"row":{"val": "foo"}}, "after": {"row":{"val": "bar"}}, "source": {"lsn": {"long": 5}, "sequence": {"string": "[null, \"5\"]"}, "snapshot": {"string": "false"}}}
-{"before": {"row":{"val": "bar"}}, "after": {"row":{"val": "baz"}}, "source": {"lsn": {"long": 7}, "sequence": {"string": "[null, \"7\"]"}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"val": "foo"}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[null, \"3\"]"}, "snapshot": {"string": "false"}}, "transaction": {"total_order": null}}
+{"before": {"row":{"val": "foo"}}, "after": {"row":{"val": "bar"}}, "source": {"lsn": {"long": 5}, "sequence": {"string": "[null, \"5\"]"}, "snapshot": {"string": "false"}}, "transaction": {"total_order": null}}
+{"before": {"row":{"val": "bar"}}, "after": {"row":{"val": "baz"}}, "source": {"lsn": {"long": 7}, "sequence": {"string": "[null, \"7\"]"}, "snapshot": {"string": "false"}}, "transaction": {"total_order": null}}
 
-{"before": null, "after": {"row":{"val": "hello,"}}, "source": {"lsn": {"long": 4}, "sequence": {"string": "[\"8\", \"4\"]"}, "snapshot": {"string": "false"}}}
-{"before": null, "after": {"row":{"val": "world!"}}, "source": {"lsn": {"long": 6}, "sequence": {"string": "[\"8\", \"6\"]"}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"val": "hello,"}}, "source": {"lsn": {"long": 4}, "sequence": {"string": "[\"8\", \"4\"]"}, "snapshot": {"string": "false"}}, "transaction": {"total_order": null}}
+{"before": null, "after": {"row":{"val": "world!"}}, "source": {"lsn": {"long": 6}, "sequence": {"string": "[\"8\", \"6\"]"}, "snapshot": {"string": "false"}}, "transaction": {"total_order": null}}
 
-{"before": null, "after": {"row":{"val": "too late"}}, "source": {"lsn": {"long": 1}, "sequence": {"string": "[null, \"1\"]"}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"val": "too late"}}, "source": {"lsn": {"long": 1}, "sequence": {"string": "[null, \"1\"]"}, "snapshot": {"string": "false"}}, "transaction": {"total_order": null}}
 
 > CREATE MATERIALIZED SOURCE pg_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}'
+  WITH (deduplication = 'ordered')
   FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
   ENVELOPE DEBEZIUM
 

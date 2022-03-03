@@ -42,25 +42,28 @@ copyright_files=$(grep -vE \
     -e '(^|/)\.github/dependabot.yml$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
-    -e '(^|/)(Cargo|askama|rust-toolchain)\.toml$' \
+    -e '(^|/)(Cargo|askama)\.toml$' \
     -e '^\.cargo/config$' \
     -e '^Cargo\.lock$' \
     -e '^deny\.toml$' \
     -e '^netlify\.toml$' \
-    -e '^rust-toolchain$' \
     -e '^rustfmt\.toml$' \
+    -e '^clippy\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
     -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so)$' \
     -e '^doc/user/.*(\.scss|\.bnf|\.toml|\.yml)$' \
-    -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool.defconfig)$' \
+    -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e 'demo/chbench/chbench' \
     -e 'src/pid-file/libbsd' \
     -e 'test/sqllogictest/postgres/testdata/.*\.data' \
     -e 'test/pgtest/.*\.pt' \
+    -e 'test/pgtest-mz/.*\.pt' \
     -e 'test/coordtest/.*\.ct' \
     -e 'gen/.*\.rs' \
+    -e 'misc/python/MANIFEST\.in' \
+    -e 'misc/completions/.*' \
     <<< "$files"
 )
 
@@ -87,6 +90,8 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         echo "hint: run bin/pyfmt" >&2
     fi
     try bin/mzcompose lint
+    try bin/lint-cargo
+    try bin/completion check
 fi
 
 try_finish

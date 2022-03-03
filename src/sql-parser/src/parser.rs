@@ -24,14 +24,20 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
-use log::{debug, warn};
+use tracing::warn;
 
-use ore::collections::CollectionExt;
-use ore::option::OptionExt;
+use mz_ore::collections::CollectionExt;
+use mz_ore::option::OptionExt;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 
 use crate::ast::*;
 use crate::keywords::*;
 use crate::lexer::{self, Token};
+
+// NOTE(benesch): this recursion limit was chosen based on the maximum amount of
+// nesting I've ever seen in a production SQL query (i.e., about a dozen) times
+// a healthy factor to be conservative.
+const RECURSION_LIMIT: usize = 128;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -65,17 +71,19 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
     }
 }
 
-/// Parses a SQL string containing zero or more SQL columns.
-pub fn parse_columns(
-    sql: &str,
-) -> Result<(Vec<ColumnDef<Raw>>, Vec<TableConstraint<Raw>>), ParserError> {
+/// Parses a SQL string containing a single data type.
+pub fn parse_data_type(sql: &str) -> Result<UnresolvedDataType, ParserError> {
     let tokens = lexer::lex(sql)?;
     let mut parser = Parser::new(sql, tokens);
-    let columns = parser.parse_columns(Optional)?;
+    let data_type = parser.parse_data_type()?;
     if parser.next_token().is_some() {
-        parser_err!(parser, parser.peek_prev_pos(), "extra token after columns")
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after data type"
+        )
     } else {
-        Ok(columns)
+        Ok(data_type)
     }
 }
 
@@ -116,6 +124,18 @@ impl fmt::Display for ParserError {
 
 impl Error for ParserError {}
 
+impl From<RecursionLimitError> for ParserError {
+    fn from(_: RecursionLimitError) -> ParserError {
+        ParserError {
+            pos: 0,
+            message: format!(
+                "statement exceeds nested expression limit of {}",
+                RECURSION_LIMIT
+            ),
+        }
+    }
+}
+
 impl ParserError {
     /// Constructs an error with the provided message at the provided position.
     pub(crate) fn new<S>(pos: usize, message: S) -> ParserError
@@ -135,8 +155,7 @@ struct Parser<'a> {
     tokens: Vec<(Token, usize)>,
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
-    /// Tracks recursion depth.
-    depth: usize,
+    recursion_guard: RecursionGuard,
 }
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
@@ -173,7 +192,7 @@ impl<'a> Parser<'a> {
             sql,
             tokens,
             index: 0,
-            depth: 0,
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
 
@@ -237,6 +256,10 @@ impl<'a> Parser<'a> {
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
                 Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
                 Token::Keyword(CLOSE) => Ok(self.parse_close()?),
+                Token::Keyword(PREPARE) => Ok(self.parse_prepare()?),
+                Token::Keyword(EXECUTE) => Ok(self.parse_execute()?),
+                Token::Keyword(DEALLOCATE) => Ok(self.parse_deallocate()?),
+                Token::Keyword(RAISE) => Ok(self.parse_raise()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -266,7 +289,7 @@ impl<'a> Parser<'a> {
 
     /// Parse tokens until the precedence changes
     fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr<Raw>, ParserError> {
-        let expr = self.check_descent(|parser| parser.parse_prefix())?;
+        let expr = self.checked_recur_mut(|parser| parser.parse_prefix())?;
         self.parse_subexpr_seeded(precedence, expr)
     }
 
@@ -275,11 +298,9 @@ impl<'a> Parser<'a> {
         precedence: Precedence,
         mut expr: Expr<Raw>,
     ) -> Result<Expr<Raw>, ParserError> {
-        self.check_descent(|parser| {
-            debug!("prefix: {:?}", expr);
+        self.checked_recur_mut(|parser| {
             loop {
                 let next_precedence = parser.get_next_precedence();
-                debug!("next precedence: {:?}", next_precedence);
                 if precedence >= next_precedence {
                     break;
                 }
@@ -334,7 +355,13 @@ impl<'a> Parser<'a> {
             Token::Keyword(LIST) => self.parse_list(),
             Token::Keyword(CASE) => self.parse_case_expr(),
             Token::Keyword(CAST) => self.parse_cast_expr(),
-            Token::Keyword(COALESCE) => self.parse_coalesce_expr(),
+            Token::Keyword(COALESCE) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Coalesce)
+            }
+            Token::Keyword(GREATEST) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Greatest)
+            }
+            Token::Keyword(LEAST) => self.parse_homogenizing_function(HomogenizingFunction::Least),
             Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
@@ -347,6 +374,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_position_expr()
             }
+            Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
             Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
@@ -372,18 +400,18 @@ impl<'a> Parser<'a> {
                 }
 
                 Ok(Expr::Op {
-                    op,
+                    op: Op::bare(op),
                     expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                     expr2: None,
                 })
             }
             Token::Op(op) if op == "+" => Ok(Expr::Op {
-                op,
+                op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
             Token::Op(op) if op == "~" => Ok(Expr::Op {
-                op,
+                op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
                 expr2: None,
             }),
@@ -474,7 +502,7 @@ impl<'a> Parser<'a> {
                 // whether it belongs to the query or the expression.
 
                 // Parse to the closing parenthesis.
-                let either = parser.check_descent(parse)?;
+                let either = parser.checked_recur_mut(parse)?;
                 parser.expect_token(&Token::RParen)?;
 
                 // Decide if we need to associate any tokens after the closing
@@ -526,16 +554,19 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let all = self.parse_keyword(ALL);
-        let distinct = self.parse_keyword(DISTINCT);
-        if all && distinct {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Cannot specify both ALL and DISTINCT in function: {}", name)
-            );
-        }
+        let distinct = matches!(
+            self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
+            Some(DISTINCT),
+        );
         let args = self.parse_optional_args(true)?;
+
+        if distinct && matches!(args, FunctionArgs::Star) {
+            return Err(self.error(
+                self.peek_prev_pos() - 1,
+                "DISTINCT * not supported as function args".to_string(),
+            ));
+        }
+
         let filter = if self.parse_keyword(FILTER) {
             self.expect_token(&Token::LParen)?;
             self.expect_keyword(WHERE)?;
@@ -678,11 +709,14 @@ impl<'a> Parser<'a> {
         Ok(exists_node)
     }
 
-    fn parse_coalesce_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+    fn parse_homogenizing_function(
+        &mut self,
+        function: HomogenizingFunction,
+    ) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let exprs = self.parse_comma_separated(Parser::parse_expr)?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Coalesce { exprs })
+        Ok(Expr::HomogenizingFunction { function, exprs })
     }
 
     fn parse_nullif_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
@@ -706,7 +740,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedObjectName::unqualified("date_part"),
+            name: UnresolvedObjectName::unqualified("extract"),
             args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -723,6 +757,20 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             Ok(Expr::Row { exprs })
         }
+    }
+
+    fn parse_composite_type_definition(&mut self) -> Result<Vec<ColumnDef<Raw>>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let fields = self.parse_comma_separated(|parser| {
+            Ok(ColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
+                collation: None,
+                options: vec![],
+            })
+        })?;
+        self.expect_token(&Token::RParen)?;
+        Ok(fields)
     }
 
     // Parse calls to trim(), which can take the form:
@@ -788,8 +836,9 @@ impl<'a> Parser<'a> {
     ///   1. `INTERVAL '1' DAY`
     ///   2. `INTERVAL '1-1' YEAR TO MONTH`
     ///   3. `INTERVAL '1' SECOND`
-    ///   4. `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
-    ///   5. `INTERVAL '1.111' SECOND (2)`
+    ///   4. `INTERVAL '1:1' MINUTE TO SECOND
+    ///   5. `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
+    ///   6. `INTERVAL '1.111' SECOND (2)`
     ///
     fn parse_literal_interval(&mut self) -> Result<Expr<Raw>, ParserError> {
         // The first token in an interval is a string literal which specifies
@@ -875,23 +924,17 @@ impl<'a> Parser<'a> {
         expr: Expr<Raw>,
         precedence: Precedence,
     ) -> Result<Expr<Raw>, ParserError> {
-        debug!("parsing infix");
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
         let regular_binary_operator = match &tok {
-            Token::Op(s) => Some(s.as_str()),
-            Token::Eq => Some("="),
-            Token::Star => Some("*"),
-            Token::Keyword(ILIKE) => Some("~~*"),
-            Token::Keyword(LIKE) => Some("~~"),
-            Token::Keyword(NOT) => {
-                if self.parse_keyword(LIKE) {
-                    Some("!~~")
-                } else if self.parse_keyword(ILIKE) {
-                    Some("!~~*")
-                } else {
-                    None
-                }
+            Token::Op(s) => Some(Op::bare(s)),
+            Token::Eq => Some(Op::bare("=")),
+            Token::Star => Some(Op::bare("*")),
+            Token::Keyword(OPERATOR) => {
+                self.expect_token(&Token::LParen)?;
+                let op = self.parse_operator()?;
+                self.expect_token(&Token::RParen)?;
+                Some(op)
             }
             _ => None,
         };
@@ -907,13 +950,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllSubquery {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(subquery),
                         }
                     } else {
                         Expr::AnySubquery {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(subquery),
                         }
                     }
@@ -923,13 +966,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllExpr {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(right),
                         }
                     } else {
                         Expr::AnyExpr {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(right),
                         }
                     }
@@ -939,7 +982,7 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             } else {
                 Ok(Expr::Op {
-                    op: op.into(),
+                    op,
                     expr1: Box::new(expr),
                     expr2: Some(Box::new(self.parse_subexpr(precedence)?)),
                 })
@@ -947,39 +990,49 @@ impl<'a> Parser<'a> {
         } else if let Token::Keyword(kw) = tok {
             match kw {
                 IS => {
-                    if self.parse_keyword(NULL) {
-                        Ok(Expr::IsNull {
+                    let negated = self.parse_keyword(NOT);
+                    if let Some(construct) =
+                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN])
+                    {
+                        Ok(Expr::IsExpr {
                             expr: Box::new(expr),
-                            negated: false,
-                        })
-                    } else if self.parse_keywords(&[NOT, NULL]) {
-                        Ok(Expr::IsNull {
-                            expr: Box::new(expr),
-                            negated: true,
+                            negated,
+                            construct: match construct {
+                                NULL => IsExprConstruct::Null,
+                                TRUE => IsExprConstruct::True,
+                                FALSE => IsExprConstruct::False,
+                                UNKNOWN => IsExprConstruct::Unknown,
+                                _ => unreachable!(),
+                            },
                         })
                     } else {
                         self.expected(
                             self.peek_pos(),
-                            "NULL or NOT NULL after IS",
+                            "NULL, NOT NULL, TRUE, NOT TRUE, FALSE, NOT FALSE, UNKNOWN, NOT UNKNOWN after IS",
                             self.peek_token(),
                         )
                     }
                 }
-                ISNULL => Ok(Expr::IsNull {
+                ISNULL => Ok(Expr::IsExpr {
                     expr: Box::new(expr),
                     negated: false,
+                    construct: IsExprConstruct::Null,
                 }),
-                NOT | IN | BETWEEN => {
+                NOT | IN | LIKE | ILIKE | BETWEEN => {
                     self.prev_token();
                     let negated = self.parse_keyword(NOT);
                     if self.parse_keyword(IN) {
                         self.parse_in(expr, negated)
                     } else if self.parse_keyword(BETWEEN) {
                         self.parse_between(expr, negated)
+                    } else if self.parse_keyword(LIKE) {
+                        self.parse_like(expr, false, negated)
+                    } else if self.parse_keyword(ILIKE) {
+                        self.parse_like(expr, true, negated)
                     } else {
                         self.expected(
                             self.peek_pos(),
-                            "IN or BETWEEN after NOT",
+                            "IN, BETWEEN, LIKE, or ILIKE after NOT",
                             self.peek_token(),
                         )
                     }
@@ -1012,6 +1065,7 @@ impl<'a> Parser<'a> {
         } else if Token::DoubleColon == tok {
             self.parse_pg_cast(expr)
         } else if Token::LBracket == tok {
+            self.prev_token();
             self.parse_subscript(expr)
         } else if Token::Dot == tok {
             match self.next_token() {
@@ -1040,54 +1094,113 @@ impl<'a> Parser<'a> {
 
     /// Parse subscript expression, i.e. either an index value or slice range.
     fn parse_subscript(&mut self, expr: Expr<Raw>) -> Result<Expr<Raw>, ParserError> {
-        let mut is_slice = false;
         let mut positions = Vec::new();
-        loop {
-            let start = if self.consume_token(&Token::Colon) {
-                is_slice = true;
+
+        while self.consume_token(&Token::LBracket) {
+            let start = if self.peek_token() == Some(Token::Colon) {
                 None
             } else {
-                let e = Some(self.parse_expr()?);
-                if is_slice {
-                    self.expect_token(&Token::Colon)?;
-                } else {
-                    is_slice = self.consume_token(&Token::Colon);
-                }
-                e
-            };
-
-            let end = if is_slice
-                && (Some(Token::RBracket) != self.peek_token()
-                    && Some(Token::Comma) != self.peek_token())
-            {
                 Some(self.parse_expr()?)
-            } else {
-                None
             };
 
-            positions.push(SubscriptPosition { start, end });
+            let (end, explicit_slice) = if self.consume_token(&Token::Colon) {
+                // Presence of a colon means these positions were explicit
+                (
+                    // Terminated expr
+                    if self.peek_token() == Some(Token::RBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expr()?)
+                    },
+                    true,
+                )
+            } else {
+                (None, false)
+            };
 
-            if !is_slice || !self.consume_token(&Token::Comma) {
-                break;
-            }
+            assert!(
+                start.is_some() || explicit_slice,
+                "user typed something between brackets"
+            );
+
+            assert!(
+                explicit_slice || end.is_none(),
+                "if end is some, must have an explicit slice"
+            );
+
+            positions.push(SubscriptPosition {
+                start,
+                end,
+                explicit_slice,
+            });
+            self.expect_token(&Token::RBracket)?;
         }
 
-        self.expect_token(&Token::RBracket)?;
-
-        Ok(if is_slice {
-            Expr::SubscriptSlice {
-                expr: Box::new(expr),
-                positions,
-            }
-        } else {
-            assert!(
-                positions.len() == 1 && positions[0].start.is_some() && positions[0].end.is_none(),
-            );
-            Expr::SubscriptIndex {
-                expr: Box::new(expr),
-                subscript: Box::new(positions.remove(0).start.unwrap()),
-            }
+        Ok(Expr::Subscript {
+            expr: Box::new(expr),
+            positions,
         })
+    }
+
+    // Parse calls to substring(), which can take the form:
+    // - substring('string', 'int')
+    // - substring('string', 'int', 'int')
+    // - substring('string' FROM 'int')
+    // - substring('string' FROM 'int' FOR 'int')
+    // - substring('string' FOR 'int')
+    fn parse_substring_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let mut exprs = vec![self.parse_expr()?];
+        if self.parse_keyword(FROM) {
+            // 'string' FROM 'int'
+            exprs.push(self.parse_expr()?);
+            if self.parse_keyword(FOR) {
+                // 'string' FROM 'int' FOR 'int'
+                exprs.push(self.parse_expr()?);
+            }
+        } else if self.parse_keyword(FOR) {
+            // 'string' FOR 'int'
+            exprs.push(Expr::Value(Value::Number(String::from("1"))));
+            exprs.push(self.parse_expr()?);
+        } else {
+            // 'string', 'int'
+            // or
+            // 'string', 'int', 'int'
+            self.expect_token(&Token::Comma)?;
+            exprs.extend(self.parse_comma_separated(Parser::parse_expr)?);
+        }
+
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::Function(Function {
+            name: UnresolvedObjectName::unqualified("substring"),
+            args: FunctionArgs::args(exprs),
+            filter: None,
+            over: None,
+            distinct: false,
+        }))
+    }
+
+    /// Parse an operator reference.
+    ///
+    /// Examples:
+    ///   * `+`
+    ///   * `OPERATOR(schema.+)`
+    ///   * `OPERATOR("foo"."bar"."baz".@>)`
+    fn parse_operator(&mut self) -> Result<Op, ParserError> {
+        let mut namespace = vec![];
+        loop {
+            match self.next_token() {
+                Some(Token::Keyword(kw)) => namespace.push(kw.into_ident()),
+                Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
+                Some(Token::Op(op)) => return Ok(Op { namespace, op }),
+                Some(Token::Star) => {
+                    let op = String::from("*");
+                    return Ok(Op { namespace, op });
+                }
+                tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
+            }
+            self.expect_token(&Token::Dot)?;
+        }
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
@@ -1129,6 +1242,28 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parses `LIKE <pattern> [ ESCAPE <char> ]`, assuming the `LIKE` keyword was already consumed
+    fn parse_like(
+        &mut self,
+        expr: Expr<Raw>,
+        case_insensitive: bool,
+        negated: bool,
+    ) -> Result<Expr<Raw>, ParserError> {
+        let pattern = self.parse_subexpr(Precedence::Like)?;
+        let escape = if self.parse_keyword(ESCAPE) {
+            Some(Box::new(self.parse_subexpr(Precedence::Like)?))
+        } else {
+            None
+        };
+        Ok(Expr::Like {
+            expr: Box::new(expr),
+            pattern: Box::new(pattern),
+            escape,
+            case_insensitive,
+            negated,
+        })
+    }
+
     /// Parse a postgresql casting style which is in the form of `expr::datatype`
     fn parse_pg_cast(&mut self, expr: Expr<Raw>) -> Result<Expr<Raw>, ParserError> {
         Ok(Expr::Cast {
@@ -1140,8 +1275,6 @@ impl<'a> Parser<'a> {
     /// Get the precedence of the next token
     fn get_next_precedence(&self) -> Precedence {
         if let Some(token) = self.peek_token() {
-            debug!("get_next_precedence() {:?}", token);
-
             match &token {
                 Token::Keyword(OR) => Precedence::Or,
                 Token::Keyword(AND) => Precedence::And,
@@ -1162,6 +1295,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(BETWEEN) => Precedence::Like,
                 Token::Keyword(ILIKE) => Precedence::Like,
                 Token::Keyword(LIKE) => Precedence::Like,
+                Token::Keyword(OPERATOR) => Precedence::Other,
                 Token::Op(s) => match s.as_str() {
                     "<" | "<=" | "<>" | "!=" | ">" | ">=" => Precedence::Cmp,
                     "+" | "-" => Precedence::PlusMinus,
@@ -1296,6 +1430,36 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_at_most_one_keyword(
+        &mut self,
+        keywords: &[Keyword],
+        location: &str,
+    ) -> Result<Option<Keyword>, ParserError> {
+        match self.parse_one_of_keywords(keywords) {
+            Some(first) => {
+                let remaining_keywords = keywords
+                    .iter()
+                    .cloned()
+                    .filter(|k| *k != first)
+                    .collect::<Vec<_>>();
+                if let Some(second) = self.parse_one_of_keywords(remaining_keywords.as_slice()) {
+                    let second_pos = self.peek_prev_pos();
+                    parser_err!(
+                        self,
+                        second_pos,
+                        "Cannot specify both {} and {} in {}",
+                        first,
+                        second,
+                        location,
+                    )
+                } else {
+                    Ok(Some(first))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Look for one of the given keywords and return the one that matches.
     #[must_use]
     fn parse_one_of_keywords(&mut self, kws: &[Keyword]) -> Option<Keyword> {
@@ -1309,7 +1473,6 @@ impl<'a> Parser<'a> {
     }
 
     /// Bail out if the current token is not one of the expected keywords, or consume it if it is
-    #[must_use = "must match against result to determine what keyword was parsed"]
     fn expect_one_of_keywords(&mut self, keywords: &[Keyword]) -> Result<Keyword, ParserError> {
         if let Some(keyword) = self.parse_one_of_keywords(keywords) {
             Ok(keyword)
@@ -1503,7 +1666,7 @@ impl<'a> Parser<'a> {
 
     fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector()?;
+            let csr_connector = self.parse_csr_connector_avro()?;
             AvroSchema::Csr { csr_connector }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
@@ -1532,7 +1695,7 @@ impl<'a> Parser<'a> {
 
     fn parse_protobuf_schema(&mut self) -> Result<ProtobufSchema<Raw>, ParserError> {
         if self.parse_keywords(&[USING, CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector()?;
+            let csr_connector = self.parse_csr_connector_proto()?;
             Ok(ProtobufSchema::Csr { csr_connector })
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
@@ -1551,7 +1714,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_csr_connector(&mut self) -> Result<CsrConnector<Raw>, ParserError> {
+    fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
         let url = self.parse_literal_string()?;
 
         let seed = if self.parse_keyword(SEED) {
@@ -1579,7 +1742,68 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(CsrConnector {
+        Ok(CsrConnectorAvro {
+            url,
+            seed,
+            with_options,
+        })
+    }
+
+    fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
+        let url = self.parse_literal_string()?;
+
+        let seed = if self.parse_keyword(SEED) {
+            if self.parse_keyword(COMPILED) {
+                let key = if self.parse_keyword(KEY) {
+                    self.expect_keyword(SCHEMA)?;
+                    let schema = self.parse_literal_string()?;
+                    self.expect_keyword(MESSAGE)?;
+                    let message_name = self.parse_literal_string()?;
+                    Some(CsrSeedCompiledEncoding {
+                        schema,
+                        message_name,
+                    })
+                } else {
+                    None
+                };
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                self.expect_keyword(MESSAGE)?;
+                let value_message_name = self.parse_literal_string()?;
+                Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
+                    value: CsrSeedCompiledEncoding {
+                        schema: value_schema,
+                        message_name: value_message_name,
+                    },
+                    key,
+                }))
+            } else {
+                let key_schema = if self.parse_keyword(KEY) {
+                    self.expect_keyword(SCHEMA)?;
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                Some(CsrSeedCompiledOrLegacy::Legacy(CsrSeed {
+                    value_schema,
+                    key_schema,
+                }))
+            }
+        } else {
+            None
+        };
+
+        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+        // accept `WITH (...)` here.
+        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+            self.parse_opt_with_sql_options()?
+        } else {
+            vec![]
+        };
+
+        Ok(CsrConnectorProto {
             url,
             seed,
             with_options,
@@ -1654,7 +1878,8 @@ impl<'a> Parser<'a> {
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => CreateSourceFormat::None,
         };
-        let key_envelope = self.parse_include_key()?;
+        let include_metadata = self.parse_source_include_metadata()?;
+
         let envelope = if self.parse_keyword(ENVELOPE) {
             let envelope = self.parse_envelope()?;
             if matches!(envelope, Envelope::Upsert) {
@@ -1674,7 +1899,7 @@ impl<'a> Parser<'a> {
             }
             envelope
         } else {
-            Default::default()
+            Envelope::None
         };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
@@ -1683,7 +1908,7 @@ impl<'a> Parser<'a> {
             connector,
             with_options,
             format,
-            key_envelope,
+            include_metadata,
             envelope,
             if_not_exists,
             materialized,
@@ -1914,7 +2139,18 @@ impl<'a> Parser<'a> {
                     && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
                 {
                     let _ = self.expect_keyword(KEY);
-                    Some(self.parse_parenthesized_column_list(Mandatory)?)
+                    let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
+
+                    let not_enforced = if self.peek_keywords(&[NOT, ENFORCED]) {
+                        let _ = self.expect_keywords(&[NOT, ENFORCED])?;
+                        true
+                    } else {
+                        false
+                    };
+                    Some(KafkaSinkKey {
+                        key_columns,
+                        not_enforced,
+                    })
                 } else {
                     None
                 };
@@ -1936,13 +2172,29 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {
-        if self.parse_keywords(&[CONSISTENCY, TOPIC]) {
+        if self.parse_keyword(CONSISTENCY) {
+            // We would prefer for all consistency parameters to be
+            // parenthesized, but for backwards compatibility we support an
+            // unparenthesized syntax that has some ambiguity issues
+            // (see #8231).
+            //
+            // Bad:
+            //     CONSISTENCY TOPIC 'foo' CONSISTENCY FORMAT 'bar' WITH (format_option = 'blah')
+            // Good:
+            //     CONSISTENCY (TOPIC 'foo' FORMAT 'bar' WITH (format_option = 'blah'))
+            let parenthesized = self.consume_token(&Token::LParen);
+            self.expect_keyword(TOPIC)?;
             let topic = self.parse_literal_string()?;
-            let topic_format = if self.parse_keywords(&[CONSISTENCY, FORMAT]) {
+            let topic_format = if (parenthesized && self.parse_keyword(FORMAT))
+                || (!parenthesized && self.parse_keywords(&[CONSISTENCY, FORMAT]))
+            {
                 Some(self.parse_format()?)
             } else {
                 None
             };
+            if parenthesized {
+                self.expect_token(&Token::RParen)?;
+            }
             Ok(Some(KafkaConsistency {
                 topic,
                 topic_format,
@@ -2119,21 +2371,30 @@ impl<'a> Parser<'a> {
         self.expect_keyword(TYPE)?;
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
-        let as_type = match self.expect_one_of_keywords(&[LIST, MAP])? {
-            LIST => CreateTypeAs::List,
-            MAP => CreateTypeAs::Map,
-            _ => unreachable!(),
-        };
 
-        self.expect_token(&Token::LParen)?;
-        let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
-        self.expect_token(&Token::RParen)?;
+        match self.parse_one_of_keywords(&[LIST, MAP]) {
+            Some(as_type) => {
+                self.expect_token(&Token::LParen)?;
+                let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
+                self.expect_token(&Token::RParen)?;
 
-        Ok(Statement::CreateType(CreateTypeStatement {
-            name,
-            as_type,
-            with_options,
-        }))
+                let as_type = match as_type {
+                    LIST => CreateTypeAs::List { with_options },
+                    MAP => CreateTypeAs::Map { with_options },
+                    _ => unreachable!(),
+                };
+
+                Ok(Statement::CreateType(CreateTypeStatement { name, as_type }))
+            }
+            None => {
+                let column_defs = self.parse_composite_type_definition()?;
+
+                Ok(Statement::CreateType(CreateTypeStatement {
+                    name,
+                    as_type: CreateTypeAs::Record { column_defs },
+                }))
+            }
+        }
     }
 
     fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
@@ -2163,16 +2424,28 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_include_key(&mut self) -> Result<CreateSourceKeyEnvelope, ParserError> {
-        Ok(if self.parse_keywords(&[INCLUDE, KEY]) {
-            if self.parse_keyword(AS) {
-                CreateSourceKeyEnvelope::Named(self.parse_identifier()?)
-            } else {
-                CreateSourceKeyEnvelope::Included
-            }
+    fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
+        if self.parse_keyword(INCLUDE) {
+            self.parse_comma_separated(|parser| {
+                let ty = match parser
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, TOPIC, OFFSET])?
+                {
+                    KEY => SourceIncludeMetadataType::Key,
+                    TIMESTAMP => SourceIncludeMetadataType::Timestamp,
+                    PARTITION => SourceIncludeMetadataType::Partition,
+                    TOPIC => SourceIncludeMetadataType::Topic,
+                    OFFSET => SourceIncludeMetadataType::Offset,
+                    _ => unreachable!("only explicitly allowed items can be parsed"),
+                };
+                let alias = parser
+                    .parse_keyword(AS)
+                    .then(|| parser.parse_identifier())
+                    .transpose()?;
+                Ok(SourceIncludeMetadata { ty, alias })
+            })
         } else {
-            CreateSourceKeyEnvelope::None
-        })
+            Ok(vec![])
+        }
     }
 
     fn parse_discard(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2193,9 +2466,16 @@ impl<'a> Parser<'a> {
             DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
+                let if_exists = self.parse_if_exists()?;
+                let name = self.parse_identifier()?;
+                let restrict = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(RESTRICT),
+                );
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
-                    if_exists: self.parse_if_exists()?,
-                    name: self.parse_identifier()?,
+                    if_exists,
+                    name,
+                    restrict,
                 }));
             }
             Some(INDEX) => ObjectType::Index,
@@ -2218,16 +2498,10 @@ impl<'a> Parser<'a> {
 
         let if_exists = self.parse_if_exists()?;
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
-        let cascade = self.parse_keyword(CASCADE);
-        let restrict = self.parse_keyword(RESTRICT);
-        let restrict_pos = self.peek_prev_pos();
-        if cascade && restrict {
-            return parser_err!(
-                self,
-                restrict_pos,
-                "Cannot specify both CASCADE and RESTRICT in DROP"
-            );
-        }
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
         Ok(Statement::DropObjects(DropObjectsStatement {
             materialized,
             object_type,
@@ -2641,6 +2915,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_boolean_value(&mut self) -> Result<bool, ParserError> {
+        match self.next_token() {
+            Some(t) => match t {
+                Token::Keyword(TRUE) => Ok(true),
+                Token::Keyword(FALSE) => Ok(false),
+                _ => self.expected(self.peek_prev_pos(), "boolean value", Some(t)),
+            },
+            None => self.expected(self.peek_prev_pos(), "boolean value", None),
+        }
+    }
+
     fn parse_value_array(&mut self) -> Result<Value, ParserError> {
         let mut values = vec![];
         loop {
@@ -2657,11 +2942,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_array(&mut self) -> Result<Expr<Raw>, ParserError> {
-        Ok(Expr::Array(self.parse_sequence(Self::parse_array)?))
+        if self.consume_token(&Token::LParen) {
+            let subquery = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            Ok(Expr::ArraySubquery(Box::new(subquery)))
+        } else {
+            self.parse_sequence(Self::parse_array).map(Expr::Array)
+        }
     }
 
     fn parse_list(&mut self) -> Result<Expr<Raw>, ParserError> {
-        Ok(Expr::List(self.parse_sequence(Self::parse_list)?))
+        if self.consume_token(&Token::LParen) {
+            let subquery = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            Ok(Expr::ListSubquery(Box::new(subquery)))
+        } else {
+            self.parse_sequence(Self::parse_list).map(Expr::List)
+        }
     }
 
     fn parse_sequence<F>(&mut self, mut f: F) -> Result<Vec<Expr<Raw>>, ParserError>
@@ -2698,7 +2995,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an unsigned literal integer/long
+    /// Parse a signed literal integer.
+    fn parse_literal_int(&mut self) -> Result<i64, ParserError> {
+        match self.next_token() {
+            Some(Token::Number(s)) => s.parse::<i64>().map_err(|e| {
+                self.error(
+                    self.peek_prev_pos(),
+                    format!("Could not parse '{}' as i64: {}", s, e),
+                )
+            }),
+            other => self.expected(self.peek_prev_pos(), "literal integer", other),
+        }
+    }
+
+    /// Parse an unsigned literal integer.
     fn parse_literal_uint(&mut self) -> Result<u64, ParserError> {
         match self.next_token() {
             Some(Token::Number(s)) => s.parse::<u64>().map_err(|e| {
@@ -2707,7 +3017,7 @@ impl<'a> Parser<'a> {
                     format!("Could not parse '{}' as u64: {}", s, e),
                 )
             }),
-            other => self.expected(self.peek_prev_pos(), "literal int", other),
+            other => self.expected(self.peek_prev_pos(), "literal unsigned integer", other),
         }
     }
 
@@ -2720,8 +3030,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<DataType<Raw>, ParserError> {
-        let other = |name: &str| DataType::Other {
+    fn parse_data_type(&mut self) -> Result<UnresolvedDataType, ParserError> {
+        let other = |name: &str| UnresolvedDataType::Other {
             name: RawName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
@@ -2735,34 +3045,25 @@ impl<'a> Parser<'a> {
                     } else {
                         "bpchar"
                     };
-                    DataType::Other {
+                    UnresolvedDataType::Other {
                         name: RawName::Name(UnresolvedObjectName::unqualified(name)),
-                        typ_mod: match self.parse_optional_precision()? {
-                            Some(u) => vec![u],
-                            None => vec![],
-                        },
+                        typ_mod: self.parse_typ_mod()?,
                     }
                 }
-                BPCHAR => DataType::Other {
+                BPCHAR => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("bpchar")),
-                    typ_mod: match self.parse_optional_precision()? {
-                        Some(u) => vec![u],
-                        None => vec![],
-                    },
+                    typ_mod: self.parse_typ_mod()?,
                 },
-                VARCHAR => DataType::Other {
+                VARCHAR => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
-                    typ_mod: match self.parse_optional_precision()? {
-                        Some(u) => vec![u],
-                        None => vec![],
-                    },
+                    typ_mod: self.parse_typ_mod()?,
                 },
                 STRING => other("text"),
 
                 // Number-like types
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
-                DEC | DECIMAL => DataType::Other {
+                DEC | DECIMAL => UnresolvedDataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -2816,20 +3117,18 @@ impl<'a> Parser<'a> {
                 BOOLEAN => other("bool"),
                 BYTES => other("bytea"),
                 JSON => other("jsonb"),
-                REGCLASS => other("oid"),
-
                 _ => {
                     self.prev_token();
-                    DataType::Other {
+                    UnresolvedDataType::Other {
                         name: RawName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
             },
-            Some(Token::Ident(_)) => {
+            Some(Token::Ident(_) | Token::LBracket) => {
                 self.prev_token();
-                DataType::Other {
-                    name: RawName::Name(self.parse_object_name()?),
+                UnresolvedDataType::Other {
+                    name: self.parse_raw_name()?,
                     typ_mod: self.parse_typ_mod()?,
                 }
             }
@@ -2840,7 +3139,7 @@ impl<'a> Parser<'a> {
             match self.peek_token() {
                 Some(Token::Keyword(LIST)) => {
                     self.next_token();
-                    data_type = DataType::List(Box::new(data_type));
+                    data_type = UnresolvedDataType::List(Box::new(data_type));
                 }
                 Some(Token::LBracket) => {
                     // Handle array suffixes. Note that `int[]`, `int[][][]`,
@@ -2848,8 +3147,8 @@ impl<'a> Parser<'a> {
                     self.next_token();
                     let _ = self.maybe_parse(|parser| parser.parse_number_value());
                     self.expect_token(&Token::RBracket)?;
-                    if !matches!(data_type, DataType::Array(_)) {
-                        data_type = DataType::Array(Box::new(data_type));
+                    if !matches!(data_type, UnresolvedDataType::Array(_)) {
+                        data_type = UnresolvedDataType::Array(Box::new(data_type));
                     }
                 }
                 _ => break,
@@ -2858,9 +3157,9 @@ impl<'a> Parser<'a> {
         Ok(data_type)
     }
 
-    fn parse_typ_mod(&mut self) -> Result<Vec<u64>, ParserError> {
+    fn parse_typ_mod(&mut self) -> Result<Vec<i64>, ParserError> {
         if self.consume_token(&Token::LParen) {
-            let typ_mod = self.parse_comma_separated(Parser::parse_literal_uint)?;
+            let typ_mod = self.parse_comma_separated(Parser::parse_literal_int)?;
             self.expect_token(&Token::RParen)?;
             Ok(typ_mod)
         } else {
@@ -2920,6 +3219,29 @@ impl<'a> Parser<'a> {
                 }))
             }
             None => Ok(None),
+        }
+    }
+
+    fn parse_raw_name(&mut self) -> Result<RawName, ParserError> {
+        if self.consume_token(&Token::LBracket) {
+            let id = match self.next_token() {
+                Some(Token::Ident(id)) => id,
+                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+            };
+            self.expect_keyword(AS)?;
+            let name = self.parse_object_name()?;
+            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
+            if name.0.len() < 2 {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "table name in square brackets must be fully qualified"
+                );
+            }
+            self.expect_token(&Token::RBracket)?;
+            Ok(RawName::Id(id, name))
+        } else {
+            Ok(RawName::Name(self.parse_object_name()?))
         }
     }
 
@@ -3023,13 +3345,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<DataType<Raw>, ParserError> {
+    fn parse_map(&mut self) -> Result<UnresolvedDataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
         let value_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::RBracket)?;
-        Ok(DataType::Map {
+        Ok(UnresolvedDataType::Map {
             key_type,
             value_type,
         })
@@ -3037,7 +3359,13 @@ impl<'a> Parser<'a> {
 
     fn parse_delete(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(FROM)?;
-        let table_name = self.parse_object_name()?;
+        let table_name = RawName::Name(self.parse_object_name()?);
+        let alias = self.parse_optional_table_alias()?;
+        let using = if self.parse_keyword(USING) {
+            self.parse_comma_separated(Parser::parse_table_and_joins)?
+        } else {
+            vec![]
+        };
         let selection = if self.parse_keyword(WHERE) {
             Some(self.parse_expr()?)
         } else {
@@ -3046,6 +3374,8 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Delete(DeleteStatement {
             table_name,
+            alias,
+            using,
             selection,
         }))
     }
@@ -3055,7 +3385,7 @@ impl<'a> Parser<'a> {
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
     /// expect the initial keyword to be already consumed
     fn parse_query(&mut self) -> Result<Query<Raw>, ParserError> {
-        self.check_descent(|parser| {
+        self.checked_recur_mut(|parser| {
             let ctes = if parser.parse_keyword(WITH) {
                 // TODO: optional RECURSIVE
                 parser.parse_comma_separated(Parser::parse_cte)?
@@ -3306,7 +3636,7 @@ impl<'a> Parser<'a> {
             // An empty target list is permissible to match PostgreSQL, which
             // permits these for symmetry with zero column tables.
             Some(Token::Keyword(kw)) if kw.is_reserved() => vec![],
-            Some(Token::Semicolon) | None => vec![],
+            Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
             _ => self.parse_comma_separated(Parser::parse_select_item)?,
         };
 
@@ -3360,10 +3690,23 @@ impl<'a> Parser<'a> {
         let modifier = self.parse_one_of_keywords(&[SESSION, LOCAL]);
         let mut variable = self.parse_identifier()?;
         let mut normal = self.consume_token(&Token::Eq) || self.parse_keyword(TO);
-        if !normal && variable.as_str().parse() == Ok(TIME) {
-            self.expect_keyword(ZONE)?;
-            variable = Ident::new("timezone");
-            normal = true;
+        if !normal {
+            match variable.as_str().parse() {
+                Ok(TIME) => {
+                    self.expect_keyword(ZONE)?;
+                    variable = Ident::new("timezone");
+                    normal = true;
+                }
+                Ok(NAMES) => {
+                    variable = Ident::new("client_encoding");
+                    normal = true;
+                }
+                Ok(SCHEMA) => {
+                    variable = Ident::new("search_path");
+                    normal = true;
+                }
+                _ => {}
+            }
         }
         if normal {
             let token = self.peek_token();
@@ -3514,6 +3857,8 @@ impl<'a> Parser<'a> {
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 Ident::new("transaction_isolation")
+            } else if self.parse_keywords(&[TIME, ZONE]) {
+                Ident::new("timezone")
             } else {
                 self.parse_identifier()?
             };
@@ -3627,13 +3972,18 @@ impl<'a> Parser<'a> {
             // LATERAL must always be followed by a subquery or table function.
             if self.consume_token(&Token::LParen) {
                 return self.parse_derived_table_factor(Lateral);
+            } else if self.parse_keywords(&[ROWS, FROM]) {
+                return Ok(self.parse_rows_from()?);
             } else {
                 let name = self.parse_object_name()?;
                 self.expect_token(&Token::LParen)?;
+                let args = self.parse_optional_args(false)?;
+                let alias = self.parse_optional_table_alias()?;
+                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 return Ok(TableFactor::Function {
-                    name,
-                    args: self.parse_optional_args(false)?,
-                    alias: self.parse_optional_table_alias()?,
+                    function: TableFunction { name, args },
+                    alias,
+                    with_ordinality,
                 });
             }
         }
@@ -3688,42 +4038,49 @@ impl<'a> Parser<'a> {
                 join: Box::new(table_and_joins),
                 alias: self.parse_optional_table_alias()?,
             })
-        } else if self.consume_token(&Token::LBracket) {
-            let id = match self.next_token() {
-                Some(Token::Ident(id)) => id,
-                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
-            };
-            self.expect_keyword(AS)?;
-            let name = self.parse_object_name()?;
-            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
-            if name.0.len() < 2 {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "table name in square brackets must be fully qualified"
-                );
-            }
-            self.expect_token(&Token::RBracket)?;
-
-            Ok(TableFactor::Table {
-                name: RawName::Id(id, name),
-                alias: self.parse_optional_table_alias()?,
-            })
+        } else if self.parse_keywords(&[ROWS, FROM]) {
+            Ok(self.parse_rows_from()?)
         } else {
-            let name = self.parse_object_name()?;
-            if self.consume_token(&Token::LParen) {
-                Ok(TableFactor::Function {
+            let name = self.parse_raw_name()?;
+            match name {
+                RawName::Name(name) if self.consume_token(&Token::LParen) => {
+                    let args = self.parse_optional_args(false)?;
+                    let alias = self.parse_optional_table_alias()?;
+                    let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+                    Ok(TableFactor::Function {
+                        function: TableFunction { name, args },
+                        alias,
+                        with_ordinality,
+                    })
+                }
+                _ => Ok(TableFactor::Table {
                     name,
-                    args: self.parse_optional_args(false)?,
                     alias: self.parse_optional_table_alias()?,
-                })
-            } else {
-                Ok(TableFactor::Table {
-                    name: RawName::Name(name),
-                    alias: self.parse_optional_table_alias()?,
-                })
+                }),
             }
         }
+    }
+
+    fn parse_rows_from(&mut self) -> Result<TableFactor<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let functions = self.parse_comma_separated(Parser::parse_table_function)?;
+        self.expect_token(&Token::RParen)?;
+        let alias = self.parse_optional_table_alias()?;
+        let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+        Ok(TableFactor::RowsFrom {
+            functions,
+            alias,
+            with_ordinality,
+        })
+    }
+
+    fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
+        let name = self.parse_object_name()?;
+        self.expect_token(&Token::LParen)?;
+        Ok(TableFunction {
+            name,
+            args: self.parse_optional_args(false)?,
+        })
     }
 
     fn parse_derived_table_factor(
@@ -3779,7 +4136,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let table_name = self.parse_object_name()?;
+        let table_name = RawName::Name(self.parse_object_name()?);
+
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
         let selection = if self.parse_keyword(WHERE) {
@@ -3787,6 +4145,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+
         Ok(Statement::Update(UpdateStatement {
             table_name,
             assignments,
@@ -3950,11 +4309,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_tail(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let name = self.parse_object_name()?;
+        let relation = if self.consume_token(&Token::LParen) {
+            let query = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            TailRelation::Query(query)
+        } else {
+            TailRelation::Name(self.parse_object_name()?)
+        };
         let options = self.parse_opt_with_options()?;
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail(TailStatement {
-            name,
+            relation,
             options,
             as_of,
         }))
@@ -3964,27 +4329,66 @@ impl<'a> Parser<'a> {
     /// has already been consumed.
     fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserError> {
         // (TYPED)?
-        let options = ExplainOptions {
-            typed: self.parse_keyword(TYPED),
-        };
+        let typed = self.parse_keyword(TYPED);
+        let mut timing = false;
 
-        // (RAW | DECORRELATED | OPTIMIZED)? PLAN
-        let stage = match self.parse_one_of_keywords(&[RAW, DECORRELATED, OPTIMIZED, PLAN]) {
+        // options: ( '(' TIMING (true|false) ')' )?
+        if let Some(Token::LParen) = self.peek_token() {
+            // Check whether a valid option is after the parentheses, since the
+            // parentheses may belong to the actual query to be explained.
+            match self.peek_nth_token(1) {
+                Some(Token::Keyword(TIMING)) => {
+                    self.next_token(); // Consume the LParen
+                    self.parse_comma_separated(|s| match s.expect_one_of_keywords(&[TIMING])? {
+                        TIMING => {
+                            timing = s.parse_boolean_value()?;
+                            Ok(())
+                        }
+                        _ => unreachable!(),
+                    })?;
+                    self.expect_token(&Token::RParen)?;
+                }
+                _ => {}
+            }
+        }
+
+        // (RAW | DECORRELATED | OPTIMIZED | PHYSICAL)? PLAN
+        let stage = match self.parse_one_of_keywords(&[
+            RAW,
+            DECORRELATED,
+            OPTIMIZED,
+            PHYSICAL,
+            PLAN,
+            QUERY,
+        ]) {
             Some(RAW) => {
                 self.expect_keywords(&[PLAN, FOR])?;
                 ExplainStage::RawPlan
+            }
+            Some(QUERY) => {
+                self.expect_keywords(&[GRAPH, FOR])?;
+                ExplainStage::QueryGraph
             }
             Some(DECORRELATED) => {
                 self.expect_keywords(&[PLAN, FOR])?;
                 ExplainStage::DecorrelatedPlan
             }
             Some(OPTIMIZED) => {
-                self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::OptimizedPlan
+                if self.parse_keyword(QUERY) {
+                    self.expect_keywords(&[GRAPH, FOR])?;
+                    ExplainStage::OptimizedQueryGraph
+                } else {
+                    self.expect_keywords(&[PLAN, FOR])?;
+                    ExplainStage::OptimizedPlan
+                }
             }
             Some(PLAN) => {
                 self.expect_keyword(FOR)?;
                 ExplainStage::OptimizedPlan
+            }
+            Some(PHYSICAL) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::PhysicalPlan
             }
             None => ExplainStage::OptimizedPlan,
             _ => unreachable!(),
@@ -3997,6 +4401,7 @@ impl<'a> Parser<'a> {
             Explainee::Query(self.parse_query()?)
         };
 
+        let options = ExplainOptions { typed, timing };
         Ok(Statement::Explain(ExplainStatement {
             stage,
             explainee,
@@ -4026,6 +4431,52 @@ impl<'a> Parser<'a> {
         Ok(Statement::Close(CloseStatement { name }))
     }
 
+    /// Parse a `PREPARE` statement, assuming that the `PREPARE` token
+    /// has already been consumed.
+    fn parse_prepare(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword(AS)?;
+        let pos = self.peek_pos();
+        //
+        let stmt = match self.parse_statement()? {
+            stmt @ Statement::Select(_)
+            | stmt @ Statement::Insert(_)
+            | stmt @ Statement::Delete(_)
+            | stmt @ Statement::Update(_) => stmt,
+            _ => return parser_err!(self, pos, "unpreparable statement"),
+        };
+        Ok(Statement::Prepare(PrepareStatement {
+            name,
+            stmt: Box::new(stmt),
+        }))
+    }
+
+    /// Parse a `EXECUTE` statement, assuming that the `EXECUTE` token
+    /// has already been consumed.
+    fn parse_execute(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        let params = if self.consume_token(&Token::LParen) {
+            let params = self.parse_comma_separated(Parser::parse_expr)?;
+            self.expect_token(&Token::RParen)?;
+            params
+        } else {
+            Vec::new()
+        };
+        Ok(Statement::Execute(ExecuteStatement { name, params }))
+    }
+
+    /// Parse a `DEALLOCATE` statement, assuming that the `DEALLOCATE` token
+    /// has already been consumed.
+    fn parse_deallocate(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let _ = self.parse_keyword(PREPARE);
+        let name = if self.parse_keyword(ALL) {
+            None
+        } else {
+            Some(self.parse_identifier()?)
+        };
+        Ok(Statement::Deallocate(DeallocateStatement { name }))
+    }
+
     /// Parse a `FETCH` statement, assuming that the `FETCH` token
     /// has already been consumed.
     fn parse_fetch(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4047,54 +4498,25 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Checks whether it is safe to descend another layer of nesting in the
-    /// parse tree, and calls `f` if so.
-    ///
-    /// The nature of a recursive descent parser, like this SQL parser, is that
-    /// deeply nested queries can easily cause a stack overflow, as each level
-    /// of nesting requires a new stack frame of a few dozen bytes, and those
-    /// bytes add up over time. That means that user input can trivially cause a
-    /// process crash, which does not make for a good user experience.
-    ///
-    /// This method uses the [`stacker`] crate to automatically grow the stack
-    /// as necessary. It also enforces a hard but arbitrary limit on the maximum
-    /// depth, as it's good practice to have *some* limit. Real-world queries
-    /// tend not to have more than a dozen or so layers of nesting.
-    ///
-    /// Calls to this function must be manually inserted in the parser at any
-    /// point that mutual recursion occurs; i.e., whenever parsing of a nested
-    /// expression or nested SQL query begins.
-    fn check_descent<F, R>(&mut self, f: F) -> Result<R, ParserError>
-    where
-        F: FnOnce(&mut Parser) -> Result<R, ParserError>,
-    {
-        // NOTE(benesch): this recursion limit was chosen based on the maximum
-        // amount of nesting I've ever seen in a production SQL query (i.e.,
-        // about a dozen) times a healthy factor to be conservative.
-        const RECURSION_LIMIT: usize = 128;
+    /// Parse a `RAISE` statement, assuming that the `RAISE` token
+    /// has already been consumed.
+    fn parse_raise(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let severity = match self.parse_one_of_keywords(&[DEBUG, INFO, LOG, NOTICE, WARNING]) {
+            Some(DEBUG) => NoticeSeverity::Debug,
+            Some(INFO) => NoticeSeverity::Info,
+            Some(LOG) => NoticeSeverity::Log,
+            Some(NOTICE) => NoticeSeverity::Notice,
+            Some(WARNING) => NoticeSeverity::Warning,
+            Some(_) => unreachable!(),
+            None => self.expected(self.peek_pos(), "severity level", self.peek_token())?,
+        };
 
-        // The red zone is the amount of stack space that must be available on
-        // the current stack in order to call `f` without allocating a new
-        // stack.
-        const STACK_RED_ZONE: usize = 32 << 10; // 32KiB
+        Ok(Statement::Raise(RaiseStatement { severity }))
+    }
+}
 
-        // The size of any freshly-allocated stacks. It was chosen to match the
-        // default stack size for threads in Rust.
-        const STACK_SIZE: usize = 2 << 20; // 2MiB
-
-        if self.depth > RECURSION_LIMIT {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                "query exceeds nested expression limit of {}",
-                RECURSION_LIMIT
-            );
-        }
-
-        self.depth += 1;
-        let out = stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || f(self));
-        self.depth -= 1;
-
-        out
+impl CheckedRecursion for Parser<'_> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
     }
 }

@@ -35,7 +35,7 @@ goofus,gallant
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-unexpected parameters for CREATE SINK: badoption
+contains:unexpected parameters for CREATE SINK: badoption
 
 > SHOW SINKS
 name
@@ -47,10 +47,17 @@ name
 # `example.com:8080` and `materialize.com:8080` which can blackhole the request
 # for minutes rather than surfacing an error in a timely manner.
 
+# Invalid in that the address is not well formed
 ! CREATE SINK bad_schema_registry FROM src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.kafka-addr}'
-unable to publish value schema to registry in kafka sink
+contains:cannot construct a CCSR client with a cannot-be-a-base URL
+
+# Invalid in that the address is not for a schema registry
+! CREATE SINK bad_schema_registry FROM src
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://${testdrive.kafka-addr}'
+contains:unable to publish value schema to registry in kafka sink
 
 > SHOW SINKS
 name
@@ -73,10 +80,12 @@ name
 
 > CREATE SINK snk4 FROM v2
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk4'
+  WITH (retention_ms=1000000)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK snk5 FROM v3
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk5'
+  WITH (retention_bytes=1000000000000)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > SHOW SINKS
@@ -170,8 +179,6 @@ $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink9'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITHOUT SNAPSHOT
-
-$ kafka-verify format=avro sink=materialize.public.sink9
 
 > CREATE SINK sink10 FROM foo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink10'

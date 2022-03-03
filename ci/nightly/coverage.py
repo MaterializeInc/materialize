@@ -45,8 +45,8 @@ def main() -> int:
             [
                 "run",
                 workflow,
-                "--mz-coverage",
-                "--mz-find",
+                "--coverage",
+                "--find",
                 composition,
             ]
         )
@@ -54,8 +54,8 @@ def main() -> int:
             [
                 "down",
                 "-v",
-                "--mz-coverage",
-                "--mz-find",
+                "--coverage",
+                "--find",
                 composition,
             ]
         )

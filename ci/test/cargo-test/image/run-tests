@@ -11,17 +11,29 @@
 
 set -euo pipefail
 
-# ShellCheck cannot follow this path, as it is only valid inside the Docker
-# container.
-# shellcheck disable=SC1091
-. /usr/local/share/shlib/shlib.bash
+export RUST_BACKTRACE=full
 
-ci_init
+passed=0
+total=0
 
-while read -r binary cwd; do
-    cd "$cwd"
-    ci_try "/tests/$binary"
-    cd "$OLDPWD"
+while read -r binary package cwd; do
+    echo "--- $binary"
+    # Run tests, generating a JSON event stream. The jq in the pipeline below
+    # prefixes each event's name field, if present, with the package name, so
+    # that we can distinguish tests with the same names in different packages.
+    if (cd "$cwd" && "/tests/$binary" -Z unstable-options --format json --report-time) \
+        | jq -c --arg package "$package" 'if .name then .name = "\($package)::\(.name)" else . end' \
+        | tee -a results.json
+    then
+        ((++passed))
+    else
+        echo "^^^ +++"
+    fi
+    ((++total))
 done < /tests/manifest
 
-ci_status_report
+echo "+++ Status report"
+echo "$passed/$total commands passed"
+if ((passed != total)); then
+    exit 1
+fi

@@ -11,13 +11,13 @@ use std::fmt;
 
 use backtrace::Backtrace;
 
-use ore::str::StrExt;
-use sql::catalog::CatalogError as SqlCatalogError;
+use mz_ore::str::StrExt;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 
 #[derive(Debug)]
 pub struct Error {
     pub(crate) kind: ErrorKind,
-    pub(crate) backtrace: Backtrace,
+    pub(crate) _backtrace: Backtrace,
 }
 
 #[derive(Debug)]
@@ -48,7 +48,7 @@ pub enum ErrorKind {
         depender_name: String,
     },
     Storage(rusqlite::Error),
-    Persistence(persist::error::Error),
+    Persistence(mz_persist::error::Error),
     AmbiguousRename {
         depender: String,
         dependee: String,
@@ -62,13 +62,14 @@ pub enum ErrorKind {
         this_version: &'static str,
         cause: String,
     },
+    FailpointReached(String),
 }
 
 impl Error {
     pub(crate) fn new(kind: ErrorKind) -> Error {
         Error {
             kind,
-            backtrace: Backtrace::new_unresolved(),
+            _backtrace: Backtrace::new_unresolved(),
         }
     }
 
@@ -109,8 +110,8 @@ impl From<SqlCatalogError> for Error {
     }
 }
 
-impl From<persist::error::Error> for Error {
-    fn from(e: persist::error::Error) -> Error {
+impl From<mz_persist::error::Error> for Error {
+    fn from(e: mz_persist::error::Error) -> Error {
         Error::new(ErrorKind::Persistence(e))
     }
 }
@@ -139,7 +140,8 @@ impl std::error::Error for Error {
             | ErrorKind::ExperimentalModeRequired
             | ErrorKind::ExperimentalModeUnavailable
             | ErrorKind::FailedMigration { .. }
-            | ErrorKind::DefaultIndexDisabled { .. } => None,
+            | ErrorKind::DefaultIndexDisabled { .. }
+            | ErrorKind::FailpointReached(_) => None,
             ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
             ErrorKind::Persistence(e) => Some(e),
@@ -244,6 +246,9 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
                     idx_on.quoted(),
                     default_idx.quoted()
                 )
+            }
+            ErrorKind::FailpointReached(failpoint) => {
+                write!(f, "failpoint {} reached", failpoint)
             }
         }
     }

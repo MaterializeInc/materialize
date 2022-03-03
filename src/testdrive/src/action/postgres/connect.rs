@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::bail;
 use async_trait::async_trait;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::postgres::postgres_client;
 
@@ -18,10 +19,10 @@ pub struct ConnectAction {
     url: String,
 }
 
-pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, String> {
+pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::Error> {
     let name = cmd.args.string("name")?;
     if name.starts_with("postgres://") {
-        return Err("connection name can not be url".into());
+        bail!("connection name can not be url");
     }
 
     let url = cmd.args.string("url")?;
@@ -31,13 +32,13 @@ pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, String> {
 
 #[async_trait]
 impl Action for ConnectAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let client = postgres_client(&self.url).await?;
         state.postgres_clients.insert(self.name.clone(), client);
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }

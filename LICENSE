@@ -5,7 +5,7 @@ code. This situation is noted in the license header at the top of the affected
 files. Full authorship information can be derived from the version control
 history.
 
------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 MATERIALIZE BUSINESS SOURCE LICENSE AGREEMENT
 
@@ -13,7 +13,7 @@ Business Source License 1.1
 
 Licensor:                  Materialize, Inc.
 
-Licensed Work:             Materialize Version 0.9.6-dev
+Licensed Work:             Materialize Version 0.22.1-dev
                            The Licensed Work is © 2021 Materialize, Inc.
 
 Additional Use Grant:      You may use one single server instance of the
@@ -29,7 +29,7 @@ Additional Use Grant:      You may use one single server instance of the
                            functionality of the Licensed Work by creating views
                            whose schemas are controlled by such third parties.
 
-Change Date:               September 21, 2025
+Change Date:               March 02, 2026
 
 Change License:            Apache License, Version 2.0
 
@@ -111,9 +111,9 @@ other recipients of the licensed work to be provided by Licensor:
 
 4. Not to modify this License in any other way.
 
------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
-A copy of the MIT license is reproduced below. This license only applies to
+A copy of the MIT license is reproduced below. This license applies only to
 files that indicate as such in their license header.
 
         Permission is hereby granted, free of charge, to any
@@ -140,9 +140,9 @@ files that indicate as such in their license header.
         IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
         DEALINGS IN THE SOFTWARE.
 
------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
-A copy of the Apache 2.0 license is reproduced below. This license only applies
+A copy of the Apache 2.0 license is reproduced below. This license applies only
 to files that indicate as such in their license header.
 
                                    Apache License
@@ -322,9 +322,9 @@ to files that indicate as such in their license header.
 
      END OF TERMS AND CONDITIONS
 
------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
-A copy of the PostgreSQL license is reproduced below. This license only applies
+A copy of the PostgreSQL license is reproduced below. This license applies only
 to files that indicate as such in their license header.
 
         Permission to use, copy, modify, and distribute this software and its
@@ -345,3 +345,32 @@ to files that indicate as such in their license header.
         ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATIONS
         TO PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR
         MODIFICATIONS.
+
+A copy of the 3-clause BSD license is reproduced below. This license applies
+only to files that indicate as such in their license header.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+       * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+       * Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following disclaimer
+    in the documentation and/or other materials provided with the
+    distribution.
+       * Neither the name of the copyright holder nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

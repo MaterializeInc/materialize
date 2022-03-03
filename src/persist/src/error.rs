@@ -13,6 +13,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::{error, fmt, io, sync};
 
+use arrow2::error::ArrowError;
+
 use crate::storage::{Log, SeqNo};
 
 /// A persistence related error.
@@ -24,6 +26,14 @@ pub enum Error {
     OutOfQuota(String),
     /// An unstructured persistence related error.
     String(String),
+    /// There is no stream registered under the given name.
+    UnknownRegistration(String),
+    /// The associated write request was sequenced (given a SeqNo) and applied
+    /// to the persist state machine, but that application was deterministically
+    /// made into a no-op because it was contextually invalid (a write or seal
+    /// at a sealed timestamp, an allow_compactions at an unsealed timestamp,
+    /// etc).
+    Noop(SeqNo, String),
     /// An error returned when a command is sent to a persistence runtime that
     /// was previously stopped.
     RuntimeShutdown,
@@ -37,6 +47,8 @@ impl fmt::Display for Error {
             Error::IO(e) => fmt::Display::fmt(e, f),
             Error::OutOfQuota(e) => f.write_str(e),
             Error::String(e) => f.write_str(e),
+            Error::UnknownRegistration(id) => write!(f, "unknown registration: {}", id),
+            Error::Noop(_, e) => f.write_str(e),
             Error::RuntimeShutdown => f.write_str("runtime shutdown"),
         }
     }
@@ -45,12 +57,13 @@ impl fmt::Display for Error {
 // Hack so we can debug_assert_eq against Result<(), Error>.
 impl PartialEq for Error {
     fn eq(&self, other: &Self) -> bool {
-        if let Error::String(s) = self {
-            if let Error::String(o) = other {
-                return s == o;
-            }
+        match (self, other) {
+            (Error::String(s), Error::String(o)) => s == o,
+            (Error::OutOfQuota(s), Error::OutOfQuota(o)) => s == o,
+            (Error::UnknownRegistration(s), Error::UnknownRegistration(o)) => s == o,
+            (Error::RuntimeShutdown, Error::RuntimeShutdown) => true,
+            _ => false,
         }
-        return false;
     }
 }
 
@@ -76,6 +89,12 @@ impl<'a> From<&'a str> for Error {
     }
 }
 
+impl From<ArrowError> for Error {
+    fn from(e: ArrowError) -> Self {
+        Error::String(e.to_string())
+    }
+}
+
 impl<T> From<sync::PoisonError<T>> for Error {
     fn from(e: sync::PoisonError<T>) -> Self {
         Error::String(format!("poison: {}", e))
@@ -86,6 +105,7 @@ impl<T> From<sync::PoisonError<T>> for Error {
 ///
 /// This exists to let us keep the (surprisingly non-trivial) Log plumbing while
 /// we don't actually use it, but without the risk of accidentally using it.
+#[derive(Debug)]
 pub struct ErrorLog;
 
 impl Log for ErrorLog {

@@ -384,11 +384,25 @@ SELECT '1'::pg_catalog.regproc
 ----
 1
 
-query error CAST does not support casting from regproc to text
+query T
 SELECT '1'::regproc::text
+----
+1
 
-query error CAST does not support casting from regproc to text
+query T
 SELECT 'now'::regproc::text
+----
+now
+
+query T
+SELECT 'now'::regproc::text::regproc
+----
+1299
+
+query T
+SELECT 'now'::regproc::text::regproc::text
+----
+now
 
 query T
 SELECT 'now'::regproc
@@ -399,6 +413,11 @@ query T
 SELECT 'now'::regproc::oid
 ----
 1299
+
+query T
+SELECT NULL::regproc::text
+----
+NULL
 
 # TODO: improve this error message to match postgres.
 query error more than one record produced in subquery
@@ -429,22 +448,22 @@ SELECT a::regproc FROM text_to_regproc ORDER BY a
 750
 NULL
 
-# 🔬🔬🔬 oid alias
-
-query T
-SELECT '1'::regclass
+# Regression for 9194
+query I
+select 'now'::regproc::oid::text::regproc
 ----
-1
+1299
 
-query error unknown catalog item 'pg_catalog.regclass'
-SELECT '1'::pg_catalog.regclass
+# ensure that all existing functions can be cast to their respective names (#9199)
+statement OK
+select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 
 # 🔬🔬 record
 
-query error type "pg_catalog.record" does not exist
+query error cannot reference pseudo type pg_catalog.record
 SELECT ROW(1, 2)::record;
 
-query error type "pg_catalog.record" does not exist
+query error cannot reference pseudo type pg_catalog.record
 SELECT ROW(1, 2)::pg_catalog.record;
 
 # 🔬🔬 text
@@ -467,9 +486,12 @@ SELECT 'dog'::char(3)
 dog
 
 query T
-SELECT 'dog'::pg_catalog.char(3)
+SELECT 'dog'::pg_catalog.bpchar(3)
 ----
 dog
+
+query error pg_catalog.char does not support type modifiers
+SELECT 'dog'::pg_catalog.char(3)
 
 # 🔬🔬🔬 varchar
 
@@ -574,7 +596,7 @@ SELECT '1'::materialize.pg_catalog.int4
 1
 
 # tables are not types yet
-query error type "pg_catalog.pg_enum" does not exist
+query error "pg_catalog.pg_enum" does not refer to a type
 SELECT '1'::pg_catalog.pg_enum
 
 # 🔬 format_type
@@ -592,7 +614,7 @@ NULL
 query T
 SELECT format_type(16, NULL)
 ----
-bool
+boolean
 
 query T
 SELECT format_type(17, NULL)
@@ -602,12 +624,12 @@ bytea
 query T
 SELECT format_type(20, NULL)
 ----
-int8
+bigint
 
 query T
 SELECT format_type(23, NULL)
 ----
-int4
+integer
 
 query T
 SELECT format_type(25, NULL)
@@ -617,12 +639,12 @@ text
 query T
 SELECT format_type(18, NULL)
 ----
-char
+character
 
 query T
 SELECT format_type(1043, NULL)
 ----
-varchar
+character varying
 
 query T
 SELECT format_type(26, NULL)
@@ -632,12 +654,12 @@ oid
 query T
 SELECT format_type(700, NULL)
 ----
-float4
+real
 
 query T
 SELECT format_type(701, NULL)
 ----
-float8
+double precision
 
 query T
 SELECT format_type(1082, NULL)
@@ -657,7 +679,7 @@ timestamp
 query T
 SELECT format_type(1184, NULL)
 ----
-timestamptz
+timestamp with time zone
 
 query T
 SELECT format_type(1186, NULL)
@@ -682,82 +704,102 @@ jsonb
 query T
 SELECT format_type(1000, NULL)
 ----
-_bool
+boolean[]
 
 query T
 SELECT format_type(1001, NULL)
 ----
-_bytea
+bytea[]
+
+query T
+SELECT format_type(1005, NULL)
+----
+smallint[]
 
 query T
 SELECT format_type(1016, NULL)
 ----
-_int8
+bigint[]
 
 query T
 SELECT format_type(1007, NULL)
 ----
-_int4
+integer[]
 
 query T
 SELECT format_type(1009, NULL)
 ----
-_text
+text[]
 
 query T
 SELECT format_type(1028, NULL)
 ----
-_oid
+oid[]
 
 query T
 SELECT format_type(1021, NULL)
 ----
-_float4
+real[]
 
 query T
 SELECT format_type(1022, NULL)
 ----
-_float8
+double precision[]
 
 query T
 SELECT format_type(1182, NULL)
 ----
-_date
+date[]
 
 query T
 SELECT format_type(1183, NULL)
 ----
-_time
+time[]
 
 query T
 SELECT format_type(1115, NULL)
 ----
-_timestamp
+timestamp[]
 
 query T
 SELECT format_type(1185, NULL)
 ----
-_timestamptz
+timestamp with time zone[]
 
 query T
 SELECT format_type(1187, NULL)
 ----
-_interval
+interval[]
 
 query T
 SELECT format_type(1231, NULL)
 ----
-_numeric
+numeric[]
 
 query T
 SELECT format_type(2951, NULL)
 ----
-_uuid
+uuid[]
 
 query T
 SELECT format_type(3807, NULL)
 ----
-_jsonb
+jsonb[]
+
+query T
+SELECT format_type(2210, NULL)
+----
+regclass[]
+
+query T
+SELECT format_type(1008, NULL)
+----
+regproc[]
+
+query T
+SELECT format_type(2211, NULL)
+----
+regtype[]
 
 # 🔬🔬 non-type OID
 
@@ -781,12 +823,12 @@ SELECT format_type(6000, -100);
 query T
 SELECT format_type(1700, 0);
 ----
-numeric(65535,65532)
+numeric
 
 query T
 SELECT format_type(1700, 3);
 ----
-numeric(65535,65535)
+numeric
 
 query T
 SELECT format_type(1700, 4);
@@ -811,7 +853,7 @@ numeric(38,0)
 query T
 SELECT format_type(1700, 2490371);
 ----
-numeric(37,65535)
+numeric(37,-1)
 
 query T
 SELECT format_type(1700, 2490373);
@@ -826,9 +868,219 @@ numeric
 query T
 SELECT format_type(26, 1);
 ----
-oid
+oid(1)
 
 query T
 SELECT format_type(26, -1);
 ----
 oid
+
+# 🔬🔬 regtype
+
+query T
+SELECT 1::regtype
+----
+1
+
+query T
+SELECT 1::int4::regtype
+----
+1
+
+query T
+SELECT 1::oid::regtype
+----
+1
+
+query T
+SELECT 1::oid::regtype::oid
+----
+1
+
+query T
+SELECT '1'::regtype
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regtype
+----
+1
+
+query T
+SELECT '1'::regtype::text
+----
+1
+
+query T
+SELECT 'date'::regtype::text
+----
+date
+
+query T
+SELECT 'date'::regtype
+----
+1082
+
+query T
+SELECT 'date'::regtype::oid
+----
+1082
+
+query error type "nonexistent" does not exist
+SELECT 'nonexistent'::regtype
+
+query B
+SELECT 1082 = 'date'::regtype
+----
+true
+
+statement ok
+CREATE TABLE text_to_regtype (a text);
+
+statement ok
+INSERT INTO text_to_regtype VALUES (NULL), ('date');
+
+query I
+SELECT a::regtype FROM text_to_regtype ORDER BY a
+----
+1082
+NULL
+
+# Regression for 9194
+query I
+select 'date'::regtype::oid::text::regtype
+----
+1082
+
+# Make sure that there are no functions with duplicate OIDs
+query I
+select oid from (select count(*) as cnt, oid from mz_catalog.mz_functions group by oid) where cnt>1
+----
+
+query T
+SELECT 'date'::regtype::text::regtype
+----
+1082
+
+query T
+SELECT 'date'::regtype::text::regtype::text
+----
+date
+
+query T
+SELECT NULL::regtype::text
+----
+NULL
+
+# ensure that all existing types can be cast to their respective names
+statement OK
+select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
+
+# 🔬🔬 regclass
+
+query T
+SELECT 1::regclass
+----
+1
+
+query T
+SELECT 1::int4::regclass
+----
+1
+
+query T
+SELECT 1::oid::regclass
+----
+1
+
+query T
+SELECT 1::oid::regclass::oid
+----
+1
+
+query T
+SELECT '1'::regclass
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regclass
+----
+1
+
+query T
+SELECT '1'::regclass::text
+----
+1
+
+query T
+SELECT 'mz_tables'::regclass::text
+----
+mz_tables
+
+query B
+SELECT 'mz_tables'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
+----
+true
+
+query B
+SELECT 'mz_tables'::regclass::oid = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
+----
+true
+
+query error object "nonexistent" does not exist
+SELECT 'nonexistent'::regclass
+
+statement ok
+CREATE TABLE text_to_regclass (a text);
+
+statement ok
+INSERT INTO text_to_regclass VALUES (NULL), ('mz_tables');
+
+query T
+SELECT a::regclass::text FROM text_to_regclass ORDER BY a
+----
+mz_tables
+NULL
+
+# Regression for 9194
+query B
+select 'mz_tables'::regclass::oid::text::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
+----
+true
+
+# Make sure that there are no classes with duplicate OIDs
+query I
+select oid from (select count(*) as cnt, oid from pg_catalog.pg_class group by oid) where cnt>1
+----
+
+query T
+SELECT NULL::regclass::text
+----
+NULL
+
+# ensure that all existing types can be cast to their respective names
+statement OK
+select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)
+
+# multiple tables with the same name cause a lookup collision
+statement OK
+create schema test
+
+statement OK
+create schema test2
+
+statement ok
+CREATE TABLE test.table_with_id(i int);
+
+statement ok
+CREATE TABLE test2.table_with_id(i int);
+
+# unqualified duplicate names will lead to an error
+statement error more than one record produced in subquery
+SELECT 'table_with_id'::regclass
+
+# fully qualified names are not yet supported
+statement error object "test.table_with_id" does not exist
+SELECT 'test.table_with_id'::regclass

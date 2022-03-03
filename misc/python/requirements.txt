@@ -1,6 +1,1 @@
-click==8.0.1
-pg8000==1.21.1
-PyMySQL==1.0.2
-pyyaml==5.4.1
-semver==3.0.0-dev.2
-toml==0.10.2
+../../ci/builder/requirements.txt

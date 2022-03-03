@@ -9,176 +9,61 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Error};
-use log::warn;
+use anyhow::{anyhow, bail, Context};
+use tracing::warn;
 
-use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-use ore::retry::Retry;
-use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use mz_ore::cast::CastFrom;
+use mz_ore::retry::Retry;
+use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 
-use super::{cdc_v2, is_null, EnvelopeType};
+use super::is_null;
 
 pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
     let schema = serde_json::from_str(schema)?;
     Ok(Schema::parse(&schema)?)
 }
 
-/// Validates an Avro key schema for use as a source.
-///
-/// An Avro key schema is valid for our purposes iff every field
-/// mentioned in the key schema exists in the specified relation
-/// type with the same type. If the schema is valid, returns a
-/// vector describing the order and position of the primary key
-/// columns.
-pub fn validate_key_schema(
-    key_schema: &str,
-    value_desc: &RelationDesc,
-) -> anyhow::Result<Vec<usize>> {
-    let key_schema = parse_schema(key_schema)?;
-    let key_desc = validate_schema_1(key_schema.top_node())?;
-    let mut indices = Vec::new();
-    for (name, key_type) in key_desc.iter() {
-        match value_desc.get_by_name(name) {
-            Some((index, value_type)) if key_type == value_type => {
-                indices.push(index);
-            }
-            Some((_, value_type)) => bail!(
-                "key and value column types do not match: key {:?} vs. value {:?}",
-                key_type,
-                value_type,
-            ),
-            None => bail!("Value schema missing primary key column: {}", name),
-        }
-    }
-    Ok(indices)
-}
-
 /// Converts an Apache Avro schema into a list of column names and types.
-pub fn validate_value_schema(
-    schema: &str,
-    envelope: EnvelopeType,
-) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
-    let schema = parse_schema(schema)?;
-    let node = schema.top_node();
-
-    let row_schema = match envelope {
-        EnvelopeType::Debezium => {
-            // The top-level record needs to be a diff "envelope" that contains
-            // `before` and `after` fields, where the `before` and `after` fields
-            // have the same schema.
-            match node.inner {
-                SchemaPiece::Record { fields, .. } => {
-                    let before = fields.iter().find(|f| f.name == "before");
-                    let after = fields.iter().find(|f| f.name == "after");
-                    match (before, after) {
-                        (Some(before), Some(after)) => {
-                            let left = node.step(&before.schema);
-                            let right = node.step(&after.schema);
-                            match (left.inner, right.inner) {
-                                (SchemaPiece::Union(before), SchemaPiece::Union(after)) => {
-                                    if before.variants().len() != 2 {
-                                        bail!("Source schema 'before' field has the wrong number of variants");
-                                    }
-                                    if after.variants().len() != 2 {
-                                        bail!("Source schema 'after' field has the wrong number of variants");
-                                    }
-                                    let before_null =
-                                        before.variants().iter().position(|s| is_null(s));
-                                    let after_null =
-                                        before.variants().iter().position(|s| is_null(s));
-                                    if before_null != after_null {
-                                        bail!("Source schema 'before' and 'after' fields do not match.");
-                                    }
-
-                                    let null_idx = match before_null {
-                                        Some(null_idx) => null_idx,
-                                        None => bail!("Source schema 'before'/'after' fields are not of expected type")
-                                    };
-                                    let record_idx = 1 - null_idx;
-                                    let (before_piece, after_piece) = (
-                                        &before.variants()[record_idx],
-                                        &after.variants()[record_idx],
-                                    );
-                                    let before_name = match before_piece {
-                                        SchemaPieceOrNamed::Piece(_) => bail!(
-                                            "Source schema 'before' field should be a record."
-                                        ),
-                                        SchemaPieceOrNamed::Named(name) => name,
-                                    };
-                                    let after_name = match after_piece {
-                                        SchemaPieceOrNamed::Piece(_) => {
-                                            bail!("Source schema 'after' field should be a record.")
-                                        }
-                                        SchemaPieceOrNamed::Named(name) => name,
-                                    };
-                                    if before_name != after_name {
-                                        bail!("Source schema 'before' and 'after' fields should be the same named record.");
-                                    }
-                                    match schema.lookup(*before_name).piece {
-                                        SchemaPiece::Record { .. } => node,
-                                        _ => bail!("Source schema 'before' and 'after' fields should contain a record."),
-                                    }
-                                }
-                                (_, SchemaPiece::Union(_)) => {
-                                    bail!("Source schema 'before' field should be a union.")
-                                }
-                                (SchemaPiece::Union(_), _) => {
-                                    bail!("Source schema 'after' field should be a union.")
-                                }
-                                (_, _) => bail!(
-                                    "Source schema 'before' and 'after' fields should be unions."
-                                ),
-                            }
-                        }
-                        (None, _) => bail!("source schema is missing 'before' field"),
-                        (_, None) => bail!("source schema is missing 'after' field"),
-                    }
-                }
-                _ => bail!("Top-level envelope must be a record."),
-            }
-        }
-        EnvelopeType::Upsert => match node.inner {
-            SchemaPiece::Record { .. } => schema.top_node(),
-            _ => bail!("upsert schema can only be record, got: {:?}", schema.top),
-        },
-        EnvelopeType::CdcV2 => cdc_v2::extract_data_columns(&schema)?,
-        EnvelopeType::None => schema.top_node(),
-    };
-
-    // The diff envelope is sane. Convert the actual record schema for the row.
-    validate_schema_1(row_schema)
+// TODO(petrosagg): find a way to make this a TryFrom impl somewhere
+pub fn schema_to_relationdesc(schema: Schema) -> Result<RelationDesc, anyhow::Error> {
+    // TODO(petrosagg): call directly into validate_schema_2 and do the Record flattening once
+    // we're in RelationDesc land
+    Ok(RelationDesc::from_names_and_types(validate_schema_1(
+        schema.top_node(),
+    )?))
 }
 
 fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
+    let mut columns = vec![];
+    let mut seen_avro_nodes = Default::default();
     match schema.inner {
         SchemaPiece::Record { fields, .. } => {
-            let mut columns = vec![];
-            let mut seen_avro_nodes = Default::default();
             for f in fields {
                 columns.extend(get_named_columns(
                     &mut seen_avro_nodes,
                     schema.step(&f.schema),
-                    &f.name,
+                    Some(&f.name),
                 )?);
             }
-            Ok(columns)
         }
-        _ => bail!("row schemas must be records, got: {:?}", schema.inner),
+        _ => {
+            columns.extend(get_named_columns(&mut seen_avro_nodes, schema, None)?);
+        }
     }
+    Ok(columns)
 }
 
 fn get_named_columns<'a>(
     seen_avro_nodes: &mut HashSet<usize>,
     schema: SchemaNode<'a>,
-    base_name: &str,
+    base_name: Option<&str>,
 ) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     if let SchemaPiece::Union(us) = schema.inner {
         let mut columns = vec![];
@@ -207,12 +92,26 @@ fn get_named_columns<'a>(
                 let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
                     // There is only one non-null variant in the
                     // union, so we can use the field name directly.
-                    base_name.to_string()
+                    base_name
+                        .map(|n| n.to_owned())
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| "?column?".into())
                 } else {
                     // There are multiple non-null variants in the
                     // union, so we need to invent field names for
                     // each variant.
-                    format!("{}{}", &base_name, i + 1)
+                    base_name
+                        .map(|n| format!("{}{}", n, i + 1))
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| "?column?".into())
                 };
 
                 // If there is more than one variant in the union,
@@ -228,7 +127,12 @@ fn get_named_columns<'a>(
         Ok(columns)
     } else {
         let scalar_type = validate_schema_2(seen_avro_nodes, schema)?;
-        Ok(vec![(base_name.into(), scalar_type.nullable(false))])
+        Ok(vec![(
+            // TODO(benesch): we should do better than this when there's no base
+            // name, e.g., invent a name based on the type.
+            base_name.unwrap_or("?column?").into(),
+            scalar_type.nullable(false),
+        )])
     }
 }
 
@@ -249,14 +153,14 @@ fn validate_schema_2(
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {
-            if *precision > NUMERIC_DATUM_MAX_PRECISION {
+            if *precision > usize::cast_from(NUMERIC_DATUM_MAX_PRECISION) {
                 bail!(
                     "decimals with precision greater than {} are not supported",
                     NUMERIC_DATUM_MAX_PRECISION
                 )
             }
             ScalarType::Numeric {
-                scale: Some(u8::try_from(*scale).unwrap()),
+                max_scale: Some(NumericMaxScale::try_from(*scale)?),
             }
         }
         SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
@@ -280,7 +184,9 @@ fn validate_schema_2(
                     }
                 }
                 let next_node = schema.step(&f.schema);
-                columns.extend(get_named_columns(seen_avro_nodes, next_node, &f.name)?.into_iter());
+                columns.extend(
+                    get_named_columns(seen_avro_nodes, next_node, Some(&f.name))?.into_iter(),
+                );
                 if let Some(named_idx) = named_idx {
                     seen_avro_nodes.remove(&named_idx);
                 }
@@ -332,11 +238,11 @@ pub struct ConfluentAvroResolver {
 impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
-        config: Option<ccsr::ClientConfig>,
+        config: Option<mz_ccsr::ClientConfig>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
-        let writer_schemas = config.map(|sr| SchemaCache::new(sr)).transpose()?;
+        let writer_schemas = config.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
@@ -347,44 +253,24 @@ impl ConfluentAvroResolver {
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<(&'b [u8], &'a Schema)> {
-        let mut extract_schema_id = || {
-            // The first byte is a magic byte (0) that indicates the Confluent
-            // serialization format version, and the next four bytes are a big
-            // endian 32-bit schema ID.
-            //
-            // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-            if bytes.len() < 5 {
-                bail!(
-                        "Confluent-style avro datum is too few bytes: expected at least 5 bytes, got {}",
-                        bytes.len()
-                    );
-            }
-            let magic = bytes[0];
-            let schema_id = BigEndian::read_i32(&bytes[1..5]);
-            bytes = &bytes[5..];
-
-            if magic != 0 {
-                bail!(
-                    "wrong Confluent-style avro serialization magic: expected 0, got {}",
-                    magic
-                );
-            }
-            Ok(schema_id)
-        };
-
-        let resolved_schema = match &mut self.writer_schemas {
+    ) -> anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)> {
+        let (resolved_schema, schema_id) = match &mut self.writer_schemas {
             Some(cache) => {
                 debug_assert!(
                     self.confluent_wire_format,
                     "We should have set 'confluent_wire_format' everywhere \
                      that can lead to this branch"
                 );
-                let schema_id = extract_schema_id()?;
-                cache
+                // XXX(guswynn): use destructuring assignments when they are stable
+                let (schema_id, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                bytes = adjusted_bytes;
+                let schema = cache
                     .get(schema_id, &self.reader_schema)
                     .await
-                    .map_err(Error::msg)?
+                    .with_context(|| {
+                        format!("failed to resolve Avro schema (id = {})", schema_id)
+                    })?;
+                (schema, Some(schema_id))
             }
 
             // If we haven't been asked to use a schema registry, we have no way
@@ -393,12 +279,13 @@ impl ConfluentAvroResolver {
             None => {
                 if self.confluent_wire_format {
                     // validate and just move the bytes buffer ahead
-                    extract_schema_id()?;
+                    let (_, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                    bytes = adjusted_bytes;
                 }
-                &self.reader_schema
+                (&self.reader_schema, None)
             }
         };
-        Ok((bytes, resolved_schema))
+        Ok((bytes, resolved_schema, schema_id))
     }
 }
 
@@ -421,11 +308,11 @@ impl fmt::Debug for ConfluentAvroResolver {
 #[derive(Debug)]
 struct SchemaCache {
     cache: HashMap<i32, Result<Schema, AvroError>>,
-    ccsr_client: ccsr::Client,
+    ccsr_client: mz_ccsr::Client,
 }
 
 impl SchemaCache {
-    fn new(schema_registry: ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
+    fn new(schema_registry: mz_ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: HashMap::new(),
             ccsr_client: schema_registry.build()?,
@@ -447,7 +334,7 @@ impl SchemaCache {
                 let ccsr_client = &self.ccsr_client;
                 let response = Retry::default()
                     .max_duration(Duration::from_secs(30))
-                    .retry(|state| async move {
+                    .retry_async(|state| async move {
                         let res = ccsr_client.get_schema_by_id(id).await;
                         match res {
                             Err(e) => {

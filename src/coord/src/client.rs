@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryFrom;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,20 +14,20 @@ use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use dataflow_types::PeekResponse;
-use expr::GlobalId;
-use ore::collections::CollectionExt;
-use ore::thread::JoinOnDropHandle;
-use repr::{Datum, Row};
-use sql::ast::{Raw, Statement};
+use mz_dataflow_types::PeekResponseUnary;
+use mz_expr::GlobalId;
+use mz_ore::collections::CollectionExt;
+use mz_ore::thread::JoinOnDropHandle;
+use mz_repr::{Datum, Row, ScalarType};
+use mz_sql::ast::{Raw, Statement};
 
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
+    Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
     StartupResponse,
 };
 use crate::error::CoordError;
 use crate::id_alloc::IdAllocator;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
 /// A handle to a running coordinator.
 ///
@@ -100,7 +99,7 @@ impl Client {
     pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, CoordError> {
         let conn_client = self.new_conn()?;
         let session = Session::new(conn_client.conn_id(), "mz_system".into());
-        let (mut session_client, _) = conn_client.startup(session).await?;
+        let (mut session_client, _) = conn_client.startup(session, false).await?;
         let res = session_client.simple_execute(stmts).await;
         session_client.terminate().await;
         res
@@ -147,24 +146,26 @@ impl ConnClient {
     pub async fn startup(
         self,
         session: Session,
+        create_user_if_not_exists: bool,
     ) -> Result<(SessionClient, StartupResponse), CoordError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
-        // connection. The coordinator will send a cancelled message on it if a
+        // connection. The coordinator will send a canceled message on it if a
         // cancellation request comes. The connection will reset that on every message
         // it receives and then check for it where we want to add the ability to cancel
         // an in-progress statement.
-        let (cancel_tx, cancel_rx) = watch::channel(Cancelled::NotCancelled);
+        let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
         let cancel_tx = Arc::new(cancel_tx);
         let mut client = SessionClient {
             inner: self,
             session: Some(session),
-            cancel_tx: cancel_tx.clone(),
+            cancel_tx: Arc::clone(&cancel_tx),
             cancel_rx,
         };
         let response = client
             .send(|tx, session| Command::Startup {
                 session,
+                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             })
@@ -189,7 +190,7 @@ impl ConnClient {
                 conn_id,
                 secret_key,
             })
-            .expect("coordinator unexpectedly canceled request")
+            .expect("coordinator unexpectedly gone");
     }
 
     async fn send<T, F>(&mut self, f: F) -> T
@@ -222,8 +223,8 @@ pub struct SessionClient {
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
-    cancel_tx: Arc<watch::Sender<Cancelled>>,
-    cancel_rx: watch::Receiver<Cancelled>,
+    cancel_tx: Arc<watch::Sender<Canceled>>,
+    cancel_rx: watch::Receiver<Canceled>,
 }
 
 impl SessionClient {
@@ -232,7 +233,7 @@ impl SessionClient {
         async move {
             loop {
                 let _ = cancel_rx.changed().await;
-                if let Cancelled::Cancelled = *cancel_rx.borrow() {
+                if let Canceled::Canceled = *cancel_rx.borrow() {
                     return;
                 }
             }
@@ -242,10 +243,28 @@ impl SessionClient {
     pub fn reset_canceled(&mut self) {
         // Clear any cancellation message.
         // TODO(mjibson): This makes the use of .changed annoying since it will
-        // generally always have a NotCancelled message first that needs to be ignored,
+        // generally always have a NotCanceled message first that needs to be ignored,
         // and thus run in a loop. Figure out a way to have the future only resolve on
-        // a Cancelled message.
-        let _ = self.cancel_tx.send(Cancelled::NotCancelled);
+        // a Canceled message.
+        let _ = self.cancel_tx.send(Canceled::NotCanceled);
+    }
+
+    // Verify and return the named prepared statement. We need to verify each use
+    // to make sure the prepared statement is still safe to use.
+    pub async fn get_prepared_statement(
+        &mut self,
+        name: &str,
+    ) -> Result<&PreparedStatement, CoordError> {
+        self.send(|tx, session| Command::VerifyPreparedStatement {
+            name: name.to_string(),
+            session,
+            tx,
+        })
+        .await?;
+        Ok(self
+            .session()
+            .get_prepared_statement_unverified(&name)
+            .expect("must exist"))
     }
 
     /// Saves the specified statement as a prepared statement.
@@ -256,7 +275,7 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Describe {
             name,
@@ -273,7 +292,7 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Statement<Raw>,
-        param_types: Vec<Option<pgrepr::Type>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Declare {
             name,
@@ -307,6 +326,11 @@ impl SessionClient {
             tx,
         })
         .await
+    }
+
+    /// Cancels the query currently running on another connection.
+    pub async fn cancel_request(&mut self, conn_id: u32, secret_key: u32) {
+        self.inner.cancel_request(conn_id, secret_key).await
     }
 
     /// Ends a transaction.
@@ -414,7 +438,7 @@ impl SessionClient {
             }
         }
 
-        let stmts = sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
+        let stmts = mz_sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
         self.start_transaction(None).await?;
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
@@ -439,21 +463,19 @@ impl SessionClient {
                 _ => return Err(CoordError::Unsupported("statements of the executed type")),
             };
             let rows = match rows {
-                PeekResponse::Rows(rows) => rows,
-                PeekResponse::Error(e) => coord_bail!("{}", e),
-                PeekResponse::Canceled => coord_bail!("execution canceled"),
+                PeekResponseUnary::Rows(rows) => rows,
+                PeekResponseUnary::Error(e) => coord_bail!("{}", e),
+                PeekResponseUnary::Canceled => coord_bail!("execution canceled"),
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
             let col_names = match desc.relation_desc {
-                Some(desc) => desc
-                    .iter_names()
-                    .map(|name| name.map(|name| name.to_string()))
-                    .collect(),
+                Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
                 None => vec![],
             };
+            let mut datum_vec = mz_repr::DatumVec::new();
             for row in rows {
-                let datums = row.unpack();
-                sql_rows.push(datums.iter().map(|datum| datum_to_json(datum)).collect());
+                let datums = datum_vec.borrow_with(&row);
+                sql_rows.push(datums.iter().map(datum_to_json).collect());
             }
             results.push(SimpleResult {
                 rows: sql_rows,

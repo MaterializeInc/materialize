@@ -13,16 +13,16 @@
 #
 
 ! SELECT EXTRACT(NULL FROM CAST('2011-11-11' AS DATE));
-unknown units 'null'
+contains:unit 'null' not recognized
 
 ! SELECT EXTRACT(NULL FROM CAST('11:11:11' AS TIME));
-unknown units 'null'
+contains:unit 'null' not recognized
 
 ! SELECT EXTRACT(NULL FROM CAST('2011-11-11' AS TIMESTAMP));
-unknown units 'null'
+contains:unit 'null' not recognized
 
 ! SELECT EXTRACT(NULL FROM CAST('2011-11-11' AS TIMESTAMP WITH TIME ZONE));
-unknown units 'null'
+contains:unit 'null' not recognized
 
 # NULL is an argument here, so the function returns NULL
 > SELECT DATE_PART(NULL, CAST('2011-11-11' AS DATE)) IS NULL;
@@ -38,59 +38,59 @@ true
 true
 
 ! SELECT EXTRACT('foo' FROM CAST('2011-11-11' AS DATE));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 ! SELECT EXTRACT('foo' FROM CAST('11:11:11' AS TIME));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 ! SELECT EXTRACT('foo' FROM CAST('2011-11-11' AS TIMESTAMP));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 ! SELECT EXTRACT('foo' FROM CAST('2011-11-11' AS TIMESTAMP WITH TIME ZONE));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 
 ! SELECT DATE_PART('foo', CAST('2011-11-11' AS DATE));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 ! SELECT DATE_PART('foo', CAST('11:11:11' AS TIME));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 ! SELECT DATE_PART('foo', CAST('2011-11-11' AS TIMESTAMP));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 ! SELECT DATE_PART('foo', CAST('2011-11-11' AS TIMESTAMP WITH TIME ZONE));
-unknown units 'foo'
+contains:unit 'foo' not recognized
 
 
 ! SELECT EXTRACT('' FROM CAST('2011-11-11' AS DATE));
-unknown units ''
+contains:unit '' not recognized
 
 ! SELECT EXTRACT('' FROM CAST('11:11:11' AS TIME));
-unknown units ''
+contains:unit '' not recognized
 
 ! SELECT EXTRACT('' FROM CAST('2011-11-11' AS TIMESTAMP));
-unknown units ''
+contains:unit '' not recognized
 
 ! SELECT EXTRACT('' FROM CAST('2011-11-11' AS TIMESTAMP WITH TIME ZONE));
-unknown units ''
+contains:unit '' not recognized
 
 
 ! SELECT DATE_PART('', CAST('2011-11-11' AS DATE));
-unknown units ''
+contains:unit '' not recognized
 
 ! SELECT DATE_PART('', CAST('11:11:11' AS TIME));
-unknown units ''
+contains:unit '' not recognized
 
 ! SELECT DATE_PART('', CAST('2011-11-11' AS TIMESTAMP));
-unknown units ''
+contains:unit '' not recognized
 
 ! SELECT DATE_PART('', CAST('2011-11-11' AS TIMESTAMP WITH TIME ZONE));
-unknown units ''
+contains:unit '' not recognized
 
 
-> SELECT EXTRACT('second' FROM CAST('2011-11-11' AS DATE));
-0
+! SELECT EXTRACT('second' FROM CAST('2011-11-11' AS DATE));
+contains:unit 'seconds' not supported for type date
 
 > SELECT EXTRACT('second' FROM CAST('2011-11-11' AS TIMESTAMP));
 0

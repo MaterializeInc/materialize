@@ -15,6 +15,8 @@
 
 //! Cast utilities.
 
+use paste::paste;
+
 /// A trait for safe, simple, and infallible casts.
 ///
 /// `CastFrom` is like [`std::convert::From`], but it is implemented for some
@@ -36,13 +38,26 @@ pub trait CastFrom<T> {
 
 macro_rules! cast_from {
     ($from:ty, $to:ty) => {
-        impl CastFrom<$from> for $to {
-            fn cast_from(from: $from) -> $to {
+        paste! {
+            impl CastFrom<$from> for $to {
+                fn cast_from(from: $from) -> $to {
+                    from as $to
+                }
+            }
+
+            /// Casts [`$from`] to [`$to`].
+            ///
+            /// This is equvialent to the [`CastFrom`] implementation but is
+            /// available as a `const fn`.
+            pub const fn [< $from _to_ $to >](from: $from) -> $to {
                 from as $to
             }
         }
     };
 }
+
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+cast_from!(u8, usize);
 
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 cast_from!(u32, usize);
@@ -51,6 +66,8 @@ cast_from!(u32, usize);
 cast_from!(u64, usize);
 
 cast_from!(usize, u64);
+
+cast_from!(u8, i32);
 
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 cast_from!(i32, isize);

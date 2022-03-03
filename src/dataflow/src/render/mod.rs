@@ -100,14 +100,10 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
-use std::rc::Weak;
 
 use differential_dataflow::AsCollection;
-use persist::indexed::runtime::RuntimeClient;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
@@ -115,86 +111,44 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use dataflow_types::*;
-use expr::{GlobalId, Id};
-use itertools::Itertools;
-use ore::collections::CollectionExt as _;
-use ore::now::NowFn;
-use repr::{Row, Timestamp};
+use mz_dataflow_types::*;
+use mz_expr::{GlobalId, Id};
+use mz_ore::collections::CollectionExt as IteratorExt;
+use mz_repr::{Row, Timestamp};
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::metrics::Metrics;
-use crate::render::context::CollectionBundle;
+use crate::arrangement::manager::TraceBundle;
+pub use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::LocalInput;
-use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
-use crate::source::timestamp::TimestampBindingRc;
-use crate::source::SourceToken;
+use crate::server::boundary::{ComputeReplay, StorageCapture};
+use crate::server::{ComputeState, StorageState};
 
-mod context;
+pub mod context;
+mod debezium;
+mod envelope_none;
 mod flat_map;
 mod join;
 mod reduce;
 pub mod sinks;
-mod sources;
+pub mod sources;
 mod threshold;
 mod top_k;
 mod upsert;
 
-/// Worker-local state that is maintained across dataflows.
-pub struct RenderState {
-    /// The traces available for sharing across dataflows.
-    pub traces: TraceManager,
-    /// Handles to local inputs, keyed by ID.
-    pub local_inputs: HashMap<GlobalId, LocalInput>,
-    /// Handles to external sources, keyed by ID.
-    pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
-    /// Timestamp data updates for each source.
-    pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
-    /// Tokens that should be dropped when a dataflow is dropped to clean up
-    /// associated state.
-    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
-    /// Frontier of sink writes (all subsequent writes will be at times at or
-    /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Metrics reported by all dataflows.
-    pub metrics: Metrics,
-    /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient>,
-    /// Shared buffer with TAIL operator instances by which they can respond.
-    ///
-    /// The entries are pairs of sink identifier (to identify the tail instance)
-    /// and the response itself.
-    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
-}
-
-/// A container for "tokens" that are relevant to an in-construction dataflow.
+/// Assemble the "storage" side of a dataflow, i.e. the sources.
 ///
-/// Tokens are used by consumers of data to keep their sources of data running.
-/// Once all tokens referencing a source are dropped, the source can shut down,
-/// which will wind down (eventually) the dataflow containing it.
-#[derive(Default)]
-pub struct RelevantTokens {
-    /// The source tokens for all sources that have been built in this context.
-    pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
-    /// Any other tokens that need to be dropped when an object is dropped.
-    pub additional_tokens: HashMap<GlobalId, Vec<Rc<dyn Any>>>,
-    /// Tokens for CDCv2 capture sources that have been built in this context.
-    pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
-}
-
-/// Build a dataflow from a description.
-pub fn build_dataflow<A: Allocate>(
+/// This method creates a new dataflow to host the implementations of sources for the `dataflow`
+/// argument, and returns assets for each source that can import the results into a new dataflow.
+pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     timely_worker: &mut TimelyWorker<A>,
-    render_state: &mut RenderState,
-    dataflow: DataflowDescription<plan::Plan>,
-    now: NowFn,
-    source_metrics: &SourceBaseMetrics,
-    sink_metrics: &SinkBaseMetrics,
+    storage_state: &mut StorageState,
+    debug_name: &str,
+    as_of: Option<Antichain<mz_repr::Timestamp>>,
+    source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
+    dataflow_id: GlobalId,
+    boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
-    let name = format!("Dataflow: {}", &dataflow.debug_name);
+    let name = format!("Source dataflow: {debug_name}");
     let materialized_logging = timely_worker.log_register().get("materialized");
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
@@ -203,65 +157,143 @@ pub fn build_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
-            let mut tokens = RelevantTokens::default();
-
-            assert!(
-                !dataflow
-                    .source_imports
-                    .iter()
-                    .map(|(id, _src)| id)
-                    .duplicates()
-                    .next()
-                    .is_some(),
-                "computation of unique IDs assumes a source appears no more than once per dataflow"
-            );
+            let as_of = as_of.clone().unwrap();
+            let source_dataflow_id = scope.addr().into_element();
+            let debug_name = format!("{debug_name}-sources");
 
             // Import declared sources into the rendering context.
-            for (src_id, (src, orig_id)) in dataflow.source_imports.clone() {
-                context.import_source(
-                    render_state,
-                    &mut tokens,
+            for (src_id, source) in &source_imports {
+                let ((ok, err), token) = crate::render::sources::import_source(
+                    &debug_name,
+                    source_dataflow_id,
+                    &as_of,
+                    source.clone(),
+                    storage_state,
                     region,
                     materialized_logging.clone(),
-                    src_id,
-                    src,
-                    orig_id,
-                    now,
-                    source_metrics,
+                    src_id.clone(),
                 );
+
+                // Capture the frontier of `ok` to present as the "source upper".
+                // TODO: remove this code when storage has a better holistic take on source progress.
+                // This shared frontier is set up in `CreateSource`, and must be present by the time we render as source.
+                let shared_frontier = Rc::clone(&storage_state.source_uppers[src_id]);
+                let weak_token = Rc::downgrade(&token);
+                use timely::dataflow::operators::Operator;
+                ok.inner.sink(
+                    timely::dataflow::channels::pact::Pipeline,
+                    "frontier monitor",
+                    move |input| {
+                        // Drain the input; we don't need it.
+                        input.for_each(|_, _| {});
+
+                        // Only attempt the frontier update if the source is still live.
+                        // If it is shutting down, we shouldn't treat the frontier as correct.
+                        if let Some(_) = weak_token.upgrade() {
+                            // Read the input frontier, and join with the shared frontier.
+                            let mut joined_frontier = Antichain::new();
+                            let mut borrow = shared_frontier.borrow_mut();
+                            for time1 in borrow.iter() {
+                                for time2 in &input.frontier.frontier() {
+                                    use differential_dataflow::lattice::Lattice;
+                                    joined_frontier.insert(time1.join(time2));
+                                }
+                            }
+                            *borrow = joined_frontier;
+                        }
+                    },
+                );
+
+                let source_key = source.with_id(*src_id);
+                boundary.capture(source_key, ok, err, token, &debug_name, dataflow_id);
+            }
+        })
+    });
+}
+
+/// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
+///
+/// This method imports sources from provided assets, and then builds the remaining
+/// dataflow using "compute-local" assets like shared arrangements, and producing
+/// both arrangements and sinks.
+pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
+    timely_worker: &mut TimelyWorker<A>,
+    compute_state: &mut ComputeState,
+    dataflow: DataflowDescription<mz_dataflow_types::plan::Plan>,
+    boundary: &mut B,
+) {
+    let worker_logging = timely_worker.log_register().get("timely");
+    let name = format!("Dataflow: {}", &dataflow.debug_name);
+
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // The scope.clone() occurs to allow import in the region.
+        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // so that other similar uses (e.g. with iterative scopes) do not require weird
+        // alternate type signatures.
+        scope.clone().region_named(&name, |region| {
+            let mut context = crate::render::context::Context::for_dataflow(
+                &dataflow,
+                scope.addr().into_element(),
+            );
+            let mut tokens = BTreeMap::new();
+
+            // Import declared sources into the rendering context.
+            for (source_id, source) in dataflow.source_imports.iter() {
+                let source_key = source.with_id(*source_id);
+                let (ok, err, token) = boundary.replay(
+                    source_key,
+                    region,
+                    &format!("{name}-{source_id}"),
+                    dataflow.id,
+                );
+
+                // Associate collection bundle with the source identifier.
+                context.insert_id(
+                    mz_expr::Id::Global(*source_id),
+                    crate::render::CollectionBundle::from_collections(ok, err),
+                );
+                // Associate returned tokens with the source identifier.
+                tokens.insert(*source_id, token);
             }
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(render_state, &mut tokens, scope, region, *idx_id, &idx.0);
+                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
             }
 
+            // We first determine indexes and sinks to export, then build the declared object, and
+            // finally export indexes and sinks. The reason for this is that we want to avoid
+            // cloning the dataflow plan for `build_object`, which can be expensive.
+
+            // Determine indexes to export
+            let indexes = dataflow
+                .index_exports
+                .iter()
+                .cloned()
+                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.get_imports(&idx.on_id), idx))
+                .collect::<Vec<_>>();
+
+            // Determine sinks to export
+            let sinks = dataflow
+                .sink_exports
+                .iter()
+                .cloned()
+                .map(|(sink_id, sink)| (sink_id, dataflow.get_imports(&sink.from), sink))
+                .collect::<Vec<_>>();
+
             // Build declared objects.
-            for object in &dataflow.objects_to_build {
-                // We clone because we cannot deconstruct `object` for its members due
-                // to subsequent use of `dataflow.get_imports`.
-                // TODO: fix that and avoid the clones.
-                context.build_object(region, object.clone());
+            for object in dataflow.objects_to_build {
+                context.build_object(region, object);
             }
 
             // Export declared indexes.
-            for (idx_id, idx, _typ) in &dataflow.index_exports {
-                let imports = dataflow.get_imports(&idx.on_id);
-                context.export_index(render_state, &mut tokens, imports, *idx_id, idx);
+            for (idx_id, imports, idx) in indexes {
+                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
             }
 
             // Export declared sinks.
-            for (sink_id, sink) in &dataflow.sink_exports {
-                let imports = dataflow.get_imports(&sink.from);
-                context.export_sink(
-                    render_state,
-                    &mut tokens,
-                    imports,
-                    *sink_id,
-                    sink,
-                    sink_metrics,
-                );
+            for (sink_id, imports, sink) in sinks {
+                context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
             }
         });
     })
@@ -271,25 +303,25 @@ impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn import_index(
+    pub(crate) fn import_index(
         &mut self,
-        render_state: &mut RenderState,
-        tokens: &mut RelevantTokens,
+        compute_state: &mut ComputeState,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
-        if let Some(traces) = render_state.traces.get_mut(&idx_id) {
+        if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 scope,
-                &format!("Index({}, {:?})", idx.on_id, idx.keys),
+                &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 scope,
-                &format!("ErrIndex({}, {:?})", idx.on_id, idx.keys),
+                &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
             );
             let ok_arranged = ok_arranged.enter(region);
@@ -297,19 +329,14 @@ where
             self.update_id(
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
-                    idx.keys.clone(),
+                    idx.key.clone(),
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                 ),
             );
-            tokens
-                .additional_tokens
-                .entry(idx_id)
-                .or_insert_with(Vec::new)
-                .push(Rc::new((
-                    ok_button.press_on_drop(),
-                    err_button.press_on_drop(),
-                    token,
-                )));
+            tokens.insert(
+                idx_id,
+                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+            );
         } else {
             panic!(
                 "import of index {} failed while building dataflow {}",
@@ -318,7 +345,7 @@ where
         }
     }
 
-    fn build_object(
+    pub(crate) fn build_object(
         &mut self,
         scope: &mut Child<'g, G, G::Timestamp>,
         object: BuildDesc<plan::Plan>,
@@ -328,44 +355,39 @@ where
         self.insert_id(Id::Global(object.id), bundle);
     }
 
-    fn export_index(
+    pub(crate) fn export_index(
         &mut self,
-        render_state: &mut RenderState,
-        tokens: &mut RelevantTokens,
+        compute_state: &mut ComputeState,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
         // put together tokens that belong to the export
-        let mut needed_source_tokens = Vec::new();
-        let mut needed_additional_tokens = Vec::new();
+        let mut needed_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(addls) = tokens.additional_tokens.get(&import_id) {
-                needed_additional_tokens.extend_from_slice(addls);
-            }
-            if let Some(source_token) = tokens.source_tokens.get(&import_id) {
-                needed_source_tokens.push(source_token.clone());
+            if let Some(token) = tokens.get(&import_id) {
+                needed_tokens.push(Rc::clone(&token));
             }
         }
-        let tokens = Rc::new((needed_source_tokens, needed_additional_tokens));
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(
                 "Arrangement alarmingly absent! id: {:?}",
                 Id::Global(idx_id)
             )
         });
-        match bundle.arrangement(&idx.keys) {
+        match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                render_state.traces.set(
+                compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
-                let trace = render_state.traces.get(&gid).unwrap().clone();
-                render_state.traces.set(idx_id, trace);
+                let trace = compute_state.traces.get(&gid).unwrap().clone();
+                compute_state.traces.set(idx_id, trace);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -376,7 +398,7 @@ where
                 panic!(
                     "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
                     Id::Global(idx_id),
-                    &idx.keys
+                    &idx.key
                 );
             }
         };
@@ -397,13 +419,10 @@ where
         scope: &mut G,
         worker_index: usize,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
-        use plan::Plan;
         match plan {
             Plan::Constant { rows } => {
-                // Determine what this worker will contribute.
-                let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
-                let (mut rows, errs) = match locally {
+                let (mut rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
@@ -439,9 +458,15 @@ where
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
                 if mfp.is_identity() {
                     // Assert that each of `keys` are present in `collection`.
-                    assert!(keys.iter().all(|key| collection.arranged.contains_key(key)));
+                    assert!(keys
+                        .arranged
+                        .iter()
+                        .all(|(key, _, _)| collection.arranged.contains_key(key)));
+                    assert!(keys.raw <= collection.collection.is_some());
                     // Retain only those keys we want to import.
-                    collection.arranged.retain(|key, _value| keys.contains(key));
+                    collection
+                        .arranged
+                        .retain(|key, _value| keys.arranged.iter().any(|(key2, _, _)| key2 == key));
                     collection
                 } else {
                     let (oks, errs) = collection.as_collection_core(mfp, key_val);
@@ -461,14 +486,14 @@ where
             Plan::Mfp {
                 input,
                 mfp,
-                key_val,
+                input_key_val,
             } => {
-                // If `mfp` is non-trivial, we should apply it and produce a collection.
                 let input = self.render_plan(*input, scope, worker_index);
+                // If `mfp` is non-trivial, we should apply it and produce a collection.
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(mfp, key_val);
+                    let (oks, errs) = input.as_collection_core(mfp, input_key_val);
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -477,9 +502,10 @@ where
                 func,
                 exprs,
                 mfp,
+                input_key,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_flat_map(input, func, exprs, mfp)
+                self.render_flat_map(input, func, exprs, mfp, input_key)
             }
             Plan::Join { inputs, plan } => {
                 let inputs = inputs
@@ -487,10 +513,10 @@ where
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
                 match plan {
-                    crate::render::join::JoinPlan::Linear(linear_plan) => {
+                    mz_dataflow_types::plan::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan, scope)
                     }
-                    crate::render::join::JoinPlan::Delta(delta_plan) => {
+                    mz_dataflow_types::plan::join::JoinPlan::Delta(delta_plan) => {
                         self.render_delta_join(inputs, delta_plan, scope)
                     }
                 }
@@ -499,9 +525,10 @@ where
                 input,
                 key_val_plan,
                 plan,
+                input_key,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_reduce(input, key_val_plan, plan)
+                self.render_reduce(input, key_val_plan, plan, input_key)
             }
             Plan::TopK { input, top_k_plan } => {
                 let input = self.render_plan(*input, scope, worker_index);
@@ -509,7 +536,7 @@ where
             }
             Plan::Negate { input } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                let (oks, errs) = input.as_collection();
+                let (oks, errs) = input.as_specific_collection(None);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
             Plan::Threshold {
@@ -523,7 +550,9 @@ where
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = self.render_plan(input, scope, worker_index).as_collection();
+                    let (os, es) = self
+                        .render_plan(input, scope, worker_index)
+                        .as_specific_collection(None);
                     oks.push(os);
                     errs.push(es);
                 }
@@ -531,665 +560,15 @@ where
                 let errs = differential_dataflow::collection::concatenate(scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
-            Plan::ArrangeBy { input, keys } => {
+            Plan::ArrangeBy {
+                input,
+                forms: keys,
+                input_key,
+                input_mfp,
+            } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                input.ensure_arrangements(keys)
+                input.ensure_collections(keys, input_key, input_mfp)
             }
         }
-    }
-}
-
-/// A re-useable vector of `Datum` with varying lifetimes.
-///
-/// This type is meant to allow us to recycle an underlying allocation with
-/// a specific lifetime, under the condition that the vector is emptied before
-/// this happens (to prevent leaking of invalid references).
-///
-/// It uses `ore::vec::repurpose_allocation` to accomplish this, which contains
-/// unsafe code.
-pub mod datum_vec {
-
-    use repr::{Datum, Row};
-
-    /// A re-useable vector of `Datum` with no particular lifetime.
-    pub struct DatumVec {
-        outer: Vec<Datum<'static>>,
-    }
-
-    impl DatumVec {
-        /// Allocate a new instance.
-        pub fn new() -> Self {
-            Self { outer: Vec::new() }
-        }
-        /// Borrow an instance with a specific lifetime.
-        ///
-        /// When the result is dropped, its allocation will be returned to `self`.
-        pub fn borrow<'a>(&'a mut self) -> DatumVecBorrow<'a> {
-            let inner = std::mem::take(&mut self.outer);
-            DatumVecBorrow {
-                outer: &mut self.outer,
-                inner,
-            }
-        }
-        /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
-        pub fn borrow_with<'a>(&'a mut self, row: &'a Row) -> DatumVecBorrow<'a> {
-            let mut borrow = self.borrow();
-            borrow.extend(row.iter());
-            borrow
-        }
-    }
-
-    /// A borrowed allocation of `Datum` with a specific lifetime.
-    ///
-    /// When an instance is dropped, its allocation is returned to the vector from
-    /// which it was extracted.
-    pub struct DatumVecBorrow<'outer> {
-        outer: &'outer mut Vec<Datum<'static>>,
-        inner: Vec<Datum<'outer>>,
-    }
-
-    impl<'outer> Drop for DatumVecBorrow<'outer> {
-        fn drop(&mut self) {
-            *self.outer = ore::vec::repurpose_allocation(std::mem::take(&mut self.inner));
-        }
-    }
-
-    impl<'outer> std::ops::Deref for DatumVecBorrow<'outer> {
-        type Target = Vec<Datum<'outer>>;
-        fn deref(&self) -> &Self::Target {
-            &self.inner
-        }
-    }
-
-    impl<'outer> std::ops::DerefMut for DatumVecBorrow<'outer> {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.inner
-        }
-    }
-}
-
-/// An explicit representation of a rendering plan for provided dataflows.
-pub mod plan {
-    use crate::render::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
-    use crate::render::reduce::{KeyValPlan, ReducePlan};
-    use crate::render::threshold::ThresholdPlan;
-    use crate::render::top_k::TopKPlan;
-    use dataflow_types::DataflowDescription;
-    use expr::{
-        EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-        OptimizedMirRelationExpr, TableFunc,
-    };
-
-    use repr::{Datum, Diff, Row};
-    use std::collections::BTreeMap;
-
-    /// A rendering plan with all conditional logic removed.
-    ///
-    /// This type is exposed publicly but the intent is that its details are under
-    /// the control of this crate, and they are subject to change as we find more
-    /// compelling ways to represent renderable plans. Several stages have already
-    /// encapsulated much of their logic in their own stage-specific plans, and we
-    /// expect more of the plans to do the same in the future, without consultation.
-    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-    pub enum Plan {
-        /// A collection containing a pre-determined collection.
-        Constant {
-            /// Explicit update triples for the collection.
-            rows: Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>,
-        },
-        /// A reference to a bound collection.
-        ///
-        /// This is commonly either an external reference to an existing source or
-        /// maintained arrangement, or an internal reference to a `Let` identifier.
-        Get {
-            /// A global or local identifier naming the collection.
-            id: Id,
-            /// Arrangements that will be available.
-            ///
-            /// The collection will also be loaded if available, which it will
-            /// not be for imported data, but which it may be for locally defined
-            /// data.
-            // TODO: Be more explicit about whether a collection is available,
-            // although one can always produce it from an arrangement, and it
-            // seems generally advantageous to do that instead (to avoid cloning
-            // rows, by using `mfp` first on borrowed data).
-            keys: Vec<Vec<MirScalarExpr>>,
-            /// Any linear operator work to apply as part of producing the data.
-            ///
-            /// This logic allows us to efficiently extract collections from data
-            /// that have been pre-arranged, avoiding copying rows that are not
-            /// used and columns that are projected away.
-            mfp: MapFilterProject,
-            /// Optionally, a pair of arrangement key and row value to search for.
-            ///
-            /// When this is present, it means that the implementation can search
-            /// the arrangement keyed by the first argument for the value that is
-            /// the second argument, and process only those elements.
-            key_val: Option<(Vec<MirScalarExpr>, Row)>,
-        },
-        /// Binds `value` to `id`, and then results in `body` with that binding.
-        ///
-        /// This stage has the effect of sharing `value` across multiple possible
-        /// uses in `body`, and is the only mechanism we have for sharing collection
-        /// information across parts of a dataflow.
-        ///
-        /// The binding is not available outside of `body`.
-        Let {
-            /// The local identifier to be used, available to `body` as `Id::Local(id)`.
-            id: LocalId,
-            /// The collection that should be bound to `id`.
-            value: Box<Plan>,
-            /// The collection that results, which is allowed to contain `Get` stages
-            /// that reference `Id::Local(id)`.
-            body: Box<Plan>,
-        },
-        /// Map, Filter, and Project operators.
-        ///
-        /// This stage contains work that we would ideally like to fuse to other plan
-        /// stages, but for practical reasons cannot. For example: reduce, threshold,
-        /// and topk stages are not able to absorb this operator.
-        Mfp {
-            /// The input collection.
-            input: Box<Plan>,
-            /// Linear operator to apply to each record.
-            mfp: MapFilterProject,
-            /// Optionally, a pair of arrangement key and row value to search for.
-            ///
-            /// When this is present, it means that the implementation can search
-            /// the arrangement keyed by the first argument for the value that is
-            /// the second argument, and process only those elements.
-            key_val: Option<(Vec<MirScalarExpr>, Row)>,
-        },
-        /// A variable number of output records for each input record.
-        ///
-        /// This stage is a bit of a catch-all for logic that does not easily fit in
-        /// map stages. This includes table valued functions, but also functions of
-        /// multiple arguments, and functions that modify the sign of updates.
-        ///
-        /// This stage allows a `MapFilterProject` operator to be fused to its output,
-        /// and this can be very important as otherwise the output of `func` is just
-        /// appended to the input record, for as many outputs as it has. This has the
-        /// unpleasant default behavior of repeating potentially large records that
-        /// are being unpacked, producing quadratic output in those cases. Instead,
-        /// in these cases use a `mfp` member that projects away these large fields.
-        FlatMap {
-            /// The input collection.
-            input: Box<Plan>,
-            /// The variable-record emitting function.
-            func: TableFunc,
-            /// Expressions that for each row prepare the arguments to `func`.
-            exprs: Vec<MirScalarExpr>,
-            /// Linear operator to apply to each record produced by `func`.
-            mfp: MapFilterProject,
-        },
-        /// A multiway relational equijoin, with fused map, filter, and projection.
-        ///
-        /// This stage performs a multiway join among `inputs`, using the equality
-        /// constraints expressed in `plan`. The plan also describes the implementataion
-        /// strategy we will use, and any pushed down per-record work.
-        Join {
-            /// An ordered list of inputs that will be joined.
-            inputs: Vec<Plan>,
-            /// Detailed information about the implementation of the join.
-            ///
-            /// This includes information about the implementation strategy, but also
-            /// any map, filter, project work that we might follow the join with, but
-            /// potentially pushed down into the implementation of the join.
-            plan: JoinPlan,
-        },
-        /// Aggregation by key.
-        Reduce {
-            /// The input collection.
-            input: Box<Plan>,
-            /// A plan for changing input records into key, value pairs.
-            key_val_plan: KeyValPlan,
-            /// A plan for performing the reduce.
-            ///
-            /// The implementation of reduction has several different strategies based
-            /// on the properties of the reduction, and the input itself. Please check
-            /// out the documentation for this type for more detail.
-            plan: ReducePlan,
-        },
-        /// Key-based "Top K" operator, retaining the first K records in each group.
-        TopK {
-            /// The input collection.
-            input: Box<Plan>,
-            /// A plan for performing the Top-K.
-            ///
-            /// The implementation of reduction has several different strategies based
-            /// on the properties of the reduction, and the input itself. Please check
-            /// out the documentation for this type for more detail.
-            top_k_plan: TopKPlan,
-        },
-        /// Inverts the sign of each update.
-        Negate {
-            /// The input collection.
-            input: Box<Plan>,
-        },
-        /// Filters records that accumulate negatively.
-        ///
-        /// Although the operator suppresses updates, it is a stateful operator taking
-        /// resources proportional to the number of records with non-zero accumulation.
-        Threshold {
-            /// The input collection.
-            input: Box<Plan>,
-            /// A plan for performing the threshold.
-            ///
-            /// The implementation of reduction has several different strategies based
-            /// on the properties of the reduction, and the input itself. Please check
-            /// out the documentation for this type for more detail.
-            threshold_plan: ThresholdPlan,
-        },
-        /// Adds the contents of the input collections.
-        ///
-        /// Importantly, this is *multiset* union, so the multiplicities of records will
-        /// add. This is in contrast to *set* union, where the multiplicities would be
-        /// capped at one. A set union can be formed with `Union` followed by `Reduce`
-        /// implementing the "distinct" operator.
-        Union {
-            /// The input collections.
-            inputs: Vec<Plan>,
-        },
-        /// The `input` plan, but with additional arrangements.
-        ///
-        /// This operator does not change the logical contents of `input`, but ensures
-        /// that certain arrangements are available in the results. This operator can
-        /// be important for e.g. the `Join` stage which benefits from multiple arrangements
-        /// or to cap a `Plan` so that indexes can be exported.
-        ArrangeBy {
-            /// The input collection.
-            input: Box<Plan>,
-            /// A list of arrangement keys that will be added to those of the input.
-            ///
-            /// If any of these keys are already present in the input, they have no effect.
-            keys: Vec<Vec<MirScalarExpr>>,
-        },
-    }
-
-    impl Plan {
-        /// This method converts a MirRelationExpr into a plan that can be directly rendered.
-        ///
-        /// The rough structure is that we repeatedly extract map/filter/project operators
-        /// from each expression we see, bundle them up as a `MapFilterProject` object, and
-        /// then produce a plan for the combination of that with the next operator.
-        ///
-        /// The method takes as an argument the existing arrangements for each bound identifier,
-        /// which it will locally add to and remove from for `Let` bindings (by the end of the
-        /// call it should contain the same bindings as when it started).
-        ///
-        /// The result of the method is both a `Plan`, but also a list of arrangements that
-        /// are certain to be produced, which can be relied on by the next steps in the plan.
-        /// An empty list of arrangement keys indicates that only a `Collection` stream can
-        /// be assumed to exist.
-        pub fn from_mir(
-            expr: &MirRelationExpr,
-            arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
-        ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
-            // Extract a maximally large MapFilterProject from `expr`.
-            // We will then try and push this in to the resulting expression.
-            //
-            // Importantly, `mfp` may contain temporal operators and not be a "safe" MFP.
-            // While we would eventually like all plan stages to be able to absorb such
-            // general operators, not all of them can.
-            let (mut mfp, expr) = MapFilterProject::extract_from_expression(expr);
-            // We attempt to plan what we have remaining, in the context of `mfp`.
-            // We may not be able to do this, and must wrap some operators with a `Mfp` stage.
-            let (mut plan, mut keys) = match expr {
-                // These operators should have been extracted from the expression.
-                MirRelationExpr::Map { .. } => {
-                    panic!("This operator should have been extracted");
-                }
-                MirRelationExpr::Filter { .. } => {
-                    panic!("This operator should have been extracted");
-                }
-                MirRelationExpr::Project { .. } => {
-                    panic!("This operator should have been extracted");
-                }
-                // These operators may not have been extracted, and need to result in a `Plan`.
-                MirRelationExpr::Constant { rows, typ: _ } => {
-                    use timely::progress::Timestamp;
-                    let plan = Plan::Constant {
-                        rows: rows.clone().map(|rows| {
-                            rows.into_iter()
-                                .map(|(row, diff)| (row, repr::Timestamp::minimum(), diff))
-                                .collect()
-                        }),
-                    };
-                    // The plan, not arranged in any way.
-                    (plan, Vec::new())
-                }
-                MirRelationExpr::Get { id, typ: _ } => {
-                    // This stage can absorb arbitrary MFP operators.
-                    let mfp = mfp.take();
-                    // If `mfp` is the identity, we can surface all imported arrangements.
-                    // Otherwise, we apply `mfp` and promise no arrangements.
-                    let mut in_keys = arrangements.get(id).cloned().unwrap_or_else(Vec::new);
-                    let out_keys = if mfp.is_identity() {
-                        in_keys.clone()
-                    } else {
-                        Vec::new()
-                    };
-
-                    // Seek out an arrangement key that might be constrained to a literal.
-                    // TODO: Improve key selection heuristic.
-                    let key_val = in_keys
-                        .iter()
-                        .filter_map(|key| {
-                            mfp.literal_constraints(key).map(|val| (key.clone(), val))
-                        })
-                        .max_by_key(|(key, _val)| key.len());
-                    // If we discover a literal constraint, we can discard other arrangements.
-                    if let Some((key, _)) = &key_val {
-                        in_keys = vec![key.clone()];
-                    }
-                    // Return the plan, and any keys if an identity `mfp`.
-                    (
-                        Plan::Get {
-                            id: id.clone(),
-                            keys: in_keys,
-                            mfp,
-                            key_val,
-                        },
-                        out_keys,
-                    )
-                }
-                MirRelationExpr::Let { id, value, body } => {
-                    // It would be unfortunate to have a non-trivial `mfp` here, as we hope
-                    // that they would be pushed down. I am not sure if we should take the
-                    // initiative to push down the `mfp` ourselves.
-
-                    // Plan the value using only the initial arrangements, but
-                    // introduce any resulting arrangements bound to `id`.
-                    let (value, v_keys) = Plan::from_mir(value, arrangements)?;
-                    let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
-                    assert!(pre_existing.is_none());
-                    // Plan the body using initial and `value` arrangements,
-                    // and then remove reference to the value arrangements.
-                    let (body, b_keys) = Plan::from_mir(body, arrangements)?;
-                    arrangements.remove(&Id::Local(*id));
-                    // Return the plan, and any `body` arrangements.
-                    (
-                        Plan::Let {
-                            id: id.clone(),
-                            value: Box::new(value),
-                            body: Box::new(body),
-                        },
-                        b_keys,
-                    )
-                }
-                MirRelationExpr::FlatMap {
-                    input,
-                    func,
-                    exprs,
-                    demand,
-                } => {
-                    // Map the demand into the MapFilterProject.
-                    // TODO: Remove this once demand is removed.
-                    if let Some(demand) = demand {
-                        prepend_mfp_demand(&mut mfp, expr, demand);
-                    }
-                    let (input, _keys) = Plan::from_mir(input, arrangements)?;
-                    // This stage can absorb arbitrary MFP instances.
-                    let mfp = mfp.take();
-                    // Return the plan, and no arrangements.
-                    (
-                        Plan::FlatMap {
-                            input: Box::new(input),
-                            func: func.clone(),
-                            exprs: exprs.clone(),
-                            mfp,
-                        },
-                        Vec::new(),
-                    )
-                }
-                MirRelationExpr::Join {
-                    inputs,
-                    equivalences,
-                    demand,
-                    implementation,
-                } => {
-                    // Map the demand into the MapFilterProject.
-                    // TODO: Remove this once demand is removed.
-                    if let Some(demand) = demand {
-                        prepend_mfp_demand(&mut mfp, expr, demand);
-                    }
-
-                    let input_mapper = JoinInputMapper::new(inputs);
-
-                    // Plan each of the join inputs independently.
-                    // The `plans` get surfaced upwards, and the `input_keys` should
-                    // be used as part of join planning / to validate the existing
-                    // plans / to aid in indexed seeding of update streams.
-                    let mut plans = Vec::new();
-                    let mut input_keys = Vec::new();
-                    for input in inputs.iter() {
-                        let (plan, keys) = Plan::from_mir(input, arrangements)?;
-                        plans.push(plan);
-                        input_keys.push(keys);
-                    }
-                    // Extract temporal predicates as joins cannot currently absorb them.
-                    let plan = match implementation {
-                        expr::JoinImplementation::Differential((start, _start_arr), order) => {
-                            JoinPlan::Linear(LinearJoinPlan::create_from(
-                                *start,
-                                equivalences,
-                                order,
-                                input_mapper,
-                                &mut mfp,
-                            ))
-                        }
-                        expr::JoinImplementation::DeltaQuery(orders) => {
-                            JoinPlan::Delta(DeltaJoinPlan::create_from(
-                                equivalences,
-                                &orders[..],
-                                input_mapper,
-                                &mut mfp,
-                            ))
-                        }
-                        // Other plans are errors, and should be reported as such.
-                        _ => return Err(()),
-                    };
-                    // Return the plan, and no arrangements.
-                    (
-                        Plan::Join {
-                            inputs: plans,
-                            plan,
-                        },
-                        Vec::new(),
-                    )
-                }
-                MirRelationExpr::Reduce {
-                    input,
-                    group_key,
-                    aggregates,
-                    monotonic,
-                    expected_group_size,
-                } => {
-                    let input_arity = input.arity();
-                    let (input, _keys) = Self::from_mir(input, arrangements)?;
-                    let key_val_plan = KeyValPlan::new(input_arity, group_key, aggregates);
-                    let reduce_plan = ReducePlan::create_from(
-                        aggregates.clone(),
-                        *monotonic,
-                        *expected_group_size,
-                    );
-                    let output_keys = reduce_plan.keys(group_key.len());
-                    // Return the plan, and the keys it produces.
-                    (
-                        Plan::Reduce {
-                            input: Box::new(input),
-                            key_val_plan,
-                            plan: reduce_plan,
-                        },
-                        output_keys,
-                    )
-                }
-                MirRelationExpr::TopK {
-                    input,
-                    group_key,
-                    order_key,
-                    limit,
-                    offset,
-                    monotonic,
-                } => {
-                    let arity = input.arity();
-                    let (input, _keys) = Self::from_mir(input, arrangements)?;
-                    let top_k_plan = TopKPlan::create_from(
-                        group_key.clone(),
-                        order_key.clone(),
-                        *offset,
-                        *limit,
-                        arity,
-                        *monotonic,
-                    );
-                    // Return the plan, and no arrangements.
-                    (
-                        Plan::TopK {
-                            input: Box::new(input),
-                            top_k_plan,
-                        },
-                        Vec::new(),
-                    )
-                }
-                MirRelationExpr::Negate { input } => {
-                    let (input, _keys) = Self::from_mir(input, arrangements)?;
-                    // Return the plan, and no arrangements.
-                    (
-                        Plan::Negate {
-                            input: Box::new(input),
-                        },
-                        Vec::new(),
-                    )
-                }
-                MirRelationExpr::Threshold { input } => {
-                    let arity = input.arity();
-                    let (input, _keys) = Self::from_mir(input, arrangements)?;
-                    let threshold_plan = ThresholdPlan::create_from(arity, false);
-                    let output_keys = threshold_plan.keys();
-                    // Return the plan, and any produced keys.
-                    (
-                        Plan::Threshold {
-                            input: Box::new(input),
-                            threshold_plan,
-                        },
-                        output_keys,
-                    )
-                }
-                MirRelationExpr::Union { base, inputs } => {
-                    let mut plans = Vec::with_capacity(1 + inputs.len());
-                    let (plan, _keys) = Self::from_mir(base, arrangements)?;
-                    plans.push(plan);
-                    for input in inputs.iter() {
-                        let (plan, _keys) = Self::from_mir(input, arrangements)?;
-                        plans.push(plan)
-                    }
-                    // Return the plan and no arrangements.
-                    (Plan::Union { inputs: plans }, Vec::new())
-                }
-                MirRelationExpr::ArrangeBy { input, keys } => {
-                    let (input, mut input_keys) = Self::from_mir(input, arrangements)?;
-                    input_keys.extend(keys.iter().cloned());
-                    input_keys.sort();
-                    input_keys.dedup();
-                    // Return the plan and extended keys.
-                    (
-                        Plan::ArrangeBy {
-                            input: Box::new(input),
-                            keys: keys.clone(),
-                        },
-                        input_keys,
-                    )
-                }
-                MirRelationExpr::DeclareKeys { input, keys: _ } => {
-                    Self::from_mir(input, arrangements)?
-                }
-            };
-
-            // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.
-            if !mfp.is_identity() {
-                // Seek out an arrangement key that might be constrained to a literal.
-                // TODO: Improve key selection heuristic.
-                let key_val = keys
-                    .iter()
-                    .filter_map(|key| mfp.literal_constraints(key).map(|val| (key.clone(), val)))
-                    .max_by_key(|(key, _val)| key.len());
-                plan = Plan::Mfp {
-                    input: Box::new(plan),
-                    mfp,
-                    key_val,
-                };
-                keys = Vec::new();
-            }
-
-            Ok((plan, keys))
-        }
-
-        /// Convert the dataflow description into one that uses render plans.
-        pub fn finalize_dataflow(
-            desc: DataflowDescription<OptimizedMirRelationExpr>,
-        ) -> Result<DataflowDescription<Self>, ()> {
-            // Collect available arrangements by identifier.
-            let mut arrangements = BTreeMap::new();
-            // Sources might provide arranged forms of their data, in the future.
-            // Indexes provide arranged forms of their data.
-            for (index_desc, _type) in desc.index_imports.values() {
-                arrangements
-                    .entry(Id::Global(index_desc.on_id))
-                    .or_insert_with(Vec::new)
-                    .push(index_desc.keys.clone());
-            }
-            // Build each object in order, registering the arrangements it forms.
-            let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
-            for build in desc.objects_to_build.into_iter() {
-                let (plan, keys) = Self::from_mir(&build.view, &mut arrangements)?;
-                arrangements.insert(Id::Global(build.id), keys);
-                objects_to_build.push(dataflow_types::BuildDesc {
-                    id: build.id,
-                    view: plan,
-                });
-            }
-
-            Ok(DataflowDescription {
-                source_imports: desc.source_imports,
-                index_imports: desc.index_imports,
-                objects_to_build,
-                index_exports: desc.index_exports,
-                sink_exports: desc.sink_exports,
-                dependent_objects: desc.dependent_objects,
-                as_of: desc.as_of,
-                debug_name: desc.debug_name,
-            })
-        }
-    }
-
-    /// Pre-prends a MapFilterProject instance with a transform that blanks out all but the columns in `demand`.
-    fn prepend_mfp_demand(
-        mfp: &mut MapFilterProject,
-        relation_expr: &MirRelationExpr,
-        demand: &[usize],
-    ) {
-        let output_arity = relation_expr.arity();
-        // Determine dummy columns for un-demanded outputs, and a projection.
-        let mut dummies = Vec::new();
-        let mut demand_projection = Vec::new();
-        for (column, typ) in relation_expr.typ().column_types.into_iter().enumerate() {
-            if demand.contains(&column) {
-                demand_projection.push(column);
-            } else {
-                demand_projection.push(output_arity + dummies.len());
-                dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type));
-            }
-        }
-
-        let (map, filter, project) = mfp.as_map_filter_project();
-
-        let map_filter_project = MapFilterProject::new(output_arity)
-            .map(dummies)
-            .project(demand_projection)
-            .map(map)
-            .filter(filter)
-            .project(project);
-
-        *mfp = map_filter_project;
     }
 }

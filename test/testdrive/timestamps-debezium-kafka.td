@@ -7,110 +7,147 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set schema={
-    "type": "record",
-    "name": "envelope",
-    "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
+$ set schema=[
+  {
+    "type": "array",
+    "items": {
+      "type": "record",
+      "name": "update",
+      "namespace": "com.materialize.cdc",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
             "type": "record",
+            "name": "data",
             "fields": [
               {"name": "a", "type": "long"},
               {"name": "b", "type": "long"}
             ]
-          },
-          "null"
-        ]
+          }
+        },
+        {
+          "name": "time",
+          "type": "long"
+        },
+        {
+          "name": "diff",
+          "type": "long"
+        }
+      ]
+    }
+  },
+  {
+    "type": "record",
+    "name": "progress",
+    "namespace": "com.materialize.cdc",
+    "fields": [
+      {
+        "name": "lower",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
       },
-      { "name": "after", "type": ["row", "null"] }
+      {
+        "name": "upper",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "counts",
+        "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "counts",
+            "fields": [
+              {
+                "name": "time",
+                "type": "long"
+              },
+              {
+                "name": "count",
+                "type": "long"
+              }
+            ]
+          }
+        }
+      }
     ]
   }
-
-$ set trxschemakey={
-      "name": "io.debezium.connector.common.TransactionMetadataKey",
-      "type": "record",
-      "fields": [
-          {
-              "name": "id",
-              "type": "string"
-          }
-      ]
-  }
-
-$ set trxschema={
-    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
-    "fields":[
-    {"name":"status","type":"string"},
-    {"name":"id","type": "string"},
-    {"name": "event_count",
-    "type": ["null", "long"],
-    "default": null
-    },
-    {"name":"data_collections","type":["null",{"type":"array",
-    "items": {"type":"record",
-    "name":"ConnectDefault",
-    "namespace":"io.confluent.connect.Avro",
-    "fields": [ {
-    "name": "data_collection",
-    "type": "string"
-    },
-    {
-    "name": "event_count",
-    "type": "long" }]}}],
-    "default": null}],
-    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
-    }
-
-$ kafka-create-topic topic=consistency
+  ]
 
 $ kafka-create-topic topic=foo
 
 $ kafka-create-topic topic=bar
 
-$ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
-{"before": null, "after": {"row":{"a": 1, "b": 1}}}
-{"before": null, "after": {"row":{"a": 2, "b": 2}}}
+$ kafka-ingest format=avro topic=foo schema=${schema}
+{"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
+{"array":[{"data":{"a":2,"b":2},"time":1,"diff":1}]}
 
-$ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
-{"before": null, "after": {"row":{"a": 10, "b": 1}}}
+$ kafka-ingest format=avro topic=bar schema=${schema}
+{"array":[{"data":{"a":10,"b":1},"time":1,"diff":1}]}
 
 > CREATE MATERIALIZED SOURCE data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+    WITH (timeline='user')
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED SOURCE data_bar
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bar-${testdrive.seed}'
-    WITH (consistency_topic = 'testdrive-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+    WITH (timeline='user')
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 
 > CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
 
 > CREATE MATERIALIZED VIEW bar AS SELECT b, sum(a) FROM data_bar GROUP BY b
 
-> CREATE MATERIALIZED VIEW join AS SELECT * FROM foo JOIN bar USING (b);
+> CREATE MATERIALIZED VIEW join (b, foo_sum, bar_sum) AS SELECT * FROM foo JOIN bar USING (b);
 
-! SELECT * FROM bar;
-At least one input has no complete timestamps yet:
+# Verify that we don't see any data yet. We can't use `set-sql-timeout` here
+# because the SELECT is blocked in the coordinator. For the same reason we
+# can't use `DECLARE c CURSOR FOR SELECT ...` (see #10763).
 
-! SELECT * FROM foo;
-At least one input has no complete timestamps yet:
+> BEGIN
 
-! SELECT * FROM join ;
-At least one input has no complete timestamps yet:
+> DECLARE c CURSOR FOR TAIL (SELECT * FROM bar)
 
-$ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschemakey}
-{"id": "1"}
+> FETCH ALL c WITH (timeout = '2s');
 
-$ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
-{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":{"long": 0},"data_collections":{"array": []}}
-{"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
+> ROLLBACK
+
+> BEGIN
+
+> DECLARE c CURSOR FOR TAIL (SELECT * FROM foo)
+
+> FETCH ALL c WITH (timeout = '2s');
+
+> ROLLBACK
+
+> BEGIN
+
+> DECLARE c CURSOR FOR TAIL (SELECT * FROM join)
+
+> FETCH ALL c WITH (timeout = '2s');
+
+> ROLLBACK
+
+$ kafka-ingest format=avro topic=foo schema=${schema}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
+
+$ kafka-ingest format=avro topic=bar schema=${schema}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":1}]}}
+
+> SELECT * FROM data_foo;
+a  b
+----
+1  1
+2  2
+
 
 > SELECT * FROM foo;
 b  sum
@@ -124,19 +161,17 @@ b  sum
 1  10
 
 > SELECT * FROM join;
-b sum sum
----------
+b foo_sum bar_sum
+-----------------
 1  1  10
 
-$ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 3, "b": 3}}}
+$ kafka-ingest format=avro topic=foo schema=${schema}
+{"array":[{"data":{"a":3,"b":3},"time":2,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[2],"upper":[3],"counts":[{"time":2,"count":2}]}}
 
-$ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 30, "b": 3}}}
-
-$ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
-{"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
+$ kafka-ingest format=avro topic=bar schema=${schema}
+{"array":[{"data":{"a":30,"b":3},"time":2,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[2],"upper":[3],"counts":[{"time":2,"count":1}]}}
 
 > SELECT * FROM foo;
 b  sum
@@ -151,12 +186,12 @@ b  sum
 3  30
 
 > SELECT * FROM join;
-b sum sum
----------
+b foo_sum bar_sum
+-----------------
 1  1  10
 
-$ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 4, "b": 4}}}
+$ kafka-ingest format=avro topic=foo schema=${schema}
+{"array":[{"data":{"a":4,"b":4},"time":2,"diff":1}]}
 
 > SELECT * FROM foo;
 b  sum
@@ -167,7 +202,7 @@ b  sum
 4  4
 
 > SELECT * FROM join;
-b sum sum
----------
+b foo_sum bar_sum
+-----------------
 1  1  10
 3  3  30

@@ -15,8 +15,7 @@
 
 //! Command-line parsing utilities.
 
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
+use clap::Parser;
 
 /// A help template for use with clap that does not include the name of the
 /// binary or the version in the help output.
@@ -31,11 +30,11 @@ USAGE:
 /// applying Materialize-specific customizations.
 pub fn parse_args<O>() -> O
 where
-    O: StructOpt,
+    O: Parser,
 {
-    let clap = O::clap()
-        .global_setting(AppSettings::DisableVersion)
-        .global_setting(AppSettings::UnifiedHelpMessage)
-        .template(NO_VERSION_HELP_TEMPLATE);
-    O::from_clap(&clap.get_matches())
+    let clap = O::command()
+        .disable_version_flag(true)
+        .args_override_self(true)
+        .help_template(NO_VERSION_HELP_TEMPLATE);
+    O::from_arg_matches(&clap.get_matches()).unwrap()
 }

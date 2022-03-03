@@ -16,8 +16,7 @@ import os
 import platform
 import subprocess
 import sys
-import sysconfig
-import venv  # type: ignore
+import venv
 from pathlib import Path
 from typing import List, Optional
 
@@ -50,23 +49,26 @@ def main(args: List[str]) -> int:
 
     # If we're not in the CI builder container, activate a virtualenv with the
     # necessary dependencies.
-    if os.environ.get("MZ_DEV_CI_BUILDER", False):
+    if os.environ.get("MZ_DEV_CI_BUILDER"):
         python = "python3"
     else:
         python = str(activate_venv(py_dir, dev))
     logger.debug("python={}".format(python))
 
     # Reinvoke with the interpreter from the virtualenv.
-    os.environ["PYTHONPATH"] = os.environ["MYPYPATH"] = str(py_dir.resolve())
+    py_path = str(py_dir.resolve())
+    os.environ["PYTHONPATH"] = py_path
+    os.environ["MYPYPATH"] = f"{py_path}:{py_path}/stubs"
     os.environ["MZ_ROOT"] = str(root_dir.resolve())
     os.execvp(python, [python, *args])
 
 
 def activate_venv(py_dir: Path, dev: bool = False) -> Path:
-    """Bootstrap and activate a virtualenv at py_dir/venv"""
+    """Bootstrap and activate a virtualenv at py_dir/venv."""
     venv_dir = py_dir / "venv"
     stamp_path = venv_dir / "dep_stamp"
-    python = venv_dir / "bin" / "python"
+    bin_dir = venv_dir / "bin"
+    python = bin_dir / "python"
     logger.debug("venv_dir={} python={}".format(venv_dir, python))
 
     # Create a virtualenv, if necessary. virtualenv creation is not atomic, so
@@ -119,15 +121,36 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     ):
         os.environ["ARCHFLAGS"] = "-arch x86_64"
 
-    acquire_deps(venv_dir)
+    # The version of pip and setuptools installed into the virtualenv by default
+    # may have bugs like pypa/pip#9138 that cause them to e.g. fail to install
+    # wheels. So the first thing we do is upgrade these dependencies to known
+    # versions. This won't help if they're so broken that they can't upgrade
+    # themselves, but in that case there's nothing we can do.
+    #
+    # Note also that we don't ask for PEP 517 until we've installed a version of
+    # pip that we know supports the flag.
+    acquire_deps(venv_dir, "core")
+    acquire_deps(venv_dir, use_pep517=True)
     if dev:
-        acquire_deps(venv_dir, "dev")
+        acquire_deps(venv_dir, "dev", use_pep517=True)
+
+    # The virtualenv's `bin` dir takes precedence over all existing PATH
+    # entries. This is normally handled by the `activate` shell script, but
+    # we won't be calling that.
+    os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ["PATH"]
 
     return python
 
 
-def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
-    """Install normal/development dependencencies into the virtualenv"""
+def acquire_deps(venv_dir: Path, variant: Optional[str] = None, use_pep517: bool = False) -> None:
+    """Install normal/development dependencies into the virtualenv.
+
+    If the use_pep517 flag is set, the `--use-pep517` flag is pased to `pip
+    install` to force use of new PEP 517-based build systems rather than legacy
+    setuptools build systems. This prevents pip from printing a scary warning
+    about "using legacy 'setup.py install'".
+    See: https://github.com/pypa/pip/issues/8102
+    """
 
     stamp_path = venv_dir / (f"{variant}_dep_stamp" if variant else "dep_stamp")
 
@@ -155,6 +178,7 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
         subprocess.check_call([
             venv_dir / "bin" / "pip", "install", "-r", requirements_path,
             "--disable-pip-version-check",
+            *(["--use-pep517"] if use_pep517 else [])
         ],
             stdout=sys.stderr
         )

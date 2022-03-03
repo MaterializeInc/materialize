@@ -22,6 +22,8 @@
 
 #![warn(missing_debug_implementations)]
 
+mod datum_vec;
+mod gen;
 mod relation;
 mod row;
 mod scalar;
@@ -30,17 +32,19 @@ pub mod adt;
 pub mod strconv;
 pub mod util;
 
-pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
+pub use datum_vec::{DatumVec, DatumVecBorrow};
+pub use relation::{ColumnName, ColumnType, NotNullViolation, RelationDesc, RelationType};
 pub use row::{
-    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena, RowRef,
+    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena,
+    RowPacker, RowRef,
 };
-pub use scalar::{Datum, FromTy, ScalarBaseType, ScalarType, WithArena};
+pub use scalar::{AsColumnType, Datum, DatumType, ScalarBaseType, ScalarType};
 
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.
 /// System-wide timestamp type.
 pub type Timestamp = u64;
 /// System-wide record count difference type.
-pub type Diff = isize;
+pub type Diff = i64;
 
 use serde::{Deserialize, Serialize};
 // This probably logically belongs in `dataflow`, but source caching looks at it,
@@ -48,7 +52,8 @@ use serde::{Deserialize, Serialize};
 /// The payload delivered by a source connector; either bytes or an EOF marker.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub enum MessagePayload {
-    /// Data from the source connector
+    /// Data from the source connector.
+    // TODO(guswynn): Determine if `Vec` needs to be non-empty.
     Data(Vec<u8>),
     /// Forces the decoder to consider this a delimiter.
     ///
@@ -56,10 +61,4 @@ pub enum MessagePayload {
     /// but files might not be newline-terminated; thus we need
     /// the decoder to emit a CSV record when the end of a file is seen.
     EOF,
-}
-
-impl Default for MessagePayload {
-    fn default() -> Self {
-        Self::Data(vec![])
-    }
 }

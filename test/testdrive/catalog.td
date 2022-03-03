@@ -15,10 +15,32 @@ public
 > SHOW EXTENDED SCHEMAS
 name
 -------
+information_schema
 public
 mz_catalog
 mz_internal
 pg_catalog
+$ psql-execute command=\dn
+\   List of schemas
+    Name     | Owner
+-------------+-------
+ mz_catalog  |
+ mz_internal |
+ public      |
+
+$ psql-execute command="\dn mz_catalog"
+\  List of schemas
+    Name    | Owner
+------------+-------
+ mz_catalog |
+
+
+$ psql-execute command="\dn mz_*"
+\   List of schemas
+    Name     | Owner
+-------------+-------
+ mz_catalog  |
+ mz_internal |
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -39,12 +61,12 @@ s
 
 # Creating a schema with a name that already exists should fail.
 ! CREATE SCHEMA s
-schema 's' already exists
+contains:schema 's' already exists
 
 # Dropping a schema with a view should only succeed with CASCADE.
 > CREATE VIEW s.v AS SELECT 1
 ! DROP SCHEMA s
-schema 'materialize.s' cannot be dropped without CASCADE while it contains objects
+contains:schema 'materialize.s' cannot be dropped without CASCADE while it contains objects
 > DROP SCHEMA s CASCADE
 
 # Dropping a schema with no objects should succeed without CASCADE.
@@ -98,11 +120,11 @@ d
 > SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
-WHERE clause must have type boolean, not type integer
+contains:WHERE clause must have type boolean, not type integer
 
 # Creating a database with a name that already exists should fail.
 ! CREATE DATABASE d
-database 'd' already exists
+contains:database 'd' already exists
 
 # The new database should have a default public schema.
 > SHOW SCHEMAS FROM d
@@ -176,7 +198,7 @@ foo.other.int_list
 
 > CREATE TYPE bool AS LIST (element_type=int4)
 ! SELECT '{1}'::bool
-invalid input syntax for type boolean: "{1}"
+contains:invalid input syntax for type boolean: "{1}"
 
 > SELECT pg_typeof('{1}'::public.bool);
 public.bool
@@ -187,7 +209,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-Expected DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found identifier
+contains:Expected DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found identifier
 
 > SHOW FULL OBJECTS
 name            type
@@ -197,11 +219,16 @@ v1_primary_idx  user
 v2              user
 v2_primary_idx  user
 
-# DROP DATABASE should not support RESTRICT or CASCADE.
+# DROP DATABASE does not support both RESTRICT and CASCADE.
+! DROP DATABASE d RESTRICT CASCADE
+contains:Cannot specify both RESTRICT and CASCADE in DROP
+! DROP DATABASE d CASCADE RESTRICT
+contains:Cannot specify both CASCADE and RESTRICT in DROP
+! DROP DATABASE d CASCADE CASCADE
+contains:Expected end of statement, found CASCADE
+
 ! DROP DATABASE d RESTRICT
-Expected end of statement, found RESTRICT
-! DROP DATABASE d RESTRICT
-Expected end of statement, found RESTRICT
+contains:database 'd' cannot be dropped with RESTRICT while it contains schemas
 
 # DROP DATABASE should succeed even when there are objects in the database.
 > DROP DATABASE d
@@ -222,7 +249,7 @@ id          name
 > SHOW DATABASE
 d
 ! SELECT * FROM v
-unknown catalog item 'v'
+contains:unknown catalog item 'v'
 
 # But queries that do not depend on the session database should work fine.
 > CREATE VIEW materialize.public.v AS SELECT 1
@@ -231,36 +258,38 @@ unknown catalog item 'v'
 # Dropping the public schema is okay, but dropping the catalog schemas is not.
 > DROP SCHEMA public
 ! DROP SCHEMA mz_catalog
-cannot drop schema mz_catalog because it is required by the database system
+contains:cannot drop schema mz_catalog because it is required by the database system
 ! DROP SCHEMA pg_catalog
-cannot drop schema pg_catalog because it is required by the database system
+contains:cannot drop schema pg_catalog because it is required by the database system
 
 # Schema names that start with "mz_" or "pg_" are reserved for future use by the
 # system.
 ! CREATE SCHEMA mz_foo
-unacceptable schema name 'mz_foo'
+contains:unacceptable schema name 'mz_foo'
 ! CREATE SCHEMA pg_bar
-unacceptable schema name 'pg_bar'
+contains:unacceptable schema name 'pg_bar'
 
 # The search path is currently hardcoded.
 > SHOW search_path
 "mz_catalog, pg_catalog, public, mz_temp"
 ! SET search_path = foo
-parameter "search_path" cannot be changed
+contains:parameter "search_path" cannot be changed
+! SET SCHEMA foo
+contains:parameter "search_path" cannot be changed
 
 # Creating views in non-existent databases should fail.
 ! CREATE VIEW noexist.ignored AS SELECT 1
-unknown schema 'noexist'
+contains:unknown schema 'noexist'
 ! CREATE VIEW materialize.noexist.ignored AS SELECT 1
-unknown schema 'noexist'
+contains:unknown schema 'noexist'
 ! CREATE VIEW noexist.ignored.ignored AS SELECT 1
-unknown database 'noexist'
+contains:unknown database 'noexist'
 
 # As should showing views.
 ! SHOW VIEWS FROM noexist
-unknown schema 'noexist'
+contains:unknown schema 'noexist'
 ! SHOW VIEWS FROM noexist_db.noexist_schema
-unknown database 'noexist_db'
+contains:unknown database 'noexist_db'
 
 # Dropping database with cross-schema dependencies is ok.
 > CREATE DATABASE d1;
@@ -303,8 +332,7 @@ mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operator_reachability_internal
 mz_dataflow_operators
-mz_kafka_broker_rtt
-mz_kafka_consumer_partitions
+mz_kafka_source_statistics
 mz_materialization_dependencies
 mz_materializations
 mz_message_counts_received_internal
@@ -327,8 +355,7 @@ mz_dataflow_channels                          system true          volatile    l
 mz_dataflow_operator_addresses                system true          volatile    local
 mz_dataflow_operator_reachability_internal    system true          volatile    local
 mz_dataflow_operators                         system true          volatile    local
-mz_kafka_broker_rtt                           system true          volatile    local
-mz_kafka_consumer_partitions                  system true          volatile    local
+mz_kafka_source_statistics                    system true          volatile    local
 mz_materialization_dependencies               system true          volatile    local
 mz_materializations                           system true          volatile    local
 mz_message_counts_received_internal           system true          volatile    local
@@ -463,7 +490,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-44
+43
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing
@@ -521,3 +548,27 @@ mz_peek_durations
 mz_perf_peek_durations_aggregates
 mz_perf_peek_durations_bucket
 mz_perf_peek_durations_core
+
+# Create a second schema with the same table name as above
+> CREATE SCHEMA tester2
+
+> CREATE TABLE tester2.test_table (a int)
+
+$ psql-execute command="\dt tester.*"
+\          List of relations
+ Schema |    Name    | Type  | Owner
+--------+------------+-------+-------
+ tester | test_table | table |
+
+$ psql-execute command="\dt tester.test_table"
+\          List of relations
+ Schema |    Name    | Type  | Owner
+--------+------------+-------+-------
+ tester | test_table | table |
+
+$ psql-execute command="\dt *.test_table"
+\          List of relations
+ Schema  |    Name    | Type  | Owner
+---------+------------+-------+-------
+ tester  | test_table | table |
+ tester2 | test_table | table |

@@ -16,6 +16,7 @@ Supported `transaction_mode` option values:
 Value | Description
 ------|----------
 `ISOLATION LEVEL SERIALIZABLE` | A no-op because transactions are always serializable. Lower isolation modes are also accepted, but treated identically to serializable.
+`READ ONLY` | Limits the transaction to read-only operations.
 
 ## Details
 
@@ -41,3 +42,14 @@ A second kind of **read-only** transaction can contain an initial [`TAIL`](/sql/
 A **write-only** transaction starts with an [`INSERT`](/sql/insert) and allows only `INSERT` statements.
 Different statements can reference different tables.
 On `COMMIT`, all statements from the transaction are committed at the same timestamp.
+
+### Same timedomain error
+
+A **read-only** transaction can produce an error with the text:
+
+> Transactions can only reference objects in the same timedomain.
+
+The first `SELECT` in a transaction assumes that any object in that `SELECT` and any other object in the same schemas are assumed to be possible query targets.
+If a later `SELECT` references another object, the transaction will fail.
+This can happen if the object is in a schema not referenced by the first `SELECT`.
+It can also happen if a new object (table, view, source, or index) was created after the transaction started, even if the new object is in the same schemas as the first `SELECT`.

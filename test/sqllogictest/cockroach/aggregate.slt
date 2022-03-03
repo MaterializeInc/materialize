@@ -210,7 +210,7 @@ SELECT 3 FROM kv HAVING TRUE
 ----
 3
 
-query error does not exist
+query error column "kv.k" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT count(*), k FROM kv
 
 # #3164
@@ -347,7 +347,7 @@ SELECT count(*), length(s) FROM kv GROUP BY s
 2 1
 
 # Selecting a value that is not grouped, even if a function of it it, does not work.
-query error does not exist
+query error column "kv.s" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT count(*), s FROM kv GROUP BY length(s)
 
 # Selecting and grouping on a more complex expression works.
@@ -373,13 +373,13 @@ SELECT count(*), k+v FROM kv GROUP BY k, v
 1 9
 1 NULL
 
-query error does not exist
+query error column "kv.v" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT count(*), k+v FROM kv GROUP BY k
 
-query error does not exist
+query error column "kv.k" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT count(*), k+v FROM kv GROUP BY v
 
-query error does not exist
+query error column "kv.v" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT count(*), v/(k+v) FROM kv GROUP BY k+v
 
 query error aggregate functions are not allowed in WHERE
@@ -425,19 +425,19 @@ SELECT max(k), min(v) FROM kv HAVING max(v) > 2
 query error nested aggregate functions are not allowed
 SELECT max(k), min(v) FROM kv HAVING max(min(v)) > 2
 
-query error does not exist
+query error column "kv.k" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT max(k), min(v) FROM kv HAVING k
 
 # Expressions listed in the HAVING clause must conform to same validation as the SELECT clause (grouped or aggregated).
-query error does not exist
+query error column "kv.k" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT 3 FROM kv GROUP BY v HAVING k > 5
 
 # pg has a special case for grouping on primary key, which would allow this, but we do not.
 # See http://www.postgresql.org/docs/current/static/sql-select.html#SQL-GROUPBY
-query error does not exist
+query error column "kv.v" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT 3 FROM kv GROUP BY k HAVING v > 2
 
-query error does not exist
+query error column "kv.k" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT k FROM kv HAVING k > 7
 
 query error Expected right parenthesis, found comma
@@ -1444,7 +1444,7 @@ DROP TABLE string_agg_test2
 query error supported
 SELECT string_agg('foo', CAST ((SELECT NULL) AS BYTEA)) OVER ();
 
-query error supported
+query error table functions are not allowed in aggregate function calls
 SELECT array_agg(generate_series(1, 2))
 
 # Regression test for #31882.

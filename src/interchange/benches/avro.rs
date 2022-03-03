@@ -12,7 +12,7 @@ use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
 use mz_avro::types::Value as AvroValue;
 
-use interchange::avro::{parse_schema, Decoder, EnvelopeType};
+use mz_interchange::avro::{parse_schema, Decoder};
 use std::ops::Add;
 
 pub fn bench_avro(c: &mut Criterion) {
@@ -389,20 +389,12 @@ pub fn bench_avro(c: &mut Criterion) {
     buf.extend(mz_avro::to_avro_datum(&schema, record).unwrap());
     let len = buf.len() as u64;
 
-    let mut decoder = Decoder::new(
-        schema_str,
-        None,
-        EnvelopeType::Debezium,
-        "avro_bench".to_string(),
-        true,
-        false,
-    )
-    .unwrap();
+    let mut decoder = Decoder::new(schema_str, None, "avro_bench".to_string(), false).unwrap();
 
     let mut bg = c.benchmark_group("avro");
     bg.throughput(Throughput::Bytes(len));
     bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(block_on(decoder.decode(&mut buf.as_slice(), None, None)).unwrap()))
+        b.iter(|| black_box(block_on(decoder.decode(&mut buf.as_slice())).unwrap()))
     });
     bg.finish();
 }

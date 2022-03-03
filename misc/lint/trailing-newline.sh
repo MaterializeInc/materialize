@@ -20,6 +20,7 @@ if [[ $# -lt 1 ]]; then
     echo "usage: $0 <file>" >&2
     exit 1
 fi
+errors=0
 
 for file in "$@"; do
     if [[ ! -f "$file" ]]; then
@@ -30,6 +31,10 @@ for file in "$@"; do
     last_byte=$(tail -c1 "$file")
     if [[ "$last_byte" != $'\n' && "$last_byte" != "" ]] &> /dev/null; then
         echo "lint: $(red error:) trailing-newline: $file is missing a trailing newline" >&2
-        exit 1
+        ((errors++))
     fi
 done
+
+if [[ $errors -gt 0 ]]; then
+        exit 1
+fi

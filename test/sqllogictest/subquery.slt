@@ -175,10 +175,17 @@ query BBBBBBBBBBBBBBB
 ----
 true  false  false  true  false  false  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
-# TODO(benesch): this should yield a nullary result set, but presently
-# fails.
-# query error subquery has too few columns
-# SELECT 1 < ALL(SELECT * FROM nullary)
+query error subquery has 0 columns available but 1 columns specified
+SELECT 1 < ALL(SELECT * FROM nullary)
+
+query error Expected subselect to return 1 column, got 0 columns
+SELECT (SELECT);
+----
+
+query
+SELECT * FROM (SELECT);
+----
+
 
 query error subquery has 2 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT 1, 2)
@@ -287,34 +294,15 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 %1 =
 | Get materialize.public.t3 (u21)
 
-%2 = Let l0 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Differential %1 %0.(#0)
-| Project (#0, #2)
+%2 =
+| Get materialize.public.t2 (u19)
+| Distinct group=(#0)
+| ArrangeBy (#0)
 
 %3 =
-| Get %2 (l0)
-| Project (#1)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%4 =
-| Get materialize.public.t2 (u19)
-| ArrangeBy (#0)
-
-%5 =
-| Join %3 %4 (= #0 #1)
-| | implementation = DeltaQuery
-| |   delta %3 %4.(#0)
-| |   delta %4 %3.(#0)
-| Project (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%6 =
-| Join %2 %5 (= #1 #2)
-| | implementation = Differential %2 %5.(#0)
-| Project (#0, #0, #1)
+| Join %0 %1 %2 (= #0 #1) (= #2 #3)
+| | implementation = Differential %1 %2.(#0) %0.(#0)
+| Project (#0, #0, #2)
 
 EOF
 
@@ -464,6 +452,7 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 
 %2 =
 | Get materialize.public.x (u25)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %3 = Let l1 =
@@ -472,7 +461,6 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
 | Project (#0)
-| Distinct group=(#0)
 
 %4 =
 | Get materialize.public.y (u27)
@@ -513,6 +501,7 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 
 %2 =
 | Get materialize.public.x (u25)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %3 = Let l1 =
@@ -521,7 +510,6 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
 | Project (#0)
-| Distinct group=(#0)
 
 %4 =
 | Get materialize.public.y (u27)
@@ -669,3 +657,36 @@ SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
 ----
 1
 1
+
+# Regression test for #9921, in which the presence of a SELECT subquery inside
+# of another subexpression produced a degenerate join that was not elided before
+# join implementation planning.
+query I
+SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+WHERE a IN (9, 0)
+  OR 0  <  ALL (
+      SELECT agg1  NULL
+      FROM (SELECT MAX(3) agg1  FROM (SELECT  FROM x)
+      GROUP BY TRUE)
+  )
+  GROUP BY TRUE;
+----
+1
+
+query T multiline
+EXPLAIN SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+WHERE a IN (9, 0)
+  OR 0  <  ALL (
+      SELECT agg1  NULL
+      FROM (SELECT MAX(3) agg1  FROM (SELECT  FROM x)
+      GROUP BY TRUE)
+  )
+  GROUP BY TRUE;
+----
+%0 =
+| Get materialize.public.y (u27)
+| Project ()
+| Distinct group=()
+| Map 1
+
+EOF

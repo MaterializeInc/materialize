@@ -1,0 +1,123 @@
+# Test that prepared statement describe works if the underlying SQL object is
+# replaced.
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE t (a INT)"}
+Parse {"name": "q", "query": "SELECT * FROM t"}
+Describe {"variant": "S", "name": "q"}
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+ParameterDescription {"parameters":[]}
+RowDescription {"fields":[{"name":"a"}]}
+ReadyForQuery {"status":"I"}
+
+# Recreating the underlying object is fine.
+send
+Query {"query": "DROP TABLE t"}
+Query {"query": "CREATE TABLE t (a INT)"}
+Describe {"variant": "S", "name": "q"}
+Sync
+Query {"query": "EXECUTE q"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+ParameterDescription {"parameters":[]}
+RowDescription {"fields":[{"name":"a"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+CommandComplete {"tag":"SELECT 0"}
+ReadyForQuery {"status":"I"}
+
+# But changing it will break the prepared statement.
+send
+Query {"query": "DROP TABLE t"}
+Query {"query": "CREATE TABLE t (c INT, b INT)"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Describe {"variant": "S", "name": "q"}
+Sync
+----
+
+# Postgres sends a ParameterDescription, but that seems wrong, so ignore it and
+# just look for the error.
+until ignore=ParameterDescription
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "EXECUTE q"}
+----
+
+# TODO(mjibson): We send a RowDescription before the error. This isn't wrong
+# (feels about as wrong as Postgres sending ParameterDescription above), it's
+# just not what Postgres does, so ignore it to be in sync with them.
+until ignore=RowDescription
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
+
+# Changing it back fixes it.
+send
+Query {"query": "DROP TABLE t"}
+Query {"query": "CREATE TABLE t (a INT)"}
+Describe {"variant": "S", "name": "q"}
+Sync
+Query {"query": "EXECUTE q"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+ParameterDescription {"parameters":[]}
+RowDescription {"fields":[{"name":"a"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+CommandComplete {"tag":"SELECT 0"}
+ReadyForQuery {"status":"I"}

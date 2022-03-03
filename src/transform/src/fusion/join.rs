@@ -22,8 +22,8 @@
 //! we may find joins with zero or one input, which can be further simplified.
 
 use crate::TransformArgs;
-use expr::{MirRelationExpr, MirScalarExpr};
-use repr::RelationType;
+use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_repr::RelationType;
 
 /// Fuses multiple `Join` operators into one `Join` operator.
 ///
@@ -38,10 +38,7 @@ impl crate::Transform for Join {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_post(&mut |e| Ok(self.action(e)))
     }
 }
 
@@ -145,7 +142,7 @@ impl JoinBuilder {
         // Update and push all of the variables.
         for mut equivalence in equivalences.drain(..) {
             for expr in equivalence.iter_mut() {
-                expr.visit_mut(&mut |e| {
+                expr.visit_mut_post(&mut |e| {
                     if let MirScalarExpr::Column(c) = e {
                         *c += self.num_columns;
                     }
@@ -156,7 +153,7 @@ impl JoinBuilder {
 
         if let Some(mut predicates) = predicates {
             for mut expr in predicates.drain(..) {
-                expr.visit_mut(&mut |e| {
+                expr.visit_mut_post(&mut |e| {
                     if let MirScalarExpr::Column(c) = e {
                         *c += self.num_columns;
                     }
@@ -172,7 +169,7 @@ impl JoinBuilder {
     }
 
     fn build(mut self) -> MirRelationExpr {
-        expr::canonicalize::canonicalize_equivalences(&mut self.equivalences);
+        mz_expr::canonicalize::canonicalize_equivalence_classes(&mut self.equivalences);
 
         // If `inputs` is now empty or a singleton (without constraints),
         // we can remove the join.
@@ -190,8 +187,7 @@ impl JoinBuilder {
             _ => MirRelationExpr::Join {
                 inputs: self.inputs,
                 equivalences: self.equivalences,
-                demand: None,
-                implementation: expr::JoinImplementation::Unimplemented,
+                implementation: mz_expr::JoinImplementation::Unimplemented,
             },
         };
 

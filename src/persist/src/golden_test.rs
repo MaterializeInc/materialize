@@ -7,18 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use ore::metrics::MetricsRegistry;
-use ore::test::init_logging;
+use std::sync::Arc;
+
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::test::init_logging;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use tokio::runtime::Runtime as AsyncRuntime;
+use tracing::{debug, error, info};
 
+use crate::client::RuntimeClient;
 use crate::error::{Error, ErrorLog};
-use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::mem::{MemBlob, MemRegistry};
-use crate::nemesis::direct::Direct;
+use crate::nemesis::direct::{Direct, StartRuntime};
 use crate::nemesis::generator::{Generator, GeneratorConfig};
-use crate::nemesis::{Input, Runtime};
-use crate::storage::Blob;
+use crate::nemesis::{Input, Runtime, RuntimeWorker};
+use crate::runtime::{self, RuntimeConfig};
+use crate::storage::{Atomicity, Blob, BlobRead};
 use crate::unreliable::UnreliableBlob;
 
 /// A test to catch changes in any part of the end-to-end persist encoding.
@@ -94,11 +99,14 @@ use crate::unreliable::UnreliableBlob;
 ///   wasn't changed), this is a red flag that something that should be
 ///   deterministic from the persist crate's external API is no longer
 ///   deterministic. This should be investigated.
-/// - The test prints out the new serialization of the golden data on every
-///   failure as a log line. Updating it is as simple as copying it in to the
-///   golden_test.json file as part of the commit (the formatting of the json
-///   shouldn't matter, but it should probably stay one line for space reasons,
-///   be careful when you save if your editor auto-formats).
+///
+/// HOW TO UPDATE "golden_test.json":
+/// 1. Truncate the file so that it exists but it's empty (e.g `truncate -s 0 golden_test.json`)
+/// 2. Run `cargo test golden_test`
+/// 3. The test will print out the new serialization of the golden data as a log line. To update
+///    the data, simply copy the printed JSON in to the golden_test.json file as part of the
+///    commit. The formatting of the json shouldn't matter, but it should probably stay one line
+///    for space reasons, be careful when you save if your editor auto-formats.
 #[test]
 fn golden() -> Result<(), Error> {
     init_logging();
@@ -112,17 +120,24 @@ fn golden() -> Result<(), Error> {
     config.storage_available = 0;
     config.start_weight = 0;
     config.stop_weight = 0;
+    config.read_output_weight = 0;
     let g = Generator::new(seed, config);
     let reqs = g.into_iter().take(100).collect::<Vec<_>>();
 
-    let golden = golden_state(DATAZ)?;
     let (current, raw_blobs) = current_state(&reqs)?;
+    let golden = golden_state(DATAZ).map_err(|e| {
+        for req in reqs.iter() {
+            debug!("req {:?}", req);
+        }
+        info!("current impl blob state: {}", raw_blobs);
+        e
+    })?;
 
     if golden != current {
         for req in reqs {
-            log::debug!("req {:?}", req);
+            debug!("req {:?}", req);
         }
-        log::info!("current impl blob state: {}", raw_blobs);
+        info!("current impl blob state: {}", raw_blobs);
         assert_eq!(golden, current);
     }
 
@@ -130,15 +145,18 @@ fn golden() -> Result<(), Error> {
 }
 
 fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
+    let async_runtime = Arc::new(AsyncRuntime::new()?);
     let mut blob = MemBlob::new_no_reentrance("");
-    if let Err(err) = Blobs::deserialize_to(blob_json, &mut blob) {
-        log::error!("error deserializing golden: {}", err);
+    if let Err(err) = async_runtime.block_on(Blobs::deserialize_to(blob_json, &mut blob)) {
+        error!("error deserializing golden: {}", err);
     }
     let mut persist = runtime::start(
         RuntimeConfig::for_tests(),
         ErrorLog,
         blob,
+        mz_build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
+        Some(async_runtime),
     )?;
     let state = PersistState::slurp_from(&persist)?;
     persist.stop()?;
@@ -146,27 +164,41 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
 }
 
 fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
-    let reg = MemRegistry::new();
-    let runtime_reg = reg.clone();
-    let mut persist = Direct::new(move |unreliable| {
-        let blob = runtime_reg.blob_no_reentrance()?;
-        let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(
-            RuntimeConfig::for_tests(),
-            ErrorLog,
-            blob,
-            &MetricsRegistry::new(),
-        )
-    })?;
-    for req in reqs.iter() {
-        let _ = persist.run(req.clone());
+    #[derive(Debug)]
+    struct GoldenStartRuntime(MemRegistry);
+
+    impl StartRuntime for GoldenStartRuntime {
+        fn start_runtime(
+            &mut self,
+            unreliable: crate::unreliable::UnreliableHandle,
+        ) -> Result<RuntimeClient, Error> {
+            let blob = self.0.blob_no_reentrance()?;
+            let blob = UnreliableBlob::from_handle(blob, unreliable);
+            runtime::start(
+                RuntimeConfig::for_tests(),
+                ErrorLog,
+                blob,
+                mz_build_info::DUMMY_BUILD_INFO,
+                &MetricsRegistry::new(),
+                None,
+            )
+        }
     }
-    let persist_state = PersistState::slurp_from(&persist.persister)?;
+
+    let async_runtime = Arc::new(AsyncRuntime::new()?);
+    let reg = MemRegistry::new();
+    let start_fn = GoldenStartRuntime(reg.clone());
+    let mut persist = Direct::new(start_fn)?;
+    let mut persist_worker = persist.add_worker();
+    for req in reqs.iter() {
+        let _ = persist_worker.run(req.clone()).recv();
+    }
+    let persist_state = PersistState::slurp_from(&persist.runtime()?)?;
     persist.finish();
 
     let mut blob = reg.blob_no_reentrance()?;
     let raw_blobs = Blobs::serialize_from(&blob)?;
-    blob.close()?;
+    async_runtime.block_on(blob.close())?;
     Ok((persist_state, raw_blobs))
 }
 
@@ -176,11 +208,12 @@ struct Blobs {
 }
 
 impl Blobs {
-    fn deserialize_to<B: Blob>(blob_json: &str, blob: &mut B) -> Result<(), Error> {
+    async fn deserialize_to<B: Blob>(blob_json: &str, blob: &mut B) -> Result<(), Error> {
         let blobs: Blobs =
             serde_json::from_str(blob_json).map_err(|err| Error::from(err.to_string()))?;
         for (key, val) in blobs.blobs.iter() {
-            blob.set(&key, val.to_owned(), false)?;
+            blob.set(&key, val.to_owned(), Atomicity::AllowNonAtomic)
+                .await?;
         }
         Ok(())
     }
@@ -206,13 +239,15 @@ impl PersistState {
         // of a RuntimeClient, so hardcode the ones nemesis uses.
         let mut streams = Vec::new();
         for name in ('a'..='e').map(|x| x.to_string()) {
-            let (_, read) = persist.create_or_load(&name)?;
-            let mut snap = read.snapshot()?;
-            let snap_data = snap.read_to_end_flattened()?;
+            let (_, read) = persist.create_or_load(&name);
+            let snap = read.snapshot()?;
+            let (seal, since) = (snap.get_seal(), snap.since());
+            let mut snap_data = snap.into_iter().collect::<Result<Vec<_>, Error>>()?;
+            differential_dataflow::consolidation::consolidate_updates(&mut snap_data);
             streams.push(PersistStreamState {
                 name,
-                seal: snap.get_seal(),
-                since: snap.since(),
+                seal,
+                since,
                 snap: snap_data,
             });
         }
@@ -225,7 +260,7 @@ struct PersistStreamState {
     name: String,
     seal: Antichain<u64>,
     since: Antichain<u64>,
-    snap: Vec<((String, ()), u64, isize)>,
+    snap: Vec<((String, ()), u64, i64)>,
 }
 
 const DATAZ: &'static str = include_str!("golden_test.json");

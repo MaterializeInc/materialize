@@ -23,10 +23,10 @@ $ set schema={
   FORMAT AVRO USING SCHEMA '${schema}'
 
 ! SELECT * FROM s AS OF 0
-Timestamp (0) is not valid for all inputs
+contains:Timestamp (0) is not valid for all inputs
 
 ! SELECT * FROM s AS OF now() - '10s'::interval
-Timestamp (<TIMESTAMP>) is not valid for all inputs
+contains:Timestamp (<TIMESTAMP>) is not valid for all inputs
 
 # Although not the original issue, also test that AS OF does work on an
 # unmaterialized source if the timestamp is queryable.

@@ -61,6 +61,10 @@ extra_lints=(
     # `!x`.
     clippy::bool_comparison
 
+    # x.clone() -> Arc::clone(&x)
+    # This clarifies a significant amount of code.
+    clippy::clone_on_ref_ptr
+
     # These can catch real bugs, because something that is expected (a cast, a
     # conversion, a statement) is not happening.
     clippy::no_effect
@@ -156,13 +160,23 @@ extra_lints=(
 
     # Needless async
     clippy::unused_async
+
+    # suggest better alternatives
+    # See `clippy.toml` for more info
+    # TODO(guswynn): renamed this to `disallowed_methods` when we upgrade
+    clippy::disallowed_method
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
 # splitting below. It's substantially clearer than doing things "properly,"
 # and the inputs to this script are trusted.
 
+flags=""
+if [[ "$*" =~ --fix ]] ; then
+    flags=--fix
+fi
+
 # shellcheck disable=SC2046
-run cargo clippy --all-targets -- \
-    $(printf -- "-D %s " "${extra_lints[@]}") \
-    $(printf -- "-A %s " "${disabled_lints[@]}")
+run cargo clippy --all-targets $flags -- \
+    $(printf -- "-A %s " "${disabled_lints[@]}") \
+    $(printf -- "-D %s " "${extra_lints[@]}")

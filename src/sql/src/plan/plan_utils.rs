@@ -13,7 +13,7 @@ use std::fmt;
 
 use anyhow::bail;
 
-use repr::RelationDesc;
+use mz_repr::RelationDesc;
 
 use crate::ast::Ident;
 use crate::normalize;
@@ -49,7 +49,27 @@ pub fn maybe_rename_columns(
 
     let new_names = column_names
         .iter()
-        .map(|n| Some(normalize::column_name(n.clone())));
+        .map(|n| normalize::column_name(n.clone()));
 
     Ok(desc.with_names(new_names))
+}
+
+/// Specifies the side of a join.
+///
+/// Intended for use in error messages.
+#[derive(Debug, Clone, Copy)]
+pub enum JoinSide {
+    /// The left side.
+    Left,
+    /// The right side.
+    Right,
+}
+
+impl fmt::Display for JoinSide {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            JoinSide::Left => f.write_str("left"),
+            JoinSide::Right => f.write_str("right"),
+        }
+    }
 }

@@ -10,7 +10,7 @@
 from pathlib import Path
 from typing import List
 
-from setuptools import find_packages, setup  # type: ignore
+from setuptools import find_packages, setup
 
 # stub setup.py that allows running `pip install -e .` to install into a virtualenv
 
@@ -28,6 +28,9 @@ setup(
     extras_require={
         "dev": requires("requirements-dev.txt"),
     },
-    package_data={"materialize": ["py.typed"]},
+    package_data={
+        "materialize": ["py.typed"],
+        "materialize.optbench": ["schema/*.sql", "workload/*.sql"],
+    },
     include_package_data=True,
 )

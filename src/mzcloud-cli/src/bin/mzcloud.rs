@@ -16,31 +16,36 @@
 //! Command-line interface for Materialize Cloud.
 
 use std::fs;
+use std::io::Cursor;
 use std::process;
 
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
-use structopt::StructOpt;
+use zip::ZipArchive;
 
 use mzcloud::apis::configuration::Configuration;
 use mzcloud::apis::deployments_api::{
     deployments_certs_retrieve, deployments_create, deployments_destroy, deployments_list,
     deployments_logs_retrieve, deployments_partial_update, deployments_retrieve,
+    deployments_tailscale_logs_retrieve,
 };
 use mzcloud::apis::mz_versions_api::mz_versions_list;
 use mzcloud::models::deployment_request::DeploymentRequest;
-use mzcloud::models::patched_deployment_request::PatchedDeploymentRequest;
-use mzcloud::models::size_enum::SizeEnum;
+use mzcloud::models::deployment_size_enum::DeploymentSizeEnum;
+use mzcloud::models::patched_deployment_update_request::PatchedDeploymentUpdateRequest;
+use mzcloud::models::provider_enum::ProviderEnum;
+use mzcloud::models::supported_cloud_region_request::SupportedCloudRegionRequest;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 /// Command-line interface for Materialize Cloud.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Parser)]
 struct Args {
-    #[structopt(flatten)]
+    #[clap(flatten)]
     oauth: OAuthArgs,
 
     /// Materialize Cloud domain.
-    #[structopt(
+    #[clap(
         short,
         long,
         env = "MZCLOUD_DOMAIN",
@@ -51,7 +56,7 @@ struct Args {
     /// Whether to use HTTP instead of HTTPS when accessing the core API.
     ///
     /// Defaults to false unless `domain` is set to `localhost`.
-    #[structopt(long, env = "MZCLOUD_INSECURE", hidden = true)]
+    #[clap(long, env = "MZCLOUD_INSECURE", hide = true)]
     insecure: Option<bool>,
 
     /// The domain of the admin API.
@@ -60,11 +65,11 @@ struct Args {
     /// which case it assumes the standard local development environment setup
     /// for Materialize Cloud and defaults to
     /// `admin.staging.cloud.materialize.com`.
-    #[structopt(long, env = "MZCLOUD_ADMIN_DOMAIN", hidden = true)]
+    #[clap(long, env = "MZCLOUD_ADMIN_DOMAIN", hide = true)]
     admin_domain: Option<String>,
 
     /// Which resources to operate on.
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     category: Category,
 }
 
@@ -93,42 +98,67 @@ impl Args {
     }
 }
 
-#[derive(Debug, StructOpt, Serialize)]
+#[derive(Debug, clap::Parser, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OAuthArgs {
     /// OAuth Client ID for authentication.
-    #[structopt(long, env = "MZCLOUD_CLIENT_ID", hide_env_values = true)]
+    #[clap(long, env = "MZCLOUD_CLIENT_ID", hide_env_values = true)]
     client_id: String,
 
     /// OAuth Secret Key for authentication.
-    #[structopt(long, env = "MZCLOUD_SECRET_KEY", hide_env_values = true)]
+    #[clap(long, env = "MZCLOUD_SECRET_KEY", hide_env_values = true)]
     secret: String,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Parser)]
 enum Category {
     /// Manage deployments.
+    #[clap(subcommand)]
     Deployments(DeploymentsCommand),
     /// List Materialize versions.
+    #[clap(subcommand)]
     MzVersions(MzVersionsCommand),
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Parser)]
 enum DeploymentsCommand {
     /// Create a new Materialize deployment.
     Create {
-        /// Version of materialized to deploy. Defaults to latest available version.
-        #[structopt(short = "v", long)]
-        mz_version: Option<String>,
+        /// Cloud provider:region pair in which to deploy Materialize. Example: `aws:us-east-1`
+        #[clap(long, parse(try_from_str = parse_cloud_region))]
+        cloud_provider_region: SupportedCloudRegionRequest,
+
+        /// Name of the deployed materialized instance. Defaults to randomly assigned.
+        #[clap(long)]
+        name: Option<String>,
+
         /// Size of the deployment.
-        #[structopt(short, long, parse(try_from_str = parse_size))]
-        size: Option<SizeEnum>,
+        #[clap(short, long, parse(try_from_str = parse_size))]
+        size: Option<DeploymentSizeEnum>,
+
         /// The number of megabytes of storage to allocate.
-        #[structopt(long)]
+        #[clap(long)]
         storage_mb: Option<i32>,
+
+        /// Disable user-created indexes (used for debugging).
+        #[clap(long)]
+        disable_user_indexes: Option<bool>,
+
+        /// Disable materialized entirely, for recovering from catalog backups.
+        #[clap(long, hide = true)]
+        catalog_restore_mode: Option<bool>,
+
         /// Extra arguments to provide to materialized.
-        #[structopt(long)]
+        #[clap(long, allow_hyphen_values = true, multiple_values = true)]
         materialized_extra_args: Option<Vec<String>>,
+
+        /// Version of materialized to deploy. Defaults to latest available version.
+        #[clap(short = 'v', long)]
+        mz_version: Option<String>,
+
+        /// Enable Tailscale by setting the Tailscale Auth Key.
+        #[clap(long)]
+        tailscale_auth_key: Option<String>,
     },
 
     /// Describe a Materialize deployment.
@@ -141,17 +171,40 @@ enum DeploymentsCommand {
     Update {
         /// ID of the deployment.
         id: String,
-        /// Version of materialized to upgrade to. Defaults to the current
-        /// version.
-        #[structopt(short = "v", long)]
-        mz_version: Option<String>,
+
+        /// Name of the deployed materialized instance. Defaults to the current version.
+        #[clap(long)]
+        name: Option<String>,
+
         /// Size of the deployment. Defaults to current size.
-        #[structopt(short, long, parse(try_from_str = parse_size))]
-        size: Option<SizeEnum>,
+        #[clap(short, long, parse(try_from_str = parse_size))]
+        size: Option<DeploymentSizeEnum>,
+
+        /// Disable user-created indexes (used for debugging).
+        #[clap(long)]
+        disable_user_indexes: Option<bool>,
+
+        /// Disable materialized entirely, for recovering from catalog backups.
+        #[clap(long, hide = true)]
+        catalog_restore_mode: Option<bool>,
+
         /// Extra arguments to provide to materialized. Defaults to the
         /// currently set extra arguments.
-        #[structopt(long)]
+        #[clap(long, allow_hyphen_values = true, multiple_values = true)]
         materialized_extra_args: Option<Vec<String>>,
+
+        /// Version of materialized to upgrade to. Defaults to the current
+        /// version.
+        #[clap(short = 'v', long)]
+        mz_version: Option<String>,
+
+        /// If Tailscale is configured, disable it and delete stored keys.
+        #[clap(long)]
+        remove_tailscale: bool,
+
+        /// Enable Tailscale by setting the Tailscale Auth Key.
+        #[clap(long, conflicts_with("remove-tailscale"))]
+        tailscale_auth_key: Option<String>,
     },
 
     /// Destroy a Materialize deployment.
@@ -168,7 +221,7 @@ enum DeploymentsCommand {
         /// ID of the deployment.
         id: String,
         /// Path to save the certs bundle to.
-        #[structopt(short, long, default_value = "mzcloud-certs.zip")]
+        #[clap(short, long, default_value = "mzcloud-certs.zip")]
         output_file: String,
     },
 
@@ -176,22 +229,62 @@ enum DeploymentsCommand {
     Logs {
         /// ID of the deployment.
         id: String,
+
+        /// Get the logs for the previous execution, rather than the currently running one.
+        #[clap(long)]
+        previous: bool,
+    },
+
+    /// Download the logs from a Materialize deployment.
+    TailscaleLogs {
+        /// ID of the deployment.
+        id: String,
+
+        /// Get the logs for the previous execution, rather than the currently running one.
+        #[clap(long)]
+        previous: bool,
+    },
+
+    /// Connect to a Materialize deployment using psql.
+    /// Requires psql to be on your PATH.
+    Psql {
+        /// ID of the deployment.
+        id: String,
     },
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Parser)]
 enum MzVersionsCommand {
     /// List available Materialize versions.
     List,
 }
 
-fn parse_size(s: &str) -> Result<SizeEnum, String> {
+fn parse_cloud_region(s: &str) -> Result<SupportedCloudRegionRequest, String> {
+    let (provider, region) = s.split_once(":").ok_or_else(|| {
+        "Cloud provider region should colon separated `provider:region` pair.".to_owned()
+    })?;
+    let provider = provider.to_lowercase();
+    let region = region.to_lowercase();
+    match (provider.as_ref(), region.as_ref()) {
+        ("aws", "us-east-1") => Ok(SupportedCloudRegionRequest {
+            provider: ProviderEnum::AWS,
+            region: "us-east-1".to_owned(),
+        }),
+        ("aws", "eu-west-1") => Ok(SupportedCloudRegionRequest {
+            provider: ProviderEnum::AWS,
+            region: "eu-west-1".to_owned(),
+        }),
+        _ => Err("Unsupported cloud provider/region pair.".to_owned()),
+    }
+}
+
+fn parse_size(s: &str) -> Result<DeploymentSizeEnum, String> {
     match s {
-        "XS" => Ok(SizeEnum::XS),
-        "S" => Ok(SizeEnum::S),
-        "M" => Ok(SizeEnum::M),
-        "L" => Ok(SizeEnum::L),
-        "XL" => Ok(SizeEnum::XL),
+        "XS" => Ok(DeploymentSizeEnum::XS),
+        "S" => Ok(DeploymentSizeEnum::S),
+        "M" => Ok(DeploymentSizeEnum::M),
+        "L" => Ok(DeploymentSizeEnum::L),
+        "XL" => Ok(DeploymentSizeEnum::XL),
         _ => Err("Invalid size.".to_owned()),
     }
 }
@@ -214,19 +307,30 @@ async fn handle_deployment_operations(
 ) -> anyhow::Result<()> {
     Ok(match operation {
         DeploymentsCommand::Create {
+            cloud_provider_region,
+            name,
             size,
-            mz_version,
             storage_mb,
+            disable_user_indexes,
+            catalog_restore_mode,
             materialized_extra_args,
+            mz_version,
+            tailscale_auth_key,
         } => {
             let deployment = deployments_create(
                 &config,
-                Some(DeploymentRequest {
+                DeploymentRequest {
+                    cloud_provider_region: Box::new(cloud_provider_region),
+                    name,
                     size: size.map(Box::new),
-                    mz_version,
                     storage_mb,
+                    disable_user_indexes,
+                    catalog_restore_mode,
                     materialized_extra_args,
-                }),
+                    mz_version,
+                    enable_tailscale: Some(tailscale_auth_key.is_some()),
+                    tailscale_auth_key,
+                },
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&deployment)?);
@@ -237,18 +341,33 @@ async fn handle_deployment_operations(
         }
         DeploymentsCommand::Update {
             id,
+            name,
             size,
-            mz_version,
+            disable_user_indexes,
+            catalog_restore_mode,
             materialized_extra_args,
+            mz_version,
+            remove_tailscale,
+            tailscale_auth_key,
         } => {
+            let enable_tailscale = match (remove_tailscale, &tailscale_auth_key) {
+                (true, _) => Some(false),
+                (false, None) => None,
+                (false, Some(_)) => Some(true),
+            };
             let deployment = deployments_partial_update(
                 &config,
                 &id,
-                Some(PatchedDeploymentRequest {
+                Some(PatchedDeploymentUpdateRequest {
+                    name,
                     size: size.map(Box::new),
-                    mz_version,
                     storage_mb: None,
+                    disable_user_indexes,
+                    catalog_restore_mode,
                     materialized_extra_args,
+                    mz_version,
+                    enable_tailscale,
+                    tailscale_auth_key,
                 }),
             )
             .await?;
@@ -266,9 +385,33 @@ async fn handle_deployment_operations(
             fs::write(&output_file, &bytes)?;
             println!("Certificate bundle saved to {}", &output_file);
         }
-        DeploymentsCommand::Logs { id } => {
-            let logs = deployments_logs_retrieve(&config, &id).await?;
+        DeploymentsCommand::Logs { id, previous } => {
+            let logs = deployments_logs_retrieve(&config, &id, Some(previous)).await?;
             print!("{}", logs);
+        }
+        DeploymentsCommand::TailscaleLogs { id, previous } => {
+            let logs = deployments_tailscale_logs_retrieve(&config, &id, Some(previous)).await?;
+            print!("{}", logs);
+        }
+        DeploymentsCommand::Psql { id } => {
+            let bytes = deployments_certs_retrieve(&config, &id).await?;
+            let dir = tempfile::tempdir()?;
+            let c = Cursor::new(bytes);
+            let mut archive = ZipArchive::new(c)?;
+            archive.extract(&dir)?;
+            let deployment = deployments_retrieve(&config, &id).await?;
+            let hostname = deployment
+                .hostname
+                .ok_or_else(|| anyhow!("Deployment does not have a hostname."))?;
+            let dir_str = dir
+                .path()
+                .to_str()
+                .ok_or_else(|| anyhow!("Unable to format postgresql connection string. Temp dir contains non-unicode characters."))?;
+            let postgres_url = format!("postgresql://materialize@{hostname}:6875/materialize?sslmode=require&sslcert={dir}/materialize.crt&sslkey={dir}/materialize.key&sslrootcert={dir}/ca.crt", hostname=hostname, dir=dir_str);
+            process::Command::new("psql")
+                .arg(postgres_url)
+                .spawn()?
+                .wait()?;
         }
     })
 }
@@ -295,7 +438,7 @@ async fn get_oauth_token(args: &Args) -> Result<String, reqwest::Error> {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let args = Args::from_args();
+    let args = mz_ore::cli::parse_args();
 
     let access_token = get_oauth_token(&args).await?;
     let config = Configuration {

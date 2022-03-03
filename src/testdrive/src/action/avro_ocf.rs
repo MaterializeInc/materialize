@@ -13,12 +13,12 @@ use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 
-use ore::result::ResultExt;
-use ore::retry::Retry;
+use mz_ore::retry::Retry;
 
-use crate::action::{Action, Context, State, SyncAction};
+use crate::action::{Action, ControlFlow, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
 
@@ -29,7 +29,7 @@ pub struct WriteAction {
     codec: Option<Codec>,
 }
 
-pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
+pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, anyhow::Error> {
     let path = cmd.args.string("path")?;
     let schema = cmd.args.string("schema")?;
     let codec = cmd.args.opt_parse("codec")?;
@@ -38,7 +38,7 @@ pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
     cmd.args.done()?;
     if path.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
-        return Err("separators in paths are forbidden".into());
+        bail!("separators in paths are forbidden");
     }
     Ok(WriteAction {
         path,
@@ -49,23 +49,23 @@ pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
 }
 
 impl SyncAction for WriteAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+    fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         // Files are written to a fresh temporary directory, so no need to
         // explicitly remove the file here.
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Writing to {}", path.display());
-        let mut file = File::create(path).map_err_to_string()?;
-        let schema = avro::parse_schema(&self.schema)
-            .map_err(|e| format!("parsing avro schema: {:#}", e))?;
+        let mut file = File::create(&path)
+            .with_context(|| format!("creating Avro OCF file: {}", path.display()))?;
+        let schema = avro::parse_schema(&self.schema).context("parsing avro schema")?;
         let mut writer = Writer::with_codec_opt(schema, &mut file, self.codec);
         write_records(&mut writer, &self.records)?;
         file.sync_all()
-            .map_err(|e| format!("error syncing file: {}", e))?;
-        Ok(())
+            .with_context(|| format!("syncing Avro OCF file: {}", path.display()))?;
+        Ok(ControlFlow::Continue)
     }
 }
 
@@ -74,87 +74,74 @@ pub struct AppendAction {
     records: Vec<String>,
 }
 
-pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
+pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, anyhow::Error> {
     let path = cmd.args.string("path")?;
     let records = cmd.input;
     cmd.args.done()?;
     if path.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
-        return Err("separators in paths are forbidden".into());
+        bail!("separators in paths are forbidden");
     }
     Ok(AppendAction { path, records })
 }
 
 impl SyncAction for AppendAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+    fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Appending to {}", path.display());
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err_to_string()?;
-        let mut writer = Writer::append_to(file).map_err_to_string()?;
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        let mut writer = Writer::append_to(file)?;
         write_records(&mut writer, &self.records)?;
-        Ok(())
+        Ok(ControlFlow::Continue)
     }
 }
 
-fn write_records<W>(writer: &mut Writer<W>, records: &[String]) -> Result<(), String>
+fn write_records<W>(writer: &mut Writer<W>, records: &[String]) -> Result<(), anyhow::Error>
 where
     W: Write,
 {
     let schema = writer.schema().clone();
     for record in records {
         let record = avro::from_json(
-            &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {:#}", e))?,
+            &serde_json::from_str(record).context("parsing avro datum: {:#}")?,
             schema.top_node(),
         )?;
-        writer
-            .append(record)
-            .map_err(|e| format!("writing avro record: {:#}", e))?;
+        writer.append(record).context("writing avro record")?;
     }
-    writer
-        .flush()
-        .map_err(|e| format!("flushing avro writer: {:#}", e))?;
+    writer.flush().context("flushing avro writer")?;
     Ok(())
 }
 
 pub struct VerifyAction {
     sink: String,
     expected: Vec<String>,
-    context: Context,
 }
 
-pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyAction, String> {
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
     let sink = cmd.args.string("sink")?;
     let expected = cmd.input;
     cmd.args.done()?;
     if sink.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
-        return Err("separators in file sink names are forbidden".into());
+        bail!("separators in file sink names are forbidden");
     }
-    Ok(VerifyAction {
-        sink,
-        expected,
-        context,
-    })
+    Ok(VerifyAction { sink, expected })
 }
 
 #[async_trait]
 impl Action for VerifyAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = Retry::default()
             .max_duration(state.default_timeout)
-            .retry(|_| async {
+            .retry_async(|_| async {
                 let row = state
                     .pgclient
                     .query_one(
@@ -164,12 +151,12 @@ impl Action for VerifyAction {
                         &[&self.sink],
                     )
                     .await
-                    .map_err(|e| format!("querying materialize: {:#}", e))?;
+                    .context("querying materialize")?;
                 let bytes: Vec<u8> = row.get("path");
-                Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
+                Ok::<_, anyhow::Error>(PathBuf::from(OsString::from_vec(bytes)))
             })
             .await
-            .map_err(|e| format!("retrieving path: {:?}", e))?;
+            .context("retrieving path")?;
 
         println!("Verifying results in file {}", path.display());
 
@@ -177,21 +164,23 @@ impl Action for VerifyAction {
         // we drop into synchronous code here.
         tokio::task::block_in_place(|| {
             let file = File::open(&path)
-                .map_err(|e| format!("reading sink file {}: {}", path.display(), e))?;
-            let reader = Reader::new(file).map_err(|e| format!("creating avro reader: {}", e))?;
+                .with_context(|| format!("reading sink file {}", path.display()))?;
+            let reader = Reader::new(file).context("creating avro reader")?;
             let schema = reader.writer_schema().clone();
             let actual = reader
                 .map(|res| res.map(|val| (None, Some(val))))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("reading avro values from file: {}", e))?;
+                .context("reading avro values from file")?;
             avro::validate_sink(
                 None,
                 &schema,
                 &self.expected,
                 &actual,
-                &self.context.regex,
-                &self.context.regex_replacement,
+                &state.regex,
+                &state.regex_replacement,
             )
-        })
+        })?;
+
+        Ok(ControlFlow::Continue)
     }
 }

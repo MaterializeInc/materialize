@@ -13,11 +13,11 @@ use std::time::Instant;
 
 use sysinfo::{ProcessorExt, SystemExt};
 
-use ore::cast::CastFrom;
-use ore::cgroup::{self, MemoryLimit};
-use ore::metric;
-use ore::metrics::{ComputedGauge, MetricsRegistry, UIntGauge};
-use ore::option::OptionExt;
+use mz_ore::cast::CastFrom;
+use mz_ore::cgroup::{self, MemoryLimit};
+use mz_ore::metric;
+use mz_ore::metrics::{ComputedGauge, MetricsRegistry, UIntGauge};
+use mz_ore::option::OptionExt;
 
 use crate::BUILD_INFO;
 
@@ -47,7 +47,7 @@ impl Metrics {
             let mut system = sysinfo::System::new();
             system.refresh_system();
 
-            let memory_limit = cgroup::detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+            let memory_limit = cgroup::detect_memory_limit().unwrap_or(MemoryLimit {
                 max: None,
                 swap_max: None,
             });

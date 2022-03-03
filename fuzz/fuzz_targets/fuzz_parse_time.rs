@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use honggfuzz::fuzz;
-use repr::strconv::parse_time;
+use mz_repr::strconv::parse_time;
 
 fn main() {
     loop {

@@ -4,8 +4,8 @@ members = [
     "fuzz",
     "play/json-flattened-view-gen",
     "play/mbta",
-    "src/avro",
     "src/avro-derive",
+    "src/avro",
     "src/aws-util",
     "src/build-info",
     "src/ccsr",
@@ -14,47 +14,47 @@ members = [
     "src/dataflow-bin",
     "src/dataflow-types",
     "src/dataflow",
-    "src/expr",
+    "src/dataflowd",
     "src/expr-test-util",
+    "src/expr",
+    "src/frontegg-auth",
     "src/http-proxy",
     "src/interchange",
     "src/kafka-util",
-    "src/lowertest",
     "src/lowertest-derive",
+    "src/lowertest",
     "src/materialized",
     "src/metabase",
+    "src/process-collector",
     "src/mzcloud-cli",
-    "src/mz-process-collector",
     "src/ore",
-    "src/peeker",
-    "src/persist",
     "src/persist-types",
-    "src/pid-file",
+    "src/persist",
+    "src/pgcopy",
     "src/pgrepr",
     "src/pgtest",
     "src/pgwire",
+    "src/pid-file",
     "src/postgres-util",
     "src/prof",
-    "src/protoc",
-    "src/repr",
     "src/repr-test-util",
+    "src/repr",
+    "src/s3-datagen",
+    "src/sql-parser",
     "src/sql",
     "src/sqllogictest",
-    "src/sql-parser",
-    "src/symbiosis",
+    "src/stash",
     "src/testdrive",
+    "src/timely-util",
     "src/transform",
     "src/walkabout",
-    "test/chaos",
-    "test/correctness",
     "test/metabase/smoketest",
-    "test/performance/perf-kinesis",
-    "test/performance/perf-upsert",
-    "test/performance/s3-datagen",
-    "test/smith",
+    "test/perf-kinesis",
     "test/test-util",
 ]
 # Use Cargo's new feature resolver, which can handle target-specific features.
+# Explicit opt-in is required even with the 2021 edition because we use a
+# virtual workspace.
 # See: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#cargos-new-feature-resolver
 resolver = "2"
 
@@ -78,3 +78,16 @@ rustc-demangle = { opt-level = 3 }
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
 debug = 1
+
+[patch.crates-io]
+# Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into a release.
+autotools = { git = "https://github.com/lu-zero/autotools-rs.git" }
+# Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55 to be released
+mysql_common = { git = "https://github.com/blackbeam/rust_mysql_common.git" }
+# Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
+parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }
+# Waiting on https://github.com/tokio-rs/prost/pull/576.
+prost = { git = "https://github.com/MaterializeInc/prost.git" }
+prost-types = { git = "https://github.com/MaterializeInc/prost.git" }
+prost-build = { git = "https://github.com/MaterializeInc/prost.git" }
+prost-derive = { git = "https://github.com/MaterializeInc/prost.git" }

@@ -7,28 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use structopt::StructOpt;
-
 /// Verifies the correctness of a Materialized coordinator.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     /// Directory containing test files.
     directory: String,
     /// Stress by running in a loop.
-    #[structopt(long)]
+    #[clap(long)]
     stress: bool,
 }
 
 #[tokio::main]
 async fn main() {
-    let args: Args = ore::cli::parse_args();
+    let args: Args = mz_ore::cli::parse_args();
     let mut iter = 0;
     loop {
         iter += 1;
         if iter > 1 {
             eprintln!("stress iteration {}", iter);
         }
-        coordtest::walk(&args.directory).await;
+        mz_coordtest::walk(&args.directory).await;
         if !args.stress {
             break;
         }

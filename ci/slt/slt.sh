@@ -18,14 +18,14 @@ export RUST_BACKTRACE=full
 mkdir -p target
 
 sqllogictest \
-    -v --json-summary-file=target/slt-summary.json --no-fail "$@" \
+    -v --no-fail "$@" \
     test/sqllogictest/cockroach/*.slt \
     test/sqllogictest/postgres/*.slt \
     test/sqllogictest/postgres/pgcrypto/*.slt \
     | tee target/slt.log
 
 sqllogictest \
-    -v \
+    -v "$@" \
     test/sqllogictest/*.slt \
     test/sqllogictest/sqlite/test \
     test/sqllogictest/transform/*.slt \

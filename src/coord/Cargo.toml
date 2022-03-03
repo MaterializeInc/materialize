@@ -1,59 +1,61 @@
 [package]
-name = "coord"
+name = "mz-coord"
 description = "Coordinates client requests with the dataflow layer."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.58.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
-aws-util = { path = "../aws-util" }
-backtrace = "0.3.61"
+anyhow = "1.0.55"
+backtrace = "0.3.64"
 bincode = { version = "1.3.3", optional = true }
-build-info = { path = "../build-info" }
 byteorder = "1.4.3"
-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.1"
-dataflow = { path = "../dataflow" }
-dataflow-types = { path = "../dataflow-types" }
+const_format = "0.2.22"
+crossbeam-channel = "0.5.2"
+dec = "0.4.8"
 derivative = "2.2.0"
-dec = "0.4.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-expr = { path = "../expr" }
-futures = "0.3.17"
-interchange = { path = "../interchange" }
-itertools = "0.10.1"
+fail = { version = "0.5.0", features = ["failpoints"] }
+futures = "0.3.21"
+itertools = "0.10.3"
 lazy_static = "1.4.0"
 log = "0.4.13"
-mz-avro = { path = "../avro", features = ["snappy"] }
-ore = { path = "../ore" }
-persist = { path = "../persist" }
-pgrepr = { path = "../pgrepr" }
+mz-aws-util = { path = "../aws-util" }
+mz-build-info = { path = "../build-info" }
+mz-ccsr = { path = "../ccsr" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-expr = { path = "../expr" }
+mz-interchange = { path = "../interchange" }
+mz-kafka-util = { path = "../kafka-util" }
+mz-ore = { path = "../ore", features = ["task"] }
+mz-persist = { path = "../persist" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-postgres-util = { path = "../postgres-util" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
+mz-transform = { path = "../transform" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-rand = "0.8.4"
+protobuf-native = "0.2.1"
+rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
-repr = { path = "../repr" }
-rusoto_kinesis = "0.47.0"
-rusqlite = { version = "0.25.3", features = ["bundled", "unlock_notify"] }
-serde = "1.0.130"
-serde_json = "1.0.68"
-semver = { version = "1.0.4"}
-sql = { path = "../sql" }
-sql-parser = { path = "../sql-parser" }
-symbiosis = { path = "../symbiosis" }
+rusqlite = { version = "0.27.0", features = ["bundled", "unlock_notify"] }
+semver = "1.0.6"
+serde = "1.0.136"
+serde_json = "1.0.79"
+tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.11.0"
+tokio = { version = "1.17.0", features = ["rt"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tokio-stream = "0.1.7"
-transform = { path = "../transform" }
+tokio-stream = "0.1.8"
+tracing = "0.1.31"
 uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
 datadriven = "0.6.0"
-tempfile = "3.2.0"

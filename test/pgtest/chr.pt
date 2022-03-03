@@ -1,0 +1,39 @@
+# Test status codes for the chr function
+
+# NOTE: Postgres does not send the RowDescription messages for these queries,
+# while we do. This is why we ignore all RowDescription messages.
+
+# NullCharacterNotPermitted maps to 54000
+send
+Query {"query": "SELECT chr(0)"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"54000"},{"typ":"M","value":"null character not permitted"}]}
+ReadyForQuery {"status":"I"}
+
+
+# CharacterNotValidForEncoding maps to 54000
+send
+Query {"query": "SELECT chr(55296)"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"54000"},{"typ":"M","value":"requested character not valid for encoding: 55296"}]}
+ReadyForQuery {"status":"I"}
+
+
+# CharacterTooLargeForEncoding maps to 54000
+send
+Query {"query": "SELECT chr(1114112)"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"54000"},{"typ":"M","value":"requested character too large for encoding: 1114112"}]}
+ReadyForQuery {"status":"I"}

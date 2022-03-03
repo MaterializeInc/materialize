@@ -15,7 +15,7 @@ use itertools::Itertools;
 use crate::MirRelationExpr;
 use crate::MirScalarExpr;
 
-use repr::RelationType;
+use mz_repr::RelationType;
 
 /// Any column in a join expression exists in two contexts:
 /// 1) It has a position relative to the result of the join (global)
@@ -44,25 +44,24 @@ impl JoinInputMapper {
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns.
     pub fn new(inputs: &[MirRelationExpr]) -> Self {
-        Self::new_from_input_arities(inputs.iter().map(|i| i.arity()).collect::<Vec<_>>())
+        Self::new_from_input_arities(inputs.iter().map(|i| i.arity()))
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns. Using this method saves is more
     /// efficient if input types have been pre-calculated
     pub fn new_from_input_types(types: &[RelationType]) -> Self {
-        let arities = types
-            .iter()
-            .map(|t| t.column_types.len())
-            .collect::<Vec<_>>();
-
-        Self::new_from_input_arities(arities)
+        Self::new_from_input_arities(types.iter().map(|t| t.column_types.len()))
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns. Using this method saves is more
     /// efficient if input arities have been pre-calculated
-    pub fn new_from_input_arities(arities: Vec<usize>) -> Self {
+    pub fn new_from_input_arities<I>(arities: I) -> Self
+    where
+        I: Iterator<Item = usize>,
+    {
+        let arities = arities.collect::<Vec<usize>>();
         let mut offset = 0;
         let mut prior_arities = Vec::new();
         for input in 0..arities.len() {
@@ -176,7 +175,7 @@ impl JoinInputMapper {
     /// where column references have been remapped to the local context.
     /// Assumes that all columns in `expr` are from the same input.
     pub fn map_expr_to_local(&self, mut expr: MirScalarExpr) -> MirScalarExpr {
-        expr.visit_mut(&mut |e| {
+        expr.visit_mut_post(&mut |e| {
             if let MirScalarExpr::Column(c) = e {
                 *c -= self.prior_arities[self.input_relation[*c]];
             }
@@ -188,7 +187,7 @@ impl JoinInputMapper {
     /// creates a new version where column references have been remapped to the
     /// global context.
     pub fn map_expr_to_global(&self, mut expr: MirScalarExpr, index: usize) -> MirScalarExpr {
-        expr.visit_mut(&mut |e| {
+        expr.visit_mut_post(&mut |e| {
             if let MirScalarExpr::Column(c) = e {
                 *c += self.prior_arities[index];
             }
@@ -232,6 +231,17 @@ impl JoinInputMapper {
             .dedup()
     }
 
+    /// Returns the index of the only input referenced in the given expression.
+    pub fn single_input(&self, expr: &MirScalarExpr) -> Option<usize> {
+        let mut inputs = self.lookup_inputs(expr);
+        if let Some(first_input) = inputs.next() {
+            if inputs.next().is_none() {
+                return Some(first_input);
+            }
+        }
+        None
+    }
+
     /// Takes an expression in the global context and looks in `equivalences`
     /// for an equivalent expression (also expressed in the global context) that
     /// belongs to one or more of the inputs in `bound_inputs`
@@ -239,8 +249,8 @@ impl JoinInputMapper {
     /// # Examples
     ///
     /// ```
-    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
-    /// use expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    /// use mz_repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use mz_expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
     /// let schema = RelationType::new(vec![
@@ -341,7 +351,7 @@ impl JoinInputMapper {
 mod tests {
     use super::*;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
-    use repr::{Datum, ScalarType};
+    use mz_repr::{Datum, ScalarType};
 
     #[test]
     fn try_map_to_input_with_bound_expr_test() {
@@ -377,7 +387,7 @@ mod tests {
         );
 
         let key20 = MirScalarExpr::CallUnary {
-            func: UnaryFunc::NegInt32,
+            func: UnaryFunc::NegInt32(crate::func::NegInt32),
             expr: Box::new(MirScalarExpr::Column(1)),
         };
         let key21 = MirScalarExpr::CallBinary {

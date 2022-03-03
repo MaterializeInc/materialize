@@ -8,12 +8,59 @@ This upgrade test framework serves to verify that objects created in a previous 
 The framework does the following:
 - fires an old version of Materialize
 - runs the applicable 'create-in' .td tests against it
-- kills the old version and starts a Materialize binary from your branch, preserving the mzdata directory across restarts
+- kills the old version and starts a Materialize binary from your current source, preserving the mzdata directory across restarts
 - runs the applicable 'check-from' .td tests
 
-Kafka and the Schema Registry are not restarted.
+The external services (Kafka, Schema Registry, Postgres) are not restarted.
 
-A separate sub-workflow also tests the "upgrade" from your branch back to your branch.
+The "upgrade" from your current source to your current source is also tested.
+
+## Running
+
+To run the entire sequence of tests:
+
+```
+./mzcompose down -v ; ./mzcompose run default
+```
+
+To run the tests against a particular version and all following versions:
+
+```
+./mzcompose down -v ; ./mzcompose run default --min-version 0.9.6
+```
+
+To run the tests against the last five versions:
+
+```
+./mzcompose down -v ; ./mzcompose run default --most-recent 5
+```
+
+To run the tests upgrading from the current source to the current source:
+
+```
+./mzcompose down -v ; ./mzcompose run default --most-recent 0
+```
+
+To run just a particular test or tests:
+
+```
+./mzcompose down -v ; ./mzcompose run default 'avro-ocf*'
+```
+
+If you are running a particular test that specifies the version, then you
+must include the `--min-version` flag with that version. The reason is
+that the test won't be included when testing earlier versions of Materialize,
+and testdrive will error out if it has no files to test:
+
+```
+./mzcompose down -v ; ./mzcompose run default 'compile-proto*' --min-version 0.9.12
+```
+
+For a full description of the command line options, run:
+
+```
+./mzcompose run default --help
+```
 
 ## Test naming convention
 
@@ -33,30 +80,6 @@ There are also two other special version identifiers:
 
 - ```current_source``` will only run when testing the "upgrade" from your current source to your current source
 - ```any_version``` tests will run when upgrading from any version
-
-## Adding a new Materialize version to the test
-
-1. Add a step under ```upgrade``` in ```mzcompose.yml```
-
-  ```
-  upgrade:
-    steps:
-      - step: workflow
-        workflow: upgrade-from-0_6_1
-  ```
-2. Add a section:
-
-```
-  upgrade-from-0_8_2:
-    env:
-      UPGRADE_FROM_VERSION: v0.8.2
-      TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2
-    steps:
-      - step: workflow
-        workflow: test-upgrade-from-version
-```
-
-Make sure the ```TESTS``` line includes the version under test **and all other** versions prior to it that are already in the file.
 
 ## Adding a new test
 

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 ! SELECT COUNT(*) FROM s3_text;
-s3
+contains:s3
 
 ! SELECT COUNT(*) FROM s3_gzip;
-s3
+contains:s3

@@ -38,11 +38,13 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use coord::PersistConfig;
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
-use ore::metrics::MetricsRegistry;
+use mz_coord::PersistConfig;
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -52,10 +54,10 @@ use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
-use pgrepr::{Interval, Jsonb, Numeric, Value};
-use repr::adt::numeric;
-use repr::ColumnName;
-use sql::ast::Statement;
+use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
+use mz_repr::adt::numeric;
+use mz_repr::ColumnName;
+use mz_sql::ast::Statement;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -312,8 +314,10 @@ impl<'a> FromSql<'a> for Slt {
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
-            PgType::OID => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
-            PgType::REGPROC => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
+            PgType::OID => Self(Value::Oid(types::oid_from_sql(raw)?)),
+            PgType::REGCLASS => Self(Value::Oid(types::oid_from_sql(raw)?)),
+            PgType::REGPROC => Self(Value::Oid(types::oid_from_sql(raw)?)),
+            PgType::REGTYPE => Self(Value::Oid(types::oid_from_sql(raw)?)),
             PgType::TEXT | PgType::BPCHAR | PgType::VARCHAR => {
                 Self(Value::Text(types::text_from_sql(raw)?.to_string()))
             }
@@ -354,7 +358,7 @@ impl<'a> FromSql<'a> for Slt {
                         dims: arr
                             .dimensions()
                             .map(|d| {
-                                Ok(repr::adt::array::ArrayDimension {
+                                Ok(mz_repr::adt::array::ArrayDimension {
                                     lower_bound: d.lower_bound as usize,
                                     length: d.len as usize,
                                 })
@@ -386,7 +390,9 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::JSONB
                 | PgType::NUMERIC
                 | PgType::OID
+                | PgType::REGCLASS
                 | PgType::REGPROC
+                | PgType::REGTYPE
                 | PgType::RECORD
                 | PgType::TEXT
                 | PgType::BPCHAR
@@ -436,6 +442,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
+        (Type::Integer, Value::Oid(i)) => i.to_string(),
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
@@ -500,7 +507,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             buf
         }
 
-        (Type::Oid, Value::Int4(o)) => o.to_string(),
+        (Type::Oid, Value::Oid(o)) => o.to_string(),
 
         (_, d) => panic!(
             "Don't know how to format {:?} as {:?} in column {}",
@@ -544,9 +551,10 @@ impl Runner {
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),
             data_directory: temp_dir.path().to_path_buf(),
-            symbiosis_url: Some("postgres://".into()),
+            aws_external_id: AwsExternalId::NotProvided,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
+            frontegg: None,
             experimental_mode: true,
             disable_user_indexes: false,
             safe_mode: false,
@@ -674,7 +682,7 @@ impl Runner {
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
         // get statement
-        let statements = match sql::parse::parse(sql) {
+        let statements = match mz_sql::parse::parse(sql) {
             Ok(statements) => statements,
             Err(e) => match output {
                 Ok(_) => {
@@ -880,7 +888,10 @@ impl Runner {
                     _ => panic!("unexpected"),
                 })
                 .collect::<Vec<_>>(),
-            Err(error) => vec![error.to_string()],
+            // Errors can contain multiple lines (say if there are details), and rewrite
+            // sticks them each on their own line, so we need to split up the lines here to
+            // each be its own String in the Vec.
+            Err(error) => error.to_string().lines().map(|s| s.to_string()).collect(),
         });
         if *output != actual {
             Ok(Outcome::OutputFailure {
@@ -904,7 +915,7 @@ async fn connect(server: &materialized::Server) -> tokio_postgres::Client {
     .await
     .unwrap();
 
-    tokio::spawn(async move {
+    task::spawn(|| "sqllogictest_connect", async move {
         if let Err(e) = connection.await {
             eprintln!("connection error: {}", e);
         }
@@ -991,12 +1002,6 @@ pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcome
     run_string(config, &format!("{}", filename.display()), &input).await
 }
 
-pub async fn run_stdin(config: &RunConfig<'_>) -> Result<Outcomes, anyhow::Error> {
-    let mut input = String::new();
-    std::io::stdin().lock().read_to_string(&mut input)?;
-    run_string(config, "<stdin>", &input).await
-}
-
 pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
@@ -1032,18 +1037,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
             },
         ) = (&record, &outcome)
         {
-            // Output everything before this record.
-            let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
-            buf.flush_to(offset);
-            buf.skip_to(offset + expected_output.len());
-
-            // Attempt to install the result separator (----), if it does
-            // not already exist.
-            if buf.peek_last(5) == "\n----" {
-                buf.append("\n");
-            } else if buf.peek_last(6) != "\n----\n" {
-                buf.append("\n----\n");
-            }
+            buf.append_header(&input, expected_output);
 
             for (i, row) in actual_output.chunks(types.len()).enumerate() {
                 match mode {
@@ -1068,6 +1062,25 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
                 }
             }
         } else if let (
+            Record::Query {
+                output:
+                    Ok(QueryOutput {
+                        output: Output::Hashed { .. },
+                        output_str: expected_output,
+                        ..
+                    }),
+                ..
+            },
+            Outcome::OutputFailure {
+                actual_output: Output::Hashed { num_values, md5 },
+                ..
+            },
+        ) = (&record, &outcome)
+        {
+            buf.append_header(&input, expected_output);
+
+            buf.append(format!("{} values hashing to {}\n", num_values, md5).as_str())
+        } else if let (
             Record::Simple {
                 output_str: expected_output,
                 ..
@@ -1078,18 +1091,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
             },
         ) = (&record, &outcome)
         {
-            // Output everything before this record.
-            let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
-            buf.flush_to(offset);
-            buf.skip_to(offset + expected_output.len());
-
-            // Attempt to install the result separator (----), if it does
-            // not already exist.
-            if buf.peek_last(5) == "\n----" {
-                buf.append("\n");
-            } else if buf.peek_last(6) != "\n----\n" {
-                buf.append("\n----\n");
-            }
+            buf.append_header(&input, expected_output);
 
             for (i, row) in actual_output.iter().enumerate() {
                 if i != 0 {
@@ -1100,7 +1102,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
         } else if let Outcome::Success = outcome {
             // Ok.
         } else {
-            bail!("unexpected: {}", outcome);
+            bail!("unexpected: {:?} {:?}", record, outcome);
         }
     }
 
@@ -1140,6 +1142,21 @@ impl<'a> RewriteBuffer<'a> {
 
     fn append(&mut self, s: &str) {
         self.output.push_str(s);
+    }
+
+    fn append_header(&mut self, input: &String, expected_output: &str) {
+        // Output everything before this record.
+        let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
+        self.flush_to(offset);
+        self.skip_to(offset + expected_output.len());
+
+        // Attempt to install the result separator (----), if it does
+        // not already exist.
+        if self.peek_last(5) == "\n----" {
+            self.append("\n");
+        } else if self.peek_last(6) != "\n----\n" {
+            self.append("\n----\n");
+        }
     }
 
     fn peek_last(&self, n: usize) -> &str {

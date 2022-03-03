@@ -7,90 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test 1: We can take MirRelationExpr serialized as JSON and get:
-# * the catalog commands for registering the sources that MirRelationExpr
-#   references.
-# * the MirRelationExpr in unit test specification form.
+cat
+(defsource u16 ([(Int32 false) (Int16 false) (Int32 false) (Int16 true) (Date true) (Int16 true) (Int16 true) (Int16 true)] [[0 1 2]]))
+(defsource u19 ([(Int32 false) (Int16 false) (Int32 false) (Int16 false) (Int32 true) (Int32 true) (Date true) (Int16 true) ((Numeric (null)) true) (String true)] [[0 1 2 3]]))
+(defsource u26 ([(Int32 false) (Int32 false) (Int16 true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Int32 true) (Int16 true) (Int16 true) (String true) (Int32 false)] [[0 1]]))
+(defsource u31 ([(Int16 false) (String false) (Int16 false) (String false)] [[0]]))
+(defsource u34 ([(Int16 false) (String false) (String false) (Int16 false) (String false) ((Numeric (null)) false) (String false)] [[0]]))
+(defsource u37 ([(Int16 false) (String false) (String false)] [[0]]))
+(defsource u6 ([(Int16 false) (Int16 false) (Int32 false) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Date true) (String true) ((Numeric (null)) true) ((Numeric (null)) true) ((Numeric (null)) true) ((Numeric (null)) true) (Int16 true) (Int16 true) (String true) (Int32 true)] [[0 1 2]]))
+----
+ok
 
 rel-to-test
-{"Reduce":{"input":{"Filter":{"input":{"Join":{"inputs":[{"Get":{"id":{"Global":{"User":6}},"typ":{"column_types":[{"scalar_type":"Int16","nullable":false},{"scalar_type":"Int16","nullable":false},{"scalar_type":"Int32","nullable":false},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"Date","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":{"Numeric":{"scale":2}},"nullable":true},{"scalar_type":{"Numeric":{"scale":4}},"nullable":true},{"scalar_type":{"Numeric":{"scale":2}},"nullable":true},{"scalar_type":{"Numeric":{"scale":2}},"nullable":true},{"scalar_type":"Int16","nullable":true},{"scalar_type":"Int16","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"Int32","nullable":true}],"keys":[[0,1,2]]}}},{"Get":{"id":{"Global":{"User":16}},"typ":{"column_types":[{"scalar_type":"Int32","nullable":false},{"scalar_type":"Int16","nullable":false},{"scalar_type":"Int32","nullable":false},{"scalar_type":"Int16","nullable":true},{"scalar_type":"Date","nullable":true},{"scalar_type":"Int16","nullable":true},{"scalar_type":"Int16","nullable":true},{"scalar_type":"Int16","nullable":true}],"keys":[[0,1,2]]}}},{"Get":{"id":{"Global":{"User":19}},"typ":{"column_types":[{"scalar_type":"Int32","nullable":false},{"scalar_type":"Int16","nullable":false},{"scalar_type":"Int32","nullable":false},{"scalar_type":"Int16","nullable":false},{"scalar_type":"Int32","nullable":true},{"scalar_type":"Int32","nullable":true},{"scalar_type":"Date","nullable":true},{"scalar_type":"Int16","nullable":true},{"scalar_type":{"Numeric":{"scale":2}},"nullable":true},{"scalar_type":"String","nullable":true}],"keys":[[0,1,2,3]]}}},{"Get":{"id":{"Global":{"User":26}},"typ":{"column_types":[{"scalar_type":"Int32","nullable":false},{"scalar_type":"Int32","nullable":false},{"scalar_type":"Int16","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"Int32","nullable":true},{"scalar_type":"Int16","nullable":true},{"scalar_type":"Int16","nullable":true},{"scalar_type":"String","nullable":true},{"scalar_type":"Int32","nullable":false}],"keys":[[0,1]]}}},{"Get":{"id":{"Global":{"User":34}},"typ":{"column_types":[{"scalar_type":"Int16","nullable":false},{"scalar_type":"String","nullable":false},{"scalar_type":"String","nullable":false},{"scalar_type":"Int16","nullable":false},{"scalar_type":"String","nullable":false},{"scalar_type":{"Numeric":{"scale":2}},"nullable":false},{"scalar_type":"String","nullable":false}],"keys":[[0]]}}},{"Get":{"id":{"Global":{"User":31}},"typ":{"column_types":[{"scalar_type":"Int16","nullable":false},{"scalar_type":"String","nullable":false},{"scalar_type":"Int16","nullable":false},{"scalar_type":"String","nullable":false}],"keys":[[0]]}}},{"Get":{"id":{"Global":{"User":37}},"typ":{"column_types":[{"scalar_type":"Int16","nullable":false},{"scalar_type":"String","nullable":false},{"scalar_type":"String","nullable":false}],"keys":[[0]]}}}],"equivalences":[],"demand":null,"implementation":"Unimplemented"}},"predicates":[{"CallBinary":{"func":"Eq","expr1":{"Column":0},"expr2":{"Column":25}}},{"CallBinary":{"func":"Eq","expr1":{"Column":1},"expr2":{"Column":23}}},{"CallBinary":{"func":"Eq","expr1":{"Column":2},"expr2":{"Column":24}}},{"CallBinary":{"func":"Eq","expr1":{"Column":21},"expr2":{"CallUnary":{"func":"CastInt16ToInt32","expr":{"Column":61}}}}},{"CallBinary":{"func":"Eq","expr1":{"Column":22},"expr2":{"Column":30}}},{"CallBinary":{"func":"Eq","expr1":{"Column":23},"expr2":{"Column":31}}},{"CallBinary":{"func":"Eq","expr1":{"Column":24},"expr2":{"Column":32}}},{"CallBinary":{"func":"Eq","expr1":{"Column":32},"expr2":{"Column":41}}},{"CallBinary":{"func":"Eq","expr1":{"Column":34},"expr2":{"Column":40}}},{"CallBinary":{"func":"Eq","expr1":{"Column":57},"expr2":{"CallUnary":{"func":"CastInt16ToInt32","expr":{"Column":58}}}}},{"CallBinary":{"func":"Eq","expr1":{"Column":61},"expr2":{"Column":65}}},{"CallBinary":{"func":"Eq","expr1":{"Column":67},"expr2":{"Column":69}}},{"CallBinary":{"func":"Eq","expr1":{"Column":70},"expr2":{"Literal":[{"Ok":{"data":[17,6,69,85,82,79,80,69]}},{"scalar_type":"String","nullable":false}]}}},{"CallBinary":{"func":"Gte","expr1":{"CallUnary":{"func":"CastDateToTimestamp","expr":{"Column":26}}},"expr2":{"Literal":[{"Ok":{"data":[10,46,224,250,0,0,0,0,0,0,0,0,0]}},{"scalar_type":"Timestamp","nullable":false}]}}}]}},"group_key":[{"Column":66}],"aggregates":[{"func":"SumNumeric","expr":{"Column":38},"distinct":false}],"monotonic":false,"expected_group_size":null}}
-----
-----
-cat
-(defsource u16 ([(Int32 false) (Int16 false) (Int32 false) (Int16 true) (Date true) (Int16 true) (Int16 true) (Int16 true)] [[0 1 2]]))
-(defsource u19 ([(Int32 false) (Int16 false) (Int32 false) (Int16 false) (Int32 true) (Int32 true) (Date true) (Int16 true) ((Numeric 2) true) (String true)] [[0 1 2 3]]))
-(defsource u26 ([(Int32 false) (Int32 false) (Int16 true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Int32 true) (Int16 true) (Int16 true) (String true) (Int32 false)] [[0 1]]))
-(defsource u31 ([(Int16 false) (String false) (Int16 false) (String false)] [[0]]))
-(defsource u34 ([(Int16 false) (String false) (String false) (Int16 false) (String false) ((Numeric 2) false) (String false)] [[0]]))
-(defsource u37 ([(Int16 false) (String false) (String false)] [[0]]))
-(defsource u6 ([(Int16 false) (Int16 false) (Int32 false) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Date true) (String true) ((Numeric 2) true) ((Numeric 4) true) ((Numeric 2) true) ((Numeric 2) true) (Int16 true) (Int16 true) (String true) (Int32 true)] [[0 1 2]]))
+(Reduce (Filter (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get u31) (get u37)] [] Unimplemented) [(CallBinary Eq #0 #25) (CallBinary Eq #1 #23) (CallBinary Eq #2 #24) (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61)) (CallBinary Eq #22 #30) (CallBinary Eq #23 #31) (CallBinary Eq #24 #32) (CallBinary Eq #32 #41) (CallBinary Eq #34 #40) (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58)) (CallBinary Eq #61 #65) (CallBinary Eq #67 #69) (CallBinary Eq #70 ("EUROPE" String)) (CallBinary Gte (CallUnary CastDateToTimestamp #26) ("2007-01-02 00:00:00" Timestamp))]) [#66] [(SumNumeric #38 false)] false null)
 ----
 ok
-
-(Reduce (Filter (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get u31) (get u37)] [] null Unimplemented) [(CallBinary Eq #0 #25) (CallBinary Eq #1 #23) (CallBinary Eq #2 #24) (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61)) (CallBinary Eq #22 #30) (CallBinary Eq #23 #31) (CallBinary Eq #24 #32) (CallBinary Eq #32 #41) (CallBinary Eq #34 #40) (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58)) (CallBinary Eq #61 #65) (CallBinary Eq #67 #69) (CallBinary Eq #70 ("EUROPE" String)) (CallBinary Gte (CallUnary CastDateToTimestamp #26) ("2007-01-02 00:00:00" Timestamp))]) [#66] [(SumNumeric #38 false)] false null)
-----
-----
-
-# Test 2: Make sure that the output of Test 1 are valid test specifications.
-
-cat
-(defsource u16 ([(Int32 false) (Int16 false) (Int32 false) (Int16 true) (Date true) (Int16 true) (Int16 true) (Int16 true)] [[0 1 2]]))
-(defsource u19 ([(Int32 false) (Int16 false) (Int32 false) (Int16 false) (Int32 true) (Int32 true) (Date true) (Int16 true) ((Numeric 2) true) (String true)] [[0 1 2 3]]))
-(defsource u26 ([(Int32 false) (Int32 false) (Int16 true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Int32 true) (Int16 true) (Int16 true) (String true) (Int32 false)] [[0 1]]))
-(defsource u31 ([(Int16 false) (String false) (Int16 false) (String false)] [[0]]))
-(defsource u34 ([(Int16 false) (String false) (String false) (Int16 false) (String false) ((Numeric 2) false) (String false)] [[0]]))
-(defsource u37 ([(Int16 false) (String false) (String false)] [[0]]))
-(defsource u6 ([(Int16 false) (Int16 false) (Int32 false) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (String true) (Date true) (String true) ((Numeric 2) true) ((Numeric 4) true) ((Numeric 2) true) ((Numeric 2) true) (Int16 true) (Int16 true) (String true) (Int32 true)] [[0 1 2]]))
-----
-ok
-
-build
-(Filter
-    (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get
-        u31) (get u37)] [] null Unimplemented)
-    [(CallBinary Eq #0 #25)
-    (CallBinary Eq #1 #23)
-    (CallBinary Eq #2 #24)
-    (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61))
-    (CallBinary Eq #22 #30)
-    (CallBinary Eq #23 #31)
-    (CallBinary Eq #24 #32)
-    (CallBinary Eq #32 #41)
-    (CallBinary Eq #34 #40)
-    (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58))
-    (CallBinary Eq #61 #65)
-    (CallBinary Eq #67 #69)
-    (CallBinary Eq #70 ("EUROPE" String))
-    (CallBinary Gte (CallUnary CastDateToTimestamp #26)
-        ("2007-01-02 00:00:00" Timestamp))
-    ]
-)
-----
-----
-%0 =
-| Get u6 (u6)
-
-%1 =
-| Get u16 (u0)
-
-%2 =
-| Get u19 (u1)
-
-%3 =
-| Get u26 (u2)
-
-%4 =
-| Get u34 (u4)
-
-%5 =
-| Get u31 (u3)
-
-%6 =
-| Get u37 (u5)
-
-%7 =
-| Join %0 %1 %2 %3 %4 %5 %6
-| | implementation = Unimplemented
-| Filter (#0 = #25), (#1 = #23), (#2 = #24), (#21 = i16toi32(#61)), (#22 = #30), (#23 = #31), (#24 = #32), (#32 = #41), (#34 = #40), (#57 = i16toi32(#58)), (#61 = #65), (#67 = #69), (#70 = "EUROPE"), (datetots(#26) >= 2007-01-02 00:00:00)
-----
-----

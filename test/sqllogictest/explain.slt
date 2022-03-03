@@ -54,26 +54,19 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FROM (VALUES (1, 'b'))
 ----
 %0 =
-| Constant
-
-%1 =
-| Constant ()
-| Map 1, "b"
-
-%2 =
-| Union %0 %1
-| Map select(%3), select(%4)
+| CallTable wrap2(1, "b")
+| Map select(%1), select(%2)
 | |
-| | %3 =
+| | %1 =
 | | | Constant ()
 | | | Map #^1
 | |
 | |
-| | %4 =
+| | %2 =
 | | | Constant ()
-| | | Map select(%5)
+| | | Map select(%3)
 | | | |
-| | | | %5 =
+| | | | %3 =
 | | | | | Constant ()
 | | | | | Map #^^0
 | | | |
@@ -86,27 +79,14 @@ query T multiline
 EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FROM (VALUES (1, 'b'))
 ----
 %0 =
-| Constant
+| CallTable wrap2(1, "b")
 | | types = (integer, text)
 | | keys = ()
-
-%1 =
-| Constant ()
-| | types = ()
-| | keys = ()
-| Map 1, "b"
-| | types = (integer, text)
-| | keys = ()
-
-%2 =
-| Union %0 %1
-| | types = (integer, text)
-| | keys = ()
-| Map select(%3), select(%4)
+| Map select(%1), select(%2)
 | | types = (integer, text, text?, integer?)
 | | keys = ()
 | |
-| | %3 =
+| | %1 =
 | | | Constant ()
 | | | | types = ()
 | | | | keys = ()
@@ -115,15 +95,15 @@ EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FR
 | | | | keys = ()
 | |
 | |
-| | %4 =
+| | %2 =
 | | | Constant ()
 | | | | types = ()
 | | | | keys = ()
-| | | Map select(%5)
+| | | Map select(%3)
 | | | | types = (integer?)
 | | | | keys = ()
 | | | |
-| | | | %5 =
+| | | | %3 =
 | | | | | Constant ()
 | | | | | | types = ()
 | | | | | | keys = ()
@@ -147,10 +127,14 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM (SELECT 1)
 %1 =
 | Constant ()
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
+
+%3 =
+| Get %2 (l1)
 | Map 1
+| Project (#0)
 
 EOF
 
@@ -182,10 +166,14 @@ EXPLAIN DECORRELATED PLAN FOR VIEW foo
 %1 =
 | Constant ()
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
+
+%3 =
+| Get %2 (l1)
 | Map 1
+| Project (#0)
 
 EOF
 
@@ -210,14 +198,20 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 | | types = ()
 | | keys = (())
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
+| | types = ()
+| | keys = (())
+
+%3 =
+| Get %2 (l1)
 | | types = ()
 | | keys = (())
 | Map 1
 | | types = (integer)
 | | keys = (())
+| Project (#0)
 | | types = (integer)
 | | keys = (())
 
@@ -311,5 +305,433 @@ EXPLAIN SELECT mz_logical_timestamp()
 %0 =
 | Constant ()
 | Map mz_logical_timestamp()
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ],
+          {
+            "0": 0,
+            "1": 1
+          },
+          []
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ],
+          {
+            "0": 0,
+            "1": 1
+          },
+          []
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
+----
+{
+  "TopK": {
+    "input": {
+      "ArrangeBy": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 2
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    },
+                    {
+                      "Column": 1
+                    }
+                  ],
+                  {
+                    "0": 0,
+                    "1": 1
+                  },
+                  []
+                ]
+              ]
+            },
+            "mfp": {
+              "expressions": [],
+              "predicates": [],
+              "projection": [
+                0,
+                1
+              ],
+              "input_arity": 2
+            },
+            "key_val": [
+              [
+                {
+                  "Column": 0
+                },
+                {
+                  "Column": 1
+                }
+              ],
+              null
+            ]
+          }
+        },
+        "forms": {
+          "raw": true,
+          "arranged": []
+        },
+        "input_key": [
+          {
+            "Column": 0
+          },
+          {
+            "Column": 1
+          }
+        ],
+        "input_mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0,
+            1
+          ],
+          "input_arity": 2
+        }
+      }
+    },
+    "top_k_plan": {
+      "Basic": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false
+          },
+          {
+            "column": 0,
+            "desc": true
+          }
+        ],
+        "limit": 5,
+        "offset": 0,
+        "arity": 2
+      }
+    }
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
+----
+{
+  "TopK": {
+    "input": {
+      "ArrangeBy": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 2
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    },
+                    {
+                      "Column": 1
+                    }
+                  ],
+                  {
+                    "0": 0,
+                    "1": 1
+                  },
+                  []
+                ]
+              ]
+            },
+            "mfp": {
+              "expressions": [],
+              "predicates": [],
+              "projection": [
+                0,
+                1
+              ],
+              "input_arity": 2
+            },
+            "key_val": [
+              [
+                {
+                  "Column": 0
+                },
+                {
+                  "Column": 1
+                }
+              ],
+              null
+            ]
+          }
+        },
+        "forms": {
+          "raw": true,
+          "arranged": []
+        },
+        "input_key": [
+          {
+            "Column": 0
+          },
+          {
+            "Column": 1
+          }
+        ],
+        "input_mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0,
+            1
+          ],
+          "input_arity": 2
+        }
+      }
+    },
+    "top_k_plan": {
+      "Basic": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false
+          },
+          {
+            "column": 0,
+            "desc": true
+          }
+        ],
+        "limit": 5,
+        "offset": 0,
+        "arity": 2
+      }
+    }
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ],
+          {
+            "0": 0,
+            "1": 1
+          },
+          []
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
+  }
+}
+
+Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": {
+      "raw": false,
+      "arranged": [
+        [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ],
+          {
+            "0": 0,
+            "1": 1
+          },
+          []
+        ]
+      ]
+    },
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
+  }
+}
+
+Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
 
 EOF

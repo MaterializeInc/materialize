@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> DROP SOURCE IF EXISTS mz_source CASCADE;
+
 > CREATE MATERIALIZED SOURCE mz_source
   FROM POSTGRES
   CONNECTION 'host=toxiproxy port=5432 user=postgres password=postgres dbname=postgres'

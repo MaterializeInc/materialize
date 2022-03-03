@@ -11,11 +11,15 @@ Want to connect with Materialize? Join our growing community on Slack! →
 
 You can access Materialize through the `materialized` binary, which you can
 install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
-instructions install the latest release of Materialize, **{{< version >}}**. The latest (unstable)
-developer builds are available at https://dev.materialize.com/. For prior releases,
-see the [Versions page](/versions).
+instructions install the latest release of Materialize, **{{< version >}}**. For prior releases and unstable builds, see the [Versions page](/versions).
 
 **Have any questions?** [Ask us on Slack](https://materialize.com/s/chat)
+
+{{< warning >}}
+Support for the ARM CPU architecture is in beta. You may encounter performance
+and stability issues. Running Materialize on ARM in production is not yet
+recommended.
+{{< /warning >}}
 
 ## Docker
 
@@ -42,7 +46,7 @@ brew install MaterializeInc/materialize/materialized
 ### curl
 
 ```shell
-curl -L https://binaries.materialize.com/materialized-{{< version >}}-x86_64-apple-darwin.tar.gz \
+curl -L https://binaries.materialize.com/materialized-{{< version >}}-$(uname -m)-apple-darwin.tar.gz \
     | sudo tar -xzC /usr/local --strip-components=1
 ```
 
@@ -64,8 +68,9 @@ sudo apt install materialized
 ```
 
 ### curl
+
 ```shell
-curl -L https://binaries.materialize.com/materialized-{{< version >}}-x86_64-unknown-linux-gnu.tar.gz \
+curl -L https://binaries.materialize.com/materialized-{{< version >}}-$(uname -m)-unknown-linux-gnu.tar.gz \
     | sudo tar -xzC /usr/local --strip-components=1
 ```
 
@@ -78,6 +83,8 @@ tools:
   * A recent version of Git
 
   * A C compiler that supports C11
+
+  * A C++ compiler that supports C++11
 
   * CMake v3.2+
 

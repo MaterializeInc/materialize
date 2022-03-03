@@ -1,0 +1,1 @@
+../../ci/builder/requirements-core.txt

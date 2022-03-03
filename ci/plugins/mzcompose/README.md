@@ -9,8 +9,9 @@ steps:
   - id: compose-using-step
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/mzcompose.yml
-          run: container-name
+          composition: composition-name
+          run: workflow-name
+          args: [--some, args]
 ```
 
 [Buildkite plugin]: https://buildkite.com/docs/agent/v3/plugins

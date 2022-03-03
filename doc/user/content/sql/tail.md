@@ -31,9 +31,12 @@ Clients can use `TAIL` to:
 Field | Use
 ------|-----
 _object&lowbar;name_ | The name of the source, table, or view that you want to tail.
+_select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to tail.
 _timestamp&lowbar;expression_ | The logical time at which the `TAIL` begins as a [`bigint`] representing milliseconds since the Unix epoch. See [`AS OF`](#as-of) below.
 
-Supported `WITH` option values:
+### `WITH` options
+
+The following options are valid within the `WITH` clause.
 
 Option name | Value type | Default | Describes
 ------------|------------|---------|----------
@@ -108,7 +111,7 @@ the nature of the update:
 </tbody>
 </table>
 
-`TAIL` will continue to run until cancelled, or until all updates the tailed
+`TAIL` will continue to run until canceled, or until all updates the tailed
 item could undergo have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
 [file sources](/sql/create-source/text-file) that were created in non-tailing
@@ -203,15 +206,17 @@ All further columns after `mz_progressed` will be `NULL` in the `true` case.
 Not all timestamps that appear will have a corresponding `mz_progressed` row.
 For example, the following is a valid sequence of updates:
 
-`mz_timestamp` | `mz_progressed` | `mz_diff` | `column1`
----------------|-----------------|-----------|----------------
-1              | `false`         | 1         | data
-1              | `false`         | 1         | more data
-2              | `false`         | 1         | even more data
-4              | `true`          | `NULL`    | `NULL`
+```nofmt
+mz_timestamp | mz_progressed | mz_diff | column1
+-------------|---------------|---------|--------------
+1            | false         | 1       | data
+2            | false         | 1       | more data
+3            | false         | 1       | even more data
+4            | true          | NULL    | NULL
+```
 
 Notice how Materialize did not emit explicit progress messages for timestamps
-`1`, `2`, or `3`. The receipt of the update at timestamp `2` implies that there
+`1` or `2`. The receipt of the update at timestamp `2` implies that there
 are no more updates for timestamp `1`, because timestamps are always presented
 in non-decreasing order. The receipt of the explicit progress message at
 timestamp `4` implies that there are no more updates for either timestamp
@@ -226,7 +231,7 @@ Below are the recommended ways to work around this.
 ### Tailing with `FETCH`
 
 The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
-These must be used within a transaction.
+These must be used within a transaction, with [only one `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests. First, declare a `TAIL` cursor:
 
 ```sql
@@ -234,7 +239,7 @@ BEGIN;
 DECLARE c CURSOR FOR TAIL t;
 ````
 
-Now use [`FETCH`](/sql/fetch) in a loop to retrieve some number of rows within a time window:
+Now use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it is ready:
 
 ```sql
 FETCH ALL c;

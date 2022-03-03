@@ -3,7 +3,7 @@ title: "System Catalog"
 description: "The system catalog stores metadata about your Materialize instance."
 aliases:
   - /sql/system-tables
-weight: 14
+weight: 50
 menu:
   main:
     parent: 'sql'
@@ -114,6 +114,7 @@ Field            | Type        | Meaning
 `nullable`       | [`boolean`] | Can the column contain a `NULL` value?
 `type`           | [`text`]    | The data type of the column.
 `default`        | [`text`]    | The default expression of the column.
+`type_oid`       | [`oid`]     | The OID of the type of the column (references `mz_types`).
 
 ### `mz_databases`
 
@@ -198,6 +199,8 @@ Field         | Type           | Meaning
 `name`        | [`text`]       | The name of the function.
 `arg_ids`     | [`text array`] | The function's arguments' types. Elements refers to `mz_types.id`.
 `variadic_id` | [`text`]       | The variadic array parameter's elements, or `NULL` if the function does not have a variadic parameter. Refers to `mz_types.id`.
+`ret_id`      | [`text`]       | The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].
+`ret_set`     | [`bool`]       | Whether the returned value is a set, i.e. the function is a table function.
 
 ### `mz_indexes`
 
@@ -229,50 +232,19 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
-### `mz_kafka_broker_rtt`
+### `mz_kafka_source_statistics`
 
-The `mz_kafka_broker_rtt` table contains round-trip time (RTT) statistics for
-the Kafka consumers in the system.
+The `mz_kafka_source_statistics` table contains statistics for Kafka sources
+from the underlying [librdkafka] library.
 
-Field           | Type       | Meaning
-----------------|------------|--------
-`consumer_name` | [`text`]   | The internal name of the Kafka consumer.
-`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
-`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to [`mz_source_info.dataflow_id`](#mz_source_info).
-`broker_name`   | [`text`]   | The name of the Kafka broker.
-`min`           | [`bigint`] | The minimum RTT in milliseconds.
-`max`           | [`bigint`] | The maximum RTT in milliseconds.
-`avg`           | [`bigint`] | The average RTT in milliseconds.
-`sum`           | [`bigint`] | The sum of all RTTs in milliseconds.
-`cnt`           | [`bigint`] | The number of round trips recorded.
-`stddev`        | [`bigint`] | The standard deviation of the RTT in milliseconds.
-`p50`           | [`bigint`] | The 50th percentile RTT in milliseconds.
-`p90`           | [`bigint`] | The 90th percentile RTT in milliseconds.
-`p95`           | [`bigint`] | The 95th percentile RTT in milliseconds.
-`p99`           | [`bigint`] | The 99th percentile RTT in milliseconds.
-`p99_99`        | [`bigint`] | The 99.99th percentile RTT in milliseconds.
-
-### `mz_kafka_consumer_partitions`
-
-The `mz_kafka_consumer_partitions` table contains a row for each partition being
-read by a Kafka consumer in the system.
+Note that the contents of this table may evolve without warning when Materialize
+updates the version of librdkafka in use.
 
 Field           | Type       | Meaning
 ----------------|------------|--------
-`consumer_name` | [`text`]   | The handle name for the consumer.
-`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
-`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to [`mz_source_info.dataflow_id`](#mz_source_info).
-`partition_id`  | [`text`]   | The ID of the topic partition the consumer is reading from.
-`rx_msgs`       | [`bigint`] | The number of messages read by this consumer since materialized startup.
-`rx_bytes`      | [`bigint`] | The number of bytes read by this consumer since materialized startup.
-`tx_msgs`       | [`bigint`] | The number of messages sent by this consumer since materialized startup.
-`tx_bytes`      | [`bigint`] | The number of bytes sent by this consumer since materialized startup.
-`lo_offset`     | [`bigint`] | The partition's low watermark offset on the broker.
-`hi_offset`     | [`bigint`] | The partition's high watermark offset on the broker.
-`ls_offset`     | [`bigint`] | The partition's last stable offset on the broker.
-`app_offset`    | [`bigint`] | The offset of the last message passed to materialized + 1.
-`consumer_lag`  | [`bigint`] | Difference between the `hi_offset` and `app_offset`.
-`initial_high_offset`  | [`bigint`] | The first known partition's high watermark offset on the broker, based on `hi_offset`.
+`source_id`     | [`text`]   | The ID of the source. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
+`worker_id`     | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`statistics`    | [`jsonb`]  | A JSON object containing the statistics. See [`STATISTICS.md`] in the librdkafka documentation for details.
 
 ### `mz_kafka_sinks`
 
@@ -651,11 +623,13 @@ Field       | Type       | Meaning
 
 ## `pg_catalog`
 
-Materialize has compatibility shims for the following tables from [PostgreSQL's
+Materialize has compatibility shims for the following relations from [PostgreSQL's
 system catalog](https://www.postgresql.org/docs/current/catalogs.html):
 
+  * [`pg_access_methods`](https://www.postgresql.org/docs/current/catalog-pg-access-methods.html)
   * [`pg_attribute`](https://www.postgresql.org/docs/current/catalog-pg-attribute.html)
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
+  * [`pg_constraint`](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
   * [`pg_database`](https://www.postgresql.org/docs/current/catalog-pg-database.html)
   * [`pg_description`](https://www.postgresql.org/docs/current/catalog-pg-description.html)
   * [`pg_enum`](https://www.postgresql.org/docs/current/catalog-pg-enum.html)
@@ -663,7 +637,11 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_namespace`](https://www.postgresql.org/docs/current/catalog-pg-namespace.html)
   * [`pg_proc`](https://www.postgresql.org/docs/current/catalog-pg-proc.html)
   * [`pg_range`](https://www.postgresql.org/docs/current/catalog-pg-range.html)
+  * [`pg_roles`](https://www.postgresql.org/docs/current/catalog-pg-roles.html)
+  * [`pg_settings`](https://www.postgresql.org/docs/current/catalog-pg-settings.html)
+  * [`pg_tables`](https://www.postgresql.org/docs/current/catalog-pg-tables.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
+  * [`pg_views`](https://www.postgresql.org/docs/current/catalog-pg-views.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set
@@ -674,6 +652,21 @@ the documented [`mz_catalog`](#mz_catalog) API instead.
 If you are having trouble making a PostgreSQL tool work with Materialize, please
 [file a GitHub issue][gh-issue]. Many PostgreSQL tools can be made to work with
 Materialize with minor changes to the `pg_catalog` compatibility shim.
+
+## `information_schema`
+
+Materialize has compatibility shims for the following relations from the
+SQL standard [`information_schema`](https://www.postgresql.org/docs/current/infoschema-schema.html)
+schema, which is automatically available in all databases:
+
+  * [`columns`](https://www.postgresql.org/docs/current/infoschema-columns.html)
+  * [`tables`](https://www.postgresql.org/docs/current/infoschema-tables.html)
+
+These compatibility shims are largely incomplete. Most are lacking some columns
+that are present in the SQL standard, or if they do include the column the
+result set its value may always be `NULL`. The precise nature of the
+incompleteness is intentionally undocumented. New tools developed against
+Materialize should use the documented [`mz_catalog`](#mz_catalog) API instead.
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
@@ -691,3 +684,5 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 [`text array`]: /sql/types/array
 [arrangement]: /overview/arrangements/#arrangements
 [dataflow]: /overview/arrangements/#dataflows
+[librdkafka]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}
+[`STATISTICS.md`]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}/STATISTICS.md

@@ -13,29 +13,39 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::iter;
+use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
-use aws_util::aws;
 use csv::ReaderBuilder;
 use itertools::Itertools;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
+use protobuf_native::MessageLite;
+use reqwest::Url;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
-use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
-use repr::strconv;
-use sql_parser::ast::{
-    display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
-    CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnector, CsrSeed, CsvColumns, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema,
-    Query, Raw, RawName, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins,
-    UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
+use mz_ccsr::{Client, GetBySubjectError};
+use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
+use mz_dataflow_types::sources::{
+    ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
 };
-use sql_parser::parser::parse_columns;
+use mz_repr::strconv;
+use mz_sql_parser::parser::parse_data_type;
 
-use crate::catalog::Catalog;
+use crate::ast::{
+    AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
+    CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
+    CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
+    CsvColumns, DbzMode, Envelope, Expr, Format, Ident, Op, ProtobufSchema, Query, Raw, RawName,
+    Select, SelectItem, SetExpr, SqlOption, Statement, SubscriptPosition, TableFactor,
+    TableWithJoins, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
+};
+use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::normalize;
 
@@ -46,10 +56,10 @@ use crate::normalize;
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
 /// time to complete. As a result purification does *not* have access to a
-/// [`Catalog`](crate::catalog::Catalog), as that would require locking access
-/// to the catalog for an unbounded amount of time.
+/// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
+/// locking access to the catalog for an unbounded amount of time.
 pub fn purify(
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     mut stmt: Statement<Raw>,
 ) -> impl Future<Output = Result<Statement<Raw>, anyhow::Error>> {
     // If we're dealing with a CREATE VIEWS statement we need to query the catalog for the
@@ -73,14 +83,15 @@ pub fn purify(
     };
 
     let now = catalog.now();
+    let aws_external_id = catalog.config().aws_external_id.clone();
 
     async move {
         if let Statement::CreateSource(CreateSourceStatement {
             connector,
             format,
             envelope,
-            key_envelope,
             with_options,
+            include_metadata: _,
             ..
         }) = &mut stmt
         {
@@ -99,15 +110,12 @@ pub fn purify(
                     let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
                         .await
                         .map_err(|e| {
-                            anyhow!(
-                                "Cannot create Kafka Consumer for determining start offsets: {}",
-                                e
-                            )
+                            anyhow!("Failed to create and connect Kafka consumer: {}", e)
                         })?;
 
                     // Translate `kafka_time_offset` to `start_offset`.
                     match kafka_util::lookup_start_offsets(
-                        consumer.clone(),
+                        Arc::clone(&consumer),
                         &topic,
                         &with_options_map,
                         now,
@@ -117,16 +125,16 @@ pub fn purify(
                         Some(start_offsets) => {
                             // Drop `kafka_time_offset`
                             with_options.retain(|val| match val {
-                                sql_parser::ast::SqlOption::Value { name, .. } => {
+                                mz_sql_parser::ast::SqlOption::Value { name, .. } => {
                                     name.as_str() != "kafka_time_offset"
                                 }
                                 _ => true,
                             });
 
                             // Add `start_offset`
-                            with_options.push(sql_parser::ast::SqlOption::Value {
-                                name: sql_parser::ast::Ident::new("start_offset"),
-                                value: sql_parser::ast::Value::Array(
+                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                                name: mz_sql_parser::ast::Ident::new("start_offset"),
+                                value: mz_sql_parser::ast::Value::Array(
                                     start_offsets
                                         .iter()
                                         .map(|offset| Value::Number(offset.to_string()))
@@ -146,9 +154,9 @@ pub fn purify(
                         let r = mz_avro::Reader::new(f)?;
                         if !with_options_map.contains_key("reader_schema") {
                             let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                            with_options.push(sql_parser::ast::SqlOption::Value {
-                                name: sql_parser::ast::Ident::new("reader_schema"),
-                                value: sql_parser::ast::Value::String(schema),
+                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                                name: mz_sql_parser::ast::Ident::new("reader_schema"),
+                                value: mz_sql_parser::ast::Value::String(schema),
                             });
                         }
                         Ok::<_, anyhow::Error>(())
@@ -163,19 +171,19 @@ pub fn purify(
                     file = Some(f);
                 }
                 CreateSourceConnector::S3 { .. } => {
-                    let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
-                    aws::validate_credentials(aws_info.clone(), aws::AUTH_TIMEOUT).await?;
+                    let aws_config = normalize::aws_config(&mut with_options_map, None)?;
+                    validate_aws_credentials(&aws_config, aws_external_id).await?;
                 }
                 CreateSourceConnector::Kinesis { arn } => {
                     let region = arn
                         .parse::<ARN>()
-                        .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
+                        .context("Unable to parse provided ARN")?
                         .region
                         .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-                    let aws_info =
-                        normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
-                    aws::validate_credentials(aws_info, aws::AUTH_TIMEOUT).await?;
+                    let aws_config =
+                        normalize::aws_config(&mut with_options_map, Some(region.into()))?;
+                    validate_aws_credentials(&aws_config, aws_external_id).await?;
                 }
                 CreateSourceConnector::Postgres {
                     conn,
@@ -192,18 +200,20 @@ pub fn purify(
                     // verify that we can connect upstream
                     // TODO(petrosagg): store this info along with the source for better error
                     // detection
-                    let _ = postgres_util::publication_info(&conn, &publication).await?;
+                    let _ = mz_postgres_util::publication_info(&conn, &publication).await?;
                 }
                 CreateSourceConnector::PubNub { .. } => (),
             }
 
-            purify_source_format(format, connector, &envelope, file, &config_options).await?;
-
-            if key_envelope.is_present() && !matches!(format, CreateSourceFormat::KeyValue { .. }) {
-                bail!(
-                    "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT"
-                );
-            }
+            purify_source_format(
+                format,
+                connector,
+                &envelope,
+                file,
+                &config_options,
+                with_options,
+            )
+            .await?;
         }
 
         if let Statement::CreateViews(CreateViewsStatement { definitions, .. }) = &mut stmt {
@@ -222,7 +232,8 @@ pub fn purify(
                             }),
                         ..
                     } => {
-                        let pub_info = postgres_util::publication_info(&conn, &publication).await?;
+                        let pub_info =
+                            mz_postgres_util::publication_info(&conn, &publication).await?;
 
                         // If the user didn't specify targets we'll generate views for all of them
                         let targets = targets.clone().unwrap_or_else(|| {
@@ -277,31 +288,56 @@ pub fn purify(
                             let view_name =
                                 target.alias.clone().unwrap_or_else(|| target.name.clone());
 
-                            let col_schema = table_info
-                                .schema
-                                .iter()
-                                .map(|c| c.to_ast_string())
-                                .collect::<Vec<String>>()
-                                .join(", ");
-                            let (columns, _constraints) =
-                                parse_columns(&format!("({})", col_schema))?;
-
                             let mut projection = vec![];
-                            for (i, column) in columns.iter().enumerate() {
+                            for (i, column) in table_info.schema.iter().enumerate() {
+                                let mut ty = column.ty.clone();
+                                // Ignore precision constraints on date/time types until we support
+                                // it. This should be safe enough because our types are wide enough
+                                // to support the maximum possible precision.
+                                //
+                                // See: https://github.com/MaterializeInc/materialize/issues/10837
+                                match &mut ty {
+                                    mz_pgrepr::Type::Interval { constraints } => {
+                                        *constraints = None
+                                    }
+                                    mz_pgrepr::Type::Time { precision } => *precision = None,
+                                    mz_pgrepr::Type::TimeTz { precision } => *precision = None,
+                                    mz_pgrepr::Type::Timestamp { precision } => *precision = None,
+                                    mz_pgrepr::Type::TimestampTz { precision } => *precision = None,
+                                    _ => (),
+                                }
+                                // NOTE(benesch): this *looks* gross, but it is
+                                // safe enough. The `fmt::Display`
+                                // representation on `pgrepr::Type` promises to
+                                // produce an unqualified type name that does
+                                // not require quoting.
+                                //
+                                // TODO(benesch): converting `json` to `jsonb`
+                                // is wrong. We ought to support the `json` type
+                                // directly.
+                                let mut ty = format!("pg_catalog.{}", ty);
+                                if ty == "pg_catalog.json" {
+                                    ty = "pg_catalog.jsonb".into();
+                                }
+                                let data_type = parse_data_type(&ty)?;
                                 projection.push(SelectItem::Expr {
                                     expr: Expr::Cast {
-                                        expr: Box::new(Expr::SubscriptIndex {
+                                        expr: Box::new(Expr::Subscript {
                                             expr: Box::new(Expr::Identifier(vec![Ident::new(
                                                 "row_data",
                                             )])),
-                                            subscript: Box::new(Expr::Value(Value::Number(
-                                                // LIST is one based
-                                                (i + 1).to_string(),
-                                            ))),
+                                            positions: vec![SubscriptPosition {
+                                                start: Some(Expr::Value(Value::Number(
+                                                    // LIST is one based
+                                                    (i + 1).to_string(),
+                                                ))),
+                                                end: None,
+                                                explicit_slice: false,
+                                            }],
                                         }),
-                                        data_type: column.data_type.clone(),
+                                        data_type,
                                     },
-                                    alias: Some(column.name.clone()),
+                                    alias: Some(Ident::new(column.name.clone())),
                                 });
                             }
 
@@ -318,7 +354,7 @@ pub fn purify(
                                         joins: vec![],
                                     }],
                                     selection: Some(Expr::Op {
-                                        op: "=".to_string(),
+                                        op: Op::bare("="),
                                         expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
                                         expr2: Some(Box::new(Expr::Value(Value::Number(
                                             table_info.rel_id.to_string(),
@@ -335,7 +371,11 @@ pub fn purify(
 
                             views.push(ViewDefinition {
                                 name: view_name,
-                                columns: columns.iter().map(|c| c.name.clone()).collect(),
+                                columns: table_info
+                                    .schema
+                                    .iter()
+                                    .map(|c| Ident::new(c.name.clone()))
+                                    .collect(),
                                 with_options: vec![],
                                 query,
                             });
@@ -361,6 +401,7 @@ async fn purify_source_format(
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
+    with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(connector, CreateSourceConnector::Kafka { .. })
@@ -368,31 +409,38 @@ async fn purify_source_format(
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
-    // the existing semantics of Upsert is that specifying a simple bare format
-    // duplicates the format into the key.
+    // For backwards compatibility, using ENVELOPE UPSERT with a bare FORMAT
+    // BYTES or FORMAT TEXT uses the specified format for both the key and the
+    // value.
     //
-    // TODO(bwm): We should either make this the semantics everywhere, or deprecate
-    // this.
-    if matches!(connector, CreateSourceConnector::Kafka { .. })
-        && matches!(envelope, Envelope::Upsert)
-        && format.is_simple()
-    {
-        let value = format.value().map(|f| f.clone());
-        if let Some(value) = value {
+    // TODO(bwm): We should either make these semantics apply everywhere, or
+    // deprecate this.
+    match (&connector, &envelope, &*format) {
+        (
+            CreateSourceConnector::Kafka { .. },
+            Envelope::Upsert,
+            CreateSourceFormat::Bare(f @ Format::Bytes | f @ Format::Text),
+        ) => {
             *format = CreateSourceFormat::KeyValue {
-                key: value.clone(),
-                value,
-            }
-        } else {
-            bail!("Upsert requires either a VALUE FORMAT or a bare TEXT or BYTES format");
-        };
+                key: f.clone(),
+                value: f.clone(),
+            };
+        }
+        _ => (),
     }
 
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(format, connector, envelope, file, connector_options)
-                .await?
+            purify_source_format_single(
+                format,
+                connector,
+                envelope,
+                file,
+                connector_options,
+                with_options,
+            )
+            .await?;
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
@@ -401,8 +449,24 @@ async fn purify_source_format(
                 anyhow!("[internal-error] File sources cannot be key-value sources")
             );
 
-            purify_source_format_single(key, connector, envelope, None, connector_options).await?;
-            purify_source_format_single(val, connector, envelope, None, connector_options).await?;
+            purify_source_format_single(
+                key,
+                connector,
+                envelope,
+                None,
+                connector_options,
+                with_options,
+            )
+            .await?;
+            purify_source_format_single(
+                val,
+                connector,
+                envelope,
+                None,
+                connector_options,
+                with_options,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -414,14 +478,16 @@ async fn purify_source_format_single(
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
+    with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connector } => {
-                purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
+                purify_csr_connector_avro(connector, csr_connector, envelope, connector_options)
+                    .await?
             }
             AvroSchema::InlineSchema {
-                schema: sql_parser::ast::Schema::File(path),
+                schema: mz_sql_parser::ast::Schema::File(path),
                 with_options,
             } => {
                 let file_schema = tokio::fs::read_to_string(path).await?;
@@ -440,7 +506,7 @@ async fn purify_source_format_single(
                     });
                 }
                 *schema = AvroSchema::InlineSchema {
-                    schema: sql_parser::ast::Schema::Inline(file_schema),
+                    schema: mz_sql_parser::ast::Schema::Inline(file_schema),
                     with_options: with_options.clone(),
                 };
             }
@@ -448,14 +514,18 @@ async fn purify_source_format_single(
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connector } => {
-                purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
+                purify_csr_connector_proto(connector, csr_connector, envelope, with_options)
+                    .await?;
             }
-            ProtobufSchema::InlineSchema { schema, .. } => {
-                if let sql_parser::ast::Schema::File(path) = schema {
+            ProtobufSchema::InlineSchema {
+                message_name: _,
+                schema,
+            } => {
+                if let mz_sql_parser::ast::Schema::File(path) = schema {
                     let descriptors = tokio::fs::read(path).await?;
                     let mut buf = String::new();
                     strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = sql_parser::ast::Schema::Inline(buf);
+                    *schema = mz_sql_parser::ast::Schema::Inline(buf);
                 }
             }
         },
@@ -470,11 +540,11 @@ async fn purify_source_format_single(
     Ok(())
 }
 
-async fn purify_csr_connector(
+async fn purify_csr_connector_proto(
     connector: &mut CreateSourceConnector,
-    connector_options: &BTreeMap<String, String>,
+    csr_connector: &mut CsrConnectorProto<Raw>,
     envelope: &Envelope,
-    csr_connector: &mut CsrConnector<Raw>,
+    with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
         topic
@@ -482,7 +552,58 @@ async fn purify_csr_connector(
         bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
-    let CsrConnector {
+    let CsrConnectorProto {
+        url,
+        seed,
+        with_options: ccsr_options,
+    } = csr_connector;
+    match seed {
+        None => {
+            let url: Url = url.parse()?;
+            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
+            let ccsr_config = kafka_util::generate_ccsr_client_config(
+                url,
+                &kafka_options,
+                &mut normalize::options(&ccsr_options),
+            )?;
+
+            let value =
+                compile_proto(&format!("{}-value", topic), ccsr_config.clone().build()?).await?;
+            let key = compile_proto(&format!("{}-key", topic), ccsr_config.build()?)
+                .await
+                .ok();
+
+            if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key.is_none() {
+                bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            }
+
+            *seed = Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
+                value,
+                key,
+            }));
+        }
+        Some(CsrSeedCompiledOrLegacy::Compiled(..)) => (),
+        Some(CsrSeedCompiledOrLegacy::Legacy(..)) => {
+            unreachable!("Should not be able to purify CsrCeedCompiledOrLegacy::Legacy")
+        }
+    }
+
+    Ok(())
+}
+
+async fn purify_csr_connector_avro(
+    connector: &mut CreateSourceConnector,
+    csr_connector: &mut CsrConnectorAvro<Raw>,
+    envelope: &Envelope,
+    connector_options: &BTreeMap<String, String>,
+) -> Result<(), anyhow::Error> {
+    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+        topic
+    } else {
+        bail!("Confluent Schema Registry is only supported with Kafka sources")
+    };
+
+    let CsrConnectorAvro {
         url,
         seed,
         with_options: ccsr_options,
@@ -494,7 +615,7 @@ async fn purify_csr_connector(
             kafka_util::generate_ccsr_client_config(
                 url,
                 &connector_options,
-                normalize::options(ccsr_options),
+                &mut normalize::options(ccsr_options),
             )
         })?;
 
@@ -648,12 +769,12 @@ pub async fn purify_csv(
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
     pub confluent_wire_format: bool,
 }
 
 async fn get_remote_csr_schema(
-    schema_registry_config: ccsr::ClientConfig,
+    schema_registry_config: mz_ccsr::ClientConfig,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
     let ccsr_client = schema_registry_config.clone().build()?;
@@ -669,11 +790,70 @@ async fn get_remote_csr_schema(
             )
         })?;
     let subject = format!("{}-key", topic);
-    let key_schema = ccsr_client.get_schema_by_subject(&subject).await.ok();
+    let key_schema = match ccsr_client.get_schema_by_subject(&subject).await {
+        Ok(ks) => Some(ks),
+        Err(GetBySubjectError::SubjectNotFound) => None,
+        Err(e) => bail!(e),
+    };
     Ok(Schema {
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
         schema_registry_config: Some(schema_registry_config),
         confluent_wire_format: true,
     })
+}
+
+/// Collect protobuf message descriptor from CSR and compile the descriptor.
+async fn compile_proto(
+    subject_name: &String,
+    ccsr_client: Client,
+) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
+    let (primary_subject, dependency_subjects) =
+        ccsr_client.get_subject_and_references(subject_name).await?;
+
+    // Compile .proto files into a file descriptor set.
+    let mut source_tree = VirtualSourceTree::new();
+    for subject in iter::once(&primary_subject).chain(dependency_subjects.iter()) {
+        source_tree.as_mut().add_file(
+            Path::new(&subject.name),
+            subject.schema.raw.as_bytes().to_vec(),
+        );
+    }
+    let mut db = SourceTreeDescriptorDatabase::new(source_tree.as_mut());
+    let fds = db
+        .as_mut()
+        .build_file_descriptor_set(&[Path::new(&primary_subject.name)])?;
+
+    // Ensure there is exactly one message in the file.
+    let primary_fd = fds.file(0);
+    let message_name = match primary_fd.message_type_size() {
+        1 => String::from_utf8_lossy(primary_fd.message_type(0).name()).into_owned(),
+        0 => bail_unsupported!(9598, "Protobuf schemas with no messages"),
+        _ => bail_unsupported!(9598, "Protobuf schemas with multiple messages"),
+    };
+
+    // Encode the file descriptor set into a SQL byte string.
+    let mut schema = String::new();
+    strconv::format_bytes(&mut schema, &fds.serialize()?);
+
+    Ok(CsrSeedCompiledEncoding {
+        schema,
+        message_name,
+    })
+}
+
+/// Makes an always-valid AWS API call to perform a basic sanity check of
+/// whether the specified AWS configuration is valid.
+async fn validate_aws_credentials(
+    config: &AwsConfig,
+    external_id: AwsExternalId,
+) -> Result<(), anyhow::Error> {
+    let config = config.load(external_id).await;
+    let sts_client = mz_aws_util::sts::client(&config);
+    let _ = sts_client
+        .get_caller_identity()
+        .send()
+        .await
+        .context("Unable to validate AWS credentials")?;
+    Ok(())
 }

@@ -19,68 +19,82 @@
 # transaction is assigned timestamp 1, data from the second is assigned
 # timestamp 2, and so on.
 
-$ set nums-schema={
+$ set nums-schema=[
+  {
+    "type": "array",
+    "items": {
+      "type": "record",
+      "name": "update",
+      "namespace": "com.materialize.cdc",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "type": "record",
+            "name": "data",
+            "fields": [{"name": "num", "type": "long"}]
+          }
+        },
+        {
+          "name": "time",
+          "type": "long"
+        },
+        {
+          "name": "diff",
+          "type": "long"
+        }
+      ]
+    }
+  },
+  {
     "type": "record",
-    "name": "envelope",
+    "name": "progress",
+    "namespace": "com.materialize.cdc",
     "fields": [
       {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [{"name": "num", "type": "long"}]
-          },
-          "null"
-        ]
+        "name": "lower",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
       },
-      { "name": "after", "type": ["row", "null"] }
+      {
+        "name": "upper",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "counts",
+        "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "counts",
+            "fields": [
+              {
+                "name": "time",
+                "type": "long"
+              },
+              {
+                "name": "count",
+                "type": "long"
+              }
+            ]
+          }
+        }
+      }
     ]
   }
-
-$ set tx-schema={
-    "type": "record",
-    "name": "TransactionMetadataValue",
-    "namespace": "io.debezium.connector.common",
-    "fields": [
-      {"name": "status", "type": "string"},
-      {"name": "id", "type": "string"},
-      {
-        "name": "event_count",
-        "type": ["null", "long"],
-        "default": null
-      },
-      {
-        "name": "data_collections",
-        "type": [
-          "null",
-          {
-            "type": "array",
-            "items": {
-              "type": "record",
-              "name": "ConnectDefault",
-              "namespace": "io.confluent.connect.Avro",
-              "fields": [
-                {"name": "data_collection", "type": "string"},
-                {"name": "event_count", "type": "long"}
-              ]
-            }
-          }
-        ],
-        "default": null
-      }
-    ],
-    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
-  }
+  ]
 
 $ kafka-create-topic topic=nums
-$ kafka-create-topic topic=tx
 
 > CREATE MATERIALIZED SOURCE nums
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nums-${testdrive.seed}'
-  WITH (consistency_topic = 'testdrive-tx-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${nums-schema}'
-  ENVELOPE DEBEZIUM
+  ENVELOPE MATERIALIZE
 
 # Disable logical compaction, to ensure we can view historical detail.
 > ALTER INDEX materialize.public.nums_primary_idx
@@ -93,26 +107,17 @@ $ kafka-create-topic topic=tx
 
 # ==> Test consolidation.
 
-# Ingest several updates that consolidate. Some of these updates are in one
-# transaction, and some of them are in their own transactions.
+# Ingest several updates that consolidate
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
-{"before": null, "after": {"row": {"num": 1}}}
-{"before": {"row": {"num": 1}}, "after": {"row": {"num": 2}}}
-{"before": {"row": {"num": 2}}, "after": {"row": {"num": 3}}}
-{"before": {"row": {"num": 3}}, "after": {"row": {"num": 4}}}
-{"before": {"row": {"num": 4}}, "after": {"row": {"num": 5}}}
+{"array":[{"data":{"num":3},"time":1,"diff":1}]}
+{"array":[{"data":{"num":3},"time":2,"diff":-1}]}
+{"array":[{"data":{"num":4},"time":2,"diff":1}]}
+{"array":[{"data":{"num":4},"time":3,"diff":-1}]}
+{"array":[{"data":{"num":5},"time":3,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":1},{"time":2,"count":2}, {"time": 3, "count": 2}]}}
 
-$ kafka-ingest format=avro topic=tx schema=${tx-schema}
-{"status": "BEGIN", "id": "1", "event_count": null, "data_collections": null}
-{"status": "END", "id": "1", "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
-{"status": "BEGIN", "id": "2", "event_count": null, "data_collections": null}
-{"status": "END", "id": "2", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
-{"status": "BEGIN", "id": "3", "event_count": null, "data_collections": null}
-{"status": "END", "id": "3", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
-
-# Test that by default updates that occurred at the same time are consolidated,
-# but updates that occurred at distinct times are not.
+# Test that by updates that occurred at at distinct times are not consolidated
 
 # we know that transactions (timestamps) are emitted in order, but the order
 # of emitted records with the same timestamp is not deterministic. We therefore
@@ -171,41 +176,35 @@ mz_timestamp  mz_diff  num
   SET (logical_compaction_window = '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
-{"before": {"row": {"num": 5}}, "after": {"row": {"num": 6}}}
-
-$ kafka-ingest format=avro topic=tx schema=${tx-schema}
-{"status": "BEGIN", "id": "4", "event_count": null, "data_collections": null}
-{"status": "END", "id": "4", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
+{"array":[{"data":{"num":5},"time":4,"diff":-1}]}
+{"array":[{"data":{"num":6},"time":4,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[4],"upper":[5],"counts":[{"time":4,"count":2}]}}
 
 # Data from older transactions should be immediately compacted to the timestamp
 # of the latest transaction (i.e., 4).
 
 ! SELECT * FROM nums AS OF 2
-Timestamp (2) is not valid for all inputs
+contains:Timestamp (2) is not valid for all inputs
 ! SELECT * FROM nums AS OF 3
-Timestamp (3) is not valid for all inputs
+contains:Timestamp (3) is not valid for all inputs
 > SELECT * FROM nums AS OF 4
 6
 
-# Reset the compaction window back to default (currently 60s) and advance the
-# number in transactions 5 and 6.
+# Set the compaction window back to off and advance the number in transactions 5 and 6.
 
 > ALTER INDEX materialize.public.nums_primary_idx
-  RESET (logical_compaction_window)
+  SET (logical_compaction_window = 'off')
 
 # But also create an index that compacts frequently.
 > CREATE VIEW nums_compacted AS SELECT * FROM nums
 > CREATE DEFAULT INDEX ON nums_compacted WITH (logical_compaction_window = '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
-{"before": {"row": {"num": 6}}, "after": {"row": {"num": 7}}}
-{"before": {"row": {"num": 7}}, "after": {"row": {"num": 8}}}
-
-$ kafka-ingest format=avro topic=tx schema=${tx-schema}
-{"status": "BEGIN", "id": "5", "event_count": null, "data_collections": null}
-{"status": "END", "id": "5", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
-{"status": "BEGIN", "id": "6", "event_count": null, "data_collections": null}
-{"status": "END", "id": "6", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
+{"array":[{"data":{"num":6},"time":5,"diff":-1}]}
+{"array":[{"data":{"num":7},"time":5,"diff":1}]}
+{"array":[{"data":{"num":7},"time":6,"diff":-1}]}
+{"array":[{"data":{"num":8},"time":6,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[5],"upper":[7],"counts":[{"time":5,"count":2},{"time":6,"count":2}]}}
 
 # Timestamps 4, 5, and 6 should all be available due to the longer compaction
 # window.
@@ -218,8 +217,8 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 8
 
 ! SELECT * FROM nums_compacted AS OF 4
-Timestamp (4) is not valid for all inputs
+contains:Timestamp (4) is not valid for all inputs
 ! SELECT * FROM nums_compacted AS OF 5
-Timestamp (5) is not valid for all inputs
+contains:Timestamp (5) is not valid for all inputs
 > SELECT * FROM nums_compacted AS OF 6
 8

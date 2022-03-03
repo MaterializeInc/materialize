@@ -26,11 +26,13 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-RUSTDOCFLAGS="-D warnings"
+RUSTDOCFLAGS+=" -D warnings "
 if [[ $(cargo -V) = *nightly* ]]; then
   RUSTDOCFLAGS+=" --cfg nightly_doc_features"
 fi
 export RUSTDOCFLAGS
+
+target=${CARGO_TARGET_DIR:-target}
 
 cargo doc --all-features "$@"
 
@@ -41,7 +43,7 @@ crates=$(cargo metadata --format-version=1 \
 # HTML template like this, but the upstream issue [0] that would resolve this is
 # now five years old and doesn't look close to resolution.
 # [0]: https://github.com/rust-lang/cargo/issues/739
-cat > target/doc/index.html <<EOF
+cat > "$target"/doc/index.html <<EOF
 <!DOCTYPE html>
 <html lang="en">
 
@@ -117,7 +119,7 @@ EOF
 
 # Make the logo link to the nice homepage we just created. Otherwise it just
 # links to the root of whatever crate you happen to be looking at.
-cat >> target/doc/main.js <<EOF
+cat >> "$target"/doc/main.js <<EOF
 ;
 var el = document.querySelector("img[alt=logo]").closest("a");
 if (el.href != "index.html") {
@@ -125,4 +127,4 @@ if (el.href != "index.html") {
 }
 EOF
 
-echo "Docs are in target/doc/index.html"
+echo "Docs are in $target/doc/index.html"

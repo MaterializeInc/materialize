@@ -1,0 +1,206 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test that the test runner can properly construct sources with keys
+# and report on key information in plans
+
+cat
+(defsource x ([int32 int64 int32]))
+(defsource y ([int64 int32 int32]))
+----
+ok
+
+build format=types
+(union [(get x) (get x) (get x)])
+----
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%1 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%2 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%3 =
+| Union %0 %1 %2
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+----
+----
+
+build format=types
+(union [(get x) (project (get y) [#1 #0 #2])])
+----
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%1 =
+| Get y (u1)
+| | types = (Int64?, Int32?, Int32?)
+| | keys = ()
+| Project (#1, #0, #2)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%2 =
+| Union %0 %1
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+----
+----
+
+build format=types
+(union [(project (get y) [#1 #0 #2]) (get x)])
+----
+----
+%0 =
+| Get y (u1)
+| | types = (Int64?, Int32?, Int32?)
+| | keys = ()
+| Project (#1, #0, #2)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%1 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%2 =
+| Union %0 %1
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+----
+----
+
+build format=types
+(let z (project (get y) [#1 #0 #2])
+    (union [(get x) (get z)]))
+----
+----
+%0 = Let l0 =
+| Get y (u1)
+| | types = (Int64?, Int32?, Int32?)
+| | keys = ()
+| Project (#1, #0, #2)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%1 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%2 =
+| Union %1 %0
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+----
+----
+
+build format=types
+(let z (project (get y) [#1 #0 #2])
+    (union [(get z) (get z)]))
+----
+----
+%0 = Let l0 =
+| Get y (u1)
+| | types = (Int64?, Int32?, Int32?)
+| | keys = ()
+| Project (#1, #0, #2)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%1 =
+| Union %0 %0
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+----
+----
+
+build format=types
+(join [(get x) (get y)] [])
+----
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+
+%1 =
+| Get y (u1)
+| | types = (Int64?, Int32?, Int32?)
+| | keys = ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| | types = (Int32?, Int64?, Int32?, Int64?, Int32?, Int32?)
+| | keys = ()
+----
+----
+
+# Key information propagation through Filters
+
+build format=types
+(filter (reduce (get x) [#0 #2] []) [(call_binary eq #0 #1)])
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+| Distinct group=(#0, #2)
+| | types = (Int32?, Int32?)
+| | keys = ((#0, #1))
+| Filter (#0 = #1)
+| | types = (Int32, Int32)
+| | keys = ((#0), (#1))
+
+cat
+(defsource with_keys ([int32 int32 int32] [[0 1] [1 2]]))
+----
+ok
+
+build format=types
+(filter (get with_keys) [(call_binary eq #0 #2)])
+----
+%0 =
+| Get with_keys (u2)
+| | types = (Int32?, Int32?, Int32?)
+| | keys = ((#0, #1), (#1, #2))
+| Filter (#0 = #2)
+| | types = (Int32, Int32?, Int32)
+| | keys = ((#0, #1), (#1, #2))
+
+cat
+(defsource with_keys2 ([int32 int32 int32 int32] [[0 1] [2 3]]))
+----
+ok
+
+build format=types
+(filter (get with_keys2) [(call_binary eq #0 #2)])
+----
+%0 =
+| Get with_keys2 (u3)
+| | types = (Int32?, Int32?, Int32?, Int32?)
+| | keys = ((#0, #1), (#2, #3))
+| Filter (#0 = #2)
+| | types = (Int32, Int32?, Int32, Int32?)
+| | keys = ((#0, #1), (#0, #3), (#1, #2), (#2, #3))

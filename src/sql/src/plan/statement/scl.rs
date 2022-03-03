@@ -12,21 +12,21 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use std::convert::TryFrom;
-
 use anyhow::bail;
 use uncased::UncasedStr;
 
-use repr::adt::interval::Interval;
-use repr::{RelationDesc, ScalarType};
+use mz_repr::adt::interval::Interval;
+use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
-    CloseStatement, DeclareStatement, DiscardStatement, DiscardTarget, FetchStatement, Raw,
-    SetVariableStatement, SetVariableValue, ShowVariableStatement, Value,
+    CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
+    ExecuteStatement, FetchStatement, PrepareStatement, Raw, SetVariableStatement,
+    SetVariableValue, ShowVariableStatement, Value,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    ClosePlan, DeclarePlan, ExecuteTimeout, FetchPlan, Plan, SetVariablePlan, ShowVariablePlan,
+    describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
+    FetchPlan, Plan, PreparePlan, SetVariablePlan, ShowVariablePlan,
 };
 
 pub fn describe_set_variable(
@@ -44,9 +44,6 @@ pub fn plan_set_variable(
         value,
     }: SetVariableStatement,
 ) -> Result<Plan, anyhow::Error> {
-    if local {
-        bail_unsupported!("SET LOCAL");
-    }
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
         value: match value {
@@ -54,6 +51,7 @@ pub fn plan_set_variable(
             SetVariableValue::Literal(lit) => lit.to_string(),
             SetVariableValue::Ident(ident) => ident.into_string(),
         },
+        local,
     }))
 }
 
@@ -63,12 +61,11 @@ pub fn describe_show_variable(
 ) -> Result<StatementDesc, anyhow::Error> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::empty()
-            .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("setting", ScalarType::String.nullable(false))
-            .with_named_column("description", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("setting", ScalarType::String.nullable(false))
+            .with_column("description", ScalarType::String.nullable(false))
     } else {
-        RelationDesc::empty()
-            .with_named_column(variable.as_str(), ScalarType::String.nullable(false))
+        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
     };
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -150,7 +147,7 @@ pub fn plan_fetch(
             // bumped. If we do bump it, ensure that the new upper limit is within the
             // bounds of a tokio time future, otherwise it'll panic.
             const SECS_PER_DAY: f64 = 60f64 * 60f64 * 24f64;
-            let timeout_secs = timeout.as_seconds();
+            let timeout_secs = timeout.as_epoch_seconds::<f64>();
             if !timeout_secs.is_finite() || timeout_secs < 0f64 || timeout_secs > SECS_PER_DAY {
                 bail!("timeout out of range: {:#}", timeout);
             }
@@ -179,5 +176,80 @@ pub fn plan_close(
 ) -> Result<Plan, anyhow::Error> {
     Ok(Plan::Close(ClosePlan {
         name: name.to_string(),
+    }))
+}
+
+pub fn describe_prepare(
+    _: &StatementContext,
+    _: PrepareStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_prepare(
+    scx: &StatementContext,
+    PrepareStatement { name, stmt }: PrepareStatement<Raw>,
+) -> Result<Plan, anyhow::Error> {
+    // TODO: PREPARE supports specifying param types.
+    let param_types = [];
+    let desc = describe(scx.pcx()?, scx.catalog, *stmt.clone(), &param_types)?;
+    Ok(Plan::Prepare(PreparePlan {
+        name: name.to_string(),
+        stmt: *stmt,
+        desc,
+    }))
+}
+
+pub fn describe_execute(
+    scx: &StatementContext,
+    stmt: ExecuteStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    // The evaluation of the statement doesn't happen until it gets to coord. That
+    // means if the statement is now invalid due to an object having been dropped,
+    // describe is unable to notice that. This is currently an existing problem
+    // with prepared statements over pgwire as well, so we can leave this for now.
+    // See #8397.
+    Ok(plan_execute_desc(scx, stmt)?.0.clone())
+}
+
+pub fn plan_execute(
+    scx: &StatementContext,
+    stmt: ExecuteStatement<Raw>,
+) -> Result<Plan, anyhow::Error> {
+    Ok(plan_execute_desc(scx, stmt)?.1)
+}
+
+fn plan_execute_desc<'a>(
+    scx: &'a StatementContext,
+    ExecuteStatement { name, params }: ExecuteStatement<Raw>,
+) -> Result<(&'a StatementDesc, Plan), anyhow::Error> {
+    let name = name.to_string();
+    let desc = match scx.catalog.get_prepared_statement_desc(&name) {
+        Some(desc) => desc,
+        // TODO(mjibson): use CoordError::UnknownPreparedStatement.
+        None => bail!("unknown prepared statement {}", name),
+    };
+    Ok((
+        desc,
+        Plan::Execute(ExecutePlan {
+            name,
+            params: query::plan_params(scx, params, desc)?,
+        }),
+    ))
+}
+
+pub fn describe_deallocate(
+    _: &StatementContext,
+    _: DeallocateStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_deallocate(
+    _: &StatementContext,
+    DeallocateStatement { name }: DeallocateStatement,
+) -> Result<Plan, anyhow::Error> {
+    Ok(Plan::Deallocate(DeallocatePlan {
+        name: name.map(|name| name.to_string()),
     }))
 }

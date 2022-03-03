@@ -30,8 +30,9 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
 - [Materialize &amp; Postgres CDC](/guides/cdc-postgres/)
+- [dbt &amp; Materialize](/guides/dbt/)
 - [Materialize &amp; Node.js](/guides/node-js/)
-- - [Time-windowed computation](/guides/temporal-filters/)
+- [Time-windowed computation](/guides/temporal-filters/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
 - [`CREATE SOURCE`](/sql/create-source)
@@ -43,13 +44,14 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 
 ## New &amp; updated
 
-- [Version 0.9.2 Release Notes](release-notes/#v0.9.2)
-- [Change Data Capture with Postgres Guide](/guides/cdc-postgres/)
-- [Kafka Sink Topic Reuse (Exactly-Once) Sinks Guide](/guides/reuse-topic-for-kafka-sink)
+- [Release Notes](release-notes/)
+- [CDC with MySQL](/guides/cdc-mysql/)
+- [Materialize Cloud](/cloud/) - Now in open beta!
 
 ## Learn more
 
-- [**Install Materialize**](./install) to try it out.
+- [**Install Materialize**](./install) to try it out or try [Materialize Cloud](/cloud/) for free.
+- [**Check out the Materialize blog**](https://www.materialize.com/blog/) for neat things our developers wrote.
 - [**What is Materialize?**](./overview/what-is-materialize) to learn
 more about what Materialize does and how it works.
 - [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.

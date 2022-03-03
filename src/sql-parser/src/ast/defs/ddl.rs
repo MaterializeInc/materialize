@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use enum_kinds::EnumKind;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
+use crate::ast::{AstInfo, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -58,7 +58,7 @@ impl_display!(Schema);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema<T: AstInfo> {
     Csr {
-        csr_connector: CsrConnector<T>,
+        csr_connector: CsrConnectorAvro<T>,
     },
     InlineSchema {
         schema: Schema,
@@ -92,7 +92,7 @@ impl_display_t!(AvroSchema);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProtobufSchema<T: AstInfo> {
     Csr {
-        csr_connector: CsrConnector<T>,
+        csr_connector: CsrConnectorProto<T>,
     },
     InlineSchema {
         message_name: String,
@@ -121,13 +121,13 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrConnector<T: AstInfo> {
+pub struct CsrConnectorAvro<T: AstInfo> {
     pub url: String,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<SqlOption<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for CsrConnector<T> {
+impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
         f.write_node(&display::escape_single_quote_string(&self.url));
@@ -143,7 +143,32 @@ impl<T: AstInfo> AstDisplay for CsrConnector<T> {
         }
     }
 }
-impl_display_t!(CsrConnector);
+impl_display_t!(CsrConnectorAvro);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrConnectorProto<T: AstInfo> {
+    pub url: String,
+    pub seed: Option<CsrSeedCompiledOrLegacy>,
+    pub with_options: Vec<SqlOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
+        f.write_node(&display::escape_single_quote_string(&self.url));
+        f.write_str("'");
+        if let Some(seed) = &self.seed {
+            f.write_str(" ");
+            f.write_node(seed);
+        }
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CsrConnectorProto);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -167,6 +192,58 @@ impl AstDisplay for CsrSeed {
 impl_display!(CsrSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CsrSeedCompiledOrLegacy {
+    Compiled(CsrSeedCompiled),
+    // Starting with version 0.9.13, Legacy should only be found when reading
+    // from the catalog and should be transformed during migration.
+    Legacy(CsrSeed),
+}
+impl AstDisplay for CsrSeedCompiledOrLegacy {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CsrSeedCompiledOrLegacy::Compiled(c) => f.write_node(c),
+            CsrSeedCompiledOrLegacy::Legacy(l) => f.write_node(l),
+        }
+    }
+}
+impl_display!(CsrSeedCompiledOrLegacy);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrSeedCompiled {
+    pub key: Option<CsrSeedCompiledEncoding>,
+    pub value: CsrSeedCompiledEncoding,
+}
+impl AstDisplay for CsrSeedCompiled {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SEED COMPILED");
+        if let Some(key) = &self.key {
+            f.write_str(" KEY ");
+            f.write_node(key);
+        }
+        f.write_str(" VALUE ");
+        f.write_node(&self.value);
+    }
+}
+impl_display!(CsrSeedCompiled);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrSeedCompiledEncoding {
+    // Hex encoded string.
+    pub schema: String,
+    pub message_name: String,
+}
+impl AstDisplay for CsrSeedCompiledEncoding {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(" SCHEMA '");
+        f.write_str(&display::escape_single_quote_string(&self.schema));
+        f.write_str("' MESSAGE '");
+        f.write_str(&self.message_name);
+        f.write_str("'");
+    }
+}
+impl_display!(CsrSeedCompiledEncoding);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceFormat<T: AstInfo> {
     None,
     /// `CREATE SOURCE .. FORMAT`
@@ -178,26 +255,6 @@ pub enum CreateSourceFormat<T: AstInfo> {
         key: Format<T>,
         value: Format<T>,
     },
-}
-
-impl<T: AstInfo + PartialEq> CreateSourceFormat<T> {
-    /// True if this is a Bare format that can contain no configuration
-    pub fn is_simple(&self) -> bool {
-        match self {
-            CreateSourceFormat::Bare(f) => f.is_simple(),
-            CreateSourceFormat::KeyValue { .. } => false,
-            CreateSourceFormat::None => false,
-        }
-    }
-
-    /// The value portion of a `KeyValue` format, or the only format in `Bare`
-    pub fn value(&self) -> Option<&Format<T>> {
-        match self {
-            CreateSourceFormat::None => None,
-            CreateSourceFormat::Bare(f) => Some(f),
-            CreateSourceFormat::KeyValue { value, .. } => Some(value),
-        }
-    }
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceFormat<T> {
@@ -233,13 +290,6 @@ pub enum Format<T: AstInfo> {
     Text,
 }
 
-impl<T: AstInfo> Format<T> {
-    /// True if the format cannot carry any configuration
-    pub fn is_simple(&self) -> bool {
-        matches!(self, Format::Bytes | Format::Text)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CsvColumns {
     /// `WITH count COLUMNS`
@@ -268,34 +318,43 @@ impl AstDisplay for CsvColumns {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateSourceKeyEnvelope {
-    /// `INCLUDE KEY` is absent
-    None,
-    /// bare `INCLUDE KEY`
-    Included,
-    /// `INCLUDE KEY AS name`
-    Named(Ident),
+pub enum SourceIncludeMetadataType {
+    Key,
+    Timestamp,
+    Partition,
+    Topic,
+    Offset,
 }
 
-impl AstDisplay for CreateSourceKeyEnvelope {
+impl AstDisplay for SourceIncludeMetadataType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceKeyEnvelope::None => {}
-            CreateSourceKeyEnvelope::Included => f.write_str(" INCLUDE KEY"),
-            CreateSourceKeyEnvelope::Named(name) => {
-                f.write_str(" INCLUDE KEY AS ");
-                f.write_str(name)
-            }
+            SourceIncludeMetadataType::Key => f.write_str("KEY"),
+            SourceIncludeMetadataType::Timestamp => f.write_str("TIMESTAMP"),
+            SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
+            SourceIncludeMetadataType::Topic => f.write_str("TOPIC"),
+            SourceIncludeMetadataType::Offset => f.write_str("OFFSET"),
         }
     }
 }
-impl_display!(CreateSourceKeyEnvelope);
+impl_display!(SourceIncludeMetadataType);
 
-impl CreateSourceKeyEnvelope {
-    pub fn is_present(&self) -> bool {
-        !matches!(self, CreateSourceKeyEnvelope::None)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceIncludeMetadata {
+    pub ty: SourceIncludeMetadataType,
+    pub alias: Option<Ident>,
+}
+
+impl AstDisplay for SourceIncludeMetadata {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.ty);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
     }
 }
+impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope {
@@ -303,12 +362,6 @@ pub enum Envelope {
     Debezium(DbzMode),
     Upsert,
     CdcV2,
-}
-
-impl Default for Envelope {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl AstDisplay for Envelope {
@@ -373,12 +426,6 @@ pub enum Compression {
     None,
 }
 
-impl Default for Compression {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 impl AstDisplay for Compression {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -395,12 +442,6 @@ pub enum DbzMode {
     Plain,
     /// `ENVELOPE DEBEZIUM UPSERT`
     Upsert,
-}
-
-impl Default for DbzMode {
-    fn default() -> Self {
-        Self::Plain
-    }
 }
 
 impl AstDisplay for DbzMode {
@@ -462,10 +503,8 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str("FILE '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
-                if compression != &Default::default() {
-                    f.write_str(" COMPRESSION ");
-                    f.write_node(compression);
-                }
+                f.write_str(" COMPRESSION ");
+                f.write_node(compression);
             }
             CreateSourceConnector::Kafka { broker, topic, key } => {
                 f.write_str("KAFKA BROKER '");
@@ -503,10 +542,8 @@ impl AstDisplay for CreateSourceConnector {
                 }
                 f.write_str(" USING");
                 f.write_node(&display::comma_separated(key_sources));
-                if compression != &Default::default() {
-                    f.write_str(" COMPRESSION ");
-                    f.write_node(compression);
-                }
+                f.write_str(" COMPRESSION ");
+                f.write_node(compression);
             }
             CreateSourceConnector::Postgres {
                 conn,
@@ -553,7 +590,7 @@ pub enum CreateSinkConnector<T: AstInfo> {
     Kafka {
         broker: String,
         topic: String,
-        key: Option<Vec<Ident>>,
+        key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
     /// Avro Object Container File
@@ -576,9 +613,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
                 if let Some(key) = key.as_ref() {
-                    f.write_str(" KEY (");
-                    f.write_node(&display::comma_separated(&key));
-                    f.write_str(")");
+                    f.write_node(key);
                 }
                 if let Some(consistency) = consistency.as_ref() {
                     f.write_node(consistency);
@@ -602,17 +637,35 @@ pub struct KafkaConsistency<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(" CONSISTENCY TOPIC '");
+        f.write_str(" CONSISTENCY (TOPIC '");
         f.write_node(&display::escape_single_quote_string(&self.topic));
         f.write_str("'");
 
         if let Some(format) = self.topic_format.as_ref() {
-            f.write_str(" CONSISTENCY FORMAT ");
+            f.write_str(" FORMAT ");
             f.write_node(format);
         }
+        f.write_str(")");
     }
 }
 impl_display_t!(KafkaConsistency);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaSinkKey {
+    pub key_columns: Vec<Ident>,
+    pub not_enforced: bool,
+}
+
+impl AstDisplay for KafkaSinkKey {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(" KEY (");
+        f.write_node(&display::comma_separated(&self.key_columns));
+        f.write_str(")");
+        if self.not_enforced {
+            f.write_str(" NOT ENFORCED");
+        }
+    }
+}
 
 /// Information about upstream Postgres tables used for replication sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -762,7 +815,7 @@ impl_display!(KeyConstraint);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
-    pub data_type: DataType<T>,
+    pub data_type: T::DataType,
     pub collation: Option<UnresolvedObjectName>,
     pub options: Vec<ColumnOptionDef<T>>,
 }

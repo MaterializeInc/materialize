@@ -8,12 +8,22 @@
   - signature: 'coalesce(x: T...) -> T?'
     description: First non-_NULL_ arg, or _NULL_ if all are _NULL_
 
+  - signature: 'greatest(x: T...) -> T?'
+    description: The maximum argument, or _NULL_ if all are _NULL_
+
+  - signature: 'least(x: T...) -> T?'
+    description: The minimum argument, or _NULL_ if all are _NULL_
+
   - signature: 'nullif(x: T, y: T) -> T?'
     description: _NULL_ if `x == y`, else `x`
 
 - type: Aggregate
   description: Aggregate functions take one or more of the same element type as arguments.
   functions:
+  - signature: 'array_agg(x: T) -> T[]'
+    description: Aggregate values (including nulls) as an array.
+    url: array_agg
+
   - signature: 'avg(x: T) -> U'
     description: Average of `T`'s values.
       <br><br>
@@ -30,9 +40,6 @@
   - signature: jsonb_object_agg(keys, values) -> jsonb
     description: Aggregate keys and values (including nulls) as a jsonb object.
     url: jsonb_object_agg
-
-  - signature: 'array_agg(x: T) -> T[]'
-    description: Aggregate values (including nulls) as an array.
 
   - signature: 'max(x: T) -> T'
     description: Maximum value among `T`
@@ -58,7 +65,7 @@
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
-  - signature: 'string_agg(value: text, delimeter: text) -> text'
+  - signature: 'string_agg(value: text, delimiter: text) -> text'
     description: Concatenates the non-null input values into text. Each value after the first is preceded by the corresponding delimiter.
     url: string_agg
 
@@ -88,7 +95,7 @@
   description: List functions take [`list`](../types/list) arguments, and are [polymorphic](../types/list/#polymorphism).
   functions:
     - signature: 'list_agg(x: any) -> L'
-      description: Aggregate values (including nulls) as a list.
+      description: Aggregate values (including nulls) as a list. [(docs)](/sql/functions/list_agg)
 
     - signature: 'list_append(l: listany, e: listelementany) -> L'
       description: Appends `e` to `l`.
@@ -96,7 +103,7 @@
     - signature: 'list_cat(l1: listany, l2: listany) -> L'
       description: Concatenates `l1` and `l2`.
 
-    - signature: 'list_ndims(l: listany) -> int'
+    - signature: 'list_n_layers(l: listany) -> int'
       description: '[Experimental](/cli/#experimental-mode)––Returns the number of dimensions on `l`.'
 
     - signature: 'list_length(l: listany) -> int'
@@ -107,6 +114,12 @@
 
     - signature: 'list_prepend(e: listelementany, l: listany) -> listany'
       description: Prepends `e` to `l`.
+
+    - signature: 'list_remove(l: listany, e: listelementany) -> listany'
+      description: >-
+        [Experimental](/cli/#experimental-mode)––Returns the list `l` without
+        any elements equal to the given value `e`. Comparisons are done using
+        IS NOT DISTINCT FROM semantics, so it is possible to remove NULLs.
 
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
@@ -145,7 +158,7 @@
   - signature: 'log10(x: numeric) -> numeric'
     description: Base 10 logarithm of `x`, same as `log`
 
-  - signature: 'log(x: numeric, b: numeric) -> numeric'
+  - signature: 'log(b: numeric, x: numeric) -> numeric'
     description: Base `b` logarithm of `x`
 
   - signature: 'mod(x: N, y: N) -> N'
@@ -185,8 +198,14 @@
   - signature: 'cos(x: double precision) -> double precision'
     description: The cosine of `x`, with `x` in radians.
 
+  - signature: 'acos(x: double precision) -> double precision'
+    description: The inverse cosine of `x`, result in radians.
+
   - signature: 'cosh(x: double precision) -> double precision'
     description: The hyperbolic cosine of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'acosh(x: double precision) -> double precision'
+    description: The inverse hyperbolic cosine of `x`.
 
   - signature: 'cot(x: double precision) -> double precision'
     description: The cotangent of `x`, with `x` in radians.
@@ -194,14 +213,32 @@
   - signature: 'sin(x: double precision) -> double precision'
     description: The sine of `x`, with `x` in radians.
 
+  - signature: 'asin(x: double precision) -> double precision'
+    description: The inverse sine of `x`, result in radians.
+
   - signature: 'sinh(x: double precision) -> double precision'
     description: The hyperbolic sine of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'asinh(x: double precision) -> double precision'
+    description: The inverse hyperbolic sine of `x`.
 
   - signature: 'tan(x: double precision) -> double precision'
     description: The tangent of `x`, with `x` in radians.
 
+  - signature: 'asin(x: double precision) -> double precision'
+    description: The inverse tangent of `x`, result in radians.
+
   - signature: 'tanh(x: double precision) -> double precision'
     description: The hyperbolic tangent of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'atanh(x: double precision) -> double precision'
+    description: The inverse hyperbolic tangent of `x`.
+
+  - signature: 'radians(x: double precision) -> double precision'
+    description: Converts degrees to radians.
+
+  - signature: 'degrees(x: double precision) -> double precision'
+    description: Converts radians to degrees.
 
 - type: String
   functions:
@@ -222,6 +259,12 @@
 
   - signature: 'char_length(s: str) -> int'
     description: Number of code points in `s`
+
+  - signature: 'chr(i: int) -> str'
+    description: >-
+      Character with the given Unicode codepoint.
+      Only supports codepoints that can be encoded in UTF-8.
+      The NULL (0) character is not allowed.
 
   - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
     description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
@@ -308,6 +351,10 @@
     description: Substring starting at `start_pos` of length `l`
     url: substring
 
+  - signature: "substring('s' [FROM 'start_pos']? [FOR 'l']?) -> str"
+    description: Substring starting at `start_pos` of length `l`
+    url: substring
+
   - signature: "trim([BOTH | LEADING | TRAILING]? 'c'? FROM 's') -> str"
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
@@ -377,25 +424,42 @@
     [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
   functions:
   - signature: current_timestamp() -> timestamptz
-    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
-      Users cannot define views with queries containing `current_timestamp()`.'
+    description: 'The `timestamp with time zone` representing when the query was executed.'
+    nonpure: true
+
+  - signature: 'date_bin(stride: interval, source: timestamp, origin: timestamp) -> timestamp'
+    description: Align `source` with `origin` along `stride`.
+    url: date-bin
+
+  - signature: 'date_bin(stride: interval, source: timestamp) -> timestamp'
+    description: '**Experimental**: Align `source` with the UNIX epoch along `stride`.'
+    url: date-bin
 
   - signature: 'date_trunc(time_component: str, val: timestamp) -> timestamp'
     description: Largest `time_component` <= `val`
     url: date-trunc
 
-  - signature: EXTRACT(extract_expr) -> float
+  - signature: EXTRACT(extract_expr) -> numeric
     description: Specified time component from value
     url: extract
 
+  - signature: 'date_part(time_component: str, val: timestamp) -> float'
+    description: Specified time component from value
+    url: date-part
+
   - signature: mz_logical_timestamp() -> numeric
-    description: 'The logical time at which a query executes. Used for temporal filters and internal debugging.'
+    description: |
+      The logical time at which a query executes. Used for temporal filters and internal debugging.
+      <br><br>
+      **Note**: This function generally behaves like a [non-pure] function, but
+      can be used in limited contexts in materialized views as a [temporal filter](/guides/temporal-filters).
     url: now_and_mz_logical_timestamp
+    nonpure: true
 
   - signature: now() -> timestamptz
-    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
-      Users cannot define views with queries containing `now()`.'
+    description: 'The `timestamp with time zone` representing when the query was executed.'
     url: now_and_mz_logical_timestamp
+    nonpure: true
 
   - signature: timestamp AT TIME ZONE zone -> timestamptz
     description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
@@ -421,10 +485,23 @@
     description: Converts a timestamp into a string using the specified format.
     url: to_char
 
+  - signature: 'justify_days(val: interval) -> interval'
+    description: Adjust interval so 30-day time periods are represented as months.
+    url: justify-days
+
+  - signature: 'justify_hours(val: interval) -> interval'
+    description: Adjust interval so 24-hour time periods are represented as days.
+    url: justify-hours
+
+  - signature: 'justify_interval(val: interval) -> interval'
+    description: Adjust interval using justify_days and justify_hours, with additional sign adjustments.
+    url: justify-interval
+
 - type: UUID
   functions:
   - signature: mz_cluster_id() -> uuid
     description: The `uuid` uniquely identifying this Materialize cluster.
+    nonpure: true
 
 - type: JSON
   functions:
@@ -488,6 +565,11 @@
   - signature: 'generate_series(start: int, stop: int, step: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive, incrementing
       by `step` each time.
+  - signature: 'generate_series(start: timestamp, stop: timestamp, step: interval) -> Col<timestamp>'
+    description: Generate all timestamp values between `start` and `stop`, inclusive, incrementing
+      by `step` each time.
+  - signature: 'generate_subscripts(a: anyarray, dim: int) -> Col<int>'
+    description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given array `a`.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
     description: Values of the capture groups of `regex` as matched in `haystack`
   - signature: 'unnest(a: anyarray)'
@@ -497,11 +579,18 @@
 
 - type: Array
   functions:
+  - signature: 'array_cat(a1: arrayany, a2: arrayany) -> arrayany'
+    description: '[Experimental](/cli/#experimental-mode)––Concatenates `a1` and `a2`.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: >-
       Concatenates the elements of `array` together separated by `sep`.
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
+  - signature: 'array_remove(a: anyarray, e: anyelement) -> anyarray'
+    description: >-
+      Returns the array `a` without any elements equal to the given value `e`.
+      The array must be one-dimensional. Comparisons are done using IS NOT
+      DISTINCT FROM semantics, so it is possible to remove NULLs.
 
 - type: Cryptography
   functions:
@@ -521,24 +610,56 @@
       description: >-
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
         `type` algorithm. The supported hash algorithms are the same as for `digest`.
+    - signature: 'md5(data: bytea) -> text'
+      description: >-
+        Computes the MD5 hash of the given bytea `data`.
+        For PostgreSQL compatibility, returns a hex-encoded value of type `text` rather than `bytea`.
+    - signature: 'sha224(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-224 hash of the given bytea `data`.
+    - signature: 'sha256(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-256 hash of the given bytea `data`.
+    - signature: 'sha384(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-384 hash of the given bytea `data`.
+    - signature: 'sha512(data: bytea) -> bytea'
+      description: >-
+        Computes the SHA-512 hash of the given bytea `data`.
+
+- type: Window
+  description: Window functions compute values across sets of rows related to the current query.
+  functions:
+  - signature: 'row_number() -> int'
+    description: Returns the number of the current row within its partition, counting from 1.
 
 - type: System information
   description: Functions that return information about the system
   functions:
   - signature: 'mz_uptime() -> interval'
     description: Returns the length of time that the materialized process has been running.
+    nonpure: true
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
-  - signature: 'mz_workers() -> bigint'
-    description: Returns the number of workers in use by the server.
+    nonpure: true
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
+  - signature: 'current_database() -> text'
+    description: >-
+      Returns the name of the current database.
+    nonpure: true
   - signature: 'current_role() -> text'
     description: >-
       Alias for `current_user`.
+    nonpure: true
   - signature: 'current_user() -> text'
     description: >-
       Returns the name of the user who executed the containing query.
+    nonpure: true
+  - signature: 'session_user() -> text'
+    description: >-
+      Returns the name of the user who executed the containing query.
+    nonpure: true
   - signature: 'mz_row_size(expr: Record) -> int'
     description: Returns the number of bytes used to store a row.
 
@@ -549,22 +670,33 @@
     description: >-
       Returns the name of the first non-implicit schema on the search path, or
       `NULL` if the search path is empty.
+    nonpure: true
   - signature: 'current_schemas(include_implicit: bool) -> text[]'
     description: >-
       Returns the names of the schemas on the search path.
       The `include_implicit` parameter controls whether implicit schemas like
       `mz_catalog` and `pg_catalog` are included in the output.
+    nonpure: true
   - signature: 'obj_description(oid: oid, catalog: text) -> text'
     description: PostgreSQL compatibility shim. Currently always returns `NULL`.
+  - signature: 'pg_backend_pid() -> int'
+    description: Returns the internal connection ID.
+    nonpure: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
+  - signature: 'pg_get_constraintdef(oid: oid [, pretty: bool]) -> text'
+    description: Returns the constraint definition for the given `oid`. Currently always returns an error.
   - signature: 'pg_table_is_visible(relation: oid) -> boolean'
     description: Reports whether the relation with the specified OID is visible in the search path.
+  - signature: 'pg_type_is_visible(relation: oid) -> boolean'
+    description: Reports whether the type with the specified OID is visible in the search path.
   - signature: 'pg_typeof(expr: any) -> text'
     description: Returns the type of its input argument as a string.
   - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'
     description: PostgreSQL compatibility shim. Not intended for direct use.
   - signature: 'pg_postmaster_start_time() -> timestamptz'
     description: Returns the time when the server started.
+    nonpure: true
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
+    nonpure: true

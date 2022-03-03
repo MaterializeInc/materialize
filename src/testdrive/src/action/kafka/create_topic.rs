@@ -8,29 +8,29 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::convert::TryFrom;
 use std::time::Duration;
 
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use ore::result::ResultExt;
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::error::RDKafkaErrorCode;
 use rdkafka::producer::Producer;
 
-use crate::action::{Action, State};
+use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub struct CreateTopicAction {
     topic_prefix: String,
-    partitions: usize,
+    partitions: Option<usize>,
     replication_factor: i32,
     compression: String,
     compaction: bool,
 }
 
-pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, String> {
+pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
-    let partitions = cmd.args.opt_parse("partitions")?.unwrap_or(1);
+    let partitions = cmd.args.opt_parse("partitions")?;
+
     let replication_factor = cmd.args.opt_parse("replication-factor")?.unwrap_or(1);
     let compression = cmd
         .args
@@ -50,15 +50,11 @@ pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, 
 
 #[async_trait]
 impl Action for CreateTopicAction {
-    async fn undo(&self, state: &mut State) -> Result<(), String> {
-        let metadata = state
-            .kafka_producer
-            .client()
-            .fetch_metadata(
-                None,
-                Some(cmp::max(Duration::from_secs(1), state.default_timeout)),
-            )
-            .map_err_to_string()?;
+    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
+        let metadata = state.kafka_producer.client().fetch_metadata(
+            None,
+            Some(cmp::max(Duration::from_secs(1), state.default_timeout)),
+        )?;
 
         let stale_kafka_topics: Vec<_> = metadata
             .topics()
@@ -80,23 +76,19 @@ impl Action for CreateTopicAction {
             let res = state
                 .kafka_admin
                 .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts)
-                .await;
-            let res = match res {
-                Err(err) => return Err(err.to_string()),
-                Ok(res) => res,
-            };
+                .await?;
             if res.len() != stale_kafka_topics.len() {
-                return Err(format!(
+                bail!(
                     "kafka topic deletion returned {} results, but exactly {} expected",
                     res.len(),
                     stale_kafka_topics.len()
-                ));
+                );
             }
             for (res, topic) in res.iter().zip(stale_kafka_topics.iter()) {
                 match res {
                     Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
                     Err((_, err)) => {
-                        eprintln!("warning: unable to delete {}: {}", topic, err.to_string())
+                        eprintln!("warning: unable to delete {}: {}", topic, err)
                     }
                 }
             }
@@ -104,7 +96,7 @@ impl Action for CreateTopicAction {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         // NOTE(benesch): it is critical that we invent a new topic name on
         // every testdrive run. We previously tried to delete and recreate the
         // topic with a fixed name, but ran into serious race conditions in
@@ -155,15 +147,17 @@ impl Action for CreateTopicAction {
         //
         // [0]: https://github.com/confluentinc/confluent-kafka-python/issues/524#issuecomment-456783176
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
+        let partitions = self.partitions.unwrap_or(state.kafka_default_partitions);
+
         println!(
             "Creating Kafka topic {} with partition count of {}",
-            topic_name, self.partitions
+            topic_name, partitions
         );
-        let partitions = i32::try_from(self.partitions)
-            .map_err(|_| format!("partition count must fit in an i32: {}", self.partitions))?;
+
         let new_topic = NewTopic::new(
             &topic_name,
-            partitions,
+            i32::try_from(partitions)
+                .map_err(|_| anyhow!("partition count must fit in an i32: {}", partitions))?,
             TopicReplication::Fixed(self.replication_factor),
         )
         // Disabling retention is very important! Our testdrive tests
@@ -174,7 +168,7 @@ impl Action for CreateTopicAction {
         .set("retention.ms", "-1")
         .set("compression.type", &self.compression);
 
-        // agressive compaction, when it is enabled
+        // aggressive compaction, when it is enabled
         let new_topic = if self.compaction {
             new_topic
                 .set("cleanup.policy", "compact")
@@ -182,14 +176,15 @@ impl Action for CreateTopicAction {
                 .set("segment.ms", "100")
                 // make sure we get compaction even with low throughput
                 .set("min.cleanable.dirty.ratio", "0.01")
+                .set("min.compaction.lag.ms", "100")
+                .set("delete.retention.ms", "100")
         } else {
             new_topic
         };
 
-        kafka_util::admin::create_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
-            .await
-            .map_err_to_string()?;
-        state.kafka_topics.insert(topic_name, self.partitions);
-        Ok(())
+        mz_kafka_util::admin::ensure_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
+            .await?;
+        state.kafka_topics.insert(topic_name, partitions);
+        Ok(ControlFlow::Continue)
     }
 }

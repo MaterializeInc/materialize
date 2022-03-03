@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use expr::GlobalId;
-use repr::{RelationDesc, ScalarType};
+use mz_expr::GlobalId;
+use mz_repr::{RelationDesc, ScalarType};
 
 /// Logging configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +21,13 @@ pub struct LoggingConfig {
     pub active_logs: HashMap<LogVariant, GlobalId>,
     // Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
+}
+
+impl LoggingConfig {
+    /// Announce the identifiers the logging config will populate.
+    pub fn log_identifiers<'a>(&'a self) -> impl Iterator<Item = GlobalId> + 'a {
+        self.active_logs.values().cloned()
+    }
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -55,8 +62,7 @@ pub enum MaterializedLog {
     DataflowCurrent,
     DataflowDependency,
     FrontierCurrent,
-    KafkaBrokerRtt,
-    KafkaConsumerInfo,
+    KafkaSourceStatistics,
     PeekCurrent,
     PeekDuration,
     SourceInfo,
@@ -81,33 +87,33 @@ impl LogVariant {
     pub fn desc(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
-                .with_named_column("id", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("name", ScalarType::String.nullable(false))
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("name", ScalarType::String.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
-                .with_named_column("id", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("source_node", ScalarType::Int64.nullable(false))
-                .with_named_column("source_port", ScalarType::Int64.nullable(false))
-                .with_named_column("target_node", ScalarType::Int64.nullable(false))
-                .with_named_column("target_port", ScalarType::Int64.nullable(false))
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("source_node", ScalarType::Int64.nullable(false))
+                .with_column("source_port", ScalarType::Int64.nullable(false))
+                .with_column("target_node", ScalarType::Int64.nullable(false))
+                .with_column("target_port", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
-                .with_named_column("id", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false)),
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
-                .with_named_column("id", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("duration_ns", ScalarType::Int64.nullable(false)),
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("duration_ns", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
-                .with_named_column("id", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column(
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column(
                     "address",
                     ScalarType::List {
                         element_type: Box::new(ScalarType::Int64),
@@ -118,22 +124,22 @@ impl LogVariant {
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("slept_for", ScalarType::Int64.nullable(false))
-                .with_named_column("requested", ScalarType::Int64.nullable(false)),
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("slept_for", ScalarType::Int64.nullable(false))
+                .with_column("requested", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
-                .with_named_column("channel", ScalarType::Int64.nullable(false))
-                .with_named_column("source_worker", ScalarType::Int64.nullable(false))
-                .with_named_column("target_worker", ScalarType::Int64.nullable(false)),
+                .with_column("channel", ScalarType::Int64.nullable(false))
+                .with_column("source_worker", ScalarType::Int64.nullable(false))
+                .with_column("target_worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::empty()
-                .with_named_column("channel", ScalarType::Int64.nullable(false))
-                .with_named_column("source_worker", ScalarType::Int64.nullable(false))
-                .with_named_column("target_worker", ScalarType::Int64.nullable(false)),
+                .with_column("channel", ScalarType::Int64.nullable(false))
+                .with_column("source_worker", ScalarType::Int64.nullable(false))
+                .with_column("target_worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
-                .with_named_column(
+                .with_column(
                     "address",
                     ScalarType::List {
                         element_type: Box::new(ScalarType::Int64),
@@ -141,88 +147,60 @@ impl LogVariant {
                     }
                     .nullable(false),
                 )
-                .with_named_column("port", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("update_type", ScalarType::String.nullable(false))
-                .with_named_column("timestamp", ScalarType::Int64.nullable(true)),
+                .with_column("port", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("update_type", ScalarType::String.nullable(false))
+                .with_column("timestamp", ScalarType::Int64.nullable(true)),
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
             | LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
-                .with_named_column("operator", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false)),
+                .with_column("operator", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationDesc::empty()
-                .with_named_column("name", ScalarType::String.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("name", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::SourceInfo) => RelationDesc::empty()
-                .with_named_column("source_name", ScalarType::String.nullable(false))
-                .with_named_column("source_id", ScalarType::String.nullable(false))
-                .with_named_column("dataflow_id", ScalarType::Int64.nullable(false))
-                .with_named_column("partition_id", ScalarType::String.nullable(true))
-                .with_named_column("offset", ScalarType::Int64.nullable(false))
-                .with_named_column("timestamp", ScalarType::Int64.nullable(false))
+                .with_column("source_name", ScalarType::String.nullable(false))
+                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("dataflow_id", ScalarType::Int64.nullable(false))
+                .with_column("partition_id", ScalarType::String.nullable(true))
+                .with_column("offset", ScalarType::Int64.nullable(false))
+                .with_column("timestamp", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2, 3]),
 
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
-                .with_named_column("dataflow", ScalarType::String.nullable(false))
-                .with_named_column("source", ScalarType::String.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false)),
+                .with_column("dataflow", ScalarType::String.nullable(false))
+                .with_column("source", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
-                .with_named_column("global_id", ScalarType::String.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("time", ScalarType::Int64.nullable(false)),
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("time", ScalarType::Int64.nullable(false)),
 
-            LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt) => RelationDesc::empty()
-                .with_named_column("consumer_name", ScalarType::String.nullable(false))
-                .with_named_column("source_id", ScalarType::String.nullable(false))
-                .with_named_column("dataflow_id", ScalarType::Int64.nullable(false))
-                .with_named_column("broker_name", ScalarType::String.nullable(false))
-                .with_named_column("min", ScalarType::Int64.nullable(false))
-                .with_named_column("max", ScalarType::Int64.nullable(false))
-                .with_named_column("avg", ScalarType::Int64.nullable(false))
-                .with_named_column("sum", ScalarType::Int64.nullable(false))
-                .with_named_column("cnt", ScalarType::Int64.nullable(false))
-                .with_named_column("stddev", ScalarType::Int64.nullable(false))
-                .with_named_column("p50", ScalarType::Int64.nullable(false))
-                .with_named_column("p75", ScalarType::Int64.nullable(false))
-                .with_named_column("p90", ScalarType::Int64.nullable(false))
-                .with_named_column("p95", ScalarType::Int64.nullable(false))
-                .with_named_column("p99", ScalarType::Int64.nullable(false))
-                .with_named_column("p99_99", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2]),
-
-            LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => RelationDesc::empty()
-                .with_named_column("consumer_name", ScalarType::String.nullable(false))
-                .with_named_column("source_id", ScalarType::String.nullable(false))
-                .with_named_column("dataflow_id", ScalarType::Int64.nullable(false))
-                .with_named_column("partition_id", ScalarType::String.nullable(false))
-                .with_named_column("rx_msgs", ScalarType::Int64.nullable(false))
-                .with_named_column("rx_bytes", ScalarType::Int64.nullable(false))
-                .with_named_column("tx_msgs", ScalarType::Int64.nullable(false))
-                .with_named_column("tx_bytes", ScalarType::Int64.nullable(false))
-                .with_named_column("lo_offset", ScalarType::Int64.nullable(false))
-                .with_named_column("hi_offset", ScalarType::Int64.nullable(false))
-                .with_named_column("ls_offset", ScalarType::Int64.nullable(false))
-                .with_named_column("app_offset", ScalarType::Int64.nullable(false))
-                .with_named_column("consumer_lag", ScalarType::Int64.nullable(false))
-                .with_named_column("initial_high_offset", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2]),
+            LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics) => {
+                RelationDesc::empty()
+                    .with_column("source_id", ScalarType::String.nullable(false))
+                    .with_column("worker", ScalarType::Int64.nullable(false))
+                    .with_column("statistics", ScalarType::Jsonb.nullable(false))
+                    .with_key(vec![0, 1])
+            }
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
-                .with_named_column("uuid", ScalarType::String.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("id", ScalarType::String.nullable(false))
-                .with_named_column("time", ScalarType::Int64.nullable(false))
+                .with_column("uuid", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("id", ScalarType::String.nullable(false))
+                .with_column("time", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationDesc::empty()
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("duration_ns", ScalarType::Int64.nullable(false))
-                .with_named_column("count", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("duration_ns", ScalarType::Int64.nullable(false))
+                .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
         }
     }
@@ -269,13 +247,9 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt) => vec![(
+            LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics) => vec![(
                 LogVariant::Materialized(MaterializedLog::SourceInfo),
-                vec![(1, 1), (2, 2), (3, 3)],
-            )],
-            LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => vec![(
-                LogVariant::Materialized(MaterializedLog::SourceInfo),
-                vec![(1, 1), (2, 2), (3, 3)],
+                vec![(0, 1)],
             )],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],

@@ -140,7 +140,7 @@ pub enum PartitionId {
 impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
+            PartitionId::Kafka(id) => write!(f, "{}", id),
             PartitionId::None => write!(f, "none"),
         }
     }
@@ -165,15 +165,6 @@ impl FromStr for PartitionId {
                 let val: i32 = s.parse()?;
                 Ok(PartitionId::Kafka(val))
             }
-        }
-    }
-}
-
-impl PartitionId {
-    pub fn kafka_id(&self) -> Option<i32> {
-        match self {
-            PartitionId::Kafka(id) => Some(*id),
-            _ => None,
         }
     }
 }

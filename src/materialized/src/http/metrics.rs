@@ -11,7 +11,7 @@
 
 use askama::Template;
 use hyper::{Body, Request, Response};
-use ore::metrics::MetricsRegistry;
+use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
 
 use crate::http::util;
@@ -49,9 +49,9 @@ pub fn handle_prometheus(
 
 pub fn handle_status(
     _: Request<Body>,
-    _: &mut coord::SessionClient,
+    _: &mut mz_coord::SessionClient,
     global_metrics: &Metrics,
-    pgwire_metrics: &pgwire::Metrics,
+    pgwire_metrics: &mz_pgwire::Metrics,
 ) -> Result<Response<Body>, anyhow::Error> {
     Ok(util::template_response(StatusTemplate {
         version: BUILD_INFO.version,

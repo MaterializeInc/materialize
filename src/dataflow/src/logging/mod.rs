@@ -17,7 +17,7 @@ pub mod timely;
 use std::time::Duration;
 
 use ::timely::communication::Push;
-use ::timely::dataflow::channels::{Bundle, Message};
+use ::timely::dataflow::channels::Bundle;
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
 use ::timely::dataflow::operators::generic::OutputHandle;
 use ::timely::dataflow::operators::Capability;
@@ -28,8 +28,8 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::ExchangeData;
 
-use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
-use repr::Timestamp;
+use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use mz_repr::Timestamp;
 
 /// Logs events as a timely stream, with progress statements.
 pub struct BatchLogger<T, E, P>
@@ -91,7 +91,7 @@ where
                 ));
             }
 
-            self.buffer.extend(data.drain(..));
+            self.buffer.append(data);
         }
         if self.time_ms < new_time_ms {
             // Flush buffered events that may need to advance.
@@ -166,7 +166,7 @@ where
             output_handle,
             port,
             cap: None,
-            buffer: Vec::with_capacity(Message::<T, (D, T, R)>::default_length()),
+            buffer: Vec::with_capacity(::timely::container::buffer::default_capacity::<(D, T, R)>()),
         }
     }
 

@@ -7,30 +7,37 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_repr::{Datum, DatumList};
+
 use crate::EvalError;
-use repr::Datum;
-use std::convert::TryFrom;
 
 sqlfunc!(
     #[sqlname = "isnull"]
-    #[propagates_nulls = false]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    fn is_null(a: Datum<'_>) -> Result<Option<bool>, EvalError> {
-        Ok(Some(a == Datum::Null))
+    fn is_null<'a>(a: Datum<'a>) -> bool {
+        a.is_null()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "pg_column_size"]
-    #[propagates_nulls = true]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    fn pg_column_size(a: Datum<'_>) -> Result<Option<i32>, EvalError> {
+    #[sqlname = "istrue"]
+    fn is_true<'a>(a: Datum<'a>) -> bool {
+        a == Datum::True
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "isfalse"]
+    fn is_false<'a>(a: Datum<'a>) -> bool {
+        a == Datum::False
+    }
+);
+
+sqlfunc!(
+    fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {
         match a {
             Datum::Null => Ok(None),
-            d => {
-                let sz = repr::datum_size(&d);
+            datum => {
+                let sz = mz_repr::datum_size(&datum);
                 i32::try_from(sz)
                     .map(Some)
                     .or(Err(EvalError::Int32OutOfRange))
@@ -40,20 +47,8 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "mz_row_size"]
-    #[propagates_nulls = true]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    // Return the number of bytes this Record (List) datum would use if packed as a Row.
-    fn mz_row_size(a: Datum<'_>) -> Result<Option<i32>, EvalError> {
-        match a {
-            Datum::Null => Ok(None),
-            d => {
-                let sz = repr::row_size(d.unwrap_list().iter());
-                i32::try_from(sz)
-                    .map(Some)
-                    .or(Err(EvalError::Int32OutOfRange))
-            }
-        }
+    fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
+        let sz = mz_repr::row_size(a.iter());
+        i32::try_from(sz).or(Err(EvalError::Int32OutOfRange))
     }
 );

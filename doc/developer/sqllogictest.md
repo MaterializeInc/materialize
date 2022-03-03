@@ -294,11 +294,6 @@ You can look for sqllogictest-related code in the following directories:
       [test/sqllogictest/dates-times.slt](/test/sqllogictest/dates-times.slt),
       we are selecting date and time types, but the expected result type is T
       (text).
-* [src/symbiosis](/src/symbiosis): Contains code for the Materialize symbosis
-  mode. Specifically, this code takes sqllogictest commands such as `CREATE
-  TABLE ...`, `INSERT INTO ... VALUES ...`, or `UPDATE`, runs them in PostgreSQL
-  and passes the changelog to Materialize. Look here if you want to change what
-  gets passed to PostgreSQL and what gets passed to Materialize.
 * [src/coord](/src/coord): This is the starting point for the code that handles
   processing the changelog received from PostgreSQL. Search the directory for
   `Plan::CreateTable` and `Plan::SendDiffs`.

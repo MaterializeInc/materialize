@@ -11,13 +11,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::source as timely_source;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use repr::Timestamp;
+use mz_repr::Timestamp;
 
 use super::{SourceStatus, SourceToken};
 
@@ -31,6 +31,10 @@ use super::{SourceStatus, SourceToken};
 /// `tick` function is responsible for periodically downgrading this capability
 /// whenever it can see that a timestamp is "closed", according to whatever
 /// logic makes sense for the source.
+///
+/// The `tick` function is also given a secondary output handle and capability
+/// that can be used to emit a stream of data that is separate from the main
+/// "data" output. This can, for example, be used to emit and persist the timestamp bindings.
 ///
 /// If `tick` realizes it will never produce data again, it should indicate that
 /// fact by returning [`SourceStatus::Done`], which will immediately drop the
@@ -49,42 +53,74 @@ use super::{SourceStatus, SourceToken};
 ///
 /// When the source token is dropped, the timestamping_flag is set to false
 /// to terminate any spawned threads in the source operator
-pub fn source<G, D, B, L>(scope: &G, name: String, construct: B) -> (Stream<G, D>, SourceToken)
+pub fn source<G, D, D2, B, L>(
+    scope: &G,
+    name: String,
+    construct: B,
+) -> (Stream<G, D>, Stream<G, D2>, SourceToken)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
+    D2: Data,
     B: FnOnce(OperatorInfo) -> L,
     L: FnMut(
             &mut Capability<Timestamp>,
+            &mut Capability<Timestamp>,
+            &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
+            &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
         ) -> SourceStatus
         + 'static,
 {
     let mut token = None;
-    let stream = timely_source(scope, &name, |cap, info| {
-        let cap = Rc::new(RefCell::new(Some(cap)));
+
+    let mut builder = OperatorBuilder::new(name, scope.clone());
+    let operator_info = builder.operator_info();
+
+    let (mut data_output, data_stream) = builder.new_output();
+    let (mut secondary_output, secondary_stream) = builder.new_output();
+    builder.set_notify(false);
+
+    builder.build(|mut capabilities| {
+        // `capabilities` should be a two-element vector.
+        let secondary_capability = capabilities.pop().unwrap();
+        let data_capability = capabilities.pop().unwrap();
+        let durability_capability = CapabilitySet::from_elem(data_capability.clone());
+
+        let capabilities_rc = Rc::new(RefCell::new(Some((
+            data_capability,
+            secondary_capability,
+            durability_capability,
+        ))));
 
         // Export a token to the outside word that will keep this source alive.
         token = Some(SourceToken {
-            capability: cap.clone(),
-            activator: scope.activator_for(&info.address[..]),
+            capabilities: Rc::clone(&capabilities_rc),
+            activator: scope.activator_for(&operator_info.address[..]),
         });
 
-        let mut tick = construct(info);
-        move |output| {
-            let mut cap = cap.borrow_mut();
-            if let Some(some_cap) = &mut *cap {
+        let mut tick = construct(operator_info);
+
+        move |_frontier| {
+            let mut caps = capabilities_rc.borrow_mut();
+            if let Some((data_cap, secondary_cap, durability_capability)) = &mut *caps {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                if let SourceStatus::Done = tick(some_cap, output) {
+                if let SourceStatus::Done = tick(
+                    data_cap,
+                    secondary_cap,
+                    durability_capability,
+                    &mut data_output.activate(),
+                    &mut secondary_output.activate(),
+                ) {
                     // The inner source is finished. Drop our capability.
-                    *cap = None;
+                    *caps = None;
                 }
             }
         }
     });
 
-    // `timely_source` promises to call the provided closure before returning,
+    // `build()` promises to call the provided closure before returning,
     // so we are guaranteed that `token` is non-None.
-    (stream, token.unwrap())
+    (data_stream, secondary_stream, token.unwrap())
 }

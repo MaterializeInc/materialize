@@ -10,7 +10,6 @@
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use std::ops::Mul;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -22,7 +21,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use repr::Diff;
+use mz_repr::Diff;
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, D1>
@@ -85,24 +84,6 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
-    /// Like [`timely::dataflow::operators::filter::Filter::filter`], but `logic`
-    /// is allowed to fail. The first returned stream will contain the
-    /// elements where `logic` returned `Ok(true)`, and the second returned
-    /// stream will contain the errors for elements where `logic` failed.
-    /// Elements for which `logic` returned `Ok(false)` are not present in
-    /// either stream.
-    fn filter_fallible<E, L>(&self, name: &str, mut logic: L) -> (Stream<G, D1>, Stream<G, E>)
-    where
-        E: Data,
-        L: FnMut(&D1) -> Result<bool, E> + 'static,
-    {
-        self.flat_map_fallible(name, move |record| match logic(&record) {
-            Ok(false) => None,
-            Ok(true) => Some(Ok(record)),
-            Err(err) => Some(Err(err)),
-        })
-    }
-
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
     fn pass_through(&self, name: &str) -> Stream<G, (D1, G::Timestamp, Diff)>;
@@ -147,50 +128,6 @@ where
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
-        L: FnMut(D1) -> I + 'static;
-
-    /// Like [`Collection::filter`], but `logic` is allowed to fail. The first
-    /// returned collection will contain the elements where `logic` returned
-    /// `Ok(true)`, and the second returned collection will contain the errors
-    /// for elements where `logic` failed. Elements for which `logic` returned
-    /// `Ok(false)` are not present in either collection.
-    fn filter_fallible<E, L>(
-        &self,
-        name: &str,
-        mut logic: L,
-    ) -> (Collection<G, D1, R>, Collection<G, E, R>)
-    where
-        D1: Data,
-        E: Data,
-        L: FnMut(&D1) -> Result<bool, E> + 'static,
-    {
-        self.flat_map_fallible(name, move |record| match logic(&record) {
-            Ok(false) => None,
-            Ok(true) => Some(Ok(record)),
-            Err(err) => Some(Err(err)),
-        })
-    }
-
-    /// Like [`Collection::flat_map`], but the first element
-    /// returned from `logic` is allowed to represent a failure. The first
-    /// returned collection will contain the successful applications of `logic`,
-    /// while the second returned collection will contain the failed
-    /// applications; in each case, with the multiplicities multiplied by the
-    /// second element returned from `logic`.
-    fn explode_fallible<D2, E, R2, I, L>(
-        &self,
-        name: &str,
-        logic: L,
-    ) -> (
-        Collection<G, D2, <R2 as Mul<R>>::Output>,
-        Collection<G, E, <R2 as Mul<R>>::Output>,
-    )
-    where
-        D2: Data,
-        E: Data,
-        R2: Semigroup + Mul<R>,
-        <R2 as Mul<R>>::Output: Data + Semigroup,
-        I: IntoIterator<Item = (Result<D2, E>, R2)>,
         L: FnMut(D1) -> I + 'static;
 }
 
@@ -243,6 +180,12 @@ where
         (ok_stream, err_stream)
     }
 
+    // XXX(guswynn): file an minimization bug report for the logic flat_map
+    // false positive here
+    // TODO(guswynn): remove this after https://github.com/rust-lang/rust-clippy/issues/8098 is
+    // resolved. The `logic` `FnMut` needs to be borrowed in the `flat_map` call, not moved in
+    // so the simple `|d1| logic(d1)` closure is load-bearing
+    #[allow(clippy::redundant_closure)]
     fn flat_map_fallible<D2, E, I, L>(
         &self,
         name: &str,
@@ -325,31 +268,6 @@ where
             logic(d1).into_iter().map(move |res| match res {
                 Ok(d2) => Ok((d2, t.clone(), r.clone())),
                 Err(e) => Err((e, t.clone(), r.clone())),
-            })
-        });
-        (ok_stream.as_collection(), err_stream.as_collection())
-    }
-
-    fn explode_fallible<D2, E, R2, I, L>(
-        &self,
-        name: &str,
-        mut logic: L,
-    ) -> (
-        Collection<G, D2, <R2 as Mul<R>>::Output>,
-        Collection<G, E, <R2 as Mul<R>>::Output>,
-    )
-    where
-        D2: Data,
-        E: Data,
-        R2: Semigroup + Mul<R>,
-        <R2 as Mul<R>>::Output: Data + Semigroup,
-        I: IntoIterator<Item = (Result<D2, E>, R2)>,
-        L: FnMut(D1) -> I + 'static,
-    {
-        let (ok_stream, err_stream) = self.inner.flat_map_fallible(name, move |(d1, t, r)| {
-            logic(d1).into_iter().map(move |res| match res {
-                (Ok(d2), r2) => Ok((d2, t.clone(), r2 * r.clone())),
-                (Err(e), r2) => Err((e, t.clone(), r2 * r.clone())),
             })
         });
         (ok_stream.as_collection(), err_stream.as_collection())

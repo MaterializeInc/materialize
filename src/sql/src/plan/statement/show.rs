@@ -15,10 +15,9 @@
 
 use anyhow::bail;
 
-use expr::Id;
-use ore::collections::CollectionExt;
-use repr::{Datum, RelationDesc, Row, ScalarType};
-use sql_parser::ast::display::AstDisplay;
+use mz_ore::collections::CollectionExt;
+use mz_repr::{Datum, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
@@ -27,12 +26,11 @@ use crate::ast::{
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, UnresolvedObjectName, Value,
 };
-use crate::catalog::{Catalog, CatalogItemType};
-use crate::names::PartialName;
+use crate::catalog::CatalogItemType;
+use crate::names::{resolve_names_stmt, NameSimplifier};
 use crate::parse;
-use crate::plan::query::{resolve_names_stmt, ResolvedObjectName};
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{Aug, Params, Plan, SendRowsPlan};
+use crate::plan::{Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -40,27 +38,9 @@ pub fn describe_show_create_view(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_named_column("View", ScalarType::String.nullable(false))
-            .with_named_column("Create View", ScalarType::String.nullable(false)),
+            .with_column("View", ScalarType::String.nullable(false))
+            .with_column("Create View", ScalarType::String.nullable(false)),
     )))
-}
-
-// Used when displaying a view's source for human creation. If the name
-// specified is the same as the name in the catalog, we don't use the ID format.
-#[derive(Debug)]
-struct NameSimplifier<'a> {
-    catalog: &'a dyn Catalog,
-}
-
-impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
-    fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
-        if let Id::Global(id) = name.id {
-            let item = self.catalog.get_item_by_id(&id);
-            if PartialName::from(item.name().clone()) == name.raw_name() {
-                name.print_id = false;
-            }
-        }
-    }
 }
 
 pub fn plan_show_create_view(
@@ -96,8 +76,8 @@ pub fn describe_show_create_table(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_named_column("Table", ScalarType::String.nullable(false))
-            .with_named_column("Create Table", ScalarType::String.nullable(false)),
+            .with_column("Table", ScalarType::String.nullable(false))
+            .with_column("Create Table", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -107,10 +87,16 @@ pub fn plan_show_create_table(
 ) -> Result<Plan, anyhow::Error> {
     let table = scx.resolve_item(table_name)?;
     if let CatalogItemType::Table = table.item_type() {
+        let parsed = parse::parse(table.create_sql())?.into_element();
+        let mut resolved = resolve_names_stmt(scx.catalog, parsed)?;
+        let mut s = NameSimplifier {
+            catalog: scx.catalog,
+        };
+        s.visit_statement_mut(&mut resolved);
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&table.name().to_string()),
-                Datum::String(table.create_sql()),
+                Datum::String(&resolved.to_ast_string_stable()),
             ])],
         }))
     } else {
@@ -124,8 +110,8 @@ pub fn describe_show_create_source(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_named_column("Source", ScalarType::String.nullable(false))
-            .with_named_column("Create Source", ScalarType::String.nullable(false)),
+            .with_column("Source", ScalarType::String.nullable(false))
+            .with_column("Create Source", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -152,8 +138,8 @@ pub fn describe_show_create_sink(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_named_column("Sink", ScalarType::String.nullable(false))
-            .with_named_column("Create Sink", ScalarType::String.nullable(false)),
+            .with_column("Sink", ScalarType::String.nullable(false))
+            .with_column("Create Sink", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -180,8 +166,8 @@ pub fn describe_show_create_index(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_named_column("Index", ScalarType::String.nullable(false))
-            .with_named_column("Create Index", ScalarType::String.nullable(false)),
+            .with_column("Index", ScalarType::String.nullable(false))
+            .with_column("Create Index", ScalarType::String.nullable(false)),
     )))
 }
 

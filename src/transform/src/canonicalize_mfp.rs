@@ -34,8 +34,8 @@
 //! expressions re-use complex subexpressions.
 
 use crate::TransformArgs;
-use expr::canonicalize::canonicalize_predicates;
-use expr::MirRelationExpr;
+use mz_expr::canonicalize::canonicalize_predicates;
+use mz_expr::MirRelationExpr;
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.
 #[derive(Debug)]
@@ -47,15 +47,14 @@ impl crate::Transform for CanonicalizeMfp {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation);
-        Ok(())
+        self.action(relation)
     }
 }
 
 impl CanonicalizeMfp {
-    fn action(&self, relation: &mut MirRelationExpr) {
-        let mut mfp = expr::MapFilterProject::extract_non_errors_from_expr_mut(relation);
-        relation.visit1_mut(|e| self.action(e));
+    fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+        let mut mfp = mz_expr::MapFilterProject::extract_non_errors_from_expr_mut(relation);
+        relation.try_visit_mut_children(|e| self.action(e))?;
         mfp.optimize();
         if !mfp.is_identity() {
             let (map, mut filter, project) = mfp.as_map_filter_project();
@@ -68,12 +67,13 @@ impl CanonicalizeMfp {
                 }
                 canonicalize_predicates(&mut filter, &relation_type);
                 let all_errors = filter.iter().all(|p| p.is_literal_err());
-                let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown
+                let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown::default()
                     .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
                 if !pushdown.is_empty() {
                     *relation = relation.take_dangerous().filter(pushdown);
+                    crate::fusion::filter::Filter.action(relation);
                 }
-                mfp = expr::MapFilterProject::new(mfp.input_arity)
+                mfp = mz_expr::MapFilterProject::new(mfp.input_arity)
                     .map(map)
                     .filter(retained)
                     .project(project);
@@ -87,6 +87,7 @@ impl CanonicalizeMfp {
                 }
                 if !filter.is_empty() {
                     *relation = relation.take_dangerous().filter(filter);
+                    crate::fusion::filter::Filter.action(relation);
                 }
                 if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
@@ -94,5 +95,6 @@ impl CanonicalizeMfp {
                 }
             }
         }
+        Ok(())
     }
 }

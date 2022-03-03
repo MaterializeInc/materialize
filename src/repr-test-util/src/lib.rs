@@ -15,19 +15,19 @@ use chrono::NaiveDateTime;
 use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 
-use lowertest::{
-    deserialize_optional, gen_reflect_info_func, GenericTestDeserializeContext, MzEnumReflect,
-    MzStructReflect, ReflectedTypeInfo,
+use mz_lowertest::{
+    deserialize_optional, GenericTestDeserializeContext, MzReflect, ReflectedTypeInfo,
 };
-use ore::str::StrExt;
-use repr::adt::numeric::Numeric;
-use repr::{ColumnType, Datum, Row, RowArena, ScalarType};
-
-/* #region Generate information required to construct arbitrary `ScalarType`*/
-gen_reflect_info_func!(produce_rti, [ScalarType], [ColumnType]);
+use mz_ore::str::StrExt;
+use mz_repr::adt::numeric::Numeric;
+use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 
 lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = produce_rti();
+    pub static ref RTI: ReflectedTypeInfo = {
+        let mut rti = ReflectedTypeInfo::default();
+        ColumnType::add_to_reflected_type_info(&mut rti);
+        rti
+    };
 }
 
 /* #endregion */
@@ -79,7 +79,7 @@ where
                 ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
                 ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
                 ScalarType::String => Ok(Datum::from(
-                    temp_storage.push_string(lowertest::unquote(litval)),
+                    temp_storage.push_string(mz_lowertest::unquote(litval)),
                 )),
                 ScalarType::Timestamp => {
                     let datetime = if litval.contains('.') {
@@ -111,7 +111,7 @@ pub fn datum_to_test_spec(datum: Datum) -> String {
 
 /// Parses `ScalarType` from `scalar_type_stream` or infers it from `litval`
 ///
-/// See [lowertest::to_json] for the syntax for specifying a `ScalarType`.
+/// See [mz_lowertest::to_json] for the syntax for specifying a `ScalarType`.
 /// If `scalar_type_stream` is empty, will attempt to guess a `ScalarType` for
 /// the literal:
 /// * If `litval` is "true", "false", or "null", will return `Bool`.
@@ -180,7 +180,7 @@ where
         TokenTree::Punct(punct) if punct.as_char() == '-' => {
             match rest_of_stream.next() {
                 Some(TokenTree::Literal(literal)) => {
-                    Ok(Some(format!("{}{}", punct.as_char(), literal.to_string())))
+                    Ok(Some(format!("{}{}", punct.as_char(), literal)))
                 }
                 None => Ok(None),
                 // Must error instead of handling the tokens using default

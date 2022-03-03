@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Rendering of linear join plans.
+//!
+//! Consult [LinearJoinPlan] documentation for details.
+
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -15,148 +19,18 @@ use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
-use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use dataflow_types::*;
-use expr::{MapFilterProject, MirScalarExpr};
-use repr::{Diff, Row, RowArena};
+use mz_dataflow_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
+use mz_dataflow_types::plan::join::JoinClosure;
+use mz_dataflow_types::DataflowError;
+use mz_repr::{Diff, Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
-use crate::render::datum_vec::DatumVec;
-use crate::render::join::{JoinBuildState, JoinClosure};
-
-// TODO(mcsherry): Identical to `DeltaPathPlan`; consider unifying.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LinearJoinPlan {
-    /// The source relation from which we start the join.
-    source_relation: usize,
-    /// An initial closure to apply before any stages.
-    ///
-    /// Values of `None` indicate the identity closure.
-    initial_closure: Option<JoinClosure>,
-    /// A *sequence* of stages to apply one after the other.
-    stage_plans: Vec<LinearStagePlan>,
-    /// A concluding closure to apply after the last stage.
-    ///
-    /// Values of `None` indicate the identity closure.
-    final_closure: Option<JoinClosure>,
-}
-
-// TODO(mcsherry): Identical to `DeltaStagePlan`; consider unifying.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LinearStagePlan {
-    /// The relation index into which we will look up.
-    lookup_relation: usize,
-    /// The key expressions to use for the streamed relation.
-    ///
-    /// While this starts as a stream of the source relation,
-    /// it evolves through multiple lookups and ceases to be
-    /// the same thing, hence the different name.
-    stream_key: Vec<MirScalarExpr>,
-    /// The key expressions to use for the lookup relation.
-    lookup_key: Vec<MirScalarExpr>,
-    /// The closure to apply to the concatenation of columns
-    /// of the stream and lookup relations.
-    closure: JoinClosure,
-}
-
-impl LinearJoinPlan {
-    /// Create a new join plan from the required arguments.
-    pub fn create_from(
-        source_relation: usize,
-        equivalences: &[Vec<MirScalarExpr>],
-        join_order: &[(usize, Vec<MirScalarExpr>)],
-        input_mapper: expr::JoinInputMapper,
-        map_filter_project: &mut MapFilterProject,
-    ) -> Self {
-        let temporal_mfp = map_filter_project.extract_temporal();
-
-        // Construct initial join build state.
-        // This state will evolves as we build the join dataflow.
-        let mut join_build_state = JoinBuildState::new(
-            input_mapper.global_columns(source_relation),
-            &equivalences,
-            &map_filter_project,
-        );
-
-        // We would prefer to extract a closure here, but we do not know if
-        // the input will be arranged or not.
-        let initial_closure = None;
-
-        // Sequence of steps to apply.
-        let mut stage_plans = Vec::with_capacity(join_order.len());
-
-        // Track the set of bound input relations, for equivalence resolution.
-        let mut bound_inputs = vec![source_relation];
-
-        // Iterate through the join order instructions, assembling keys and
-        // closures to use.
-        for (lookup_relation, lookup_key) in join_order.iter() {
-            // rebase the intended key to use global column identifiers.
-            let lookup_key_rebased = lookup_key
-                .iter()
-                .map(|k| input_mapper.map_expr_to_global(k.clone(), *lookup_relation))
-                .collect::<Vec<_>>();
-
-            // Expressions to use as a key for the stream of incoming updates
-            // are determined by locating the elements of `lookup_key` among
-            // the existing bound `columns`. If that cannot be done, the plan
-            // is irrecoverably defective and we panic.
-            // TODO: explicitly validate this before rendering.
-            let stream_key = lookup_key_rebased
-                .iter()
-                .map(|expr| {
-                    let mut bound_expr = input_mapper
-                        .find_bound_expr(expr, &bound_inputs, &join_build_state.equivalences)
-                        .expect("Expression in join plan is not bound at time of use");
-                    // Rewrite column references to physical locations.
-                    bound_expr.permute_map(&join_build_state.column_map);
-                    bound_expr
-                })
-                .collect::<Vec<_>>();
-
-            // Introduce new columns and expressions they enable. Form a new closure.
-            let closure = join_build_state.add_columns(
-                input_mapper.global_columns(*lookup_relation),
-                &lookup_key_rebased,
-            );
-
-            bound_inputs.push(*lookup_relation);
-
-            // record the stage plan as next in the path.
-            stage_plans.push(LinearStagePlan {
-                lookup_relation: *lookup_relation,
-                stream_key,
-                lookup_key: lookup_key.clone(),
-                closure,
-            });
-        }
-
-        // determine a final closure, and complete the path plan.
-        let final_closure = join_build_state.complete();
-        let final_closure = if final_closure.is_identity() {
-            None
-        } else {
-            Some(final_closure)
-        };
-
-        // Now that `map_filter_project` has been captured in the state builder,
-        // assign the remaining temporal predicates to it, for the caller's use.
-        *map_filter_project = temporal_mfp;
-
-        // Form and return the complete join plan.
-        LinearJoinPlan {
-            source_relation,
-            initial_closure,
-            stage_plans,
-            final_closure,
-        }
-    }
-}
+use mz_repr::DatumVec;
 
 /// Different forms the streamed data might take.
 enum JoinedFlavor<G, T>
@@ -209,8 +83,10 @@ where
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
                 // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
-                let (mut joined, errs) = inputs[linear_plan.source_relation].as_collection();
+                let (mut joined, errs) = inputs[linear_plan.source_relation]
+                    .as_specific_collection(linear_plan.source_key.as_deref());
                 errors.push(errs);
+
                 // In the current code this should always be `None`, but we have this here should
                 // we change that and want to know what we should be doing.
                 if let Some(closure) = initial_closure {
@@ -239,16 +115,14 @@ where
             }
         };
 
-        // Progress through stages, updating partial results and errors.
+        // progress through stages, updating partial results and errors.
         for stage_plan in linear_plan.stage_plans.into_iter() {
             // Different variants of `joined` implement this differently,
             // and the logic is centralized there.
             let stream = self.differential_join(
                 joined,
-                stage_plan.stream_key,
                 inputs[stage_plan.lookup_relation].clone(),
-                stage_plan.lookup_key,
-                stage_plan.closure,
+                stage_plan,
                 &mut errors,
             );
             // Update joined results and capture any errors.
@@ -295,79 +169,79 @@ where
     fn differential_join(
         &mut self,
         mut joined: JoinedFlavor<G, T>,
-        stream_key: Vec<MirScalarExpr>,
         lookup_relation: CollectionBundle<G, Row, T>,
-        lookup_key: Vec<MirScalarExpr>,
-        closure: JoinClosure,
-        errors: &mut Vec<Collection<G, DataflowError>>,
-    ) -> Collection<G, Row> {
+        LinearStagePlan {
+            stream_key,
+            stream_thinning,
+            lookup_key,
+            closure,
+            lookup_relation: _,
+        }: LinearStagePlan,
+        errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    ) -> Collection<G, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
+            let mut row_buf = Row::default();
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
-                    let key = Row::try_pack(
+                    row_buf.packer().try_extend(
                         stream_key
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
-                    // Explicit drop here to allow `row` to be returned.
-                    drop(datums_local);
-                    // TODO(mcsherry): We could remove any columns used only for `key`.
-                    // This cannot be done any earlier, for example in a prior closure,
-                    // because we need the columns for key production.
-                    Ok((key, row))
+                    let key = row_buf.clone();
+                    row_buf
+                        .packer()
+                        .extend(stream_thinning.iter().map(|e| datums_local[*e]));
+                    let value = row_buf.clone();
+                    Ok((key, value))
                 }
             });
+
             errors.push(errs);
             use crate::arrangement::manager::RowSpine;
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }
 
-        // Ensure that the correct arrangement exists.
-        let lookup_relation = lookup_relation.ensure_arrangements(Some(lookup_key.clone()));
-
         // Demultiplex the four different cross products of arrangement types we might have.
+        let arrangement = lookup_relation
+            .arrangement(&lookup_key[..])
+            .expect("Arrangement absent despite explicit construction");
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
             }
-            JoinedFlavor::Local(local) => match lookup_relation.arrangement(&lookup_key[..]) {
-                Some(ArrangementFlavor::Local(oks, errs1)) => {
+            JoinedFlavor::Local(local) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(local, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
-                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(local, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
-                }
-                None => {
-                    unreachable!("Arrangement absent despite explicit construction");
                 }
             },
-            JoinedFlavor::Trace(trace) => match lookup_relation.arrangement(&lookup_key[..]) {
-                Some(ArrangementFlavor::Local(oks, errs1)) => {
+            JoinedFlavor::Trace(trace) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
-                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
-                }
-                None => {
-                    unreachable!("Arrangement absent despite explicit construction");
                 }
             },
         }
@@ -381,14 +255,14 @@ where
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
         closure: JoinClosure,
-    ) -> (Collection<G, Row>, Collection<G, DataflowError>)
+    ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
     where
-        J: JoinCore<G, Row, Row, repr::Diff>,
-        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = repr::Diff>
+        J: JoinCore<G, Row, Row, mz_repr::Diff>,
+        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = mz_repr::Diff>
             + Clone
             + 'static,
-        Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
-        Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
+        Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, mz_repr::Diff> + 'static,
+        Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, mz_repr::Diff> + 'static,
     {
         use differential_dataflow::AsCollection;
         use timely::dataflow::operators::OkErr;
@@ -396,13 +270,11 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
         let mut row_builder = Row::default();
-        let (oks, err) = prev_keyed
-            .join_core(&next_input, move |_keys, old, new| {
-                let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow();
-                datums_local.extend(old.iter());
-                datums_local.extend(new.iter());
 
+        let (oks, err) = prev_keyed
+            .join_core(&next_input, move |key, old, new| {
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums.borrow_with_many(&[key, old, new]);
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .map_err(DataflowError::from)
