@@ -130,13 +130,13 @@ impl<C> Controller<C> {
 }
 
 /// Compaction policies for collections maintained by `Controller`.
-pub enum ReadPolicy<T = mz_repr::Timestamp> {
+pub enum ReadPolicy<T> {
     /// Maintain the collection as valid from this frontier onward.
     ValidFrom(Antichain<T>),
     /// Maintain the collection as valid from a function of the write frontier.
     ///
     /// This function will only be re-evaluated when the write frontier changes.
     /// If the intended behavior is to change in response to external signals,
-    /// consider using the `StopAt` variant to manually pilot compaction.
+    /// consider using the `ValidFrom` variant to manually pilot compaction.
     LagWriteFrontier(Box<dyn Fn(AntichainRef<T>) -> Antichain<T>>),
 }

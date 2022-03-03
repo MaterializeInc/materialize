@@ -384,7 +384,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         Ok(())
     }
 
-    /// Accept write frontier updates from the compute layer
+    /// Accept write frontier updates from the compute layer.
     pub(super) async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, changes) in updates.iter() {
