@@ -9,6 +9,7 @@
 
 use anyhow::bail;
 use mz_dataflow_types::DecodeError;
+use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::strconv::parse_uuid;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, Row, RowArena, RowPacker, ScalarType};
 use serde_json::Value;
@@ -17,35 +18,45 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub struct JsonDecoderState {
     columns: Vec<(ColumnName, ColumnType)>,
-    packer: Row,
+    row: Row,
 }
 
 impl JsonDecoderState {
     pub fn new(columns: Vec<(ColumnName, ColumnType)>) -> JsonDecoderState {
         JsonDecoderState {
             columns,
-            packer: Row::default(),
+            row: Row::default(),
         }
     }
 
     pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
+        let mut packer = self.row.packer();
         for (col_name, col_type) in &self.columns {
-            let json: serde_json::Value = serde_json::from_slice(chunk).unwrap();
-            if let Err(e) = decode_column(&mut self.packer, json, col_name, col_type) {
-                return Err(DecodeError::Text(format!(
-                    "error decoding column {}: {:#}",
-                    col_name.as_str(),
-                    e
-                )));
+            match serde_json::from_slice(chunk) {
+                Ok(deserialized) => {
+                    let json: serde_json::Value = deserialized;
+                    if let Err(e) = decode_column(&mut packer, json, col_name, col_type) {
+                        return Err(DecodeError::Text(format!(
+                            "error decoding column {}: {:#}",
+                            col_name.as_str(),
+                            e
+                        )));
+                    }
+                }
+                Err(e) => {
+                    return Err(DecodeError::Text(format!("invalid json document: {:#}", e)));
+                }
             }
         }
 
-        Ok(Some(self.packer.clone()))
+        let row = self.row.clone();
+        println!("Completed Row: {:?}", row);
+        Ok(Some(row))
     }
 }
 
 pub fn decode_column(
-    row: &mut Row,
+    row_packer: &mut RowPacker,
     json: serde_json::Value,
     col_name: &ColumnName,
     col_type: &ColumnType,
@@ -55,7 +66,6 @@ pub fn decode_column(
         scalar_type,
     } = col_type;
 
-    let mut row_packer = row.packer();
     let json_field = json.get(col_name.as_str());
 
     if json_field.is_none() {
@@ -77,7 +87,7 @@ pub fn decode_column(
     );
 
     let arena = RowArena::default();
-    decode_and_push_value(&mut row_packer, &arena, json_field, scalar_type)
+    decode_and_push_value(row_packer, &arena, json_field, scalar_type)
 }
 
 pub fn decode_value<'a>(
@@ -114,7 +124,7 @@ pub fn decode_value<'a>(
         }
         ScalarType::Float32 => {
             if let Some(v) = json_field.as_f64() {
-                return Ok(Datum::Float64(v.into()));
+                return Ok(Datum::Float32((v as f32).into()));
             }
         }
         ScalarType::Float64 => {
@@ -203,7 +213,7 @@ pub fn decode_value<'a>(
 }
 
 pub fn decode_and_push_value(
-    row: &mut RowPacker,
+    row_packer: &mut RowPacker,
     row_arena: &RowArena,
     json_field: &Value,
     scalar_type: &ScalarType,
@@ -229,10 +239,13 @@ pub fn decode_and_push_value(
         | ScalarType::String
         | ScalarType::Char { .. }
         | ScalarType::VarChar { .. }
-        | ScalarType::Jsonb
         | ScalarType::Uuid => {
-            row.push(decode_value(row_arena, json_field, scalar_type)?);
-            return Ok(());
+            row_packer.push(decode_value(row_arena, json_field, scalar_type)?);
+            Ok(())
+        }
+        ScalarType::Jsonb => {
+            JsonbPacker::new(row_packer).pack_serde_json(json_field.clone())?;
+            Ok(())
         }
         ScalarType::Array(inner) => {
             let mut values = vec![];
@@ -245,36 +258,39 @@ pub fn decode_and_push_value(
                 lower_bound: 1,
                 length: values.len(),
             };
-            row.push_array(&[dims], values);
-            return Ok(());
+            row_packer.push_array(&[dims], values)?;
+            Ok(())
         }
         ScalarType::List { element_type, .. } => {
-            row.push_list_with(|row| {
+            row_packer.push_list_with(|row| {
                 if let Some(elems) = json_field.as_array() {
                     for x in elems {
-                        decode_and_push_value(row, row_arena, x, element_type);
+                        decode_and_push_value(row, row_arena, x, element_type)?;
                     }
                 }
-            });
-            return Ok(());
+                Ok::<_, anyhow::Error>(())
+            })?;
+            Ok(())
         }
         ScalarType::Record { fields, .. } => {
-            row.push_list_with(|row| {
+            row_packer.push_list_with(|row| {
                 let columns: HashMap<&str, &ColumnType> =
                     fields.iter().map(|(n, t)| (n.as_str(), t)).collect();
                 if let Some(elems) = json_field.as_object() {
                     for (name, value) in elems {
                         let col_type = columns.get(name.as_str());
+                        // TODO(phemberger): must handle case of missing field
                         decode_and_push_value(
                             row,
                             row_arena,
                             value,
                             &col_type.unwrap().scalar_type,
-                        );
+                        )?;
                     }
                 }
-            });
-            return Ok(());
+                Ok::<_, anyhow::Error>(())
+            })?;
+            Ok(())
         }
         ScalarType::Map { .. } => {
             unimplemented!()

@@ -520,6 +520,15 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
             Type::INT2 => row.get::<_, Option<i16>>(i).map(|x| x.to_string()),
             Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
             Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
+            Type::INT2_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<i16>>>>(i)
+                .map(|a| a.to_string()),
+            Type::INT4_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<i32>>>>(i)
+                .map(|a| a.to_string()),
+            Type::INT8_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<i64>>>>(i)
+                .map(|a| a.to_string()),
             Type::OID => row.get::<_, Option<u32>>(i).map(|x| x.to_string()),
             Type::NUMERIC => row
                 .get::<_, Option<Numeric>>(i)

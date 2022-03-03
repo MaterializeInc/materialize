@@ -137,7 +137,7 @@ impl AstDisplay for JsonSchema {
                 unimplemented!();
             }
             Self::NamedCompositeType { name } => {
-                f.write_str("USING SCHEMA ");
+                f.write_str("USING TYPE ");
                 f.write_node(name);
             }
         }

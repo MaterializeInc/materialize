@@ -1649,7 +1649,7 @@ impl<'a> Parser<'a> {
             };
             Format::Csv { columns, delimiter }
         } else if self.parse_keyword(JSON) {
-            if self.parse_keywords(&[USING, SCHEMA]) {
+            if self.parse_keywords(&[USING, TYPE]) {
                 let composite_type = self.parse_object_name()?;
                 Format::Json(JsonSchema::NamedCompositeType {
                     name: composite_type,
