@@ -77,6 +77,17 @@ behavior of PostgreSQL.
 
 - Change the claimed PostgreSQL version returned by the `version()` function to 9.5 to match the values of the `server_version` and `server_version_num session` parameters.
 
+- In Kafka sources that use `INCLUDE KEY`, allow the key schema to be directly provided by the Confluent Schema Registry using the bare `FORMAT` syntax:
+
+  ```sql
+  CREATE SOURCE src
+    FROM KAFKA BROKER '...' TOPIC '...'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '...'
+    INCLUDE KEY AS named;
+  ```
+
+  Previously, this required explicitly using the `KEY FORMAT...VALUE FORMAT` syntax _also_ when using the Confluent Schema Registry.
+
 - Allow specifying the same [command line flag](/cli/) multiple times. The last
 specification takes precedence. This matches the behavior of many standard
 Unix tools and is particularly useful for folks using `materialized` via
