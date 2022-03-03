@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::adt::system::Oid;
+use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -129,6 +129,18 @@ sqlfunc!(
         // should not in general be thought of as freely convertible from
         // `i32`s.
         Oid(u32::from_ne_bytes(a.to_ne_bytes()))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i32topglegacychar"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {
+        // Per PostgreSQL, casts to `PgLegacyChar` are performed as if
+        // `PgLegacyChar` is signed.
+        // See: https://github.com/postgres/postgres/blob/791b1b71da35d9d4264f72a87e4078b85a2fcfb4/src/backend/utils/adt/char.c#L91-L96
+        let a = i8::try_from(a).map_err(|_| EvalError::CharOutOfRange)?;
+        Ok(PgLegacyChar(u8::from_ne_bytes(a.to_ne_bytes())))
     }
 );
 

@@ -53,6 +53,8 @@ pub enum Type {
     Bool,
     /// A byte array, i.e., a variable-length binary string.
     Bytea,
+    /// A single-byte character.
+    Char,
     /// A date.
     Date,
     /// A 4-byte floating point number.
@@ -93,7 +95,7 @@ pub enum Type {
     /// A variable-length string.
     Text,
     /// A (usually) fixed-length string.
-    Char {
+    BpChar {
         /// The length of the string.
         ///
         /// If unspecified, the type represents a variable-length string.
@@ -385,7 +387,7 @@ impl Type {
             postgres_types::Type::OID => Type::Oid,
             postgres_types::Type::TEXT => Type::Text,
             postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => {
-                Type::Char { length: None }
+                Type::BpChar { length: None }
             }
             postgres_types::Type::VARCHAR => Type::VarChar { max_length: None },
             postgres_types::Type::TIME => Type::Time { precision: None },
@@ -399,7 +401,7 @@ impl Type {
             postgres_types::Type::BOOL_ARRAY => Type::Array(Box::new(Type::Bool)),
             postgres_types::Type::BYTEA_ARRAY => Type::Array(Box::new(Type::Bytea)),
             postgres_types::Type::BPCHAR_ARRAY => {
-                Type::Array(Box::new(Type::Char { length: None }))
+                Type::Array(Box::new(Type::BpChar { length: None }))
             }
             postgres_types::Type::DATE_ARRAY => Type::Array(Box::new(Type::Date)),
             postgres_types::Type::FLOAT4_ARRAY => Type::Array(Box::new(Type::Float4)),
@@ -452,7 +454,7 @@ impl Type {
                     typ => typ,
                 };
                 match elem_typ {
-                    Type::Char { length } => *length = CharLength::from_typmod(typmod)?,
+                    Type::BpChar { length } => *length = CharLength::from_typmod(typmod)?,
                     Type::Numeric { constraints } => {
                         *constraints = NumericConstraints::from_typmod(typmod)?
                     }
@@ -490,6 +492,7 @@ impl Type {
                 Type::Array(_) => unreachable!(),
                 Type::Bool => &postgres_types::Type::BOOL_ARRAY,
                 Type::Bytea => &postgres_types::Type::BYTEA_ARRAY,
+                Type::Char => &postgres_types::Type::CHAR_ARRAY,
                 Type::Date => &postgres_types::Type::DATE_ARRAY,
                 Type::Float4 => &postgres_types::Type::FLOAT4_ARRAY,
                 Type::Float8 => &postgres_types::Type::FLOAT8_ARRAY,
@@ -505,7 +508,7 @@ impl Type {
                 Type::Oid => &postgres_types::Type::OID_ARRAY,
                 Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
                 Type::Text => &postgres_types::Type::TEXT_ARRAY,
-                Type::Char { .. } => &postgres_types::Type::BPCHAR_ARRAY,
+                Type::BpChar { .. } => &postgres_types::Type::BPCHAR_ARRAY,
                 Type::VarChar { .. } => &postgres_types::Type::VARCHAR_ARRAY,
                 Type::Time { .. } => &postgres_types::Type::TIME_ARRAY,
                 Type::TimeTz { .. } => &postgres_types::Type::TIMETZ_ARRAY,
@@ -519,6 +522,7 @@ impl Type {
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
+            Type::Char => &postgres_types::Type::CHAR,
             Type::Date => &postgres_types::Type::DATE,
             Type::Float4 => &postgres_types::Type::FLOAT4,
             Type::Float8 => &postgres_types::Type::FLOAT8,
@@ -534,7 +538,7 @@ impl Type {
             Type::Oid => &postgres_types::Type::OID,
             Type::Record(_) => &postgres_types::Type::RECORD,
             Type::Text => &postgres_types::Type::TEXT,
-            Type::Char { .. } => &postgres_types::Type::BPCHAR,
+            Type::BpChar { .. } => &postgres_types::Type::BPCHAR,
             Type::VarChar { .. } => &postgres_types::Type::VARCHAR,
             Type::Time { .. } => &postgres_types::Type::TIME,
             Type::TimeTz { .. } => &postgres_types::Type::TIMETZ,
@@ -600,7 +604,7 @@ impl Type {
     /// Returns the constraint on the type, if any.
     pub fn constraint(&self) -> Option<&dyn TypeConstraint> {
         match self {
-            Type::Char {
+            Type::BpChar {
                 length: Some(length),
             } => Some(length),
             Type::VarChar {
@@ -627,7 +631,8 @@ impl Type {
             Type::Array(_)
             | Type::Bool
             | Type::Bytea
-            | Type::Char { length: None }
+            | Type::BpChar { length: None }
+            | Type::Char
             | Type::Date
             | Type::Float4
             | Type::Float8
@@ -663,6 +668,7 @@ impl Type {
             Type::Array(_) => -1,
             Type::Bool => 1,
             Type::Bytea => -1,
+            Type::Char => 1,
             Type::Date => 4,
             Type::Float4 => 4,
             Type::Float8 => 8,
@@ -678,7 +684,7 @@ impl Type {
             Type::Oid => 4,
             Type::Record(_) => -1,
             Type::Text => -1,
-            Type::Char { .. } => -1,
+            Type::BpChar { .. } => -1,
             Type::VarChar { .. } => -1,
             Type::Time { .. } => 4,
             Type::TimeTz { .. } => 4,
@@ -726,6 +732,7 @@ impl TryFrom<&Type> for ScalarType {
             Type::Array(t) => Ok(ScalarType::Array(Box::new(TryFrom::try_from(&**t)?))),
             Type::Bool => Ok(ScalarType::Bool),
             Type::Bytea => Ok(ScalarType::Bytes),
+            Type::Char => Ok(ScalarType::PgLegacyChar),
             Type::Date => Ok(ScalarType::Date),
             Type::Float4 => Ok(ScalarType::Float32),
             Type::Float8 => Ok(ScalarType::Float64),
@@ -776,7 +783,7 @@ impl TryFrom<&Type> for ScalarType {
                 Err(TypeConversionError::UnsupportedType(typ.clone()))
             }
             Type::TimeTz { .. } => Err(TypeConversionError::UnsupportedType(typ.clone())),
-            Type::Char { length } => Ok(ScalarType::Char {
+            Type::BpChar { length } => Ok(ScalarType::Char {
                 length: match length {
                     Some(length) => Some(AdtCharLength::try_from(i64::from(length.into_i32()))?),
                     None => None,
@@ -901,6 +908,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
             ScalarType::Bool => Type::Bool,
             ScalarType::Bytes => Type::Bytea,
+            ScalarType::PgLegacyChar => Type::Char,
             ScalarType::Date => Type::Date,
             ScalarType::Float64 => Type::Float8,
             ScalarType::Float32 => Type::Float4,
@@ -923,7 +931,7 @@ impl From<&ScalarType> for Type {
                     .collect(),
             ),
             ScalarType::String => Type::Text,
-            ScalarType::Char { length } => Type::Char {
+            ScalarType::Char { length } => Type::BpChar {
                 length: (*length).map(CharLength::from),
             },
             ScalarType::VarChar { max_length } => Type::VarChar {

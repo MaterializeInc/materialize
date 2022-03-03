@@ -347,7 +347,6 @@ pub enum CatalogType {
     Bool,
     Bytes,
     Char,
-    Char1,
     Date,
     Float32,
     Float64,
@@ -365,6 +364,7 @@ pub enum CatalogType {
     },
     Numeric,
     Oid,
+    PgLegacyChar,
     Pseudo,
     Record {
         fields: Vec<(ColumnName, GlobalId)>,

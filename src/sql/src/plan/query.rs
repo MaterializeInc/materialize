@@ -4404,9 +4404,6 @@ fn scalar_type_from_catalog(
                 }
                 CatalogType::Bool => Ok(ScalarType::Bool),
                 CatalogType::Bytes => Ok(ScalarType::Bytes),
-                CatalogType::Char1 => Ok(ScalarType::Char {
-                    length: Some(CharLength::ONE),
-                }),
                 CatalogType::Date => Ok(ScalarType::Date),
                 CatalogType::Float32 => Ok(ScalarType::Float32),
                 CatalogType::Float64 => Ok(ScalarType::Float64),
@@ -4416,6 +4413,7 @@ fn scalar_type_from_catalog(
                 CatalogType::Interval => Ok(ScalarType::Interval),
                 CatalogType::Jsonb => Ok(ScalarType::Jsonb),
                 CatalogType::Oid => Ok(ScalarType::Oid),
+                CatalogType::PgLegacyChar => Ok(ScalarType::PgLegacyChar),
                 CatalogType::Pseudo => {
                     sql_bail!("cannot reference pseudo type {}", entry.name().to_string())
                 }

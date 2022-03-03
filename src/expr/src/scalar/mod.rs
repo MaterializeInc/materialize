@@ -1242,6 +1242,7 @@ pub enum EvalError {
     OidOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    CharOutOfRange,
     InvalidBase64Equals,
     InvalidBase64Symbol(char),
     InvalidBase64EndSequence,
@@ -1323,6 +1324,7 @@ impl fmt::Display for EvalError {
             EvalError::OidOutOfRange => f.write_str("OID out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::CharOutOfRange => f.write_str("\"char\" out of range"),
             EvalError::InvalidBase64Equals => {
                 f.write_str("unexpected \"=\" while decoding base64 sequence")
             }

@@ -245,13 +245,13 @@ abc de
 uv  wxyz
 
 # Check that char w/o typmod now behaves as char(1) in Postgres
-> CREATE TABLE IF NOT EXISTS char_col (a pg_catalog.char)
+> CREATE TABLE IF NOT EXISTS char_col (a char)
 > SHOW CREATE TABLE char_col
 Table "Create Table"
 --------------------
-materialize.public.char_col "CREATE TABLE \"materialize\".\"public\".\"char_col\" (\"a\" \"pg_catalog\".\"char\")"
+materialize.public.char_col "CREATE TABLE \"materialize\".\"public\".\"char_col\" (\"a\" \"pg_catalog\".\"bpchar\")"
 
-> INSERT INTO char_col VALUES ('abc'::pg_catalog.char), ('wxyz'::pg_catalog.char);
+> INSERT INTO char_col VALUES ('abc'::char), ('wxyz'::char);
 
 > SELECT a FROM char_col ORDER BY a;
 a

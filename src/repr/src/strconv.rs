@@ -1077,11 +1077,11 @@ where
     Ok(map)
 }
 
-pub fn format_map<F, T>(
+pub fn format_map<F, T, E>(
     buf: &mut F,
     elems: impl IntoIterator<Item = (impl AsRef<str>, T)>,
-    mut format_elem: impl FnMut(MapValueWriter<F>, T) -> Nestable,
-) -> Nestable
+    mut format_elem: impl FnMut(MapValueWriter<F>, T) -> Result<Nestable, E>,
+) -> Result<Nestable, E>
 where
     F: FormatBuffer,
 {
@@ -1097,7 +1097,7 @@ where
         buf.write_str("=>");
 
         let value_start = buf.len();
-        if let Nestable::MayNeedEscaping = format_elem(MapValueWriter(buf), value) {
+        if let Nestable::MayNeedEscaping = format_elem(MapValueWriter(buf), value)? {
             escape_elem::<_, MapElementEscaper>(buf, value_start);
         }
 
@@ -1106,33 +1106,34 @@ where
         }
     }
     buf.write_char('}');
-    Nestable::Yes
+    Ok(Nestable::Yes)
 }
 
-pub fn format_array<F, T>(
+pub fn format_array<F, T, E>(
     buf: &mut F,
     dims: &[ArrayDimension],
     elems: impl IntoIterator<Item = T>,
-    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
-) -> Nestable
+    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Result<Nestable, E>,
+) -> Result<Nestable, E>
 where
     F: FormatBuffer,
 {
-    format_array_inner(buf, dims, &mut elems.into_iter(), &mut format_elem);
-    Nestable::Yes
+    format_array_inner(buf, dims, &mut elems.into_iter(), &mut format_elem)?;
+    Ok(Nestable::Yes)
 }
 
-pub fn format_array_inner<F, T>(
+pub fn format_array_inner<F, T, E>(
     buf: &mut F,
     dims: &[ArrayDimension],
     elems: &mut impl Iterator<Item = T>,
-    format_elem: &mut impl FnMut(ListElementWriter<F>, T) -> Nestable,
-) where
+    format_elem: &mut impl FnMut(ListElementWriter<F>, T) -> Result<Nestable, E>,
+) -> Result<(), E>
+where
     F: FormatBuffer,
 {
     if dims.is_empty() {
         buf.write_str("{}");
-        return;
+        return Ok(());
     }
 
     buf.write_char('{');
@@ -1143,61 +1144,65 @@ pub fn format_array_inner<F, T>(
         if dims.len() == 1 {
             let start = buf.len();
             let elem = elems.next().unwrap();
-            if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem) {
+            if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem)? {
                 escape_elem::<_, ListElementEscaper>(buf, start);
             }
         } else {
-            format_array_inner(buf, &dims[1..], elems, format_elem);
+            format_array_inner(buf, &dims[1..], elems, format_elem)?;
         }
     }
     buf.write_char('}');
+
+    Ok(())
 }
 
-pub fn format_legacy_vector<F, T>(
+pub fn format_legacy_vector<F, T, E>(
     buf: &mut F,
     elems: impl IntoIterator<Item = T>,
-    format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
-) -> Nestable
+    format_elem: impl FnMut(ListElementWriter<F>, T) -> Result<Nestable, E>,
+) -> Result<Nestable, E>
 where
     F: FormatBuffer,
 {
-    format_elems(buf, elems, format_elem, ' ');
-    Nestable::MayNeedEscaping
+    format_elems(buf, elems, format_elem, ' ')?;
+    Ok(Nestable::MayNeedEscaping)
 }
 
-pub fn format_list<F, T>(
+pub fn format_list<F, T, E>(
     buf: &mut F,
     elems: impl IntoIterator<Item = T>,
-    format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
-) -> Nestable
+    format_elem: impl FnMut(ListElementWriter<F>, T) -> Result<Nestable, E>,
+) -> Result<Nestable, E>
 where
     F: FormatBuffer,
 {
     buf.write_char('{');
-    format_elems(buf, elems, format_elem, ',');
+    format_elems(buf, elems, format_elem, ',')?;
     buf.write_char('}');
-    Nestable::Yes
+    Ok(Nestable::Yes)
 }
 
 /// Writes each `elem` into `buf`, separating the elems with `sep`.
-pub fn format_elems<F, T>(
+pub fn format_elems<F, T, E>(
     buf: &mut F,
     elems: impl IntoIterator<Item = T>,
-    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
+    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Result<Nestable, E>,
     sep: char,
-) where
+) -> Result<(), E>
+where
     F: FormatBuffer,
 {
     let mut elems = elems.into_iter().peekable();
     while let Some(elem) = elems.next() {
         let start = buf.len();
-        if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem) {
+        if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem)? {
             escape_elem::<_, ListElementEscaper>(buf, start);
         }
         if elems.peek().is_some() {
             buf.write_char(sep)
         }
     }
+    Ok(())
 }
 
 pub trait ElementEscaper {
@@ -1357,11 +1362,11 @@ where
     }
 }
 
-pub fn format_record<F, T>(
+pub fn format_record<F, T, E>(
     buf: &mut F,
     elems: impl IntoIterator<Item = T>,
-    mut format_elem: impl FnMut(RecordElementWriter<F>, T) -> Nestable,
-) -> Nestable
+    mut format_elem: impl FnMut(RecordElementWriter<F>, T) -> Result<Nestable, E>,
+) -> Result<Nestable, E>
 where
     F: FormatBuffer,
 {
@@ -1369,7 +1374,7 @@ where
     let mut elems = elems.into_iter().peekable();
     while let Some(elem) = elems.next() {
         let start = buf.len();
-        if let Nestable::MayNeedEscaping = format_elem(RecordElementWriter(buf), elem) {
+        if let Nestable::MayNeedEscaping = format_elem(RecordElementWriter(buf), elem)? {
             escape_elem::<_, RecordElementEscaper>(buf, start);
         }
         if elems.peek().is_some() {
@@ -1377,7 +1382,7 @@ where
         }
     }
     buf.write_char(')');
-    Nestable::MayNeedEscaping
+    Ok(Nestable::MayNeedEscaping)
 }
 
 /// A helper for `format_record` that formats a single record element.
@@ -1502,5 +1507,3 @@ impl fmt::Display for ParseHexError {
         }
     }
 }
-
-impl Error for ParseHexError {}

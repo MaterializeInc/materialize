@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.55"
+bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.1.5", features = ["derive"] }
 fallible-iterator = "0.2.0"

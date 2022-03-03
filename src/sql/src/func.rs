@@ -106,9 +106,10 @@ impl TypeCategory {
             | ScalarType::Numeric { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
-            ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
-                Self::String
-            }
+            ScalarType::PgLegacyChar
+            | ScalarType::String
+            | ScalarType::Char { .. }
+            | ScalarType::VarChar { .. } => Self::String,
             ScalarType::Record { .. } => Self::Pseudo,
             ScalarType::Map { .. } => Self::Pseudo,
         }
@@ -986,6 +987,7 @@ impl From<ScalarBaseType> for ParamType {
             String => ScalarType::String,
             Char => ScalarType::Char { length: None },
             VarChar => ScalarType::VarChar { max_length: None },
+            PgLegacyChar => ScalarType::PgLegacyChar,
             Jsonb => ScalarType::Jsonb,
             Uuid => ScalarType::Uuid,
             Oid => ScalarType::Oid,
@@ -3173,6 +3175,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Lt, 1957;
                 params!(String, String) => BinaryFunc::Lt, 664;
                 params!(Char, Char) => BinaryFunc::Lt, 1058;
+                params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Lt, 631;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
                 params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
@@ -3195,6 +3198,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Lte, 1958;
                 params!(String, String) => BinaryFunc::Lte, 665;
                 params!(Char, Char) => BinaryFunc::Lte, 1059;
+                params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Lte, 632;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
                 params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
@@ -3217,6 +3221,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Gt, 1959;
                 params!(String, String) => BinaryFunc::Gt, 666;
                 params!(Char, Char) => BinaryFunc::Gt, 1060;
+                params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Gt, 633;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
                 params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
@@ -3239,6 +3244,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Gte, 1960;
                 params!(String, String) => BinaryFunc::Gte, 667;
                 params!(Char, Char) => BinaryFunc::Gte, 1061;
+                params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Gte, 634;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
                 params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
@@ -3264,6 +3270,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Eq, 1955;
                 params!(String, String) => BinaryFunc::Eq, 98;
                 params!(Char, Char) => BinaryFunc::Eq, 1054;
+                params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Eq, 92;
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
                 params!(ListAny, ListAny) => BinaryFunc::Eq => Bool, oid::FUNC_LIST_EQ_OID;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
@@ -3287,6 +3294,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::NotEq, 1956;
                 params!(String, String) => BinaryFunc::NotEq, 531;
                 params!(Char, Char) => BinaryFunc::NotEq, 1057;
+                params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::NotEq, 630;
                 params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
                 params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
