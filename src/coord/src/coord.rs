@@ -653,6 +653,7 @@ impl Coordinator {
                             Self::prepare_index_build(self.catalog.state(), &index_id)
                         {
                             let df = self.dataflow_builder().build_index_dataflow(
+                                &instance_id,
                                 name,
                                 index_id,
                                 description,
@@ -899,7 +900,7 @@ impl Coordinator {
     async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
             DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
-                assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
+                // assert_eq!(instance, DEFAULT_COMPUTE_INSTANCE_ID);
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
                 let PendingPeek {
@@ -1853,7 +1854,7 @@ impl Coordinator {
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
         let as_of = SinkAsOf {
-            frontier: self.determine_frontier(&[sink.from]),
+            frontier: self.determine_frontier(sink.compute_instance_id, &[sink.from]),
             strict: !sink.with_snapshot,
         };
         let ops = vec![
@@ -1881,7 +1882,12 @@ impl Coordinator {
                 };
                 Ok((
                     sink.compute_instance_id,
-                    builder.build_sink_dataflow(name.to_string(), id, sink_description)?,
+                    builder.build_sink_dataflow(
+                        &sink.compute_instance_id,
+                        name.to_string(),
+                        id,
+                        sink_description,
+                    )?,
                 ))
             })
             .await?;
@@ -2325,7 +2331,12 @@ impl Coordinator {
                     if let Some((name, instance_id, description)) =
                         Self::prepare_index_build(builder.catalog, &index_id)
                     {
-                        let df = builder.build_index_dataflow(name, index_id, description)?;
+                        let df = builder.build_index_dataflow(
+                            &instance_id,
+                            name,
+                            index_id,
+                            description,
+                        )?;
                         Ok(Some((instance_id, df)))
                     } else {
                         Ok(None)
@@ -2412,7 +2423,12 @@ impl Coordinator {
                                 ),
                             }
 
-                            let df = builder.build_index_dataflow(name, index_id, description)?;
+                            let df = builder.build_index_dataflow(
+                                &instance_id,
+                                name,
+                                index_id,
+                                description,
+                            )?;
                             dfs.push(df);
                         }
                     }
@@ -2636,6 +2652,7 @@ impl Coordinator {
                 // the external sink resources (e.g. Kafka Topics)
                 builder
                     .build_sink_dataflow(
+                        &compute_instance_id,
                         "dummy".into(),
                         id,
                         mz_dataflow_types::sinks::SinkDesc {
@@ -2787,7 +2804,12 @@ impl Coordinator {
                     if let Some((name, instance_id, description)) =
                         Self::prepare_index_build(&builder.catalog, &index_id)
                     {
-                        let df = builder.build_index_dataflow(name, index_id, description)?;
+                        let df = builder.build_index_dataflow(
+                            &instance_id,
+                            name,
+                            index_id,
+                            description,
+                        )?;
                         return Ok(Some((instance_id, df)));
                     }
                 }
@@ -2842,7 +2864,12 @@ impl Coordinator {
                             ),
                         }
 
-                        let df = builder.build_index_dataflow(name, index_id, description)?;
+                        let df = builder.build_index_dataflow(
+                            &instance_id,
+                            name,
+                            index_id,
+                            description,
+                        )?;
                         dfs.push(df);
                     }
                 }
@@ -2876,10 +2903,7 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let compute_instance_id = self
-            .catalog
-            .resolve_compute_instance(&&index.in_cluster)?
-            .id;
+        let compute_instance_id = self.catalog.resolve_compute_instance(&index.in_cluster)?.id;
 
         let id = self.catalog.allocate_id()?;
         let index = catalog::Index {
@@ -2903,7 +2927,12 @@ impl Coordinator {
                 if let Some((name, instance_id, description)) =
                     Self::prepare_index_build(builder.catalog, &id)
                 {
-                    let df = builder.build_index_dataflow(name, id, description)?;
+                    let df = builder.build_index_dataflow(
+                        &compute_instance_id,
+                        name,
+                        id,
+                        description,
+                    )?;
                     Ok(Some((instance_id, df)))
                 } else {
                     Ok(None)
@@ -3225,13 +3254,17 @@ impl Coordinator {
     /// schemas with the same timeline as whatever the first query is".
     fn timedomain_for(
         &self,
+        session: &Session,
         source_ids: &[GlobalId],
         source_timeline: &Option<Timeline>,
         conn_id: u32,
     ) -> Result<Vec<GlobalId>, CoordError> {
-        let mut timedomain_ids = self
-            .catalog
-            .schema_adjacent_indexed_relations(&source_ids, conn_id);
+        let instance_name = session.vars().cluster();
+        let instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+
+        let mut timedomain_ids =
+            self.catalog
+                .schema_adjacent_indexed_relations(instance_id, &source_ids, conn_id);
 
         // Filter out ids from different timelines. The timeline code only verifies
         // that the SELECT doesn't cross timelines. The schema-adjacent code looks
@@ -3280,6 +3313,10 @@ impl Coordinator {
             session.transaction(),
             &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
         );
+
+        let instance_name = session.vars().cluster();
+        let instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+
         // For explicit or implicit transactions that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
         // query, we don't care about any possible transaction timestamp. If this is a
@@ -3302,12 +3339,17 @@ impl Coordinator {
             let timestamp = session.get_transaction_timestamp(|session| {
                 // Determine a timestamp that will be valid for anything in any schema
                 // referenced by the first query.
-                let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
+                let mut timedomain_ids =
+                    self.timedomain_for(session, &source_ids, &timeline, conn_id)?;
 
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
-                let (timestamp, timestamp_ids) =
-                    self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
+                let (timestamp, timestamp_ids) = self.determine_timestamp(
+                    session,
+                    instance_id,
+                    &timedomain_ids,
+                    PeekWhen::Immediately,
+                )?;
                 // Add the used indexes to the recorded ids.
                 timedomain_ids.extend(&timestamp_ids);
                 let mut handles = vec![];
@@ -3330,11 +3372,12 @@ impl Coordinator {
             // read transaction.
             let mut stmt_ids = HashSet::new();
             stmt_ids.extend(source_ids.iter().collect::<HashSet<_>>());
+
             // Using nearest_indexes here is a hack until #8318 is fixed. It's used because
             // that's what determine_timestamp uses.
             stmt_ids.extend(
                 self.catalog
-                    .nearest_indexes(&source_ids)
+                    .nearest_indexes(instance_id, &source_ids)
                     .0
                     .into_iter()
                     .collect::<HashSet<_>>(),
@@ -3369,7 +3412,8 @@ impl Coordinator {
 
             timestamp
         } else {
-            self.determine_timestamp(session, &source_ids, when)?.0
+            self.determine_timestamp(session, instance_id, &source_ids, when)?
+                .0
         };
 
         let source = self.view_optimizer.optimize(source)?;
@@ -3394,7 +3438,7 @@ impl Coordinator {
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         let mut builder = self.dataflow_builder();
 
-        builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
+        builder.import_view_into_dataflow(&instance_id, &view_id, &source, &mut dataflow)?;
         for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
             builder.prep_relation_expr(
                 view,
@@ -3414,7 +3458,10 @@ impl Coordinator {
         );
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(
+            &mut dataflow,
+            self.catalog.enabled_indexes_per_instance(&instance_id),
+        )?;
 
         // Finalization optimizes the dataflow as much as possible.
         let dataflow_plan = self.finalize_dataflow(dataflow);
@@ -3471,15 +3518,23 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Tail)?;
         }
 
+        let instance_name = session.vars().cluster();
+        let instance_id = self.catalog.resolve_compute_instance(&instance_name)?.id;
+
         let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
             // Determine the frontier of updates to tail *from*.
             // Updates greater or equal to this frontier will be produced.
             let frontier = if let Some(ts) = ts {
                 // If a timestamp was explicitly requested, use that.
-                let ts = coord.determine_timestamp(session, uses, PeekWhen::AtTimestamp(ts))?;
+                let ts = coord.determine_timestamp(
+                    session,
+                    instance_id,
+                    uses,
+                    PeekWhen::AtTimestamp(ts),
+                )?;
                 Antichain::from_elem(ts.0)
             } else {
-                coord.determine_frontier(uses)
+                coord.determine_frontier(instance_id, uses)
             };
 
             Ok::<_, CoordError>(SinkDesc {
@@ -3501,8 +3556,12 @@ impl Coordinator {
                 let sink_id = self.catalog.allocate_id()?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id])?;
                 let sink_name = format!("tail-{}", sink_id);
-                self.dataflow_builder()
-                    .build_sink_dataflow(sink_name, sink_id, sink_desc)?
+                self.dataflow_builder().build_sink_dataflow(
+                    &instance_id,
+                    sink_name,
+                    sink_id,
+                    sink_desc,
+                )?
             }
             TailFrom::Query {
                 expr,
@@ -3515,8 +3574,18 @@ impl Coordinator {
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
                 let mut dataflow = DataflowDesc::new(format!("tail-{}", id), id);
                 let mut dataflow_builder = self.dataflow_builder();
-                dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
-                dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
+                dataflow_builder.import_view_into_dataflow(
+                    &instance_id,
+                    &id,
+                    &expr,
+                    &mut dataflow,
+                )?;
+                dataflow_builder.build_sink_dataflow_into(
+                    &instance_id,
+                    &mut dataflow,
+                    id,
+                    sink_desc,
+                )?;
                 dataflow
             }
         };
@@ -3558,6 +3627,7 @@ impl Coordinator {
     fn determine_timestamp(
         &mut self,
         session: &Session,
+        instance: ComputeInstanceId,
         uses_ids: &[GlobalId],
         when: PeekWhen,
     ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
@@ -3572,7 +3642,8 @@ impl Coordinator {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
+        let (index_ids, unmaterialized_source_ids) =
+            self.catalog.nearest_indexes(instance, uses_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
@@ -3736,7 +3807,11 @@ impl Coordinator {
     /// `source_id`.
     ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(&mut self, source_ids: &[GlobalId]) -> Antichain<Timestamp> {
+    fn determine_frontier(
+        &mut self,
+        compute_instance_id: ComputeInstanceId,
+        source_ids: &[GlobalId],
+    ) -> Antichain<Timestamp> {
         // This function differs from determine_timestamp because sinks/tail don't care
         // about indexes existing or timestamps being complete. If data don't exist
         // yet (upper = 0), it is not a problem for the sink to wait for it. If the
@@ -3749,7 +3824,9 @@ impl Coordinator {
         // nearest_indexes. We don't care about the indexes being incomplete because
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
-        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(source_ids);
+        let (index_ids, unmaterialized_source_ids) = self
+            .catalog
+            .nearest_indexes(compute_instance_id, source_ids);
         let mut since = self.indexes.least_valid_since(index_ids.iter().copied());
         since.join_assign(
             &self
@@ -3822,6 +3899,12 @@ impl Coordinator {
             decorrelated_plan
         };
 
+        let default_instance_name = session.vars().cluster();
+        let default_instance_id = self
+            .catalog
+            .resolve_compute_instance(default_instance_name)?
+            .id;
+
         let optimize =
             |timings: &mut Timings,
              coord: &mut Self,
@@ -3831,12 +3914,18 @@ impl Coordinator {
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
                 let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
                 coord.dataflow_builder().import_view_into_dataflow(
+                    &default_instance_id,
                     // TODO: If explaining a view, pipe the actual id of the view.
                     &GlobalId::Explain,
                     &optimized_plan,
                     &mut dataflow,
                 )?;
-                mz_transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
+                mz_transform::optimize_dataflow(
+                    &mut dataflow,
+                    coord
+                        .catalog
+                        .enabled_indexes_per_instance(&default_instance_id),
+                )?;
                 timings.optimization = Some(start.elapsed());
                 Ok(dataflow)
             };
@@ -4312,7 +4401,8 @@ impl Coordinator {
                     let (name, instance_id, description) =
                         Self::prepare_index_build(builder.catalog, &plan.id)
                             .expect("index enabled");
-                    let df = builder.build_index_dataflow(name, plan.id, description)?;
+                    let df =
+                        builder.build_index_dataflow(&instance_id, name, plan.id, description)?;
                     Ok((instance_id, df))
                 })
                 .await?;
@@ -4389,6 +4479,7 @@ impl Coordinator {
                 indexes,
                 persister,
                 storage,
+                in_instance: None,
             };
             f(builder)
         })?;
@@ -4603,6 +4694,7 @@ impl Coordinator {
         instance_id: ComputeInstanceId,
         dataflows: Vec<DataflowDesc>,
     ) {
+        println!("\ndataflows {:?}", dataflows);
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
             for (index_id, ..) in &dataflow.index_exports {

@@ -115,8 +115,10 @@ pub struct CatalogState {
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     by_oid: HashMap<u32, GlobalId>,
     /// Contains only enabled indexes from objects in the catalog; does not
-    /// contain indexes disabled by e.g. the disable_user_indexes flag.
-    enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    /// contain indexes disabled by e.g. the disable_user_indexes flag. Stored
+    /// by which instance contains the index.
+    enabled_indexes:
+        HashMap<ComputeInstanceId, HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
 
@@ -159,8 +161,26 @@ impl CatalogState {
         }
     }
 
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
-        &self.enabled_indexes
+    pub fn enabled_indexes(
+        &self,
+        compute_instance: &ComputeInstanceId,
+        indexes_on: GlobalId,
+    ) -> Option<&Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+        if !self.get_by_id(&indexes_on).supports_indexes() {
+            return None;
+        }
+
+        self.enabled_indexes
+            .get(compute_instance)
+            .map(|obj_map| obj_map.get(&indexes_on))
+            .flatten()
+    }
+
+    pub fn enabled_indexes_per_instance(
+        &self,
+        compute_instance: &ComputeInstanceId,
+    ) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+        &self.enabled_indexes[compute_instance]
     }
 
     /// Finds the nearest indexes that can satisfy the views or sources whose
@@ -169,7 +189,11 @@ impl CatalogState {
     /// Returns the identifiers of all discovered indexes, and the identifiers of
     /// the discovered unmaterialized sources required to satisfy ids. The returned list
     /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
+    pub fn nearest_indexes(
+        &self,
+        compute_instance: ComputeInstanceId,
+        ids: &[GlobalId],
+    ) -> (Vec<GlobalId>, Vec<GlobalId>) {
         fn has_indexes(catalog: &CatalogState, id: GlobalId) -> bool {
             matches!(
                 catalog.get_by_id(&id).item(),
@@ -179,6 +203,7 @@ impl CatalogState {
 
         fn inner(
             catalog: &CatalogState,
+            compute_instance: ComputeInstanceId,
             id: GlobalId,
             indexes: &mut Vec<GlobalId>,
             unmaterialized: &mut Vec<GlobalId>,
@@ -187,18 +212,21 @@ impl CatalogState {
                 return;
             }
 
-            // Include all indexes on an id so the dataflow builder can safely use any
-            // of them.
-            if !catalog.enabled_indexes[&id].is_empty() {
-                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
-                return;
+            let inner_idx = catalog.enabled_indexes(&compute_instance, id);
+            if let Some(i) = inner_idx {
+                // Include all indexes on an id so the dataflow builder can safely use any
+                // of them.
+                if !i.is_empty() {
+                    indexes.extend(i.iter().map(|(id, _)| id));
+                    return;
+                }
             }
 
-            match catalog.get_by_id(&id).item() {
+            match catalog.get_by_id(&id).item().clone() {
                 view @ CatalogItem::View(_) => {
                     // Unmaterialized view. Recursively search its dependencies.
                     for id in view.uses() {
-                        inner(catalog, *id, indexes, unmaterialized)
+                        inner(catalog, compute_instance, *id, indexes, unmaterialized)
                     }
                 }
                 CatalogItem::Source(_) => {
@@ -214,7 +242,13 @@ impl CatalogState {
         let mut indexes = vec![];
         let mut unmaterialized = vec![];
         for id in ids {
-            inner(self, *id, &mut indexes, &mut unmaterialized)
+            inner(
+                self,
+                compute_instance,
+                *id,
+                &mut indexes,
+                &mut unmaterialized,
+            )
         }
         indexes.sort();
         indexes.dedup();
@@ -300,23 +334,30 @@ impl CatalogState {
 
     pub fn populate_enabled_indexes(&mut self, id: GlobalId, item: &CatalogItem) {
         match item {
-            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.enabled_indexes.entry(id).or_insert_with(Vec::new);
-            }
             CatalogItem::Index(index) => {
                 if index.enabled {
-                    let idxs = self
-                        .enabled_indexes
-                        .get_mut(&index.on)
-                        .expect("object known to exist");
+                    // Populate entry for this object, which we know exists and supports indexes.
+                    let entry = self.get_by_id(&index.on);
+                    assert!(entry.supports_indexes());
 
+                    let obj_map = self
+                        .enabled_indexes
+                        .get_mut(&index.compute_instance_id)
+                        .expect("instance known to exist");
+
+                    let idxs = obj_map.entry(index.on).or_default();
                     // If index not already enabled, add it.
                     if !idxs.iter().any(|(index_id, _)| index_id == &id) {
                         idxs.push((id, index.keys.clone()));
                     }
                 }
             }
-            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_) => (),
         }
     }
 
@@ -811,6 +852,13 @@ impl CatalogEntry {
     pub fn used_by(&self) -> &[GlobalId] {
         &self.used_by
     }
+
+    pub fn supports_indexes(&self) -> bool {
+        match self.item() {
+            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Catalog {
@@ -924,6 +972,8 @@ impl Catalog {
                 .state
                 .compute_instance_names
                 .insert(name.clone(), id);
+
+            catalog.state.enabled_indexes.insert(id, HashMap::new());
         }
 
         assert!(
@@ -2098,6 +2148,7 @@ impl Catalog {
                         },
                     );
                     state.compute_instance_names.insert(name.clone(), id);
+                    state.enabled_indexes.insert(id, HashMap::new());
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                 }
 
@@ -2149,20 +2200,33 @@ impl Catalog {
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
                     if let CatalogItem::Index(index) = &metadata.item {
-                        let indexes = state
+                        // Index-supporting items are only added to enabled
+                        // indexes lazily, so despite being valid, they might
+                        // not exist.
+                        if let Some(indexes) = state
                             .enabled_indexes
+                            .get_mut(&index.compute_instance_id)
+                            .expect("instance known to exist")
                             .get_mut(&index.on)
-                            .expect("catalog out of sync");
-                        let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
-                        match i {
-                            Some(i) => {
-                                indexes.remove(i);
-                            }
-                            None if !index.enabled => {}
-                            None => panic!("catalog out of sync"),
-                        };
+                        {
+                            let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
+                            match i {
+                                Some(i) => {
+                                    indexes.remove(i);
+                                }
+                                None if !index.enabled => {}
+                                None => panic!("catalog out of sync"),
+                            };
+                        }
                     }
-                    state.enabled_indexes.remove(&id);
+
+                    for (_name, instance_id) in state.compute_instance_names.iter_mut() {
+                        state
+                            .enabled_indexes
+                            .get_mut(&instance_id)
+                            .unwrap()
+                            .remove(&id);
+                    }
                 }
 
                 Action::UpdateItem {
@@ -2372,8 +2436,19 @@ impl Catalog {
     ///
     /// Note that when `self.config.disable_user_indexes` is `true`, this does
     /// not include any user indexes.
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
-        &self.state.enabled_indexes
+    pub fn enabled_indexes(
+        &self,
+        compute_instance: &ComputeInstanceId,
+        indexes_on: GlobalId,
+    ) -> Option<&Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+        self.state.enabled_indexes(compute_instance, indexes_on)
+    }
+
+    pub fn enabled_indexes_per_instance(
+        &mut self,
+        compute_instance: &ComputeInstanceId,
+    ) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+        &self.state.enabled_indexes_per_instance(compute_instance)
     }
 
     /// Returns whether or not an index is enabled.
@@ -2430,8 +2505,12 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
-        self.state.nearest_indexes(ids)
+    pub fn nearest_indexes(
+        &self,
+        compute_instance: ComputeInstanceId,
+        ids: &[GlobalId],
+    ) -> (Vec<GlobalId>, Vec<GlobalId>) {
+        self.state.nearest_indexes(compute_instance, ids)
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {
@@ -2465,6 +2544,7 @@ impl Catalog {
     /// input ids. The indexes of all relations are included.
     pub fn schema_adjacent_indexed_relations(
         &self,
+        compute_instance: ComputeInstanceId,
         ids: &[GlobalId],
         conn_id: u32,
     ) -> Vec<GlobalId> {
@@ -2503,7 +2583,8 @@ impl Catalog {
                             relations.insert(*id);
                         }
                         SqlCatalogItemType::View | SqlCatalogItemType::Source => {
-                            let (indexes, unmaterialized) = self.nearest_indexes(&[*id]);
+                            let (indexes, unmaterialized) =
+                                self.nearest_indexes(compute_instance, &[*id]);
                             relations.extend(indexes);
                             // Add in the view/source if fully materialized.
                             if unmaterialized.is_empty() {

@@ -41,6 +41,7 @@ pub struct DataflowBuilder<'a> {
     /// A handle to the storage abstraction, which describe sources from their identifier.
     pub storage:
         &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
+    pub in_instance: Option<ComputeInstanceId>,
 }
 
 /// The styles in which an expression can be prepared for use in a dataflow.
@@ -64,6 +65,7 @@ impl Coordinator {
             indexes: &self.indexes,
             persister: &self.persister,
             storage: &self.dataflow_client,
+            in_instance: None,
         }
     }
 
@@ -99,6 +101,7 @@ impl<'a> DataflowBuilder<'a> {
     /// dataflow description.
     fn import_into_dataflow(
         &mut self,
+        in_instance: &ComputeInstanceId,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,
     ) -> Result<(), CoordError> {
@@ -110,9 +113,15 @@ impl<'a> DataflowBuilder<'a> {
 
             // A valid index is any index on `id` that is known to the dataflow
             // layer, as indicated by its presence in `self.indexes`.
-            let valid_index = self.catalog.enabled_indexes()[id]
-                .iter()
-                .find(|(id, _keys)| self.indexes.contains_key(*id));
+            let valid_index = self
+                .catalog
+                .enabled_indexes(in_instance, *id)
+                .map(|obj_map| {
+                    obj_map
+                        .iter()
+                        .find(|(id, _keys)| self.indexes.contains_key(*id))
+                })
+                .flatten();
             if let Some((index_id, keys)) = valid_index {
                 let index_desc = IndexDesc {
                     on_id: *id,
@@ -164,7 +173,7 @@ impl<'a> DataflowBuilder<'a> {
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
-                        self.import_view_into_dataflow(id, &expr, dataflow)?;
+                        self.import_view_into_dataflow(in_instance, id, &expr, dataflow)?;
                     }
                     _ => unreachable!(),
                 }
@@ -177,17 +186,18 @@ impl<'a> DataflowBuilder<'a> {
     /// dataflow description.
     pub fn import_view_into_dataflow(
         &mut self,
+        in_instance: &ComputeInstanceId,
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
     ) -> Result<(), CoordError> {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
         for get_id in view.global_uses() {
-            self.import_into_dataflow(&get_id, dataflow)?;
+            self.import_into_dataflow(in_instance, &get_id, dataflow)?;
 
             // TODO: indexes should be imported after the optimization process, and only those
             // actually used by the optimized plan
-            if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
+            if let Some(indexes) = self.catalog.enabled_indexes(in_instance, get_id) {
                 for (id, keys) in indexes.iter() {
                     // Ensure only valid indexes (i.e. those in self.indexes) are imported.
                     // TODO(#8318): Ensure this logic is accounted for.
@@ -213,6 +223,7 @@ impl<'a> DataflowBuilder<'a> {
     /// Builds a dataflow description for the index with the specified ID.
     pub fn build_index_dataflow(
         &mut self,
+        in_instance: &ComputeInstanceId,
         name: String,
         id: GlobalId,
         mut index_description: IndexDesc,
@@ -220,7 +231,7 @@ impl<'a> DataflowBuilder<'a> {
         let on_entry = self.catalog.get_by_id(&index_description.on_id);
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(name, id);
-        self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
+        self.import_into_dataflow(in_instance, &index_description.on_id, &mut dataflow)?;
         for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
             self.prep_relation_expr(view, ExprPrepStyle::Index)?;
         }
@@ -230,7 +241,10 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(
+            &mut dataflow,
+            self.catalog.enabled_indexes_per_instance(in_instance),
+        )?;
 
         Ok(dataflow)
     }
@@ -242,12 +256,13 @@ impl<'a> DataflowBuilder<'a> {
     /// the sink (primarily to drop it, at the moment).
     pub fn build_sink_dataflow(
         &mut self,
+        in_instance: &ComputeInstanceId,
         name: String,
         id: GlobalId,
         sink_description: SinkDesc,
     ) -> Result<DataflowDesc, CoordError> {
         let mut dataflow = DataflowDesc::new(name, id);
-        self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
+        self.build_sink_dataflow_into(in_instance, &mut dataflow, id, sink_description)?;
         Ok(dataflow)
     }
 
@@ -255,19 +270,24 @@ impl<'a> DataflowBuilder<'a> {
     /// existing dataflow description instead of creating one from scratch.
     pub fn build_sink_dataflow_into(
         &mut self,
+        in_instance: &ComputeInstanceId,
         dataflow: &mut DataflowDesc,
         id: GlobalId,
         sink_description: SinkDesc,
     ) -> Result<(), CoordError> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
-        self.import_into_dataflow(&sink_description.from, dataflow)?;
+        self.import_into_dataflow(&in_instance, &sink_description.from, dataflow)?;
         for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
             self.prep_relation_expr(view, ExprPrepStyle::Index)?;
         }
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(
+            dataflow,
+            self.catalog
+                .enabled_indexes_per_instance(&self.in_instance.unwrap()),
+        )?;
 
         Ok(())
     }

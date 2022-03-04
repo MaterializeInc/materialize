@@ -2007,8 +2007,7 @@ pub fn plan_create_index(
     } = &mut stmt;
     if let Some(in_cluster) = in_cluster {
         if in_cluster.as_str() != &scx.resolve_cluster(&None).unwrap() {
-            bail_unsupported!("IN CLUSTER for non-default clusters");
-            // scx.require_experimental_mode("IN CLUSTER for non-default clusters")?;
+            scx.require_experimental_mode("IN CLUSTER for non-default clusters")?;
         }
     }
 
