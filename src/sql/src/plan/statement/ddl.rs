@@ -2005,6 +2005,13 @@ pub fn plan_create_index(
         with_options,
         if_not_exists,
     } = &mut stmt;
+    if let Some(in_cluster) = in_cluster {
+        if in_cluster.as_str() != &scx.resolve_cluster(&None).unwrap() {
+            bail_unsupported!("IN CLUSTER for non-default clusters");
+            // scx.require_experimental_mode("IN CLUSTER for non-default clusters")?;
+        }
+    }
+
     let on = scx.resolve_item(on_name.clone())?;
 
     if CatalogItemType::View != on.item_type()
@@ -2299,12 +2306,13 @@ pub fn describe_create_cluster(
 }
 
 pub fn plan_create_cluster(
-    _: &StatementContext,
+    scx: &StatementContext,
     CreateClusterStatement {
         name,
         if_not_exists,
     }: CreateClusterStatement,
 ) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("CREATE CLUSTER")?;
     Ok(Plan::CreateCluster(CreateClusterPlan {
         name: normalize::ident(name),
         if_not_exists,
