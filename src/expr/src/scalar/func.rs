@@ -2062,7 +2062,7 @@ fn date_trunc_interval<'a>(a: Datum, int: Interval) -> Result<Datum<'a>, EvalErr
             })
         .and_then(|dtf| {
             let mut int2 = int.clone();
-            int2.truncate_low_fields(dtf, None)
+            int2.truncate_low_fields(dtf, Some(0))
                 // truncate_low_fields should never return an error in our case
                 .map_err(|e| EvalError::Internal(e.to_string()))
                 .map(|_| int2.into())
