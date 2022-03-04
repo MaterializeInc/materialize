@@ -63,35 +63,41 @@ pub fn decode_column(
     col_name: &ColumnName,
     col_type: &ColumnType,
 ) -> Result<(), anyhow::Error> {
-    let ColumnType { scalar_type, .. } = col_type;
-
-    let json_field = json.get(col_name.as_str());
-
-    if json_field.is_none() {
+    if let Some(json_field) = json.get(col_name.as_str()) {
+        println!(
+            "Working on {} for col_name {} col type {:?}",
+            json_field,
+            col_name.as_str(),
+            col_type,
+        );
+        decode_and_pack_value(packer, row_arena, json_field, col_type)
+    } else {
         bail!("no value for field {}", col_name.as_str())
     }
-
-    let json_field = json_field.unwrap();
-
-    println!(
-        "Working on {} for col_name {} col type {:?}",
-        json_field,
-        col_name.as_str(),
-        col_type,
-    );
-
-    decode_and_pack_value(packer, row_arena, json_field, scalar_type)
 }
 
 pub fn decode_and_pack_value(
     packer: &mut RowPacker,
     row_arena: &RowArena,
     json_field: &Value,
-    scalar_type: &ScalarType,
+    col_type: &ColumnType,
 ) -> Result<(), anyhow::Error> {
+    let ColumnType {
+        scalar_type,
+        nullable,
+    } = col_type;
+
     if json_field.is_null() {
-        packer.push(Datum::Null);
-        Ok(())
+        if *nullable {
+            packer.push(Datum::Null);
+            return Ok(());
+        } else {
+            bail!(
+                "invalid `null` value for field {} of type {:?}",
+                json_field,
+                col_type
+            );
+        }
     }
 
     match scalar_type {
@@ -135,8 +141,12 @@ pub fn decode_and_pack_value(
         }
         ScalarType::List { element_type, .. } => packer.push_list_with(|row| {
             if let Some(elems) = json_field.as_array() {
+                let col_type = ColumnType {
+                    scalar_type: *element_type.clone(),
+                    nullable: true,
+                };
                 for elem in elems {
-                    decode_and_pack_value(row, row_arena, elem, element_type)?;
+                    decode_and_pack_value(row, row_arena, elem, &col_type)?;
                 }
             }
             Ok::<_, anyhow::Error>(())
@@ -145,7 +155,7 @@ pub fn decode_and_pack_value(
             if let Some(json) = json_field.as_object() {
                 for (field_name, field_type) in fields {
                     if let Some(v) = json.get(field_name.as_str()) {
-                        decode_and_pack_value(row, row_arena, v, &field_type.scalar_type)?;
+                        decode_and_pack_value(row, row_arena, v, &field_type)?;
                     } else {
                         bail!("no value for record field {}", field_name.as_str());
                     }
@@ -158,9 +168,13 @@ pub fn decode_and_pack_value(
                 // so that it does not go unstated: we must process map keys in ascending order
                 // to satisfy the contract of `push_dict_with`. fortunately this is the default
                 // behavior of serde_json (unless the `preserve_order` feature is used)
+                let col_type = ColumnType {
+                    scalar_type: *value_type.clone(),
+                    nullable: true,
+                };
                 for (name, value) in elems {
                     packer.push(Datum::String(name));
-                    decode_and_pack_value(packer, row_arena, value, value_type)?;
+                    decode_and_pack_value(packer, row_arena, value, &col_type)?;
                 }
             }
             Ok::<_, anyhow::Error>(())
@@ -179,7 +193,7 @@ pub fn decode_and_pack_value(
             packer.push_array(&[dims], values)?;
             Ok(())
         }
-        ScalarType::Oid : ScalarType::RegClass | ScalarType::RegProc | ScalarType::RegType => {
+        ScalarType::Oid | ScalarType::RegClass | ScalarType::RegProc | ScalarType::RegType => {
             bail!("unsupported type ")
         }
     }
@@ -230,7 +244,6 @@ pub fn decode_value<'a>(
         ScalarType::Numeric { .. } => {
             match json_field {
                 Value::Number(n) => {
-                    println!("Have Numeric number: {}, {:?}", n, n);
                     let v = strconv::parse_numeric(format!("{}", n).as_str())?;
                     return Ok(Datum::Numeric(v));
                 }
