@@ -387,6 +387,15 @@ impl Connection {
             .collect()
     }
 
+    pub fn get_most_recent_compute_instance(&mut self) -> Result<i64, Error> {
+        let tx = self.inner.transaction()?;
+        Ok(
+            tx.query_row("SELECT max(id) FROM compute_instances;", params![], |row| {
+                row.get(0)
+            })?,
+        )
+    }
+
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more

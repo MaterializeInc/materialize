@@ -907,7 +907,7 @@ impl Catalog {
             );
         }
 
-        let compute_instances = dbg!(catalog.storage().load_compute_instances()?);
+        let compute_instances = catalog.storage().load_compute_instances()?;
         // TODO(CREATE+DROP CLUSTER): anything that depends on the default instance must be spun up per-cluster.
         for (id, name) in compute_instances.into_iter() {
             let id = id.try_into().expect("no negative compute_instance IDs");
@@ -1830,13 +1830,13 @@ impl Catalog {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    vec![dbg!(Action::CreateCluster {
+                    vec![Action::CreateCluster {
                         id: tx
                             .insert_cluster(&name)?
                             .try_into()
                             .expect("no negative cluster IDs"),
                         name,
-                    })]
+                    }]
                 }
                 Op::CreateItem {
                     id,
@@ -2455,6 +2455,12 @@ impl Catalog {
         self.state.by_id.values()
     }
 
+    pub fn compute_instances(
+        &self,
+    ) -> impl Iterator<Item = (&ComputeInstanceId, &ComputeInstance)> {
+        self.state.compute_instances_by_id.iter()
+    }
+
     /// Returns all tables, views, and sources in the same schemas as a set of
     /// input ids. The indexes of all relations are included.
     pub fn schema_adjacent_indexed_relations(
@@ -2516,6 +2522,10 @@ impl Catalog {
             }
         }
         relations.into_iter().collect()
+    }
+
+    pub fn get_most_recent_compute_instance(&mut self) -> Result<i64, Error> {
+        self.storage().get_most_recent_compute_instance()
     }
 }
 

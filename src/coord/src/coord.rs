@@ -293,8 +293,8 @@ pub struct Coordinator {
     sources: ArrangementFrontiers<Timestamp>,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
-    /// Whether base sources are enabled.
-    logging_enabled: bool,
+    /// Logging configuration for compute instances started by this coordinator.
+    logging: Option<DataflowLoggingConfig>,
     /// Channel to manange internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Channel to communicate source status updates to the timestamper thread.
@@ -532,6 +532,20 @@ impl Coordinator {
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), CoordError> {
+        for (id, _instance) in self.catalog.compute_instances() {
+            self.dataflow_client
+                .create_instance(
+                    *id,
+                    if id == &DEFAULT_COMPUTE_INSTANCE_ID {
+                        self.logging.clone()
+                    } else {
+                        None
+                    },
+                )
+                .await
+                .unwrap()
+        }
+
         let entries: Vec<_> = self.catalog.entries().cloned().collect();
 
         // Sources and indexes may be depended upon by other catalog items,
@@ -674,7 +688,7 @@ impl Coordinator {
         self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Announce primary and foreign key relationships.
-        if self.logging_enabled {
+        if self.logging.is_some() {
             for log in BUILTINS.logs() {
                 let log_id = &log.id.to_string();
                 self.send_builtin_table_updates(
@@ -2218,7 +2232,17 @@ impl Coordinator {
         let op = catalog::Op::CreateCluster { name: plan.name };
         let r = self.catalog_transact(vec![op], |_builder| Ok(())).await;
         match r {
-            Ok(()) => Ok(ExecuteResponse::CreatedCluster { existed: false }),
+            Ok(()) => {
+                let new_instance = self.catalog.get_most_recent_compute_instance().unwrap();
+                self.dataflow_client
+                    .create_instance(
+                        new_instance.try_into().expect("no negative instance IDs"),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                Ok(ExecuteResponse::CreatedCluster { existed: false })
+            }
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ClusterAlreadyExists(_),
                 ..
@@ -4833,6 +4857,7 @@ pub async fn serve(
         persister: &persister,
     })
     .await?;
+
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
@@ -4847,6 +4872,15 @@ pub async fn serve(
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
         .spawn(move || {
+            let logging = logging.map(|config| DataflowLoggingConfig {
+                granularity_ns: config.granularity.as_nanos(),
+                active_logs: BUILTINS
+                    .logs()
+                    .map(|src| (src.variant.clone(), src.index_id))
+                    .collect(),
+                log_logging: config.log_logging,
+            });
+
             let mut coord = Coordinator {
                 dataflow_client: mz_dataflow_types::client::Controller::new(dataflow_client),
                 view_optimizer: Optimizer::logical_optimizer(),
@@ -4856,7 +4890,7 @@ pub async fn serve(
                 sources: ArrangementFrontiers::default(),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
-                logging_enabled: logging.is_some(),
+                logging,
                 internal_cmd_tx,
                 metric_scraper,
                 last_open_local_ts: 1,
@@ -4876,21 +4910,7 @@ pub async fn serve(
                 write_lock_wait_group: VecDeque::new(),
                 arrangement_instance_map: HashMap::new(),
             };
-            let logging = logging.map(|config| DataflowLoggingConfig {
-                granularity_ns: config.granularity.as_nanos(),
-                active_logs: BUILTINS
-                    .logs()
-                    .map(|src| (src.variant.clone(), src.index_id))
-                    .collect(),
-                log_logging: config.log_logging,
-            });
-            handle
-                .block_on(
-                    coord
-                        .dataflow_client
-                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
-                )
-                .unwrap();
+
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
