@@ -418,17 +418,17 @@ impl Interval {
         use DateTimeField::*;
         match f {
             Millennium => {
-                self.months -= self.months % (12*1000);
+                self.months -= self.months % (12 * 1000);
                 self.days = 0;
                 self.micros = 0;
             }
             Century => {
-                self.months -= self.months % (12*100);
+                self.months -= self.months % (12 * 100);
                 self.days = 0;
                 self.micros = 0;
             }
             Decade => {
-                self.months -= self.months % (12*10);
+                self.months -= self.months % (12 * 10);
                 self.days = 0;
                 self.micros = 0;
             }
