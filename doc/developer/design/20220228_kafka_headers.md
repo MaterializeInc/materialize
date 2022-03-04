@@ -2,14 +2,13 @@
 
 ## Summary
 
-Support the `headers` section of kafka messages in sources. This is a `string` -> `bytes` map of arbitrary
-data. The purpose of this design document is to describe a multi-phase implementation of this
+Support the `headers` section of kafka messages in sources. This is a `string` -> `bytes` multimap of arbitrary
+data. The purpose of this design document is to describe how we can implement this.
 
 ## Goals
 
-1. Begin support with basic support for unstructured data from headers that can be cast/converted later
+Add basic support for unstructured data from headers that can be cast/converted later
 in the sql layer
-2. Extend support to include typed, named headers
 
 ## Non-Goals
 
@@ -21,20 +20,15 @@ dynamic schema's supported by Kafka Connect.
 
 ## Description
 
-
-### Phase 1
-
 Add an `INCLUDE HEADERS` syntax that allows users to declare that they want a `headers` column for their source,
-as provided in kafka sources. This will provide a map from text to bytes (`bytea`).
+as provided in kafka sources. This will provide a list of from (text, bytes (`bytea`)) pairs. This is because
+Kafka headers can have multiple values per-key, and preserve order.
 Users are expected to cast these bytes values to the types they want in a later view.
 This option will only be available for `ENVELOPE NONE` and `ENVELOPE UPSERT`.
 
-### Phase 2
-As an extension to phase 1, allows users to pre-declare their expected types in the source definition, simplifying their usage.
-
 ## Proposed syntax changes
 
-In phase 1, kafka source creation will be extended so that `INCLUDE` has a new `HEADERS` option, so the full
+Kafka source creation will be extended so that `INCLUDE` has a new `HEADERS` option, so the full
 syntax becomes:
 
 ```
@@ -57,50 +51,37 @@ ENVELOPE ...
 ```
 
 This will add a new column to the row from the kafka source that is of type
-`map[text=>bytea]` with the name `headers`, if it doesn't clash
-with an existing column.
-
-In phase 2, the syntax will be
-```
-INCLUDE (
-    KEY (AS <name>)? |
-    TIMESTAMP (AS <name>)? |
-    OFFSET (AS <name>)? |
-    PARTITION (AS <name>)? |
-    TOPIC (AS <name>)? |
-    HEADERS \(headername( type)...\)?
-)+
-```
-where `type` will override the type from `bytes` to the given one.
-
+`list[Record { name: text, values: bytea}]` with the name `headers`, with
+the column name being overrideable
 
 ## Implementation notes
 
-In phase 1, once the planner places the headers in the right spot, all we need to do is pass down if we want the headers as a boolean,
+Once the planner places the headers in the right spot, all we need to do is pass down if we want the headers as a boolean,
 into the kafka source creation. The `SourceDesc` will contain the extra column. The source would pack the `SourceMessage`
-with the headers (or an empty map) for each record.
+with the headers (or an empty list) for each record.
 
-In phase 2, the source would need also be given any type information, and convert the types. If we support complex schematization,
-refactoring sources so that header's can be decoded in the decode stage.
+## Extensions
 
+A list of key-value records is not very ergonomic. Over time, we can provide helper functions that improve this.
+Some examples:
+
+- `headerstomap`: convert the headers list into a map with "smallest value wins" semantics.
+- Some kind of `avro_decode` function: This is more complex as it may require altering how we build dataflows
 
 ## Alternatives
 
-- Don't implement phase 2, and leave transformations all in later views
+- Implement typing as part of the sql definition, either sql types, or some way of declaring how to get a schema
+and its `FORMAT`. This would significantly complicate the Kafka `CREATE SOURCE` statement, which is already complex.
 
-- (Original plan): In phase 1, we could still support only `bytea` header values, but pre-declare the specific header keys we want
+- Allow users to pre-declare specific header keys, and provide columns for each one.
 
-- In both phases, we could collate the headers into a record field, instead of upgrading them to full columns (this may only be possible in phase 1).
+  - Collate the headers into a record field, instead of separate columns
 
-- In phase 2, we could come up with some way of declaring an actual `schema` with a format. This would complicate the syntax and the implemention
-by quite a bit.
-
-- Consider an option that enforces utf8
+- Consider an option that enforces utf8 for header values
 
 ## Open questions
 
-- In phase 1, how do we deal with header names clashing with other columns? Do we add an `as <name>` syntax?
-- In phase 1, is the INCLUDE syntax un-ambiguous?
-- Should we support non-nullable headers?
-- From https://github.com/MaterializeInc/materialize/issues/8446, @quodlibetor mentioned `self-retracting-envelopes` could cause problems, what are those problems?
+- How do we deal with header names clashing with other columns? Do we add an `as <name>` syntax?
+- Should we support nullable headers?
+- Can `ENVELOPE DEBEZIUM`, etc. be supported somehow?
 - Will some users expect a new value without a header to keep the header value from the previous message? The current design does not handle this
