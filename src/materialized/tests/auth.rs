@@ -12,7 +12,8 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::error::Error;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -40,7 +41,7 @@ use openssl::ssl::{
     SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslOptions, SslVerifyMode,
 };
 use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-use openssl::x509::{X509NameBuilder, X509};
+use openssl::x509::{X509Name, X509NameBuilder, X509};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
 use postgres_openssl::MakeTlsConnector;
@@ -66,40 +67,58 @@ pub mod util;
 /// A certificate authority for use in tests.
 pub struct Ca {
     dir: TempDir,
+    name: X509Name,
     cert: X509,
     pkey: PKey<Private>,
 }
 
 impl Ca {
-    /// Constructs a new certificate authority.
-    pub fn new() -> Result<Ca, Box<dyn Error>> {
+    fn make_ca(name: &str, parent: Option<&Ca>) -> Result<Ca, Box<dyn Error>> {
         let dir = tempfile::tempdir()?;
         let rsa = Rsa::generate(2048)?;
         let pkey = PKey::from_rsa(rsa)?;
         let name = {
             let mut builder = X509NameBuilder::new()?;
-            builder.append_entry_by_nid(Nid::COMMONNAME, "test ca")?;
+            builder.append_entry_by_nid(Nid::COMMONNAME, name)?;
             builder.build()
         };
         let cert = {
             let mut builder = X509::builder()?;
             builder.set_version(2)?;
             builder.set_pubkey(&pkey)?;
-            builder.set_issuer_name(&name)?;
+            builder.set_issuer_name(parent.map(|ca| &ca.name).unwrap_or(&name))?;
             builder.set_subject_name(&name)?;
             builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
             builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
             builder.append_extension(BasicConstraints::new().critical().ca().build()?)?;
-            builder.sign(&pkey, MessageDigest::sha256())?;
+            builder.sign(
+                parent.map(|ca| &ca.pkey).unwrap_or(&pkey),
+                MessageDigest::sha256(),
+            )?;
             builder.build()
         };
         fs::write(dir.path().join("ca.crt"), &cert.to_pem()?)?;
-        Ok(Ca { dir, cert, pkey })
+        Ok(Ca {
+            dir,
+            name,
+            cert,
+            pkey,
+        })
+    }
+
+    /// Creates a new root certificate authority.
+    pub fn new_root(name: &str) -> Result<Ca, Box<dyn Error>> {
+        Ca::make_ca(name, None)
     }
 
     /// Returns the path to the CA's certificate.
     pub fn ca_cert_path(&self) -> PathBuf {
         self.dir.path().join("ca.crt")
+    }
+
+    /// Requests a new intermediate certificate authority.
+    pub fn request_ca(&self, name: &str) -> Result<Ca, Box<dyn Error>> {
+        Ca::make_ca(name, Some(self))
     }
 
     /// Generates a certificate with the specified Common Name (CN) that is
@@ -451,7 +470,7 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
 
     mz_ore::test::init_logging();
 
-    let ca = Ca::new()?;
+    let ca = Ca::new_root("test ca")?;
     let (server_cert, server_key) =
         ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
 
@@ -553,14 +572,14 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
 fn test_auth() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    let ca = Ca::new()?;
+    let ca = Ca::new_root("test ca")?;
     let (server_cert, server_key) =
         ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
     let (client_cert, client_key) = ca.request_client_cert("materialize")?;
     let (client_cert_other, client_key_other) = ca.request_client_cert("other")?;
     let (client_cert_cloud, client_key_cloud) = ca.request_client_cert("user@_.com")?;
 
-    let bad_ca = Ca::new()?;
+    let bad_ca = Ca::new_root("test ca")?;
     let (bad_client_cert, bad_client_key) = bad_ca.request_client_cert("materialize")?;
 
     let tenant_id = Uuid::new_v4();
@@ -1338,6 +1357,86 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     b.set_certificate_file(&client_cert_other, SslFiletype::PEM)?;
                     b.set_private_key_file(&client_key_other, SslFiletype::PEM)
                 }),
+                assert: Assert::Success,
+            },
+        ],
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
+    // Create a CA, an intermediate CA, and a server key pair signed by the
+    // intermediate CA.
+    let ca = Ca::new_root("test ca")?;
+    let intermediate_ca = ca.request_ca("intermediary")?;
+    let (server_cert, server_key) =
+        intermediate_ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
+
+    // Create a certificate chain bundle that contains the server's certificate
+    // and the intermediate CA's certificate.
+    let server_cert_chain = {
+        let path = intermediate_ca.dir.path().join("server.chain.crt");
+        let mut buf = vec![];
+        File::open(&server_cert)?.read_to_end(&mut buf)?;
+        File::open(intermediate_ca.ca_cert_path())?.read_to_end(&mut buf)?;
+        fs::write(&path, buf)?;
+        path
+    };
+
+    // When the server presents only its own certificate, without the
+    // intermediary, the client should fail to verify the chain.
+    let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
+    let server = util::start_server(config)?;
+    run_tests(
+        "TlsMode::Require",
+        &server,
+        &[
+            TestCase::Pgwire {
+                user: "materialize",
+                password: None,
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unable to get local issuer certificate");
+                })),
+            },
+            TestCase::Http {
+                user: "mz_system",
+                scheme: Scheme::HTTPS,
+                headers: &HeaderMap::new(),
+                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert!(code.is_none());
+                    assert_contains!(message, "unable to get local issuer certificate");
+                })),
+            },
+        ],
+    );
+
+    // When the server is configured to present the entire certificate chain,
+    // the client should be able to verify the chain even though it only knows
+    // about the root CA.
+    let config =
+        util::Config::default().with_tls(TlsMode::Require, &server_cert_chain, &server_key);
+    let server = util::start_server(config)?;
+    run_tests(
+        "TlsMode::Require",
+        &server,
+        &[
+            TestCase::Pgwire {
+                user: "materialize",
+                password: None,
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                assert: Assert::Success,
+            },
+            TestCase::Http {
+                user: "mz_system",
+                scheme: Scheme::HTTPS,
+                headers: &HeaderMap::new(),
+                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Success,
             },
         ],
