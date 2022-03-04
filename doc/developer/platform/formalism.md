@@ -113,6 +113,10 @@ past, and the `upper` frontier tells us which versions have yet to be learned.
 At times between `since` and `upper`, a pTVC should be identical to its
 corresponding TVC.
 
+We think of `since` as the "read frontier": times earlier than `since` cannot
+be correctly read. We think of `upper` as the "write frontier": times later
+than or equal to it may still be written to the TVC.
+
 A *read* of a pTVC `ptvc` at time `t` is the collection version in `ptvc` which
 corresponds to `t`. We write this as `read(ptvc, t) => collection-version`.
 
@@ -122,9 +126,22 @@ collection version as would be read from the pTVC's corresponding TVC:
 
 All pTVCs ensure an important correctness invariant. Consider a pTVC `ptvc`
 corresponding to some TVC `tvc`, and with `since` and `upper` frontiers. For
-all times `t` such that `t` is later than or equal to `since`, and `t` is also
-earlier than `upper`, reads of `ptvc` at `t` are correct: `read(ptvc, t) =
-read(tvc, t)`.
+all times `t` such that `t` is later than or equal to `since`, and `t` is *not*
+later than or equal to `upper`, reads of `ptvc` at `t` are correct: `read(ptvc,
+t) = read(tvc, t)`. In the context of a pTVC, we say that such a time `t`
+is *between* `since` and `upper`.
+
+![A diagram showing past, readable, and future times in a
+pTVC.](assets/since-readable-upper.jpeg)
+
+In this diagram, times are shown as a two-dimensional lattice forming a partial
+order; time generally flows left to right, and the precise order is shown by
+arrows. The `since` frontier is formed by two times labeled "since"; the
+`upper` frontier is formed by two times labeled "upper". Times later than
+`upper` are drawn in orange: these times are in the unknown future of the pTVC.
+Times earlier than or concurrent with `since` are drawn in gray: these times
+are in the forgotten past. Only times in blue--those between `since` and
+`upper`--can be correctly read.
 
 ## Update-set representations of TVCs and pTVCs
 
@@ -158,6 +175,16 @@ diff(t, c1, c2) = { u = [data, t, diff] |
                     (diff = multiplicity(c2, data) - multiplicity(c1, data))
                   }
 ```
+
+Given a frontier `f`, a set of updates `updates` can be *compacted* together
+into a (likely smaller) set of updates where the sum of the diffs for each
+`data` in the set is preserved, and every update has a time `t` such that `f
+<=t t`. We write this as `compact(updates, f)`. Since the diffs for each data
+are unchanged, `apply(c, updates) = apply(c, compact(updates, f))` for any
+collection version `c`. These compacted updates have the same effect when
+applied as the original set, thanks to commutativity. For any collection
+version `c` and set of updates `updates`, `apply(c, updates) = apply(c,
+compact(updates))`.
 
 ### Isomorphism between update and time-function representations
 
@@ -200,7 +227,7 @@ updates(tvc) = ⋃ updates(tvc, t) for all t in T
 
 This may seem a bit abstract---the formalism is shaped this way because
 collection versions are only partially ordered. If we take our times `T` to be
-the (totally ordered) naturals, we obtain much simpler definitions. The update
+the (totally ordered) naturals, we obtain a much simpler definition: the update
 set for a given time `t` is simply the difference between the version at `t`
 and the version at `t-1`.
 
@@ -208,44 +235,87 @@ and the version at `t-1`.
 updates(tvc, t) = diff(t, read(tvc, t - 1), read(tvc, t))
 ```
 
------------ [ End of current rewrite / later text unchanged ] --------------
+### Update representation of pTVCs
 
-## Partial time-varying collections
+We have argued that the time-function and update-set representations of a TVC
+are equivalent. Similarly, we can also represent a pTVC as a set of updates
+together with `since` and `upper` frontiers: `ptvc = [updates, since, upper]`.
+We use the same definition for reads as we gave for TVCs above. We wish to
+ensure that each such pTVC maintains the correctness invariant: `read(ptvc, t)
+= read(tvc, t)` so long as `t` is at least `since` and not later than `upper`.
 
-We represent a pTVC as a triple of `[updates, since, upper]`, where `updates`
-is a set of updates (just like a TVC), and `since` and `upper` are two
-frontiers which define which times we can correctly read, and which times may
-be written in future versions of the pTVC.
+First, consider the empty pTVC `ptvc0 = [{}, {t0}, {t0}]`. `ptvc0` is trivially
+correct since there are no times earlier than than the upper frontier `{t0}`.
 
-### Since frontier
+Next we consider two ways a pTVC could evolve, and show that each evolution
+preserves correctness.
 
-Informally, updates at times not greater than the `since` frontier may have
-been consolidated with updates at other times. The updates are not
-discarded, but their times may have been advanced to allow cancelation and
-consolidation of updates to occur. This is analogous to "version vacuuming"
-in multiversioned databases. As the system operates, the `since` frontier
-may advance to allow compaction of updates. This happens subject to
-constraints, and only when correctness permits.
+### pTVC append
 
-We think of `since` as the "read frontier": times earlier than `since` cannot
-be correctly read.
+Let `ptvc = [ptvc-updates, since, upper]` be a correct view of some TVC's
+updates `tvc_updates`. Now consider appending a window of new updates to this
+pTVC, and advancing `upper` to `upper'`: `ptvc' = append(ptvc, upper',
+new-updates)`.
 
-### Upper frontier
+Which new updates do we need to add? Precisely those whose times are equal to
+or later than `upper`, and also *not* equal to or later than `upper'`.
 
-The upper frontier tells us how a pTVC may continue to
-evolve. All future updates will necessarily have their `time` greater or
-equal to the `upper` frontier. As the system operates, the `upper`
-frontier advances when the contents of the collection are known with
-certainty for more times.
+```
+ptvc' = [ptvc-updates ⋃ { u = [data, time, diff] in tvc_updates |
+                          (upper <=t time) and not ( upper' <=t time)}
+         since,
+         upper']
+```
 
-We think of `upper` as the "write frontier": times later than or equal to it may
-still be written to the TVC. For some time `t` not later than or equal to
-`upper`, the updates at `t` are complete.
+Is `ptvc'` correct? Because `since` is unchanged and its updates between
+`since` and `upper` are unchanged, it must still be correct for any `t` between
+`since` and `upper`. And since it now includes every TVC update between `upper`
+and `upper'`, it must also be correct for those times as well: their
+`prior-updates` are identical, by induction to times which were correct in the
+original `ptvc`. `ptvc'` is therefore correct for all times between `since` and
+`upper'`.
 
-These two frontiers mean that for any `time` greater or equal to `since`, but not greater or equal to `upper`, we can exactly reconstruct the collection at `time`.
-If `time` is not greater or equal to `since`, we may have permanently lost historical distinctions that allow us to know the contents at `time`.
-If `time` is greater or equal to `upper`, we may still receive changes to the collection that occur at `time`.
-The two frontiers never move backward, and often move forward as the system operates.
+This allows us to advance the upper frontier of a pTVC by appending new updates
+to it (so long as we have every update between `upper` and `upper'`) and still
+preserve correctness.
+
+### pTVC compaction
+
+Again, let `ptvc = [ptvc-updates, since, upper]` be a correct view of some TVC.
+Now consider compacting all updates prior to some frontier `since'`, in such a
+way that the collection versions read at times later than or equal to `since'`
+remain unchanged. We write this `ptvc' = compact(ptvc, since')`:
+
+```
+ptvc' = [updates', since', upper]
+```
+
+One imagines that `updates'` would contain no updates with times prior to or
+concurrent with `since'`. It would presumably differ from `updates` only along
+the "boundary layer"--the earliest wavefront of times which delineate the
+leading edge of the set of times which are at or later than `since'`. Updates
+prior to or concurrent with `since'` would be merged forward into that boundary
+layer.
+
+How this is accomplished (and showing that this is even possible) is left as an
+exercise for the reader, who is hopefully smarter than this author; but we
+trust that Very Smart People have figured this out.
+
+## Time evolution of pTVCs
+
+Materialize's goal is to keep track of a window of a TVC over time. At any
+given moment, a TVC is represented by a single `ptvc = [updates, since, upper]`
+triple. Each TVC these begins as the empty `ptvc0`, which is a correct
+representation of TVC. As new information about the TVC becomes available,
+Materialize appends those updates using `append(ptvc, upper', new-updates)`. To
+reclaim storage space, Materialize compacts ptvcs using `compact(ptvc,
+since')`. Since both `append` and `compact` preserve pTVC correctness,
+Materializ always allows us to query a range of times (those between the
+current `since` and `upper`), and obtain the same results as would be observed
+in the "real" TVC.
+
+The two frontiers never move backward, and often move forward as the system
+operates.
 
 ## Evolution
 
