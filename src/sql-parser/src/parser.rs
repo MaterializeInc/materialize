@@ -1648,15 +1648,8 @@ impl<'a> Parser<'a> {
                 ','
             };
             Format::Csv { columns, delimiter }
-        } else if self.parse_keyword(JSON) {
-            if self.parse_keywords(&[USING, TYPE]) {
-                let composite_type = self.parse_object_name()?;
-                Format::Json(JsonSchema::NamedCompositeType {
-                    name: composite_type,
-                })
-            } else {
-                Format::Json(JsonSchema::JsonbSingleton)
-            }
+        } else if self.parse_keywords(&[JSON]) {
+            Format::Json(self.parse_json_schema()?)
         } else if self.parse_keyword(TEXT) {
             Format::Text
         } else if self.parse_keyword(BYTES) {
@@ -1719,6 +1712,19 @@ impl<'a> Parser<'a> {
                 self.peek_token(),
             );
         }
+    }
+
+    fn parse_json_schema(&mut self) -> Result<JsonSchema, ParserError> {
+        let json_schema = if self.parse_keywords(&[USING, TYPE]) {
+            let composite_type = self.parse_object_name()?;
+            JsonSchema::NamedCompositeType {
+                name: composite_type,
+            }
+        } else {
+            return self.expected(self.peek_pos(), "USING TYPE", self.peek_token());
+        };
+
+        Ok(json_schema)
     }
 
     fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {

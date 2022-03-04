@@ -123,7 +123,6 @@ impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JsonSchema {
-    JsonbSingleton,
     NamedCompositeType { name: UnresolvedObjectName },
 }
 
@@ -133,9 +132,6 @@ impl AstDisplay for JsonSchema {
         W: Write,
     {
         match self {
-            Self::JsonbSingleton => {
-                unimplemented!();
-            }
             Self::NamedCompositeType { name } => {
                 f.write_str("USING TYPE ");
                 f.write_node(name);

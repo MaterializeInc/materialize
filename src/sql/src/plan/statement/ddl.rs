@@ -1214,9 +1214,6 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
             })
         }
         Format::Json(schema) => match schema {
-            JsonSchema::JsonbSingleton => {
-                unimplemented!()
-            }
             JsonSchema::NamedCompositeType { name } => {
                 let named_composite_type = scx.resolve_item(name.clone())?;
                 if let Some(CatalogTypeDetails {
