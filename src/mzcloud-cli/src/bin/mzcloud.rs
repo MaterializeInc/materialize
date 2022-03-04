@@ -17,6 +17,8 @@
 
 use std::fs;
 use std::io::Cursor;
+use std::os::unix::prelude::OsStrExt;
+use std::path::PathBuf;
 use std::process;
 
 use anyhow::anyhow;
@@ -258,6 +260,21 @@ enum DeploymentsCommand {
     Psql {
         /// ID of the deployment.
         id: String,
+
+        /// The system's root CA certificate bundle
+        #[cfg_attr(
+            target_os = "linux",
+            clap(long, default_value = "/etc/ssl/certs/ca-bundle.crt")
+        )]
+        #[cfg_attr(
+            all(target_os = "macos", target_arch = "x86_64"),
+            clap(long, default_value = "/usr/local/share/ca-certificates/cacert.pem")
+        )]
+        #[cfg_attr(
+            all(target_os = "macos", target_arch = "aarch64"),
+            clap(long, default_value = "/opt/homebrew/share/ca-certificates/cacert.pem")
+        )]
+        ca_bundle: PathBuf,
     },
 }
 
@@ -419,7 +436,7 @@ async fn handle_deployment_operations(
                     .await?;
             print!("{}", logs);
         }
-        DeploymentsCommand::Psql { id } => {
+        DeploymentsCommand::Psql { id, ca_bundle } => {
             let deployment = deployments_retrieve(&config.oapi_config, &id).await?;
             let hostname = deployment
                 .hostname
@@ -443,10 +460,11 @@ async fn handle_deployment_operations(
                         config.oauth_args.client_id, config.oauth_args.secret
                     );
                     let email = urlencoding::encode(&config.email);
+                    let ca_bundle = urlencoding::encode_binary(ca_bundle.as_os_str().as_bytes());
                     (
                         vec![("PGPASSWORD", passwd)],
                         format!(
-                            "postgresql://{email}@{hostname}:6875/materialize?sslmode=verify-full"
+                            "postgresql://{email}@{hostname}:6875/materialize?sslmode=verify-full&sslrootcert={ca_bundle}"
                         ),
                     )
                 }
