@@ -82,20 +82,6 @@ impl<T: Timestamp> ArrangementFrontiers<T> {
         }
         min_upper
     }
-
-    /// Reports the minimal frontier greater than all identified `since` frontiers.
-    pub fn least_valid_since<I>(&self, identifiers: I) -> Antichain<T>
-    where
-        I: IntoIterator<Item = GlobalId>,
-        T: Lattice,
-    {
-        let mut max_since = Antichain::from_elem(T::minimum());
-        for id in identifiers {
-            // TODO: We could avoid repeated allocation by swapping two buffers.
-            max_since.join_assign(&self.since_of(&id).expect("Since missing at coordinator"));
-        }
-        max_since
-    }
 }
 
 pub struct Frontiers<T: Timestamp> {

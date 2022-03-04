@@ -3465,6 +3465,29 @@ impl Coordinator {
         }
     }
 
+    /// The smallest common read frontier among the specified collections.
+    fn least_valid_read(
+        &mut self,
+        storage_ids: &[GlobalId],
+        compute_ids: &[GlobalId],
+        instance: mz_dataflow_types::client::ComputeInstanceId,
+    ) -> Antichain<mz_repr::Timestamp> {
+        let mut since = Antichain::from_elem(Timestamp::minimum());
+        {
+            let storage = self.dataflow_client.storage();
+            for id in storage_ids.iter() {
+                since.join_assign(&storage.collection(*id).unwrap().implied_capability)
+            }
+        }
+        {
+            let compute = self.dataflow_client.compute(instance).unwrap();
+            for id in compute_ids.iter() {
+                since.join_assign(&compute.collection(*id).unwrap().implied_capability)
+            }
+        }
+        since
+    }
+
     /// A policy for determining the timestamp for a peek.
     ///
     /// The Timestamp result may be `None` in the case that the `when` policy
@@ -3491,14 +3514,10 @@ impl Coordinator {
         // a larger timestamp and block, perhaps the user should intervene).
         let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
 
-        // Determine the valid lower bound of times that can produce correct outputs.
-        // This bound is determined by the arrangements contributing to the query,
-        // and does not depend on the transitive sources.
-        let mut since = self.indexes.least_valid_since(index_ids.iter().cloned());
-        since.join_assign(
-            &self
-                .sources
-                .least_valid_since(unmaterialized_source_ids.iter().cloned()),
+        let since = self.least_valid_read(
+            &unmaterialized_source_ids,
+            &index_ids,
+            DEFAULT_COMPUTE_INSTANCE_ID,
         );
 
         // First determine the candidate timestamp, which is either the explicitly requested
@@ -3668,11 +3687,11 @@ impl Coordinator {
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
         let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(source_ids);
-        let mut since = self.indexes.least_valid_since(index_ids.iter().copied());
-        since.join_assign(
-            &self
-                .sources
-                .least_valid_since(unmaterialized_source_ids.iter().copied()),
+
+        let since = self.least_valid_read(
+            &unmaterialized_source_ids,
+            &index_ids,
+            DEFAULT_COMPUTE_INSTANCE_ID,
         );
 
         let mut candidate = if index_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
