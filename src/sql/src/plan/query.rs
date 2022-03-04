@@ -2941,16 +2941,8 @@ fn plan_cast(
         Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
         _ => plan_expr(ecx, expr)?,
     };
-
-    let expr = match expr {
-        // Maintain the stringness of literals strings to preserve any
-        // side effects of Explicit casts (going through plan_coerce
-        // uses Assignment casts).
-        CoercibleScalarExpr::LiteralString(..) => expr.type_as(&ecx, &ScalarType::String)?,
-        expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
-    };
-
     let ecx = &ecx.with_name("CAST");
+    let expr = typeconv::plan_coerce(ecx, expr, &to_scalar_type)?;
     let expr = typeconv::plan_cast(ecx, CastContext::Explicit, expr, &to_scalar_type)?;
     Ok(expr.into())
 }

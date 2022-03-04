@@ -415,32 +415,32 @@ lazy_static! {
             (String, Int2Vector) => Explicit: CastStringToInt2Vector(func::CastStringToInt2Vector),
             (String, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
             (String, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_varchar_max_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
             // CHAR
             (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
             (Char, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_varchar_max_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
 
             // VARCHAR
             (VarChar, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
             (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
             (VarChar, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_varchar_max_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
 
             // RECORD
@@ -785,14 +785,12 @@ pub fn plan_coerce<'a>(
 
         LiteralString(s) => {
             let lit = HirScalarExpr::literal(Datum::String(&s), ScalarType::String);
-            let ccx = match coerce_to {
-                // Postgres' literal string parsing functions for bpchar
-                // (bpcharin) and varchar (varcharin) have the same semantics as
-                // the behavior in Assignment casts (other types don't have this complexity)
-                ScalarType::Char { .. } | ScalarType::VarChar { .. } => CastContext::Assignment,
-                _ => CastContext::Explicit,
-            };
-            plan_cast(ecx, ccx, lit, coerce_to)?
+            // Per PostgreSQL, string literal explicitly casts to the base type.
+            // The caller is responsible for applying any desired modifiers
+            // (with either implicit or explicit semantics) via a separate call
+            // to `plan_cast`.
+            let coerce_to_base = &coerce_to.without_modifiers();
+            plan_cast(ecx, CastContext::Explicit, lit, &coerce_to_base)?
         }
 
         LiteralRecord(exprs) => {
@@ -918,10 +916,8 @@ pub fn plan_cast(
     // Get cast which might include parameter rewrites + generating intermediate
     // expressions.
     //
-    // n.b PG solves this problem by making casts use the same process as their
-    // typical function selection, which already applies these semantics. Until
-    // we refactor this function to approximately use the function selection
-    // infrastructure, this is probably the fewest LOC change.
+    // String-like types get special handling to match PostgreSQL.
+    // See: https://github.com/postgres/postgres/blob/6b04abdfc/src/backend/parser/parse_coerce.c#L3205-L3223
     match (&cast_from, cast_to) {
         // Rewrite from char, varchar as from string
         (Char { .. } | VarChar { .. }, dest) if !dest.is_string_like() => {
