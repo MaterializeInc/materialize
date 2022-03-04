@@ -128,7 +128,7 @@ $ kafka-ingest format=bytes topic=kafka_text timestamp=1
 $ kafka-create-topic topic=kafka_numerics partitions=1
 
 $ kafka-ingest format=bytes topic=kafka_numerics timestamp=1
-{"a": -100, "b": -200, "c": 987654321, "d": 1.23456789, "e": 9.8765432123456789, "f": 5.1234567898765432123456789}
+{"a": -100, "b": -200, "c": 987654321, "d": 1.23456789, "e": 9.8e-3, "f": 5.1234567898765432123456789}
 
 > CREATE TYPE test_numerics AS (a int2, b int4, c int8, d float4, e double precision, f numeric);
 
@@ -137,7 +137,7 @@ $ kafka-ingest format=bytes topic=kafka_numerics timestamp=1
   FORMAT JSON USING TYPE test_numerics;
 
 > SELECT a, b, c, d, e, f FROM json_source_numerics;
--100 -200 987654321 1.2345679 9.876543212345679 5.1234567898765432123456789
+-100 -200 987654321 1.2345679 0.0098 5.1234567898765432123456789
 
 #
 # array types
