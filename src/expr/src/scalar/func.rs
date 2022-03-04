@@ -2039,27 +2039,29 @@ where
     }
 }
 
-fn date_trunc_interval<'a>(a: Datum, int: Interval) -> Result<Datum<'a>, EvalError>
-{
+fn date_trunc_interval<'a>(a: Datum, int: Interval) -> Result<Datum<'a>, EvalError> {
     use mz_repr::adt::datetime::DateTimeField;
     let units = a.unwrap_str();
-    units.parse()
+    units
+        .parse()
         .map_err(|_| EvalError::UnknownUnits(units.to_owned()))
-        .and_then(|dtu|
-            match dtu {
-                DateTimeUnits::Millennium => Ok(DateTimeField::Millennium),
-                DateTimeUnits::Century => Ok(DateTimeField::Century),
-                DateTimeUnits::Decade => Ok(DateTimeField::Decade),
-                DateTimeUnits::Year => Ok(DateTimeField::Year),
-                DateTimeUnits::Month => Ok(DateTimeField::Month),
-                DateTimeUnits::Day => Ok(DateTimeField::Day),
-                DateTimeUnits::Hour => Ok(DateTimeField::Hour),
-                DateTimeUnits::Minute => Ok(DateTimeField::Minute),
-                DateTimeUnits::Second => Ok(DateTimeField::Second),
-                DateTimeUnits::Milliseconds => Ok(DateTimeField::Milliseconds),
-                DateTimeUnits::Microseconds => Ok(DateTimeField::Microseconds),
-                other => Err(EvalError::Undefined(format!("truncate interval by \"{}\"", other)))
-            })
+        .and_then(|dtu| match dtu {
+            DateTimeUnits::Millennium => Ok(DateTimeField::Millennium),
+            DateTimeUnits::Century => Ok(DateTimeField::Century),
+            DateTimeUnits::Decade => Ok(DateTimeField::Decade),
+            DateTimeUnits::Year => Ok(DateTimeField::Year),
+            DateTimeUnits::Month => Ok(DateTimeField::Month),
+            DateTimeUnits::Day => Ok(DateTimeField::Day),
+            DateTimeUnits::Hour => Ok(DateTimeField::Hour),
+            DateTimeUnits::Minute => Ok(DateTimeField::Minute),
+            DateTimeUnits::Second => Ok(DateTimeField::Second),
+            DateTimeUnits::Milliseconds => Ok(DateTimeField::Milliseconds),
+            DateTimeUnits::Microseconds => Ok(DateTimeField::Microseconds),
+            other => Err(EvalError::Undefined(format!(
+                "truncate interval by \"{}\"",
+                other
+            ))),
+        })
         .and_then(|dtf| {
             let mut int2 = int.clone();
             int2.truncate_low_fields(dtf, Some(0))
