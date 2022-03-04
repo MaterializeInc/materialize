@@ -14,6 +14,7 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
+use mz_dataflow_types::client::{controller::ComputeController, Client};
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::{
@@ -23,10 +24,9 @@ use mz_expr::{
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{Datum, Row, Timestamp};
+use mz_repr::{Datum, Row};
 
 use crate::catalog::{CatalogItem, CatalogState};
-use crate::coord::ArrangementFrontiers;
 use crate::coord::Coordinator;
 use crate::error::RematerializedSourceType;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
@@ -35,11 +35,12 @@ use crate::{CoordError, PersisterWithConfig};
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
-    pub indexes: &'a ArrangementFrontiers<Timestamp>,
     pub persister: &'a PersisterWithConfig,
-    /// A handle to the storage abstraction, which describe sources from their identifier.
-    pub storage:
-        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
+    /// A handle to the compute abstraction, which describes indexes by identifier.
+    ///
+    /// This can also be used to grab a handle to the storage abstraction, through
+    /// its `storage()` method.
+    pub compute: ComputeController<'a, Box<dyn Client>, mz_repr::Timestamp>,
 }
 
 /// The styles in which an expression can be prepared for use in a dataflow.
@@ -57,12 +58,15 @@ pub enum ExprPrepStyle<'a> {
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder<'a>(&'a mut self) -> DataflowBuilder {
+    pub fn dataflow_builder<'a>(
+        &'a mut self,
+        instance: mz_dataflow_types::client::ComputeInstanceId,
+    ) -> DataflowBuilder {
+        let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
-            indexes: &self.indexes,
             persister: &self.persister,
-            storage: &self.dataflow_client,
+            compute,
         }
     }
 
@@ -107,10 +111,10 @@ impl<'a> DataflowBuilder<'a> {
             }
 
             // A valid index is any index on `id` that is known to the dataflow
-            // layer, as indicated by its presence in `self.indexes`.
+            // layer, as indicated by its presence in `self.compute`.
             let valid_index = self.catalog.enabled_indexes()[id]
                 .iter()
-                .find(|(id, _keys)| self.indexes.contains_key(*id));
+                .find(|(id, _keys)| self.compute.collection(*id).is_ok());
             if let Some((index_id, keys)) = valid_index {
                 let index_desc = IndexDesc {
                     on_id: *id,
@@ -137,7 +141,11 @@ impl<'a> DataflowBuilder<'a> {
                             // If this source relies on any pre-existing indexes (i.e., indexes
                             // that we're not building as part of this `DataflowBuilder`), we're
                             // attempting to reinstantiate a single-use source.
-                            let intersection = self.indexes.intersection(dependent_indexes);
+                            let intersection = dependent_indexes
+                                .into_iter()
+                                .filter(|id| self.compute.collection(*id).is_ok())
+                                .collect::<Vec<_>>();
+
                             if !intersection.is_empty() {
                                 let existing_indexes = intersection
                                     .iter()
@@ -187,9 +195,9 @@ impl<'a> DataflowBuilder<'a> {
             // actually used by the optimized plan
             if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
                 for (id, keys) in indexes.iter() {
-                    // Ensure only valid indexes (i.e. those in self.indexes) are imported.
+                    // Ensure only valid indexes (i.e. those in self.compute) are imported.
                     // TODO(#8318): Ensure this logic is accounted for.
-                    if !self.indexes.contains_key(*id) {
+                    if self.compute.collection(*id).is_err() {
                         continue;
                     }
                     let on_entry = self.catalog.get_by_id(&get_id);

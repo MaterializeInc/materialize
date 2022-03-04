@@ -140,3 +140,23 @@ pub enum ReadPolicy<T> {
     /// consider using the `ValidFrom` variant to manually pilot compaction.
     LagWriteFrontier(Box<dyn Fn(AntichainRef<T>) -> Antichain<T>>),
 }
+
+impl ReadPolicy<mz_repr::Timestamp> {
+    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to a multiple of that amount.
+    ///
+    /// The rounding down is done to reduce the number of changes the capability undergoes, with the thinking
+    /// being that if you are ok with `lag`, then getting something between `lag` and `2 x lag` should be ok.
+    pub fn lag_writes_by(lag: mz_repr::Timestamp) -> Self {
+        Self::LagWriteFrontier(Box::new(move |upper| {
+            if upper.is_empty() {
+                Antichain::from_elem(Timestamp::minimum())
+            } else {
+                // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
+                let mut time = upper[0];
+                time = time.saturating_sub(lag);
+                time = time.saturating_sub(time % lag);
+                Antichain::from_elem(time)
+            }
+        }))
+    }
+}

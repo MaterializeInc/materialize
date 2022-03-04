@@ -630,11 +630,9 @@ impl Coordinator {
                         if let Some((name, description)) =
                             Self::prepare_index_build(self.catalog.state(), &index_id)
                         {
-                            let df = self.dataflow_builder().build_index_dataflow(
-                                name,
-                                index_id,
-                                description,
-                            )?;
+                            let df = self
+                                .dataflow_builder(DEFAULT_COMPUTE_INSTANCE_ID)
+                                .build_index_dataflow(name, index_id, description)?;
                             self.ship_dataflow(df).await;
                         }
                     }
@@ -3238,7 +3236,7 @@ impl Coordinator {
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
         dataflow.set_as_of(Antichain::from_elem(timestamp));
-        let mut builder = self.dataflow_builder();
+        let mut builder = self.dataflow_builder(DEFAULT_COMPUTE_INSTANCE_ID);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
             builder.prep_relation_expr(
@@ -3339,7 +3337,7 @@ impl Coordinator {
                 let sink_id = self.catalog.allocate_id()?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id])?;
                 let sink_name = format!("tail-{}", sink_id);
-                self.dataflow_builder()
+                self.dataflow_builder(DEFAULT_COMPUTE_INSTANCE_ID)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
             TailFrom::Query {
@@ -3352,7 +3350,7 @@ impl Coordinator {
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
                 let mut dataflow = DataflowDesc::new(format!("tail-{}", id), id);
-                let mut dataflow_builder = self.dataflow_builder();
+                let mut dataflow_builder = self.dataflow_builder(DEFAULT_COMPUTE_INSTANCE_ID);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
                 dataflow
@@ -3419,13 +3417,14 @@ impl Coordinator {
             // Explicitly requested timestamps should be respected.
             PeekWhen::AtTimestamp(mut timestamp) => {
                 let temp_storage = RowArena::new();
-                self.dataflow_builder().prep_scalar_expr(
-                    &mut timestamp,
-                    ExprPrepStyle::OneShot {
-                        logical_time: None,
-                        session,
-                    },
-                )?;
+                self.dataflow_builder(DEFAULT_COMPUTE_INSTANCE_ID)
+                    .prep_scalar_expr(
+                        &mut timestamp,
+                        ExprPrepStyle::OneShot {
+                            logical_time: None,
+                            session,
+                        },
+                    )?;
                 let evaled = timestamp.eval(&[], &temp_storage)?;
                 let ty = timestamp.typ(&RelationType::empty());
                 match ty.scalar_type {
@@ -3659,12 +3658,14 @@ impl Coordinator {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
                 let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
-                coord.dataflow_builder().import_view_into_dataflow(
-                    // TODO: If explaining a view, pipe the actual id of the view.
-                    &GlobalId::Explain,
-                    &optimized_plan,
-                    &mut dataflow,
-                )?;
+                coord
+                    .dataflow_builder(DEFAULT_COMPUTE_INSTANCE_ID)
+                    .import_view_into_dataflow(
+                        // TODO: If explaining a view, pipe the actual id of the view.
+                        &GlobalId::Explain,
+                        &optimized_plan,
+                        &mut dataflow,
+                    )?;
                 mz_transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
                 timings.optimization = Some(start.elapsed());
                 Ok(dataflow)
@@ -4207,16 +4208,17 @@ impl Coordinator {
             }
         }
 
-        let indexes = &self.indexes;
         let persister = &self.persister;
-        let storage = &self.dataflow_client;
+        let compute = self
+            .dataflow_client
+            .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+            .unwrap();
 
         let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
             let builder = DataflowBuilder {
                 catalog,
-                indexes,
+                compute,
                 persister,
-                storage,
             };
             f(builder)
         })?;
