@@ -15,11 +15,14 @@
 
 //! Command-line interface for Materialize Cloud.
 
+use std::borrow::Cow;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Cursor;
 use std::os::unix::prelude::OsStrExt;
 use std::path::PathBuf;
 use std::process;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -262,20 +265,57 @@ enum DeploymentsCommand {
         id: String,
 
         /// The system's root CA certificate bundle
-        #[cfg_attr(
-            target_os = "linux",
-            clap(long, default_value = "/etc/ssl/certs/ca-bundle.crt")
-        )]
-        #[cfg_attr(
-            all(target_os = "macos", target_arch = "x86_64"),
-            clap(long, default_value = "/usr/local/share/ca-certificates/cacert.pem")
-        )]
-        #[cfg_attr(
-            all(target_os = "macos", target_arch = "aarch64"),
-            clap(long, default_value = "/opt/homebrew/share/ca-certificates/cacert.pem")
-        )]
-        ca_bundle: PathBuf,
+        #[clap(long, default_value_os_t)]
+        ca_bundle: CaBundle,
     },
+}
+
+#[derive(Debug, PartialEq)]
+struct CaBundle(PathBuf);
+
+impl Default for CaBundle {
+    fn default() -> Self {
+        CaBundle(
+            (&[
+                "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu/Gentoo etc.
+                "/etc/pki/tls/certs/ca-bundle.crt",   // Fedora/RHEL 6
+                "/etc/ssl/ca-bundle.pem",             // OpenSUSE
+                "/etc/pki/tls/cacert.pem",            // OpenELEC
+                "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS/RHEL 7
+                "/etc/ssl/cert.pem",                  // Alpine Linux
+                "/usr/local/share/ca-certificates/cacert.pem", // macOS x86-64
+                "/opt/homebrew/share/ca-certificates/cacert.pem", // macOS aarch64
+            ])
+                .iter()
+                .map(PathBuf::from)
+                .find(|path| path.exists())
+                .unwrap_or_else(|| PathBuf::from("/etc/ssl/certs/ca-certificates.crt")),
+        )
+    }
+}
+
+impl FromStr for CaBundle {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let path = PathBuf::from(s);
+        if !path.exists() {
+            anyhow::bail!("CA bundle does not exist: {:?}", path);
+        }
+        Ok(CaBundle(path))
+    }
+}
+
+impl CaBundle {
+    fn ssl_root_cert(&self) -> Cow<str> {
+        urlencoding::encode_binary(self.0.as_os_str().as_bytes())
+    }
+}
+
+impl Into<OsString> for CaBundle {
+    fn into(self) -> OsString {
+        OsString::from(self.0.as_os_str())
+    }
 }
 
 #[derive(Debug, clap::Parser)]
@@ -460,7 +500,7 @@ async fn handle_deployment_operations(
                         config.oauth_args.client_id, config.oauth_args.secret
                     );
                     let email = urlencoding::encode(&config.email);
-                    let ca_bundle = urlencoding::encode_binary(ca_bundle.as_os_str().as_bytes());
+                    let ca_bundle = ca_bundle.ssl_root_cert();
                     (
                         vec![("PGPASSWORD", passwd)],
                         format!(
