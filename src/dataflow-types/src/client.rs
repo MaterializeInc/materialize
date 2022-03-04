@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use tracing::trace;
@@ -108,8 +108,8 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
     /// Cancel the peeks associated with the given `uuids`.
     CancelPeeks {
-        /// The identifier of the peek request to cancel.
-        uuids: HashSet<Uuid>,
+        /// The identifiers of the peek requests to cancel.
+        uuids: BTreeSet<Uuid>,
     },
 }
 

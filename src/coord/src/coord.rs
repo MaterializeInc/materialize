@@ -84,7 +84,7 @@
 //!
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -337,7 +337,7 @@ pub struct Coordinator {
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client
-    client_pending_peeks: HashMap<u32, HashSet<Uuid>>,
+    client_pending_peeks: HashMap<u32, BTreeSet<Uuid>>,
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
@@ -4920,7 +4920,7 @@ pub mod fast_path_peek {
 
     use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
     use mz_dataflow_types::PeekResponseUnary;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
@@ -5146,7 +5146,7 @@ pub mod fast_path_peek {
             );
             self.client_pending_peeks
                 .entry(conn_id)
-                .or_insert_with(HashSet::new)
+                .or_insert_with(BTreeSet::new)
                 .insert(uuid);
             let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
             self.dataflow_client

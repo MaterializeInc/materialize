@@ -22,7 +22,7 @@
 //! compaction of each of its outputs, ensuring that we can recover each dataflow to its current state in case of
 //! failure or other reconfiguration.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
@@ -294,7 +294,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .map_err(ComputeError::from)
     }
     /// Cancels existing peek requests.
-    pub async fn cancel_peeks(&mut self, uuids: &HashSet<Uuid>) -> Result<(), ComputeError> {
+    pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         let uuids = uuids.clone();
         self.client
             .send(Command::Compute(
