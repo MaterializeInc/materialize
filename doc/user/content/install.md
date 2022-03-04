@@ -133,7 +133,7 @@ Detail | Info
 
 ### `systemd` service
 
-If you've install Materialize via [`apt`](#apt-ubuntu-debian-or-variants), you can start it as a service by running:
+If you've installed Materialize via [`apt`](#apt-ubuntu-debian-or-variants), you can start it as a service by running:
 
 ```shell
 systemctl start materialized.service
