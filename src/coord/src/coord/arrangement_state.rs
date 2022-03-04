@@ -23,7 +23,7 @@ use crate::coord::antichain::AntichainToken;
 
 /// A map from global identifiers to arrangement frontier state.
 pub struct ArrangementFrontiers<T: Timestamp> {
-    index: HashMap<GlobalId, Frontiers<T>>,
+    pub index: HashMap<GlobalId, Frontiers<T>>,
 }
 
 impl<T: Timestamp> Default for ArrangementFrontiers<T> {
@@ -155,11 +155,6 @@ impl<T: Timestamp + Copy> Frontiers<T> {
                 (since_action.borrow_mut())(since.borrow().frontier().to_owned());
             }
         })
-    }
-
-    /// Sets the latency behind the collection frontier at which compaction occurs.
-    pub fn set_compaction_window_ms(&mut self, window_ms: Option<T>) {
-        self.compaction_window_ms = window_ms;
     }
 }
 

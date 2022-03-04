@@ -193,12 +193,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
-                let mut new_read_capability = match &policy {
-                    ReadPolicy::ValidFrom(frontier) => frontier.clone(),
-                    ReadPolicy::LagWriteFrontier(logic) => {
-                        logic(collection.write_frontier.frontier())
-                    }
-                };
+                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
 
                 if <_ as timely::order::PartialOrder>::less_equal(
                     &collection.implied_capability,
@@ -222,6 +217,47 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             self.update_read_capabilities(&mut read_capability_changes)
                 .await;
         }
+    }
+
+    /// Assigns a read policy to specific identifiers.
+    ///
+    /// The policies are assigned in the order presented, and repeated identifiers should
+    /// conclude with the last policy. Changing a policy will immediately downgrade the read
+    /// capability if appropriate, but it will not "recover" the read capability if the prior
+    /// capability is already ahead of it.
+    ///
+    /// Identifiers not present in `policies` retain their existing read policies.
+    ///
+    /// This method is not `async` (yay) but will crash if it needs to transmit changes (boo).
+    pub fn set_read_policy_sync(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
+        let mut read_capability_changes = BTreeMap::default();
+        for (id, policy) in policies.into_iter() {
+            if let Ok(collection) = self.collection_mut(id) {
+                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
+
+                if <_ as timely::order::PartialOrder>::less_equal(
+                    &collection.implied_capability,
+                    &new_read_capability,
+                ) {
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                    if !update.is_empty() {
+                        read_capability_changes.insert(id, update);
+                    }
+                }
+
+                collection.read_policy = policy;
+            } else {
+                tracing::error!("Reference to unregistered id: {:?}", id);
+            }
+        }
+        assert!(
+            read_capability_changes.is_empty(),
+            "Read capabilites changed: {:?}",
+            read_capability_changes
+        );
     }
 }
 
@@ -257,20 +293,20 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
                 .write_frontier
                 .update_iter(changes.clone().drain());
 
-            if let super::ReadPolicy::LagWriteFrontier(logic) = &collection.read_policy {
-                let mut new_read_capability = logic(collection.write_frontier.frontier());
-                if <_ as timely::order::PartialOrder>::less_equal(
-                    &collection.implied_capability,
-                    &new_read_capability,
-                ) {
-                    // TODO: reuse change batch above?
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
+            let mut new_read_capability = collection
+                .read_policy
+                .frontier(collection.write_frontier.frontier());
+            if <_ as timely::order::PartialOrder>::less_equal(
+                &collection.implied_capability,
+                &new_read_capability,
+            ) {
+                // TODO: reuse change batch above?
+                let mut update = ChangeBatch::new();
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                if !update.is_empty() {
+                    read_capability_changes.insert(*id, update);
                 }
             }
         }
