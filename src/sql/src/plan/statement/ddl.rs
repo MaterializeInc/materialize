@@ -1225,6 +1225,20 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
                         .iter()
                         .map(|(column, id)| {
                             let scalar_type = scalar_type_from_catalog(scx, *id, &[])?;
+
+                            match scalar_type {
+                                ScalarType::Oid
+                                | ScalarType::RegProc
+                                | ScalarType::RegType
+                                | ScalarType::RegClass => {
+                                    bail!(
+                                        "unsupported scalar type {:?} in JSON source",
+                                        scalar_type
+                                    )
+                                }
+                                _ => {}
+                            };
+
                             Ok((
                                 column.clone(),
                                 ColumnType {
@@ -1233,7 +1247,7 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
                                 },
                             ))
                         })
-                        .collect::<Result<Vec<_>, PlanError>>()?;
+                        .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
                     DataEncoding::Json(JsonEncoding { fields })
                 } else {

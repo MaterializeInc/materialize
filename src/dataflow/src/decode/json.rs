@@ -63,20 +63,12 @@ pub fn decode_column(
     col_name: &ColumnName,
     col_type: &ColumnType,
 ) -> Result<(), anyhow::Error> {
-    let ColumnType {
-        nullable,
-        scalar_type,
-    } = col_type;
+    let ColumnType { scalar_type, .. } = col_type;
 
     let json_field = json.get(col_name.as_str());
 
     if json_field.is_none() {
-        if *nullable {
-            packer.push(Datum::Null);
-        } else {
-            bail!("column {} cannot be null", col_name.as_str())
-        }
-        return Ok(());
+        bail!("no value for field {}", col_name.as_str())
     }
 
     let json_field = json_field.unwrap();
@@ -97,14 +89,15 @@ pub fn decode_and_pack_value(
     json_field: &Value,
     scalar_type: &ScalarType,
 ) -> Result<(), anyhow::Error> {
+    if json_field.is_null() {
+        packer.push(Datum::Null);
+        Ok(())
+    }
+
     match scalar_type {
         ScalarType::Bool
         | ScalarType::Int16
         | ScalarType::Int32
-        | ScalarType::Oid
-        | ScalarType::RegClass
-        | ScalarType::RegProc
-        | ScalarType::RegType
         | ScalarType::Int64
         | ScalarType::Float32
         | ScalarType::Float64
@@ -129,8 +122,8 @@ pub fn decode_and_pack_value(
         ScalarType::Array(inner) => {
             let mut values = vec![];
             if let Some(array) = json_field.as_array() {
-                for x in array {
-                    values.push(decode_value(row_arena, x, inner)?);
+                for v in array {
+                    values.push(decode_value(row_arena, v, inner)?);
                 }
             }
             let dims = mz_repr::adt::array::ArrayDimension {
@@ -154,15 +147,7 @@ pub fn decode_and_pack_value(
                     if let Some(v) = json.get(field_name.as_str()) {
                         decode_and_pack_value(row, row_arena, v, &field_type.scalar_type)?;
                     } else {
-                        if field_type.nullable {
-                            // TODO(phemberger): do absent collections become Null or empty?
-                            row.push(Datum::Null);
-                        } else {
-                            bail!(
-                                "unable to find required record field {}",
-                                field_name.as_str()
-                            );
-                        }
+                        bail!("no value for record field {}", field_name.as_str());
                     }
                 }
             }
@@ -183,8 +168,8 @@ pub fn decode_and_pack_value(
         ScalarType::Int2Vector => {
             let mut values = vec![];
             if let Some(array) = json_field.as_array() {
-                for elem in array {
-                    values.push(decode_value(row_arena, elem, &ScalarType::Int16)?);
+                for v in array {
+                    values.push(decode_value(row_arena, v, &ScalarType::Int16)?);
                 }
             }
             let dims = mz_repr::adt::array::ArrayDimension {
@@ -194,6 +179,9 @@ pub fn decode_and_pack_value(
             packer.push_array(&[dims], values)?;
             Ok(())
         }
+        ScalarType::Oid : ScalarType::RegClass | ScalarType::RegProc | ScalarType::RegType => {
+            bail!("unsupported type ")
+        }
     }
 }
 
@@ -202,6 +190,10 @@ pub fn decode_value<'a>(
     json_field: &'a Value,
     scalar_type: &'a ScalarType,
 ) -> Result<Datum<'a>, anyhow::Error> {
+    if json_field.is_null() {
+        return Ok(Datum::Null);
+    }
+
     match scalar_type {
         ScalarType::Bool => {
             if let Some(v) = json_field.as_bool() {
@@ -214,11 +206,7 @@ pub fn decode_value<'a>(
                 return Ok(Datum::Int16(v));
             }
         }
-        ScalarType::Int32
-        | ScalarType::Oid
-        | ScalarType::RegClass
-        | ScalarType::RegProc
-        | ScalarType::RegType => {
+        ScalarType::Int32 => {
             if let Some(v) = json_field.as_i64() {
                 let v = i32::try_from(v)?;
                 return Ok(Datum::Int32(v));
@@ -240,6 +228,14 @@ pub fn decode_value<'a>(
             }
         }
         ScalarType::Numeric { .. } => {
+            match json_field {
+                Value::Number(n) => {
+                    println!("Have Numeric number: {}, {:?}", n, n);
+                    let v = strconv::parse_numeric(format!("{}", n).as_str())?;
+                    return Ok(Datum::Numeric(v));
+                }
+                _ => {}
+            }
             if let Some(v) = json_field.as_str() {
                 let v = strconv::parse_numeric(v)?;
                 return Ok(Datum::Numeric(v));
@@ -296,20 +292,28 @@ pub fn decode_value<'a>(
                 return Ok(Datum::String(v));
             }
         }
-        ScalarType::Jsonb => {
-            unimplemented!()
-        }
         ScalarType::Uuid => {
             if let Some(v) = json_field.as_str() {
                 let v = parse_uuid(v)?;
                 return Ok(Datum::Uuid(v));
             }
         }
-        ScalarType::Array(_) => unreachable!(),
-        ScalarType::List { .. } => unreachable!(),
-        ScalarType::Record { .. } => unreachable!(),
-        ScalarType::Map { .. } => unreachable!(),
-        ScalarType::Int2Vector => unreachable!(),
+        ScalarType::Oid | ScalarType::RegClass | ScalarType::RegProc | ScalarType::RegType => {
+            // should be disallowed by planning
+            unreachable!(format!(
+                "scalar type {:?} disallowed for JSON sources",
+                scalar_type
+            ));
+        }
+        ScalarType::Jsonb
+        | ScalarType::Array(_)
+        | ScalarType::List { .. }
+        | ScalarType::Record { .. }
+        | ScalarType::Map { .. }
+        | ScalarType::Int2Vector => {
+            // should be handled by `decode_and_pack_value`
+            unreachable!()
+        }
     }
 
     bail!(
