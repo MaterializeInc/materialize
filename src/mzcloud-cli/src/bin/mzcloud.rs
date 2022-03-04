@@ -269,7 +269,7 @@ enum MzVersionsCommand {
 }
 
 fn parse_cloud_region(s: &str) -> Result<SupportedCloudRegionRequest, String> {
-    let (provider, region) = s.split_once(":").ok_or_else(|| {
+    let (provider, region) = s.split_once(':').ok_or_else(|| {
         "Cloud provider region should colon separated `provider:region` pair.".to_owned()
     })?;
     let provider = provider.to_lowercase();

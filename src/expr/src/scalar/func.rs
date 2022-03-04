@@ -468,7 +468,7 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
     // Supporting other encodings is tracked by #2282.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
@@ -537,7 +537,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
@@ -5425,7 +5425,7 @@ fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
                 EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
             })?;
             // nth from the back
-            byte_indices.nth(n).unwrap_or_else(|| string.len())
+            byte_indices.nth(n).unwrap_or(string.len())
         }
         Ordering::Less => {
             let n = usize::try_from(n.abs() - 1).map_err(|_| {
@@ -5460,7 +5460,7 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         let n = usize::try_from(n).map_err(|_| {
             EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
         })?;
-        byte_indices.nth(n).unwrap_or_else(|| string.len())
+        byte_indices.nth(n).unwrap_or(string.len())
     };
 
     Ok(Datum::String(&string[start_in_bytes..]))

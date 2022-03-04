@@ -768,7 +768,7 @@ mod tests {
         let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
 
         let async_runtime = AsyncRuntime::new()?;
-        #[allow(clippy::disallowed_method)]
+        #[allow(clippy::disallowed_methods)]
         let listener_handle = async_runtime.spawn(async move {
             let mut num_channels_closed = 0;
             loop {
