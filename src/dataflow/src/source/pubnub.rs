@@ -19,7 +19,7 @@ use mz_dataflow_types::{sources::PubNubSourceConnector, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
 use mz_repr::{Datum, Row};
 
-use crate::source::{SimpleSource, SourceError, Timestamper};
+use crate::source::{SimpleSource, SourceError, TxnTimestamper};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
@@ -39,7 +39,7 @@ impl PubNubSourceReader {
 
 #[async_trait]
 impl SimpleSource for PubNubSourceReader {
-    async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
+    async fn start(mut self, timestamper: &mut TxnTimestamper) -> Result<(), SourceError> {
         let transport = DefaultTransport::new()
             // we don't need a publish key for subscribing
             .publish_key("")

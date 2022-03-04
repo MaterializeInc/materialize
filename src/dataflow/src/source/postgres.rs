@@ -28,7 +28,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
-use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
+use crate::source::{SimpleSource, SourceError, SourceTransaction, TxnTimestamper};
 use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
@@ -336,7 +336,7 @@ impl PostgresSourceReader {
 
     async fn produce_replication(
         &mut self,
-        timestamper: &Timestamper,
+        timestamper: &mut TxnTimestamper,
     ) -> Result<(), ReplicationError> {
         use ReplicationError::*;
 
@@ -554,7 +554,7 @@ impl PostgresSourceReader {
 #[async_trait]
 impl SimpleSource for PostgresSourceReader {
     /// The top-level control of the state machine and retry logic
-    async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
+    async fn start(mut self, timestamper: &mut TxnTimestamper) -> Result<(), SourceError> {
         // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
         // Postgres sources cannot proceed without a successful snapshot.
         {

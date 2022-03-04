@@ -653,90 +653,122 @@ impl SourceTransaction<'_> {
 
 /// A thread-safe transaction manager that is responsible for assigning timestamps to the
 /// transactions submitted to the system. Rows can be inserted individually using the
-/// [insert](Timestamper::insert) and [delete](Timestamper::delete) methods or as part of a bigger
+/// [insert](TxnTimestamper::insert) and [delete](TxnTimestamper::delete) methods or as part of a bigger
 /// transaction.
 ///
-/// When a transaction is started using [start_tx](Timestamper::start_tx) the internal clock will be
+/// When a transaction is started using [start_tx](TxnTimestamper::start_tx) the internal clock will be
+/// // This send is guarded by the `timestamp` LockGuard, so we know its accurate:
+/// the
 /// frozen and any subsequent rows will be timestamped with the exact same timestamp. The
 /// transaction is committed automatically as soon as the transaction object gets dropped.
+pub struct TxnTimestamper {
+    timestamp: Arc<RwLock<Timestamp>>,
+    sender: EventSender,
+}
+
+impl TxnTimestamper {
+    /// Start a transaction at a particular point in time. The timestamper will freeze its internal
+    /// clock while a transaction is active.
+    ///
+    /// NOTE: Calling `start_tx` a second time, or other methods on `Timestamper`,
+    /// before dropping the transaction guard could result in a deadlock.
+    /// This is why they take `&mut self`
+    pub async fn start_tx<'a>(&'a mut self) -> SourceTransaction<'a> {
+        // Holds the read lock so `Progress` won't be sent till we are done
+        SourceTransaction {
+            timestamp: self.timestamp.read().await,
+            sender: &self.sender,
+        }
+    }
+
+    /// Record an insertion of a row
+    pub async fn insert(&mut self, row: Row) -> anyhow::Result<()> {
+        self.start_tx().await.insert(row).await
+    }
+
+    /// Record a deletion of a row
+    pub async fn delete(&mut self, row: Row) -> anyhow::Result<()> {
+        self.start_tx().await.delete(row).await
+    }
+
+    /// Records an error. After this method is called the source will permanently be in an errored
+    /// state
+    async fn error(&mut self, err: SourceError) -> anyhow::Result<()> {
+        let timestamp = self.timestamp.read().await;
+        self.sender
+            .send(Event::Message(*timestamp, Err(err)))
+            .await
+            .or_else(|_| Err(anyhow!("channel closed")))
+    }
+}
+
+/// A dual of `TxnTimestamper` that drives times forward, periodically
 pub struct Timestamper {
-    inner: Arc<RwLock<Timestamp>>,
+    timestamp: Arc<RwLock<Timestamp>>,
     sender: EventSender,
     tick_duration: Duration,
     now: NowFn,
 }
 
 impl Timestamper {
-    fn new(sender: EventSender, tick_duration: Duration, now: NowFn) -> Self {
+    fn new(sender: EventSender, tick_duration: Duration, now: NowFn) -> (Self, TxnTimestamper) {
         let ts = now();
-        Self {
-            inner: Arc::new(RwLock::new(ts)),
-            sender,
-            tick_duration,
-            now,
-        }
+        let shared_timestamp = Arc::new(RwLock::new(ts));
+        (
+            Self {
+                timestamp: Arc::clone(&shared_timestamp),
+                sender: sender.clone(),
+                tick_duration,
+                now,
+            },
+            TxnTimestamper {
+                timestamp: shared_timestamp,
+                sender,
+            },
+        )
     }
 
-    /// Start a transaction at a particular point in time. The timestamper will freeze its internal
-    /// clock while a transaction is active.
-    ///
-    /// NOTE: Calling `start_tx` a second time, or other methods on `Timestamper`,
-    /// before dropping the transaction guard could result in a deadlock.
-    pub async fn start_tx<'a>(&'a self) -> SourceTransaction<'a> {
-        SourceTransaction {
-            timestamp: self.inner.read().await,
-            sender: &self.sender,
-        }
-    }
-
-    /// Record an insertion of a row
-    pub async fn insert(&self, row: Row) -> anyhow::Result<()> {
-        self.start_tx().await.insert(row).await
-    }
-
-    /// Record a deletion of a row
-    pub async fn delete(&self, row: Row) -> anyhow::Result<()> {
-        self.start_tx().await.delete(row).await
-    }
-
-    /// Records an error. After this method is called the source will permanently be in an errored
-    /// state
-    async fn error(&self, err: SourceError) -> anyhow::Result<()> {
-        let timestamp = self.inner.read().await;
-        self.sender
-            .send(Event::Message(*timestamp, Err(err)))
-            .await
-            .or_else(|_| Err(anyhow!("channel closed")))
-    }
-
-    /// Attempts to monotonically increase the current timestamp and provides a Progress message to
+    /// Periodically monotonically increases the current timestamp and provides a Progress message to
     /// timely.
     ///
     /// This method will wait for all current transactions to commit before advancing the clock and
     /// will cause any new requests for transactions to wait for the tick to complete before
     /// starting.  This is due to the write-preferring behaviour of the tokio RwLock.
-    async fn tick(&self) -> anyhow::Result<()> {
-        tokio::time::sleep(self.tick_duration).await;
-        let mut timestamp = self.inner.write().await;
-        let mut now: u128 = (self.now)().into();
+    async fn run(self) {
+        let mut interval = tokio::time::interval(self.tick_duration);
+        // first tick always completes immediately
+        interval.tick().await;
+        loop {
+            // Wait a consistent amount of time
+            interval.tick().await;
 
-        // Round to the next greatest self.tick_duration increment.
-        // This is to guarantee that different workers downgrade (without coordination) to the
-        // "same" next time
-        now += self.tick_duration.as_millis() - (now % self.tick_duration.as_millis());
+            // Send a Progress message
 
-        let now: u64 = now
-            .try_into()
-            .expect("materialize has existed for more than 500M years");
+            let mut timestamp = self.timestamp.write().await;
+            let mut now: u128 = (self.now)().into();
 
-        if *timestamp < now {
-            *timestamp = now;
-            self.sender
-                .send(Event::Progress(Some(*timestamp)))
-                .await
-                .or_else(|_| Err(anyhow!("channel closed")))?;
+            // Round to the next greatest self.tick_duration increment.
+            // This is to guarantee that different workers downgrade (without coordination) to the
+            // "same" next time
+            now += self.tick_duration.as_millis() - (now % self.tick_duration.as_millis());
+
+            let now: u64 = now
+                .try_into()
+                .expect("materialize has existed for more than 500M years");
+
+            if *timestamp < now {
+                *timestamp = now;
+                // This send is guarded by the `timestamp` LockGuard, so we know its accurate:
+                // The source cannot send data on the cloned `EventSender`
+                // (See https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Sender.html#cancel-safety
+                // for information about ordering).
+                if let Err(_) = self.sender.send(Event::Progress(Some(*timestamp))).await {
+                    // Break and end the task if its an error, the source future will
+                    // hit the same dead-sender issue and abort its task as well
+                    break;
+                }
+            }
         }
-        Ok(())
     }
 }
 
@@ -752,7 +784,7 @@ pub trait SimpleSource {
     ///
     /// Implementors should return an Err(_) if an unrecoverable error is encountered or Ok(()) when
     /// they have finished consuming the upstream data.
-    async fn start(self, timestamper: &Timestamper) -> Result<(), SourceError>;
+    async fn start(self, timestamper: &mut TxnTimestamper) -> Result<(), SourceError>;
 }
 
 /// Creates a source dataflow operator from a connector implementing [SimpleSource](SimpleSource)
@@ -788,36 +820,23 @@ where
 
     if active {
         task::spawn(
-            || format!("source_simple_timestamper:{}", id.source_id),
+            || format!("source_simple_driver:{}", id.source_id),
             async move {
-                let timestamper = Timestamper::new(tx, timestamp_frequency, now);
-                let source = connector.start(&timestamper);
-                tokio::pin!(source);
+                let (timestamper, mut source_timestamper) =
+                    Timestamper::new(tx, timestamp_frequency, now);
 
-                // Build the future before the select! statement, and reset
-                // it in the completion block, to prevent subtle bugs where we drop the `tick`
-                // future
-                let tick_future = timestamper.tick();
-                tokio::pin!(tick_future);
+                // Start the timestamper task
+                let timestamper = task::spawn(
+                    || format!("source_simple_timestamper:{}", id.source_id),
+                    async move { timestamper.run().await },
+                );
 
-                loop {
-                    tokio::select! {
-                        res = &mut tick_future => {
-                            if res.is_err() {
-                                break;
-                            }
-                            // TODO(guswynn): consider passing the current timestamp into a source
-                            // `poll` function
-                            tick_future.set(timestamper.tick());
-                        }
-                        res = &mut source => {
-                            if let Err(err) = res {
-                                let _ = timestamper.error(err).await;
-                            }
-                            break;
-                        }
-                    }
+                if let Err(err) = connector.start(&mut source_timestamper).await {
+                    let _ = source_timestamper.error(err).await;
                 }
+                timestamper.abort();
+                // We don't care if it gives a value, cause we just aborted it
+                let _ = timestamper.await;
             },
         );
     }
