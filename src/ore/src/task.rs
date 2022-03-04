@@ -46,7 +46,7 @@ use tokio::task::{self, JoinHandle};
 /// [module][`self`] docs for more info.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
-#[allow(clippy::disallowed_method)]
+#[allow(clippy::disallowed_methods)]
 pub fn spawn<Fut, Name, NameClosure>(_nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
     Name: AsRef<str>,
@@ -63,7 +63,7 @@ where
 /// [module][`self`] docs for more info.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
-#[allow(clippy::disallowed_method)]
+#[allow(clippy::disallowed_methods)]
 pub fn spawn<Fut, Name, NameClosure>(nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
     Name: AsRef<str>,
@@ -80,7 +80,7 @@ where
 /// [module][`self`] docs for more info.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
-#[allow(clippy::disallowed_method)]
+#[allow(clippy::disallowed_methods)]
 pub fn spawn_blocking<Function, Output, Name, NameClosure>(
     _nc: NameClosure,
     function: Function,
@@ -100,7 +100,7 @@ where
 /// [module][`self`] docs for more info.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
-#[allow(clippy::disallowed_method)]
+#[allow(clippy::disallowed_methods)]
 pub fn spawn_blocking<Function, Output, Name, NameClosure>(
     nc: NameClosure,
     function: Function,

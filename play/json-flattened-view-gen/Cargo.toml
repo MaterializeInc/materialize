@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Materialize, Inc."]
 license = "Apache-2.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
