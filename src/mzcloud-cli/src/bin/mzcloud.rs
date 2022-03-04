@@ -23,7 +23,6 @@ use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use zip::ZipArchive;
 
-use mzcloud::apis::configuration::Configuration;
 use mzcloud::apis::deployments_api::{
     deployments_certs_retrieve, deployments_create, deployments_destroy, deployments_list,
     deployments_logs_retrieve, deployments_partial_update, deployments_retrieve,
@@ -99,7 +98,7 @@ impl Args {
     }
 }
 
-#[derive(Debug, clap::Parser, Serialize)]
+#[derive(Debug, Clone, clap::Parser, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OAuthArgs {
     /// OAuth Client ID for authentication.
@@ -316,7 +315,7 @@ async fn handle_mz_version_operations(
 ) -> anyhow::Result<()> {
     Ok(match operation {
         MzVersionsCommand::List => {
-            let versions = mz_versions_list(&config).await?;
+            let versions = mz_versions_list(&config.oapi_config).await?;
             println!("{}", serde_json::to_string_pretty(&versions)?);
         }
     })
@@ -340,7 +339,7 @@ async fn handle_deployment_operations(
             tailscale_auth_key,
         } => {
             let deployment = deployments_create(
-                &config,
+                &config.oapi_config,
                 DeploymentRequest {
                     cloud_provider_region: Box::new(cloud_provider_region),
                     name,
@@ -359,7 +358,7 @@ async fn handle_deployment_operations(
             println!("{}", serde_json::to_string_pretty(&deployment)?);
         }
         DeploymentsCommand::Get { id } => {
-            let deployment = deployments_retrieve(&config, &id).await?;
+            let deployment = deployments_retrieve(&config.oapi_config, &id).await?;
             println!("{}", serde_json::to_string_pretty(&deployment)?);
         }
         DeploymentsCommand::Update {
@@ -380,7 +379,7 @@ async fn handle_deployment_operations(
                 (false, Some(_)) => Some(true),
             };
             let deployment = deployments_partial_update(
-                &config,
+                &config.oapi_config,
                 &id,
                 Some(PatchedDeploymentUpdateRequest {
                     name,
@@ -399,42 +398,62 @@ async fn handle_deployment_operations(
             println!("{}", serde_json::to_string_pretty(&deployment)?);
         }
         DeploymentsCommand::Destroy { id } => {
-            deployments_destroy(&config, &id).await?;
+            deployments_destroy(&config.oapi_config, &id).await?;
         }
         DeploymentsCommand::List => {
-            let deployments = deployments_list(&config).await?;
+            let deployments = deployments_list(&config.oapi_config).await?;
             println!("{}", serde_json::to_string_pretty(&deployments)?);
         }
         DeploymentsCommand::Certs { id, output_file } => {
-            let bytes = deployments_certs_retrieve(&config, &id).await?;
+            let bytes = deployments_certs_retrieve(&config.oapi_config, &id).await?;
             fs::write(&output_file, &bytes)?;
             println!("Certificate bundle saved to {}", &output_file);
         }
         DeploymentsCommand::Logs { id, previous } => {
-            let logs = deployments_logs_retrieve(&config, &id, Some(previous)).await?;
+            let logs = deployments_logs_retrieve(&config.oapi_config, &id, Some(previous)).await?;
             print!("{}", logs);
         }
         DeploymentsCommand::TailscaleLogs { id, previous } => {
-            let logs = deployments_tailscale_logs_retrieve(&config, &id, Some(previous)).await?;
+            let logs =
+                deployments_tailscale_logs_retrieve(&config.oapi_config, &id, Some(previous))
+                    .await?;
             print!("{}", logs);
         }
         DeploymentsCommand::Psql { id } => {
-            let bytes = deployments_certs_retrieve(&config, &id).await?;
-            let dir = tempfile::tempdir()?;
-            let c = Cursor::new(bytes);
-            let mut archive = ZipArchive::new(c)?;
-            archive.extract(&dir)?;
-            let deployment = deployments_retrieve(&config, &id).await?;
+            let deployment = deployments_retrieve(&config.oapi_config, &id).await?;
             let hostname = deployment
                 .hostname
                 .ok_or_else(|| anyhow!("Deployment does not have a hostname."))?;
-            let dir_str = dir
+            let (env, postgres_url) = match deployment.tls_authority {
+                Some(_) => {
+                    let bytes = deployments_certs_retrieve(&config.oapi_config, &id).await?;
+                    let dir = tempfile::tempdir()?;
+                    let c = Cursor::new(bytes);
+                    let mut archive = ZipArchive::new(c)?;
+                    archive.extract(&dir)?;
+                    let dir_str = dir
                 .path()
                 .to_str()
                 .ok_or_else(|| anyhow!("Unable to format postgresql connection string. Temp dir contains non-unicode characters."))?;
-            let postgres_url = format!("postgresql://materialize@{hostname}:6875/materialize?sslmode=require&sslcert={dir}/materialize.crt&sslkey={dir}/materialize.key&sslrootcert={dir}/ca.crt", hostname=hostname, dir=dir_str);
+                    (vec![], format!("postgresql://materialize@{hostname}:6875/materialize?sslmode=verify-full&sslcert={dir}/materialize.crt&sslkey={dir}/materialize.key&sslrootcert={dir}/ca.crt", hostname=hostname, dir=dir_str))
+                }
+                None => {
+                    let passwd = format!(
+                        "{}{}",
+                        config.oauth_args.client_id, config.oauth_args.secret
+                    );
+                    let email = urlencoding::encode(&config.email);
+                    (
+                        vec![("PGPASSWORD", passwd)],
+                        format!(
+                            "postgresql://{email}@{hostname}:6875/materialize?sslmode=verify-full"
+                        ),
+                    )
+                }
+            };
             process::Command::new("psql")
                 .arg(postgres_url)
+                .envs(env)
                 .spawn()?
                 .wait()?;
         }
@@ -447,7 +466,33 @@ struct OauthResponse {
     access_token: String,
 }
 
-async fn get_oauth_token(args: &Args) -> Result<String, reqwest::Error> {
+impl OauthResponse {
+    /// Decodes but doesn't validate the access token's claims.
+    ///
+    /// The returned information is *not validated*, and is only
+    /// informational. This client can use it to do some mild error
+    /// checking, and retrieve information that can be presented to a
+    /// server which will *itself* validate it.
+    fn token_information(&self) -> Result<APITokenClaims, jsonwebtoken::errors::Error> {
+        let dummy_key = jsonwebtoken::DecodingKey::from_secret(&[]);
+        let mut dummy_validation = jsonwebtoken::Validation::default();
+        dummy_validation.insecure_disable_signature_validation();
+        let data = jsonwebtoken::decode::<APITokenClaims>(
+            &self.access_token,
+            &dummy_key,
+            &dummy_validation,
+        )?;
+        Ok(data.claims)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct APITokenClaims {
+    email: String,
+}
+
+async fn get_oauth_token(args: &Args) -> Result<OauthResponse, reqwest::Error> {
     Ok(reqwest::Client::new()
         .post(format!(
             "{}/identity/resources/auth/v1/api-token",
@@ -458,21 +503,43 @@ async fn get_oauth_token(args: &Args) -> Result<String, reqwest::Error> {
         .await?
         .error_for_status()?
         .json::<OauthResponse>()
-        .await?
-        .access_token)
+        .await?)
+}
+
+struct Configuration {
+    /// OpenAPI configuration used to talk to the mzcloud API endpoint
+    oapi_config: mzcloud::apis::configuration::Configuration,
+
+    /// The original OAuth arguments which can be used to authenticate to an mzcloud deployment.
+    oauth_args: OAuthArgs,
+
+    /// The email associated with the API token.
+    email: String,
+}
+
+impl Configuration {
+    async fn new(args: &Args) -> anyhow::Result<Configuration> {
+        let oauth_response = get_oauth_token(&args).await?;
+        let token_information = oauth_response.token_information()?;
+
+        let oapi_config = mzcloud::apis::configuration::Configuration {
+            base_path: args.url(),
+            user_agent: Some(format!("mzcloud-cli/{}/rust", VERSION)),
+            // Yes, this came from OAuth, but Frontegg wants it as a bearer token.
+            bearer_access_token: Some(oauth_response.access_token),
+            ..Default::default()
+        };
+        Ok(Configuration {
+            oapi_config,
+            email: token_information.email,
+            oauth_args: args.oauth.clone(),
+        })
+    }
 }
 
 async fn run() -> anyhow::Result<()> {
     let args = mz_ore::cli::parse_args();
-
-    let access_token = get_oauth_token(&args).await?;
-    let config = Configuration {
-        base_path: args.url(),
-        user_agent: Some(format!("mzcloud-cli/{}/rust", VERSION)),
-        // Yes, this came from OAuth, but Frontegg wants it as a bearer token.
-        bearer_access_token: Some(access_token),
-        ..Default::default()
-    };
+    let config = Configuration::new(&args).await?;
 
     Ok(match args.category {
         Category::Deployments(operation) => {

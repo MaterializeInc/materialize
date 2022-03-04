@@ -3460,6 +3460,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "jsonwebtoken",
  "mz-ore",
  "mzcloud",
  "reqwest",
@@ -3467,6 +3468,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "urlencoding",
  "zip",
 ]
 
