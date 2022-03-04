@@ -9,18 +9,14 @@
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/6305
 
-$ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
-
-$ kafka-create-topic topic=tail-fetch-count-zero
-
-> CREATE MATERIALIZED SOURCE fetch_count_zero
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tail-fetch-count-zero-${testdrive.seed}'
-  WITH( timestamp_frequency_ms = 100 )
-  FORMAT AVRO USING SCHEMA '${int}'
-  ENVELOPE NONE
+> CREATE TABLE t1 (i1 INT8);
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL fetch_count_zero AS OF NOW();
+> DECLARE c CURSOR FOR TAIL (SELECT * FROM t1) AS OF now() + '1hr'
 
-> FETCH 0 c WITH (timeout='1h');
+> FETCH 0 c
+
+> FETCH 0 c WITH (timeout='1h')
+
+> COMMIT
