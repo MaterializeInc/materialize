@@ -2041,42 +2041,32 @@ where
 
 fn date_trunc_interval<'a>(a: Datum, int: Interval) -> Result<Datum<'a>, EvalError>
 {
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => date_trunc_interval_inner(units, int),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_trunc_interval_inner<'a>(units: DateTimeUnits, int : Interval) -> Result<Datum<'a>, EvalError>
-{
     use mz_repr::adt::datetime::DateTimeField;
-    let mut int2 = int.clone();
-
-    fn to_eval_err<'a>(e : anyhow::Error) -> EvalError {
-        // truncate_low_fields returns only errors when fsec_max_precision is set
-        EvalError::Internal(e.to_string())
-    }
-
-    let res = match units {
-        DateTimeUnits::Millennium => int2.truncate_low_fields(DateTimeField::Millennium, None).map_err(to_eval_err),
-        DateTimeUnits::Century => int2.truncate_low_fields(DateTimeField::Century, None).map_err(to_eval_err),
-        DateTimeUnits::Decade => int2.truncate_low_fields(DateTimeField::Decade, None).map_err(to_eval_err),
-        DateTimeUnits::Year => int2.truncate_low_fields(DateTimeField::Year, None).map_err(to_eval_err),
-        DateTimeUnits::Month => int2.truncate_low_fields(DateTimeField::Month, None).map_err(to_eval_err),
-        DateTimeUnits::Day => int2.truncate_low_fields(DateTimeField::Day, None).map_err(to_eval_err),
-        DateTimeUnits::Hour => int2.truncate_low_fields(DateTimeField::Hour, None).map_err(to_eval_err),
-        DateTimeUnits::Minute => int2.truncate_low_fields(DateTimeField::Minute, None).map_err(to_eval_err),
-        DateTimeUnits::Second => int2.truncate_low_fields(DateTimeField::Second, None).map_err(to_eval_err),
-        DateTimeUnits::Milliseconds => int2.truncate_low_fields(DateTimeField::Milliseconds, None).map_err(to_eval_err),
-        DateTimeUnits::Microseconds => int2.truncate_low_fields(DateTimeField::Microseconds, None).map_err(to_eval_err),
-
-        // Since months have fractional weeks, truncating by week does not make sense.
-        // Postgres reports an error too in this case.
-        dtu => Err(EvalError::Undefined(format!("truncate interval by \"{}\"", dtu)))
-    };
-
-    res.map(|_| int2.into())
+    let units = a.unwrap_str();
+    units.parse()
+        .map_err(|_| EvalError::UnknownUnits(units.to_owned()))
+        .and_then(|dtu|
+            match dtu {
+                DateTimeUnits::Millennium => Ok(DateTimeField::Millennium),
+                DateTimeUnits::Century => Ok(DateTimeField::Century),
+                DateTimeUnits::Decade => Ok(DateTimeField::Decade),
+                DateTimeUnits::Year => Ok(DateTimeField::Year),
+                DateTimeUnits::Month => Ok(DateTimeField::Month),
+                DateTimeUnits::Day => Ok(DateTimeField::Day),
+                DateTimeUnits::Hour => Ok(DateTimeField::Hour),
+                DateTimeUnits::Minute => Ok(DateTimeField::Minute),
+                DateTimeUnits::Second => Ok(DateTimeField::Second),
+                DateTimeUnits::Milliseconds => Ok(DateTimeField::Milliseconds),
+                DateTimeUnits::Microseconds => Ok(DateTimeField::Microseconds),
+                other => Err(EvalError::Undefined(format!("truncate interval by \"{}\"", other)))
+            })
+        .and_then(|dtf| {
+            let mut int2 = int.clone();
+            int2.truncate_low_fields(dtf, None)
+                // truncate_low_fields should never return an error in our case
+                .map_err(|e| EvalError::Internal(e.to_string()))
+                .map(|_| int2.into())
+        })
 }
 
 fn date_trunc_inner<'a, T>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
