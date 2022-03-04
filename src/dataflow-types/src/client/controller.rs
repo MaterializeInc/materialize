@@ -28,7 +28,7 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 
 use crate::client::{
-    Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response,
+    Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response, StorageResponse,
 };
 use crate::logging::LoggingConfig;
 
@@ -88,7 +88,7 @@ impl<C: Client<T>, T> Controller<C, T> {
     #[inline]
     pub fn compute(&mut self, instance: ComputeInstanceId) -> Option<ComputeController<C, T>> {
         let compute = self.compute.get_mut(&instance)?;
-        // A compute instance containts `self.storage` so that it can form a `StorageController` if it needs.
+        // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
         Some(ComputeController {
             instance,
             compute,
@@ -109,6 +109,11 @@ impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
                         // response about a terminated instance.
                         .expect("Reference to absent instance")
                         .update_write_frontiers(updates)
+                        .await;
+                }
+                Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
+                    self.storage()
+                        .update_write_frontiers(&feedback.changes)
                         .await;
                 }
                 _ => {}
