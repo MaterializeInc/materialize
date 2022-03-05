@@ -21,7 +21,8 @@ process by the release notes team.
 
 {{% version-header v0.22.0 %}}
 
-- **Breaking change.** Standardize handling of the following [nonpure functions](/sql/functions/#pure-and-nonpure-functions) {{% gh 10445 %}}:
+- **Breaking change.** Standardize handling of the following [nonpure
+  functions](/sql/functions/#pure-and-nonpure-functions) {{% gh 10445 %}}:
 
   - `current_database`
   - `current_timestamp`
@@ -39,61 +40,74 @@ process by the release notes team.
   - `version`
 
   Materialize now allows use of nonpure functions in views, but will refuse to
-  create an index that directly or indirectly depends on a nonpure function.
-  The one exception is [`mz_logical_timestamp`], which can be used in limited
-  contexts in a materialized view as a [temporal filter](/guides/temporal-filters).
+  create an index that directly or indirectly depends on a nonpure function. The
+  one exception is [`mz_logical_timestamp`], which can be used in limited
+  contexts in a materialized view as a [temporal
+  filter](/guides/temporal-filters).
 
   Previously `current_timestamp`, `mz_logical_timestamp`, and `mz_uptime` were
   incorrectly disallowed in unmaterialized views, while the remaining nonpure
   functions were incorrectly allowed in materialized views.
 
-- **Breaking change.** Store days separately in [`interval`].
-Unlike in previous versions, hours are not automatically converted to days. This
-means that: an interval of 24 hours will not be equal to an interval
-of 1 day, you cannot subtract hours from days, and when ordering
-intervals `d days > h hours` for all `d` and `h` {{% gh 10708 %}}.
+- **Breaking change.** Store days separately in [`interval`]. Unlike in previous
+  versions, hours are not automatically converted to days. This means that: an
+  interval of 24 hours will not be equal to an interval of 1 day, you cannot
+  subtract hours from days, and when ordering intervals `d days > h hours` for
+  all `d` and `h` {{% gh 10708 %}}.
 
-  To force a conversion from hours to days, use the new [`justify_hours`](/sql/functions/justify-hours) function.
+  To force a conversion from hours to days, use the new
+  [`justify_hours`](/sql/functions/justify-hours) function.
 
-- **Breaking change.** Print all negative [`interval`]
-units as plural (e.g., `-1 days` will be printed instead of `-1 day`). This
-matches the behavior of PostgreSQL.
+- **Breaking change.** Print all negative [`interval`] units as plural (e.g.,
+  `-1 days` will be printed instead of `-1 day`). This matches the behavior of
+  PostgreSQL.
 
-- **Breaking change.** Round microsecond field of
-[`interval`] to 6 places before applying the
-given precision. For example `INTERVAL '1.2345649' SECOND(5)` will be
-rounded to `00:00:01.23457`, not `00:00:01.23456`. This matches the
-behavior of PostgreSQL.
+- **Breaking change.** Round microsecond field of [`interval`] to 6 places
+  before applying the given precision. For example `INTERVAL '1.2345649'
+  SECOND(5)` will be rounded to `00:00:01.23457`, not `00:00:01.23456`. This
+  matches the behavior of PostgreSQL.
 
-- Add several new time units to [`interval`](/sql/types/interval) parsing: `yr`, `yrs`, `hr`, `hrs`, `min`, `mins`, `sec`, and `secs`.
+- Add several new time units to [`interval`](/sql/types/interval) parsing:
+  `yr`, `yrs`, `hr`, `hrs`, `min`, `mins`, `sec`, and `secs`.
 
   Thanks to external contributor [@sunisdown](https://github.com/sunisdown).
 
-- Add the [`justify_days`](/sql/functions/justify-days), [`justify_hours`](/sql/functions/justify-hours), and [`justify_interval`](/sql/functions/justify-interval) functions.
+- Add the [`justify_days`](/sql/functions/justify-days),
+  [`justify_hours`](/sql/functions/justify-hours),
+  and [`justify_interval`](/sql/functions/justify-interval) functions.
 
-- Add support for [named composite types](/sql/create-type/#custom-row-type). Unimplemented features are listed in the original issue {{% gh 10734 %}}.
+- Add support for [named composite types](/sql/create-type/#custom-row-type).
+  Unimplemented features are listed in the original issue {{% gh 10734 %}}.
 
-- Change the range of the `oid` type from [-2<sup>31</sup>, 2<sup>31</sup> - 1] to [0, 2<sup>32</sup> - 1] to match PostgreSQL.
+- Change the range of the [`oid`] type from [-2<sup>31</sup>, 2<sup>31</sup> - 1]
+  to [0, 2<sup>32</sup> - 1] to match PostgreSQL.
 
-- Change the claimed PostgreSQL version returned by the `version()` function to 9.5 to match the values of the `server_version` and `server_version_num session` parameters.
+- Change the claimed PostgreSQL version returned by the
+  [`version()`](/sql/functions#system-information-func) function to 9.5 to
+  match the values of the `server_version` and `server_version_num` session
+  parameters.
 
-- In Kafka sources that use `INCLUDE KEY`, allow the key schema to be directly provided by the Confluent Schema Registry using the bare `FORMAT` syntax:
+- In Kafka sources that use `INCLUDE KEY`, allow the key schema to be directly
+  provided by the Confluent Schema Registry using the bare `FORMAT` syntax:
 
   ```sql
   CREATE SOURCE src
-    FROM KAFKA BROKER '...' TOPIC '...'
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '...'
-    INCLUDE KEY AS named;
+  FROM KAFKA BROKER '...' TOPIC '...'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '...'
+  INCLUDE KEY AS named;
   ```
 
-  Previously, this required explicitly using the `KEY FORMAT...VALUE FORMAT` syntax _also_ when using the Confluent Schema Registry.
+  Previously, this required explicitly using the `KEY FORMAT ... VALUE FORMAT`
+  syntax when _also_ using the Confluent Schema Registry.
 
 - Allow specifying the same [command line flag](/cli/) multiple times. The last
-specification takes precedence. This matches the behavior of many standard
-Unix tools and is particularly useful for folks using `materialized` via
-Docker, as it allows overwriting the default `--log-file` option.
+  specification takes precedence. This matches the behavior of many standard
+  Unix tools and is particularly useful for folks using `materialized` via
+  Docker, as it allows overwriting the default `--log-file` option.
 
-- Fix a panic that could occur if you performed the following sequence of operations {{% gh 10904 %}}:
+- Fix a panic that could occur if you rematerialized a source that had
+  previously been materialized under a different name, e.g. via the following
+  sequence of operations {{% gh 10904 %}}:
 
   - `CREATE SOURCE src ...;`
   - `CREATE INDEX src_idx ON src ...;`
@@ -101,7 +115,7 @@ Docker, as it allows overwriting the default `--log-file` option.
   - `DROP INDEX src_idx;`
   - `CREATE INDEX new_src_idx ON new_src ...;`
 
-- Fix a data loss bug in [Postgres sources] introduced in version v0.20.0 {{% gh 10981 %}}.
+- Fix a data loss bug in [Postgres sources] introduced in v0.20.0 {{% gh 10981 %}}.
 
 {{% version-header v0.21.0 %}}
 
