@@ -9,7 +9,7 @@
 
 //! Persistent metadata storage for the coordinator.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -55,8 +55,8 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
-    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
+    PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session};
@@ -241,9 +241,9 @@ impl CatalogState {
         match self.get_by_id(&id).item() {
             CatalogItem::Table(_) => true,
             item @ CatalogItem::View(_) => item.uses().iter().any(|id| self.uses_tables(*id)),
+            CatalogItem::Index(idx) => self.uses_tables(idx.on),
             CatalogItem::Source(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_) => false,
         }
@@ -1416,7 +1416,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn get_schema(
+    pub fn get_schema(
         &self,
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
@@ -2342,69 +2342,6 @@ impl Catalog {
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.state.by_id.values()
-    }
-
-    /// Returns all tables, views, and sources in the same schemas as a set of
-    /// input ids. The indexes of all relations are included.
-    pub fn schema_adjacent_indexed_relations(
-        &self,
-        ids: &[GlobalId],
-        conn_id: u32,
-    ) -> Vec<GlobalId> {
-        // Find all relations referenced by the expression. Find their parent schemas
-        // and add all tables, views, and sources in those schemas to a set.
-        let mut relations: HashSet<GlobalId> = HashSet::new();
-        let mut schemas = HashSet::new();
-        let mut schema_ids = VecDeque::new();
-        for id in ids {
-            // Always add in the user-specified ids.
-            relations.insert(*id);
-            let entry = self.get_by_id(&id);
-            let name = entry.name();
-            schemas.insert((&name.database, &*name.schema));
-        }
-
-        // If any of the system schemas is specified, add the rest of the
-        // system schemas.
-        let system_schemas = &[
-            (&DatabaseSpecifier::Ambient, MZ_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, PG_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, INFORMATION_SCHEMA),
-        ];
-        if system_schemas.iter().any(|s| schemas.contains(s)) {
-            schemas.extend(system_schemas);
-        }
-
-        for (db, schema) in schemas {
-            if let Some(schema) = self.get_schema(db, schema, conn_id) {
-                schema_ids.extend(schema.items.values());
-                while let Some(id) = schema_ids.pop_front() {
-                    let entry = self.get_by_id(id);
-                    let ty = entry.item_type();
-                    match ty {
-                        SqlCatalogItemType::Table => {
-                            relations.insert(*id);
-                        }
-                        SqlCatalogItemType::View | SqlCatalogItemType::Source => {
-                            let (indexes, unmaterialized) = self.nearest_indexes(&[*id]);
-                            relations.extend(indexes);
-                            // Add in the view/source if fully materialized.
-                            if unmaterialized.is_empty() {
-                                relations.insert(*id);
-                                if let SqlCatalogItemType::View = ty {
-                                    // Add transitive items from views.
-                                    if let CatalogItem::View(view) = entry.item() {
-                                        schema_ids.extend(&view.depends_on);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        relations.into_iter().collect()
     }
 }
 

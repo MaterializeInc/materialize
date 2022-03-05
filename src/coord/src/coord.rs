@@ -138,7 +138,7 @@ use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
 use mz_transform::Optimizer;
 
 use self::prometheus::Scraper;
-use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
+use crate::catalog::builtin::{self, BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{self, storage, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -250,18 +250,6 @@ struct PendingPeek {
     conn_id: u32,
 }
 
-/// The return value of [`Coordinator::determine_timestamp`].
-struct DeterminedTimestamp {
-    /// The determined timestamp.
-    timestamp: mz_repr::Timestamp,
-    /// The identifiers of sources that were involved in timestamp
-    /// determination.
-    storage_ids: Vec<GlobalId>,
-    /// The identifiers of indexes that were involved in timestamp
-    /// determination.
-    compute_ids: Vec<GlobalId>,
-}
-
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
@@ -353,7 +341,6 @@ struct TxnReads {
     // happens if both 1) there are no referenced sources or indexes and 2)
     // `mz_logical_timestamp()` is not present.
     timestamp_independent: bool,
-    timedomain_ids: HashSet<GlobalId>,
     read_holds: crate::coord::read_holds::ReadHolds<mz_repr::Timestamp>,
 }
 
@@ -2861,34 +2848,70 @@ impl Coordinator {
     /// schemas with the same timeline as whatever the first query is".
     fn timedomain_for(
         &self,
-        source_ids: &[GlobalId],
-        source_timeline: &Option<Timeline>,
+        uses_ids: &[GlobalId],
+        timeline: &Option<Timeline>,
         conn_id: u32,
-    ) -> Result<Vec<GlobalId>, CoordError> {
-        let mut timedomain_ids = self
-            .catalog
-            .schema_adjacent_indexed_relations(&source_ids, conn_id);
+    ) -> Result<(Vec<GlobalId>, Vec<GlobalId>), CoordError> {
+        // Gather all the used schemas.
+        let mut schemas = HashSet::new();
+        for id in uses_ids {
+            let entry = self.catalog.get_by_id(&id);
+            let name = entry.name();
+            schemas.insert((&name.database, &*name.schema));
+        }
 
-        // Filter out ids from different timelines. The timeline code only verifies
-        // that the SELECT doesn't cross timelines. The schema-adjacent code looks
-        // for other ids in the same database schema.
-        timedomain_ids.retain(|&id| {
-            let id_timeline = self
-                .validate_timeline(vec![id])
-                .expect("single id should never fail");
-            match (&id_timeline, &source_timeline) {
-                // If this id doesn't have a timeline, we can keep it.
-                (None, _) => true,
-                // If there's no source timeline, we have the option to opt into a timeline,
-                // so optimistically choose epoch ms. This is useful when the first query in a
-                // transaction is on a static view.
-                (Some(id_timeline), None) => id_timeline == &Timeline::EpochMilliseconds,
-                // Otherwise check if timelines are the same.
-                (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
-            }
-        });
+        // If any of the system schemas is specified, add the rest of the
+        // system schemas.
+        let system_schemas = &[
+            (&DatabaseSpecifier::Ambient, builtin::MZ_CATALOG_SCHEMA),
+            (&DatabaseSpecifier::Ambient, builtin::PG_CATALOG_SCHEMA),
+            (&DatabaseSpecifier::Ambient, builtin::INFORMATION_SCHEMA),
+        ];
+        if system_schemas.iter().any(|s| schemas.contains(s)) {
+            schemas.extend(system_schemas);
+        }
 
-        Ok(timedomain_ids)
+        // Gather the IDs of all items in all used schemas.
+        let mut item_ids: HashSet<GlobalId> = HashSet::new();
+        for (db, schema) in schemas {
+            let schema = self
+                .catalog
+                .get_schema(db, schema, conn_id)
+                .expect("known to exist");
+            item_ids.extend(schema.items.values());
+        }
+
+        // Gather the indexes and unmaterialized sources used by those items.
+        let mut storage_ids = vec![];
+        let mut compute_ids = vec![];
+        for id in item_ids {
+            let (indexes, sources) = self.catalog.nearest_indexes(&[id]);
+            storage_ids.extend(sources);
+            compute_ids.extend(indexes);
+        }
+
+        // Filter out ids from different timelines.
+        for ids in [&mut storage_ids, &mut compute_ids] {
+            ids.sort();
+            ids.dedup();
+            ids.retain(|&id| {
+                let id_timeline = self
+                    .validate_timeline(vec![id])
+                    .expect("single id should never fail");
+                match (&id_timeline, &timeline) {
+                    // If this id doesn't have a timeline, we can keep it.
+                    (None, _) => true,
+                    // If there's no source timeline, we have the option to opt into a timeline,
+                    // so optimistically choose epoch ms. This is useful when the first query in a
+                    // transaction is on a static view.
+                    (Some(id_timeline), None) => id_timeline == &Timeline::EpochMilliseconds,
+                    // Otherwise check if timelines are the same.
+                    (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
+                }
+            });
+        }
+
+        Ok((storage_ids, compute_ids))
     }
 
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -2940,65 +2963,67 @@ impl Coordinator {
                 _ => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
-                    let mut timedomain_ids =
+                    let (storage_ids, compute_ids) =
                         self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
-                    let determined =
-                        self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
-                    // Add the used sources and indexes to the recorded ids.
-                    timedomain_ids.extend(&determined.storage_ids);
-                    timedomain_ids.extend(&determined.compute_ids);
+                    let timestamp = self.determine_timestamp(
+                        session,
+                        &storage_ids,
+                        &compute_ids,
+                        PeekWhen::Immediately,
+                    )?;
                     let read_holds = read_holds::ReadHolds {
-                        time: determined.timestamp,
-                        storage_ids: determined.storage_ids,
-                        compute_ids: determined.compute_ids,
+                        time: timestamp,
+                        storage_ids,
+                        compute_ids,
                         compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
                     };
                     self.acquire_read_holds(&read_holds).await;
                     let txn_reads = TxnReads {
                         timestamp_independent,
-                        timedomain_ids: timedomain_ids.into_iter().collect(),
                         read_holds,
                     };
                     self.txn_reads.insert(conn_id, txn_reads);
-
-                    determined.timestamp
+                    timestamp
                 }
             };
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
 
-            // Verify that the references and indexes for this query are in the current
-            // read transaction.
-            let mut stmt_ids = HashSet::new();
-            stmt_ids.extend(source_ids.iter().collect::<HashSet<_>>());
-            // Using nearest_indexes here is a hack until #8318 is fixed. It's used because
-            // that's what determine_timestamp uses.
-            stmt_ids.extend(
-                self.catalog
-                    .nearest_indexes(&source_ids)
-                    .0
-                    .into_iter()
-                    .collect::<HashSet<_>>(),
-            );
+            // Verify that the references and indexes for this query are in the
+            // current read transaction.
+            //
+            // Using nearest_indexes here is a hack until #8318 is fixed. It's
+            // used because that's what determine_timestamp uses.
+            let (compute_ids, storage_ids) = self.catalog.nearest_indexes(&source_ids);
+            let storage_ids = BTreeSet::from_iter(storage_ids);
+            let compute_ids = BTreeSet::from_iter(compute_ids);
+
             let read_txn = self.txn_reads.get(&conn_id).unwrap();
+            let allowed_storage_ids =
+                BTreeSet::from_iter(read_txn.read_holds.storage_ids.iter().copied());
+            let allowed_compute_ids =
+                BTreeSet::from_iter(read_txn.read_holds.compute_ids.iter().copied());
+
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
             // after the transaction started.
-            let outside: Vec<_> = stmt_ids.difference(&read_txn.timedomain_ids).collect();
-            if !outside.is_empty() {
-                let mut names: Vec<_> = read_txn
-                    .timedomain_ids
-                    .iter()
+            let outside_storage = &storage_ids - &allowed_storage_ids;
+            let outside_compute = &compute_ids - &allowed_compute_ids;
+            if !outside_storage.is_empty() || !outside_compute.is_empty() {
+                let mut names: Vec<_> = allowed_storage_ids
+                    .into_iter()
+                    .chain(allowed_compute_ids)
                     // This could filter out a view that has been replaced in another transaction.
-                    .filter_map(|id| self.catalog.try_get_by_id(*id))
+                    .filter_map(|id| self.catalog.try_get_by_id(id))
                     .map(|item| item.name().to_string())
                     .collect();
-                let mut outside: Vec<_> = outside
+                let mut outside: Vec<_> = outside_storage
                     .into_iter()
-                    .filter_map(|id| self.catalog.try_get_by_id(*id))
+                    .chain(outside_compute)
+                    .filter_map(|id| self.catalog.try_get_by_id(id))
                     .map(|item| item.name().to_string())
                     .collect();
                 // Sort so error messages are deterministic.
@@ -3012,8 +3037,8 @@ impl Coordinator {
 
             timestamp
         } else {
-            self.determine_timestamp(session, &source_ids, when)?
-                .timestamp
+            let (compute_ids, storage_ids) = self.catalog.nearest_indexes(&source_ids);
+            self.determine_timestamp(session, &storage_ids, &compute_ids, when)?
         };
 
         let source = self.view_optimizer.optimize(source)?;
@@ -3111,9 +3136,14 @@ impl Coordinator {
             // Updates greater or equal to this frontier will be produced.
             let frontier = if let Some(ts) = ts {
                 // If a timestamp was explicitly requested, use that.
-                let determined =
-                    coord.determine_timestamp(session, uses, PeekWhen::AtTimestamp(ts))?;
-                Antichain::from_elem(determined.timestamp)
+                let (compute_ids, storage_ids) = coord.catalog.nearest_indexes(uses);
+                let ts = coord.determine_timestamp(
+                    session,
+                    &storage_ids,
+                    &compute_ids,
+                    PeekWhen::AtTimestamp(ts),
+                )?;
+                Antichain::from_elem(ts)
             } else {
                 coord.determine_frontier(uses)
             };
@@ -3251,9 +3281,10 @@ impl Coordinator {
     fn determine_timestamp(
         &mut self,
         session: &Session,
-        uses_ids: &[GlobalId],
+        unmaterialized_source_ids: &[GlobalId],
+        index_ids: &[GlobalId],
         when: PeekWhen,
-    ) -> Result<DeterminedTimestamp, CoordError> {
+    ) -> Result<Timestamp, CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -3265,7 +3296,6 @@ impl Coordinator {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
 
         let since = self.least_valid_read(
             &unmaterialized_source_ids,
@@ -3320,49 +3350,52 @@ impl Coordinator {
 
                 // Compute a timestamp to which we should advance the candidate (if it is in
                 // advance).
-                let advance_to: Timestamp =
-                    if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
-                        // If the view depends on any tables, we enforce linearizability by choosing
-                        // the latest input time.  If the candidate is already advanced past read_ts
-                        // due to the since work above (if joined with some other view), a peek will
-                        // be put into pending until something closes the table timestamp. That
-                        // occurs if a user does certain table operations, or otherwise by the
-                        // advance_local_inputs_loop task (and so the pending peek could wait up to 1
-                        // second before the table timestamp is closed). We do not need to worry about
-                        // telling the table linearizability stuff about this future timestamp because
-                        // by the time the read is served the table linearizability time will have
-                        // advanced already.
-                        self.get_local_read_ts()
-                    } else {
-                        let upper = self.least_valid_write(
-                            &unmaterialized_source_ids,
-                            &index_ids,
-                            DEFAULT_COMPUTE_INSTANCE_ID,
-                        );
+                let advance_to: Timestamp = if unmaterialized_source_ids
+                    .iter()
+                    .any(|id| self.catalog.uses_tables(*id))
+                    || index_ids.iter().any(|id| self.catalog.uses_tables(*id))
+                {
+                    // If the view depends on any tables, we enforce linearizability by choosing
+                    // the latest input time.  If the candidate is already advanced past read_ts
+                    // due to the since work above (if joined with some other view), a peek will
+                    // be put into pending until something closes the table timestamp. That
+                    // occurs if a user does certain table operations, or otherwise by the
+                    // advance_local_inputs_loop task (and so the pending peek could wait up to 1
+                    // second before the table timestamp is closed). We do not need to worry about
+                    // telling the table linearizability stuff about this future timestamp because
+                    // by the time the read is served the table linearizability time will have
+                    // advanced already.
+                    self.get_local_read_ts()
+                } else {
+                    let upper = self.least_valid_write(
+                        &unmaterialized_source_ids,
+                        &index_ids,
+                        DEFAULT_COMPUTE_INSTANCE_ID,
+                    );
 
-                        // We peek at the largest element not in advance of `upper`, which
-                        // involves a subtraction. If `upper` contains a zero timestamp there
-                        // is no "prior" answer, and we do not want to peek at it as it risks
-                        // hanging awaiting the response to data that may never arrive.
-                        //
-                        // The .get(0) here breaks the antichain abstraction by assuming this antichain
-                        // has 0 or 1 elements in it. It happens to work because we use a timestamp
-                        // type that meets that assumption, but would break if we used a more general
-                        // timestamp.
-                        if let Some(candidate) = upper.elements().get(0) {
-                            if *candidate > Timestamp::minimum() {
-                                candidate.saturating_sub(1)
-                            } else {
-                                Timestamp::minimum()
-                            }
+                    // We peek at the largest element not in advance of `upper`, which
+                    // involves a subtraction. If `upper` contains a zero timestamp there
+                    // is no "prior" answer, and we do not want to peek at it as it risks
+                    // hanging awaiting the response to data that may never arrive.
+                    //
+                    // The .get(0) here breaks the antichain abstraction by assuming this antichain
+                    // has 0 or 1 elements in it. It happens to work because we use a timestamp
+                    // type that meets that assumption, but would break if we used a more general
+                    // timestamp.
+                    if let Some(candidate) = upper.elements().get(0) {
+                        if *candidate > Timestamp::minimum() {
+                            candidate.saturating_sub(1)
                         } else {
-                            // A complete trace can be read in its final form with this time.
-                            //
-                            // This should only happen for literals that have no sources or sources that
-                            // are known to have completed (non-tailed files for example).
-                            Timestamp::MAX
+                            Timestamp::minimum()
                         }
-                    };
+                    } else {
+                        // A complete trace can be read in its final form with this time.
+                        //
+                        // This should only happen for literals that have no sources or sources that
+                        // are known to have completed (non-tailed files for example).
+                        Timestamp::MAX
+                    }
+                };
                 candidate.join_assign(&advance_to);
                 candidate
             }
@@ -3371,11 +3404,7 @@ impl Coordinator {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&timestamp) {
-            Ok(DeterminedTimestamp {
-                timestamp,
-                compute_ids: index_ids,
-                storage_ids: unmaterialized_source_ids,
-            })
+            Ok(timestamp)
         } else {
             let invalid_indexes = index_ids
                 .iter()
