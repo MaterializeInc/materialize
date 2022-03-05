@@ -220,8 +220,21 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
             }
 
             StorageCommand::AdvanceAllLocalInputs { advance_to } => {
-                for (_, local_input) in self.storage_state.local_inputs.iter_mut() {
+                let new_frontier = Antichain::from_elem(advance_to);
+                for (id, local_input) in self.storage_state.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
+                    // Announce the table updates as durably recorded. This is not correct,
+                    // but it also hasn't been correct afaict.
+                    // TODO(petrosagg): correct this once STORAGE owns table durability.
+                    let mut borrow = self.storage_state.source_uppers[id].borrow_mut();
+                    let mut joined_frontier = Antichain::new();
+                    for time1 in borrow.iter() {
+                        for time2 in new_frontier.iter() {
+                            use differential_dataflow::lattice::Lattice;
+                            joined_frontier.insert(time1.join(time2));
+                        }
+                    }
+                    *borrow = joined_frontier;
                 }
             }
 
