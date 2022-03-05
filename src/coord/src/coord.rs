@@ -250,6 +250,18 @@ struct PendingPeek {
     conn_id: u32,
 }
 
+/// The return value of [`Coordinator::determine_timestamp`].
+struct DeterminedTimestamp {
+    /// The determined timestamp.
+    timestamp: mz_repr::Timestamp,
+    /// The identifiers of sources that were involved in timestamp
+    /// determination.
+    storage_ids: Vec<GlobalId>,
+    /// The identifiers of indexes that were involved in timestamp
+    /// determination.
+    compute_ids: Vec<GlobalId>,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
@@ -2951,15 +2963,15 @@ impl Coordinator {
 
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
-                    let (timestamp, timestamp_ids) =
+                    let determined =
                         self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
-                    // Add the used indexes to the recorded ids.
-                    timedomain_ids.extend(&timestamp_ids);
-                    // TODO: Delete the above once the below is confirmed to replace it.
+                    // Add the used sources and indexes to the recorded ids.
+                    timedomain_ids.extend(&determined.storage_ids);
+                    timedomain_ids.extend(&determined.compute_ids);
                     let read_holds = transaction_holds::ReadHolds {
-                        time: timestamp,
-                        storage_ids: Vec::new(),
-                        compute_ids: timestamp_ids,
+                        time: determined.timestamp,
+                        storage_ids: determined.storage_ids,
+                        compute_ids: determined.compute_ids,
                         compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
                     };
                     self.acquire_read_holds(&read_holds).await;
@@ -2970,7 +2982,7 @@ impl Coordinator {
                     };
                     self.txn_reads.insert(conn_id, txn_reads);
 
-                    timestamp
+                    determined.timestamp
                 }
             };
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
@@ -3018,7 +3030,8 @@ impl Coordinator {
 
             timestamp
         } else {
-            self.determine_timestamp(session, &source_ids, when)?.0
+            self.determine_timestamp(session, &source_ids, when)?
+                .timestamp
         };
 
         let source = self.view_optimizer.optimize(source)?;
@@ -3116,8 +3129,9 @@ impl Coordinator {
             // Updates greater or equal to this frontier will be produced.
             let frontier = if let Some(ts) = ts {
                 // If a timestamp was explicitly requested, use that.
-                let ts = coord.determine_timestamp(session, uses, PeekWhen::AtTimestamp(ts))?;
-                Antichain::from_elem(ts.0)
+                let determined =
+                    coord.determine_timestamp(session, uses, PeekWhen::AtTimestamp(ts))?;
+                Antichain::from_elem(determined.timestamp)
             } else {
                 coord.determine_frontier(uses)
             };
@@ -3243,19 +3257,20 @@ impl Coordinator {
         since
     }
 
-    /// A policy for determining the timestamp for a peek.
+    /// Determines the timestamp for a peek.
     ///
-    /// The Timestamp result may be `None` in the case that the `when` policy
-    /// cannot be satisfied, which is possible due to the restricted validity of
-    /// traces (each has a `since` and `upper` frontier, and are only valid after
-    /// `since` and sure to be available not after `upper`). The set of indexes
-    /// used is also returned.
+    /// Timestamp determination may fail due to the restricted validity of
+    /// traces. Each has a `since` and `upper` frontier, and are only valid
+    /// after `since` and sure to be available not after `upper`.
+    ///
+    /// The set of storage and compute IDs used when determining the timestamp
+    /// are also returned.
     fn determine_timestamp(
         &mut self,
         session: &Session,
         uses_ids: &[GlobalId],
         when: PeekWhen,
-    ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
+    ) -> Result<DeterminedTimestamp, CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -3316,35 +3331,6 @@ impl Coordinator {
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                if !unmaterialized_source_ids.is_empty() {
-                    let mut unmaterialized = vec![];
-                    let mut disabled_indexes = vec![];
-                    for id in unmaterialized_source_ids {
-                        // Determine which sources are unmaterialized and which have disabled indexes
-                        let name = self.catalog.get_by_id(&id).name().to_string();
-                        let indexes = self.catalog.get_indexes_on(id);
-                        if indexes.is_empty() {
-                            unmaterialized.push(name);
-                        } else {
-                            let disabled_index_names = indexes
-                                .iter()
-                                .filter_map(|id| {
-                                    if !self.catalog.is_index_enabled(id) {
-                                        Some(self.catalog.get_by_id(&id).name().to_string())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            disabled_indexes.push((name, disabled_index_names));
-                        }
-                    }
-                    return Err(CoordError::AutomaticTimestampFailure {
-                        unmaterialized,
-                        disabled_indexes,
-                    });
-                }
-
                 // Initialize candidate to the minimum correct time.
                 let mut candidate = Timestamp::minimum();
                 candidate.advance_by(since.borrow());
@@ -3365,8 +3351,11 @@ impl Coordinator {
                         // advanced already.
                         self.get_local_read_ts()
                     } else {
-                        let upper =
-                            self.least_valid_write(&[], &index_ids, DEFAULT_COMPUTE_INSTANCE_ID);
+                        let upper = self.least_valid_write(
+                            &unmaterialized_source_ids,
+                            &index_ids,
+                            DEFAULT_COMPUTE_INSTANCE_ID,
+                        );
 
                         // We peek at the largest element not in advance of `upper`, which
                         // involves a subtraction. If `upper` contains a zero timestamp there
@@ -3399,7 +3388,11 @@ impl Coordinator {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&timestamp) {
-            Ok((timestamp, index_ids))
+            Ok(DeterminedTimestamp {
+                timestamp,
+                compute_ids: index_ids,
+                storage_ids: unmaterialized_source_ids,
+            })
         } else {
             let invalid_indexes = index_ids
                 .iter()

@@ -30,11 +30,13 @@ $ file-append path=static.csv
 2
 4
 
-! SELECT * FROM unindexed
-contains:unable to automatically determine a query timestamp
+> SELECT c FROM unindexed
+1
+2
+4
 
-! SELECT * FROM v_unindexed
-contains:unable to automatically determine a query timestamp
+> SELECT * FROM v_unindexed
+3
 
 > BEGIN
 
