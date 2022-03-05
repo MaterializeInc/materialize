@@ -2941,34 +2941,38 @@ impl Coordinator {
                 }
             }
 
-            let timestamp = session.get_transaction_timestamp(|session| {
-                // Determine a timestamp that will be valid for anything in any schema
-                // referenced by the first query.
-                let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
+            let timestamp = match session.get_transaction_timestamp() {
+                Some(ts) => ts,
+                _ => {
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the first query.
+                    let mut timedomain_ids =
+                        self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
-                // We want to prevent compaction of the indexes consulted by
-                // determine_timestamp, not the ones listed in the query.
-                let (timestamp, timestamp_ids) =
-                    self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
-                // Add the used indexes to the recorded ids.
-                timedomain_ids.extend(&timestamp_ids);
-                // TODO: Delete the above once the below is confirmed to replace it.
-                let read_holds = transaction_holds::ReadHolds {
-                    time: timestamp,
-                    storage_ids: Vec::new(),
-                    compute_ids: timestamp_ids,
-                    compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
-                };
-                self.acquire_read_holds(&read_holds);
-                let txn_reads = TxnReads {
-                    timestamp_independent,
-                    timedomain_ids: timedomain_ids.into_iter().collect(),
-                    read_holds,
-                };
-                self.txn_reads.insert(conn_id, txn_reads);
+                    // We want to prevent compaction of the indexes consulted by
+                    // determine_timestamp, not the ones listed in the query.
+                    let (timestamp, timestamp_ids) =
+                        self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
+                    // Add the used indexes to the recorded ids.
+                    timedomain_ids.extend(&timestamp_ids);
+                    // TODO: Delete the above once the below is confirmed to replace it.
+                    let read_holds = transaction_holds::ReadHolds {
+                        time: timestamp,
+                        storage_ids: Vec::new(),
+                        compute_ids: timestamp_ids,
+                        compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
+                    };
+                    self.acquire_read_holds(&read_holds);
+                    let txn_reads = TxnReads {
+                        timestamp_independent,
+                        timedomain_ids: timedomain_ids.into_iter().collect(),
+                        read_holds,
+                    };
+                    self.txn_reads.insert(conn_id, txn_reads);
 
-                Ok(timestamp)
-            })?;
+                    timestamp
+                }
+            };
 
             // Verify that the references and indexes for this query are in the current
             // read transaction.

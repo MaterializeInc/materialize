@@ -206,7 +206,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                     builder.set_ca_file(ca)?;
                     builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
                 }
-                builder.set_certificate_file(&tls_config.cert, SslFiletype::PEM)?;
+                builder.set_certificate_chain_file(&tls_config.cert)?;
                 builder.set_private_key_file(&tls_config.key, SslFiletype::PEM)?;
                 builder.build().into_context()
             };
