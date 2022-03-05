@@ -2962,7 +2962,7 @@ impl Coordinator {
                         compute_ids: timestamp_ids,
                         compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
                     };
-                    self.acquire_read_holds(&read_holds);
+                    self.acquire_read_holds(&read_holds).await;
                     let txn_reads = TxnReads {
                         timestamp_independent,
                         timedomain_ids: timedomain_ids.into_iter().collect(),
@@ -5091,7 +5091,10 @@ pub mod transaction_holds {
     }
 
     impl crate::coord::Coordinator {
-        pub(super) fn acquire_read_holds(&mut self, read_holds: &ReadHolds<mz_repr::Timestamp>) {
+        pub(super) async fn acquire_read_holds(
+            &mut self,
+            read_holds: &ReadHolds<mz_repr::Timestamp>,
+        ) {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
             let mut storage = self.dataflow_client.storage();
@@ -5105,7 +5108,7 @@ pub mod transaction_holds {
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
-            storage.set_read_policy_sync(policy_changes);
+            storage.set_read_policy(policy_changes).await;
             // Update COMPUTE read policies
             let mut policy_changes = Vec::new();
             let mut compute = self
@@ -5122,7 +5125,7 @@ pub mod transaction_holds {
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
-            compute.set_read_policy_sync(policy_changes);
+            compute.set_read_policy(policy_changes).await;
         }
 
         pub(super) async fn release_read_hold(
