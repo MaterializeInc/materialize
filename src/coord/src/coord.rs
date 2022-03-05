@@ -2934,8 +2934,8 @@ impl Coordinator {
 
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
-            if let Some(txn_reads) = self.txn_reads.get(&conn_id) {
-                if txn_reads.timestamp_independent && !timestamp_independent {
+            if let Some(read_txn) = self.txn_reads.get(&conn_id) {
+                if read_txn.timestamp_independent && !timestamp_independent {
                     session.clear_transaction_ops();
                 }
             }
@@ -2982,14 +2982,14 @@ impl Coordinator {
                     .into_iter()
                     .collect::<HashSet<_>>(),
             );
-            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
+            let read_txn = self.txn_reads.get(&conn_id).unwrap();
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
             // after the transaction started.
-            let outside: Vec<_> = stmt_ids.difference(&txn_reads.timedomain_ids).collect();
+            let outside: Vec<_> = stmt_ids.difference(&read_txn.timedomain_ids).collect();
             if !outside.is_empty() {
-                let mut names: Vec<_> = txn_reads
+                let mut names: Vec<_> = read_txn
                     .timedomain_ids
                     .iter()
                     // This could filter out a view that has been replaced in another transaction.
