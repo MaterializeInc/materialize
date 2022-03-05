@@ -303,7 +303,7 @@ pub struct Coordinator {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability_needs[id]`.
-    txn_reads_neu: HashMap<u32, TxnReads>,
+    txn_reads: HashMap<u32, TxnReads>,
     /// Sources to reconsider for read capability downgrades.
     ///
     /// This exists primarily to allow the coordinator to allow `persist` to compact
@@ -1583,7 +1583,7 @@ impl Coordinator {
 
         // Allow compaction of sources from this transaction.
         // TODO: Remove the above once this is confirmed to replace it.
-        if let Some(txn_reads) = self.txn_reads_neu.remove(&session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
             self.release_read_hold(txn_reads.read_holds).await;
         }
         txn
@@ -2934,7 +2934,7 @@ impl Coordinator {
 
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
-            if let Some(txn_reads) = self.txn_reads_neu.get(&conn_id) {
+            if let Some(txn_reads) = self.txn_reads.get(&conn_id) {
                 if txn_reads.timestamp_independent && !timestamp_independent {
                     session.clear_transaction_ops();
                 }
@@ -2964,7 +2964,7 @@ impl Coordinator {
                     timedomain_ids: timedomain_ids.into_iter().collect(),
                     read_holds,
                 };
-                self.txn_reads_neu.insert(conn_id, txn_reads);
+                self.txn_reads.insert(conn_id, txn_reads);
 
                 Ok(timestamp)
             })?;
@@ -2982,7 +2982,7 @@ impl Coordinator {
                     .into_iter()
                     .collect::<HashSet<_>>(),
             );
-            let txn_reads = self.txn_reads_neu.get(&conn_id).unwrap();
+            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
@@ -4564,7 +4564,7 @@ pub async fn serve(
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability_needs: Default::default(),
-                txn_reads_neu: Default::default(),
+                txn_reads: Default::default(),
                 storage_compaction_opportunities: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
