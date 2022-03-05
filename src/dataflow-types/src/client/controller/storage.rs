@@ -23,6 +23,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 
+use crate::client::controller::ReadPolicy;
 use crate::client::{Client, Command, CreateSourceCommand, StorageCommand};
 use crate::sources::SourceDesc;
 use crate::Update;
@@ -161,31 +162,13 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         // Validate that the ids exist.
         self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
 
-        let mut updates = BTreeMap::new();
-        for (id, mut frontier) in frontiers.into_iter() {
-            let collection = self.collection_mut(id).unwrap();
-            // Ignore frontier updates that go backwards.
-            if <_ as timely::order::PartialOrder>::less_equal(
-                &collection.implied_capability,
-                &frontier,
-            ) {
-                // Add new frontier, swap, subtract old frontier.
-                let mut update = ChangeBatch::new();
-                update.extend(frontier.iter().map(|time| (time.clone(), 1)));
-                std::mem::swap(&mut collection.implied_capability, &mut frontier);
-                update.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                // Record updates if something of substance changed.
-                if !update.is_empty() {
-                    updates.insert(id, update);
-                }
-            } else {
-                tracing::error!("STORAGE::allow_compaction attempted frontier regression for id {:?}: {:?} to {:?}", id, collection.implied_capability, frontier);
-            }
-        }
-
-        self.update_read_capabilities(&mut updates).await;
+        let policies = frontiers
+            .into_iter()
+            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
+        self.set_read_policy(policies.collect()).await;
         Ok(())
     }
+
     pub async fn advance_all_table_timestamps(
         &mut self,
         advance_to: T,
@@ -196,6 +179,44 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             }))
             .await
             .map_err(StorageError::from)
+    }
+
+    /// Assigns a read policy to specific identifiers.
+    ///
+    /// The policies are assigned in the order presented, and repeated identifiers should
+    /// conclude with the last policy. Changing a policy will immediately downgrade the read
+    /// capability if appropriate, but it will not "recover" the read capability if the prior
+    /// capability is already ahead of it.
+    ///
+    /// Identifiers not present in `policies` retain their existing read policies.
+    pub async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
+        let mut read_capability_changes = BTreeMap::default();
+        for (id, policy) in policies.into_iter() {
+            if let Ok(collection) = self.collection_mut(id) {
+                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
+
+                if <_ as timely::order::PartialOrder>::less_equal(
+                    &collection.implied_capability,
+                    &new_read_capability,
+                ) {
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                    if !update.is_empty() {
+                        read_capability_changes.insert(id, update);
+                    }
+                }
+
+                collection.read_policy = policy;
+            } else {
+                tracing::error!("Reference to unregistered id: {:?}", id);
+            }
+        }
+        if !read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut read_capability_changes)
+                .await;
+        }
     }
 }
 
@@ -217,6 +238,41 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             self.collection(id)?;
         }
         Ok(())
+    }
+
+    /// Accept write frontier updates from the compute layer.
+    pub(super) async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
+        let mut read_capability_changes = BTreeMap::default();
+        for (id, changes) in updates.iter() {
+            let collection = self
+                .collection_mut(*id)
+                .expect("Reference to absent collection");
+
+            collection
+                .write_frontier
+                .update_iter(changes.clone().drain());
+
+            let mut new_read_capability = collection
+                .read_policy
+                .frontier(collection.write_frontier.frontier());
+            if <_ as timely::order::PartialOrder>::less_equal(
+                &collection.implied_capability,
+                &new_read_capability,
+            ) {
+                // TODO: reuse change batch above?
+                let mut update = ChangeBatch::new();
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                if !update.is_empty() {
+                    read_capability_changes.insert(*id, update);
+                }
+            }
+        }
+        if !read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut read_capability_changes)
+                .await;
+        }
     }
 
     /// Applies `updates` and sends any appropriate compaction command.
@@ -274,19 +330,31 @@ pub struct CollectionState<T> {
     ///
     /// This accumulation will always contain `self.implied_capability`, but may also contain
     /// capabilities held by others who have read dependencies on this collection.
-    pub(super) read_capabilities: MutableAntichain<T>,
+    pub read_capabilities: MutableAntichain<T>,
     /// The implicit capability associated with collection creation.
-    pub(super) implied_capability: Antichain<T>,
+    pub implied_capability: Antichain<T>,
+    /// The policy to use to downgrade `self.implied_capability`.
+    pub read_policy: ReadPolicy<T>,
+
+    /// Reported progress in the write capabilities.
+    ///
+    /// Importantly, this is not a write capability, but what we have heard about the
+    /// write capabilities of others. All future writes will have times greater than or
+    /// equal to `upper_frontier.frontier()`.
+    pub write_frontier: MutableAntichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
+    /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(description: SourceDesc, since: Antichain<T>) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {
             description: (description, since.clone()),
             read_capabilities,
-            implied_capability: since,
+            implied_capability: since.clone(),
+            read_policy: ReadPolicy::ValidFrom(since),
+            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
         }
     }
 }

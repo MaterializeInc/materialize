@@ -28,7 +28,7 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 
 use crate::client::{
-    Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response,
+    Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response, StorageResponse,
 };
 use crate::logging::LoggingConfig;
 
@@ -88,7 +88,7 @@ impl<C: Client<T>, T> Controller<C, T> {
     #[inline]
     pub fn compute(&mut self, instance: ComputeInstanceId) -> Option<ComputeController<C, T>> {
         let compute = self.compute.get_mut(&instance)?;
-        // A compute instance containts `self.storage` so that it can form a `StorageController` if it needs.
+        // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
         Some(ComputeController {
             instance,
             compute,
@@ -111,6 +111,11 @@ impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
                         .update_write_frontiers(updates)
                         .await;
                 }
+                Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
+                    self.storage()
+                        .update_write_frontiers(&feedback.changes)
+                        .await;
+                }
                 _ => {}
             }
         }
@@ -129,7 +134,10 @@ impl<C> Controller<C> {
     }
 }
 
+use std::sync::Arc;
+
 /// Compaction policies for collections maintained by `Controller`.
+#[derive(Clone)]
 pub enum ReadPolicy<T> {
     /// Maintain the collection as valid from this frontier onward.
     ValidFrom(Antichain<T>),
@@ -138,5 +146,48 @@ pub enum ReadPolicy<T> {
     /// This function will only be re-evaluated when the write frontier changes.
     /// If the intended behavior is to change in response to external signals,
     /// consider using the `ValidFrom` variant to manually pilot compaction.
-    LagWriteFrontier(Box<dyn Fn(AntichainRef<T>) -> Antichain<T>>),
+    ///
+    /// The `Arc` makes the function cloneable.
+    LagWriteFrontier(Arc<dyn Fn(AntichainRef<T>) -> Antichain<T>>),
+    /// Allows one to express multiple read policies, taking the least of
+    /// the resulting frontiers.
+    Multiple(Vec<ReadPolicy<T>>),
+}
+
+impl ReadPolicy<mz_repr::Timestamp> {
+    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to a multiple of that amount.
+    ///
+    /// The rounding down is done to reduce the number of changes the capability undergoes, with the thinking
+    /// being that if you are ok with `lag`, then getting something between `lag` and `2 x lag` should be ok.
+    pub fn lag_writes_by(lag: mz_repr::Timestamp) -> Self {
+        Self::LagWriteFrontier(Arc::new(move |upper| {
+            if upper.is_empty() {
+                Antichain::from_elem(Timestamp::minimum())
+            } else {
+                // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
+                let mut time = upper[0];
+                time = time.saturating_sub(lag);
+                time = time.saturating_sub(time % lag);
+                Antichain::from_elem(time)
+            }
+        }))
+    }
+}
+
+impl<T: Timestamp> ReadPolicy<T> {
+    pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
+        match self {
+            ReadPolicy::ValidFrom(frontier) => frontier.clone(),
+            ReadPolicy::LagWriteFrontier(logic) => logic(write_frontier),
+            ReadPolicy::Multiple(policies) => {
+                let mut frontier = Antichain::new();
+                for policy in policies.iter() {
+                    for time in policy.frontier(write_frontier).iter() {
+                        frontier.insert(time.clone());
+                    }
+                }
+                frontier
+            }
+        }
+    }
 }
