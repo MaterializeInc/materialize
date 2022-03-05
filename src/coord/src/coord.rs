@@ -2973,6 +2973,7 @@ impl Coordinator {
                     timestamp
                 }
             };
+            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
 
             // Verify that the references and indexes for this query are in the current
             // read transaction.
