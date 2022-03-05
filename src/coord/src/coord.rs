@@ -593,6 +593,7 @@ impl Coordinator {
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
                             DEFAULT_COMPUTE_INSTANCE_ID,
+                            // TODO(benesch): why is this hardcoded to 1000?
                             Some(1000),
                         )
                         .await;
