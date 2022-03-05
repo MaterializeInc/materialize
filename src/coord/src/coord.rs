@@ -3146,32 +3146,36 @@ impl Coordinator {
                 }
             }
 
-            let timestamp = session.get_transaction_timestamp(|session| {
-                // Determine a timestamp that will be valid for anything in any schema
-                // referenced by the first query.
-                let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
+            let timestamp = match session.get_transaction_timestamp() {
+                Some(ts) => ts,
+                _ => {
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the first query.
+                    let mut timedomain_ids =
+                        self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
-                // We want to prevent compaction of the indexes consulted by
-                // determine_timestamp, not the ones listed in the query.
-                let (timestamp, timestamp_ids) =
-                    self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
-                // Add the used indexes to the recorded ids.
-                timedomain_ids.extend(&timestamp_ids);
-                let mut handles = vec![];
-                for id in timestamp_ids {
-                    handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
+                    // We want to prevent compaction of the indexes consulted by
+                    // determine_timestamp, not the ones listed in the query.
+                    let (timestamp, timestamp_ids) =
+                        self.determine_timestamp(session, &timedomain_ids, PeekWhen::Immediately)?;
+                    // Add the used indexes to the recorded ids.
+                    timedomain_ids.extend(&timestamp_ids);
+                    let mut handles = vec![];
+                    for id in timestamp_ids {
+                        handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
+                    }
+                    self.txn_reads.insert(
+                        conn_id,
+                        TxnReads {
+                            timestamp_independent,
+                            timedomain_ids: timedomain_ids.into_iter().collect(),
+                            _handles: handles,
+                        },
+                    );
+                    timestamp
                 }
-                self.txn_reads.insert(
-                    conn_id,
-                    TxnReads {
-                        timestamp_independent,
-                        timedomain_ids: timedomain_ids.into_iter().collect(),
-                        _handles: handles,
-                    },
-                );
-
-                Ok(timestamp)
-            })?;
+            };
+            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
 
             // Verify that the references and indexes for this query are in the current
             // read transaction.
