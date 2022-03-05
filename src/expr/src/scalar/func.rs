@@ -59,7 +59,7 @@ mod impls;
 pub use impls::*;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub enum NullaryFunc {
+pub enum UnmaterializableFunc {
     CurrentDatabase,
     CurrentSchemasWithSystem,
     CurrentSchemasWithoutSystem,
@@ -75,50 +75,52 @@ pub enum NullaryFunc {
     Version,
 }
 
-impl NullaryFunc {
+impl UnmaterializableFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
-            NullaryFunc::CurrentDatabase => ScalarType::String.nullable(false),
+            UnmaterializableFunc::CurrentDatabase => ScalarType::String.nullable(false),
             // TODO: The `CurrentSchemas` functions should should return name[].
-            NullaryFunc::CurrentSchemasWithSystem => {
+            UnmaterializableFunc::CurrentSchemasWithSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            NullaryFunc::CurrentSchemasWithoutSystem => {
+            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            NullaryFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
-            NullaryFunc::CurrentUser => ScalarType::String.nullable(false),
-            NullaryFunc::MzClusterId => ScalarType::Uuid.nullable(false),
-            NullaryFunc::MzLogicalTimestamp => ScalarType::Numeric {
+            UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzClusterId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
             .nullable(false),
-            NullaryFunc::MzSessionId => ScalarType::Uuid.nullable(false),
-            NullaryFunc::MzUptime => ScalarType::Interval.nullable(true),
-            NullaryFunc::MzVersion => ScalarType::String.nullable(false),
-            NullaryFunc::PgBackendPid => ScalarType::Int32.nullable(false),
-            NullaryFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
-            NullaryFunc::Version => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
+            UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
+            UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
+            UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::Version => ScalarType::String.nullable(false),
         }
     }
 }
 
-impl fmt::Display for NullaryFunc {
+impl fmt::Display for UnmaterializableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NullaryFunc::CurrentDatabase => f.write_str("current_database"),
-            NullaryFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
-            NullaryFunc::CurrentSchemasWithoutSystem => f.write_str("current_schemas(false)"),
-            NullaryFunc::CurrentTimestamp => f.write_str("current_timestamp"),
-            NullaryFunc::CurrentUser => f.write_str("current_user"),
-            NullaryFunc::MzClusterId => f.write_str("mz_cluster_id"),
-            NullaryFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
-            NullaryFunc::MzSessionId => f.write_str("mz_session_id"),
-            NullaryFunc::MzUptime => f.write_str("mz_uptime"),
-            NullaryFunc::MzVersion => f.write_str("mz_version"),
-            NullaryFunc::PgBackendPid => f.write_str("pg_backend_pid"),
-            NullaryFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
-            NullaryFunc::Version => f.write_str("version"),
+            UnmaterializableFunc::CurrentDatabase => f.write_str("current_database"),
+            UnmaterializableFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
+            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
+                f.write_str("current_schemas(false)")
+            }
+            UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
+            UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
+            UnmaterializableFunc::MzClusterId => f.write_str("mz_cluster_id"),
+            UnmaterializableFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
+            UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
+            UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
+            UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
+            UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
+            UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
+            UnmaterializableFunc::Version => f.write_str("version"),
         }
     }
 }

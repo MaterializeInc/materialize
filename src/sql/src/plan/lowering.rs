@@ -702,7 +702,7 @@ impl HirScalarExpr {
                 Column(col_ref) => SS::Column(col_map.get(&col_ref)),
                 Literal(row, typ) => SS::Literal(Ok(row), typ),
                 Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
-                CallNullary(func) => SS::CallNullary(func),
+                CallUnmaterializable(func) => SS::CallUnmaterializable(func),
                 CallUnary { func, expr } => SS::CallUnary {
                     func,
                     expr: Box::new(expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map)),
@@ -1152,7 +1152,7 @@ impl HirScalarExpr {
         Ok(match self {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
             Literal(datum, typ) => SS::Literal(Ok(datum), typ),
-            CallNullary(func) => SS::CallNullary(func),
+            CallUnmaterializable(func) => SS::CallUnmaterializable(func),
             CallUnary { func, expr } => SS::CallUnary {
                 func,
                 expr: Box::new(expr.lower_uncorrelated()?),

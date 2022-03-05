@@ -365,7 +365,9 @@ impl FromHir {
                     self.find_column_within_box(context_box, c.column),
                 ))
             }
-            HirScalarExpr::CallNullary(func) => Ok(BoxScalarExpr::CallNullary(func)),
+            HirScalarExpr::CallUnmaterializable(func) => {
+                Ok(BoxScalarExpr::CallUnmaterializable(func))
+            }
             HirScalarExpr::CallUnary { func, expr } => Ok(BoxScalarExpr::CallUnary {
                 func,
                 expr: Box::new(self.generate_expr(*expr, context_box)?),

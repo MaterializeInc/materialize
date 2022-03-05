@@ -41,7 +41,7 @@ pub use relation::{
     compare_columns, AggregateExpr, ColumnOrder, JoinImplementation, MirRelationExpr,
     RowSetFinishing, RECURSION_LIMIT,
 };
-pub use scalar::func::{self, BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
+pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an

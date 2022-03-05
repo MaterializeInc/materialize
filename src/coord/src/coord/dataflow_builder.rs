@@ -18,8 +18,8 @@ use mz_dataflow_types::client::{controller::ComputeController, Client};
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::{
-    GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr,
+    GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    UnmaterializableFunc,
 };
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
@@ -307,28 +307,28 @@ impl<'a> DataflowBuilder<'a> {
         }
     }
 
-    /// Prepares a scalar expression for execution by replacing any placeholders
-    /// with their correct values.
+    /// Prepares a scalar expression for execution by handling unmaterializable
+    /// functions.
     ///
-    /// Specifically, calls to nullary functions replaced if `style` is
-    /// `OneShot`. If `style` is `Index`, then an error is produced if a call
-    /// to a nullary function is encountered.
+    /// Specifically, calls to unmaterializable functions are replaced if
+    /// `style` is `OneShot`. If `style` is `Index`, then an error is produced
+    /// if a call to a unmaterializable function is encountered.
     pub fn prep_scalar_expr(
         &self,
         expr: &mut MirScalarExpr,
         style: ExprPrepStyle,
     ) -> Result<(), CoordError> {
         match style {
-            // Evaluate each nullary function and replace the invocation with
-            // the result.
+            // Evaluate each unmaterializable function and replace the
+            // invocation with the result.
             ExprPrepStyle::OneShot {
                 logical_time,
                 session,
             } => {
                 let mut res = Ok(());
                 expr.visit_mut_post(&mut |e| {
-                    if let MirScalarExpr::CallNullary(f) = e {
-                        match self.eval_nullary_func(f, logical_time, session) {
+                    if let MirScalarExpr::CallUnmaterializable(f) = e {
+                        match self.eval_unmaterializable_func(f, logical_time, session) {
                             Ok(evaled) => *e = evaled,
                             Err(e) => res = Err(e),
                         }
@@ -337,15 +337,15 @@ impl<'a> DataflowBuilder<'a> {
                 res
             }
 
-            // Reject the query if it contains any nullary function calls.
+            // Reject the query if it contains any unmaterializable function calls.
             ExprPrepStyle::Index => {
-                let mut last_observed_nullary_func = None;
+                let mut last_observed_unmaterializable_func = None;
                 expr.visit_mut_post(&mut |e| {
-                    if let MirScalarExpr::CallNullary(f) = e {
-                        last_observed_nullary_func = Some(f.clone());
+                    if let MirScalarExpr::CallUnmaterializable(f) = e {
+                        last_observed_unmaterializable_func = Some(f.clone());
                     }
                 });
-                if let Some(f) = last_observed_nullary_func {
+                if let Some(f) = last_observed_unmaterializable_func {
                     return Err(CoordError::UnmaterializableFunction(f));
                 }
                 Ok(())
@@ -353,9 +353,9 @@ impl<'a> DataflowBuilder<'a> {
         }
     }
 
-    fn eval_nullary_func(
+    fn eval_unmaterializable_func(
         &self,
-        f: &NullaryFunc,
+        f: &UnmaterializableFunc,
         logical_time: Option<u64>,
         session: &Session,
     ) -> Result<MirScalarExpr, CoordError> {
@@ -380,8 +380,8 @@ impl<'a> DataflowBuilder<'a> {
         };
 
         match f {
-            NullaryFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
-            NullaryFunc::CurrentSchemasWithSystem => pack_1d_array(
+            UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
+            UnmaterializableFunc::CurrentSchemasWithSystem => pack_1d_array(
                 session
                     .vars()
                     .search_path()
@@ -389,7 +389,7 @@ impl<'a> DataflowBuilder<'a> {
                     .map(|s| Datum::String(s))
                     .collect(),
             ),
-            NullaryFunc::CurrentSchemasWithoutSystem => {
+            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 use crate::catalog::builtin::{
                     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
                     PG_CATALOG_SCHEMA,
@@ -410,27 +410,31 @@ impl<'a> DataflowBuilder<'a> {
                         .collect(),
                 )
             }
-            NullaryFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
-            NullaryFunc::CurrentUser => pack(Datum::from(session.user())),
-            NullaryFunc::MzClusterId => pack(Datum::from(self.catalog.config().cluster_id)),
-            NullaryFunc::MzLogicalTimestamp => match logical_time {
+            UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
+            UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
+            UnmaterializableFunc::MzClusterId => {
+                pack(Datum::from(self.catalog.config().cluster_id))
+            }
+            UnmaterializableFunc::MzLogicalTimestamp => match logical_time {
                 None => coord_bail!("cannot call mz_logical_timestamp in this context"),
                 Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),
             },
-            NullaryFunc::MzSessionId => pack(Datum::from(self.catalog.config().session_id)),
-            NullaryFunc::MzUptime => {
+            UnmaterializableFunc::MzSessionId => {
+                pack(Datum::from(self.catalog.config().session_id))
+            }
+            UnmaterializableFunc::MzUptime => {
                 let uptime = self.catalog.config().start_instant.elapsed();
                 let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
                 pack(uptime)
             }
-            NullaryFunc::MzVersion => pack(Datum::from(
+            UnmaterializableFunc::MzVersion => pack(Datum::from(
                 &*self.catalog.config().build_info.human_version(),
             )),
-            NullaryFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
-            NullaryFunc::PgPostmasterStartTime => {
+            UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
+            UnmaterializableFunc::PgPostmasterStartTime => {
                 pack(Datum::from(self.catalog.config().start_time))
             }
-            NullaryFunc::Version => {
+            UnmaterializableFunc::Version => {
                 let build_info = self.catalog.config().build_info;
                 let version = format!(
                     "PostgreSQL {}.{} on {} (materialized {})",

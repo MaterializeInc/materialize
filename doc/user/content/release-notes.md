@@ -21,8 +21,8 @@ process by the release notes team.
 
 {{% version-header v0.22.0 %}}
 
-- **Breaking change.** Standardize handling of the following [nonpure
-  functions](/sql/functions/#pure-and-nonpure-functions) {{% gh 10445 %}}:
+- **Breaking change.** Standardize handling of the following [unmaterializable
+  functions](/sql/functions/#unmaterializable-functions) {{% gh 10445 %}}:
 
   - `current_database`
   - `current_timestamp`
@@ -39,15 +39,15 @@ process by the release notes team.
   - `pg_postmaster_start_time`
   - `version`
 
-  Materialize now allows use of nonpure functions in views, but will refuse to
-  create an index that directly or indirectly depends on a nonpure function. The
-  one exception is [`mz_logical_timestamp`], which can be used in limited
-  contexts in a materialized view as a [temporal
+  Materialize now allows use of unmaterializable functions in views, but will
+  refuse to create an index that directly or indirectly depends on a
+  unmaterializable function. The one exception is [`mz_logical_timestamp`],
+  which can be used in limited contexts in a materialized view as a [temporal
   filter](/guides/temporal-filters).
 
   Previously `current_timestamp`, `mz_logical_timestamp`, and `mz_uptime` were
-  incorrectly disallowed in unmaterialized views, while the remaining nonpure
-  functions were incorrectly allowed in materialized views.
+  incorrectly disallowed in unmaterialized views, while the remaining
+  unmaterializable functions were incorrectly allowed in materialized views.
 
 - **Breaking change.** Store days separately in [`interval`]. Unlike in previous
   versions, hours are not automatically converted to days. This means that: an

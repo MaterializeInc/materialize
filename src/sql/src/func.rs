@@ -27,7 +27,7 @@ use crate::names::{resolve_names, resolve_names_expr, PartialName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
-    NullaryFunc, ScalarWindowFunc, TableFunc, UnaryFunc, VariadicFunc,
+    ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
@@ -439,9 +439,9 @@ impl<R> fmt::Debug for FuncImpl<R> {
     }
 }
 
-impl From<NullaryFunc> for Operation<HirScalarExpr> {
-    fn from(n: NullaryFunc) -> Operation<HirScalarExpr> {
-        Operation::nullary(move |_ecx| Ok(HirScalarExpr::CallNullary(n.clone())))
+impl From<UnmaterializableFunc> for Operation<HirScalarExpr> {
+    fn from(n: UnmaterializableFunc) -> Operation<HirScalarExpr> {
+        Operation::nullary(move |_ecx| Ok(HirScalarExpr::CallUnmaterializable(n.clone())))
     }
 }
 
@@ -1068,8 +1068,12 @@ impl GetReturnType for HirScalarExpr {
 
         let c = match self {
             HirScalarExpr::Literal(_row, column_type) => column_type.clone(),
-            HirScalarExpr::CallNullary(func) => {
-                assert_oti_len(&output_type_inputs, 0, "HirScalarExpr::CallNullary");
+            HirScalarExpr::CallUnmaterializable(func) => {
+                assert_oti_len(
+                    &output_type_inputs,
+                    0,
+                    "HirScalarExpr::CallUnmaterializable",
+                );
                 func.output_type()
             }
             HirScalarExpr::CallUnary { func, .. } => {
@@ -1743,20 +1747,20 @@ lazy_static! {
                 params!(Bool) => Operation::unary(|_ecx, e| {
                     Ok(HirScalarExpr::If {
                         cond: Box::new(e),
-                        then: Box::new(HirScalarExpr::CallNullary(NullaryFunc::CurrentSchemasWithSystem)),
-                        els: Box::new(HirScalarExpr::CallNullary(NullaryFunc::CurrentSchemasWithoutSystem)),
+                        then: Box::new(HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::CurrentSchemasWithSystem)),
+                        els: Box::new(HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::CurrentSchemasWithoutSystem)),
                     })
                     // TODO: this should be name[]
                 }) => ScalarType::Array(Box::new(ScalarType::String)), 1403;
             },
             "current_database" => Scalar {
-                params!() => NullaryFunc::CurrentDatabase, 861;
+                params!() => UnmaterializableFunc::CurrentDatabase, 861;
             },
             "current_user" => Scalar {
-                params!() => NullaryFunc::CurrentUser, 745;
+                params!() => UnmaterializableFunc::CurrentUser, 745;
             },
             "session_user" => Scalar {
-                params!() => NullaryFunc::CurrentUser, 746;
+                params!() => UnmaterializableFunc::CurrentUser, 746;
             },
             "chr" => Scalar {
                 params!(Int32) => UnaryFunc::Chr(func::Chr), 1621;
@@ -1920,7 +1924,7 @@ lazy_static! {
                 params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int64, 947;
             },
             "now" => Scalar {
-                params!() => NullaryFunc::CurrentTimestamp, 1299;
+                params!() => UnmaterializableFunc::CurrentTimestamp, 1299;
             },
             "octet_length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 720;
@@ -1958,7 +1962,7 @@ lazy_static! {
                 params!(Int64) => sql_impl_func("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END") => String, 1597;
             },
             "pg_backend_pid" => Scalar {
-                params!() => NullaryFunc::PgBackendPid, 2026;
+                params!() => UnmaterializableFunc::PgBackendPid, 2026;
             },
             // pg_get_constraintdef gives more info about a constraint with in the `pg_constraint`
             // view. It currently returns no information as the `pg_constraint` view is empty in
@@ -1982,7 +1986,7 @@ lazy_static! {
                 params!(Oid) => sql_impl_func("'unknown (OID=' || $1 || ')'") => String, 1642;
             },
             "pg_postmaster_start_time" => Scalar {
-                params!() => NullaryFunc::PgPostmasterStartTime, 2560;
+                params!() => UnmaterializableFunc::PgPostmasterStartTime, 2560;
             },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_impl_func(
@@ -2196,7 +2200,7 @@ lazy_static! {
                 params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, 2641;
             },
             "version" => Scalar {
-                params!() => NullaryFunc::Version, 89;
+                params!() => UnmaterializableFunc::Version, 89;
             },
 
             // Aggregates.
@@ -2551,7 +2555,7 @@ lazy_static! {
                 params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
             },
             "current_timestamp" => Scalar {
-                params!() => NullaryFunc::CurrentTimestamp, oid::FUNC_CURRENT_TIMESTAMP_OID;
+                params!() => UnmaterializableFunc::CurrentTimestamp, oid::FUNC_CURRENT_TIMESTAMP_OID;
             },
             "list_agg" => Aggregate {
                 params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
@@ -2600,16 +2604,16 @@ lazy_static! {
                 }) => ListAny, oid::FUNC_LIST_REMOVE_OID;
             },
             "mz_cluster_id" => Scalar {
-                params!() => NullaryFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;
+                params!() => UnmaterializableFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;
             },
             "mz_logical_timestamp" => Scalar {
-                params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
+                params!() => UnmaterializableFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
             },
             "mz_uptime" => Scalar {
-                params!() => NullaryFunc::MzUptime, oid::FUNC_MZ_UPTIME_OID;
+                params!() => UnmaterializableFunc::MzUptime, oid::FUNC_MZ_UPTIME_OID;
             },
             "mz_version" => Scalar {
-                params!() => NullaryFunc::MzVersion, oid::FUNC_MZ_VERSION_OID;
+                params!() => UnmaterializableFunc::MzVersion, oid::FUNC_MZ_VERSION_OID;
             },
             "regexp_extract" => Table {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
@@ -2724,7 +2728,7 @@ lazy_static! {
             // confusing. It does not identify the SQL session, but the
             // invocation of this `materialized` process.
             "mz_session_id" => Scalar {
-                params!() => NullaryFunc::MzSessionId, oid::FUNC_MZ_SESSION_ID_OID;
+                params!() => UnmaterializableFunc::MzSessionId, oid::FUNC_MZ_SESSION_ID_OID;
             },
             "mz_sleep" => Scalar {
                 params!(Float64) => UnaryFunc::Sleep(func::Sleep), oid::FUNC_MZ_SLEEP_OID;
