@@ -305,23 +305,17 @@ pub struct Coordinator {
 
     /// For each identifier, its read policy and any transaction holds on time.
     ///
-    /// The antichain contains the accumulation of all expressed pins, and prevents
-    /// compaction past its lower bound, to ensure they all remain valid. The antichain
-    /// is emptied only when all transactions have dropped, at which point the read
-    /// policy for the identifier is returned to its current compaction policy.
-    read_capability_needs: HashMap<GlobalId, ReadCapabilityState<mz_repr::Timestamp>>,
+    /// Transactions should introduce and remove constraints through the methods
+    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
+    /// policy can also be updated, though one should be sure to communicate this
+    /// to the controller for it to have an effect.
+    read_capability: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
     /// For each transaction, the pinned storage and compute identifiers and time at
     /// which they are pinned.
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
-    /// in `self.read_capability_needs[id]`.
+    /// in `self.read_capability[id]`, using the `release_read_holds` method.
     txn_reads: HashMap<u32, TxnReads>,
-    /// Sources to reconsider for read capability downgrades.
-    ///
-    /// This exists primarily to allow the coordinator to allow `persist` to compact
-    /// its collections, which is not handled through the STORAGE abstraction at the
-    /// moment. Should that change, this monitoring can be removed.
-    storage_compaction_opportunities: HashSet<GlobalId>,
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
@@ -360,7 +354,7 @@ struct TxnReads {
     // `mz_logical_timestamp()` is not present.
     timestamp_independent: bool,
     timedomain_ids: HashSet<GlobalId>,
-    read_holds: crate::coord::transaction_holds::ReadHolds<mz_repr::Timestamp>,
+    read_holds: crate::coord::read_holds::ReadHolds<mz_repr::Timestamp>,
 }
 
 /// Enforces critical section invariants for functions that perform writes to
@@ -461,9 +455,9 @@ impl Coordinator {
 
     /// Initialize the storage read policies.
     ///
-    /// It is critical to call this once a storage collection is created, so that
-    /// transaction processing doesn't trip over itself when it first tries to pin
-    /// a frontier. It uses a brittle method because it cannot make async calls.
+    /// This should be called only after a storage collection is created, and
+    /// ideally very soon afterwards. The collection is otherwise initialized
+    /// with a read policy that allows no compaction.
     async fn initialize_storage_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
@@ -475,8 +469,8 @@ impl Coordinator {
                 Some(time) => ReadPolicy::lag_writes_by(time),
                 None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
             };
-            self.read_capability_needs.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability_needs[&id].policy()));
+            self.read_capability.insert(id, policy.clone().into());
+            policy_updates.push((id, self.read_capability[&id].policy()));
         }
         self.dataflow_client
             .storage()
@@ -486,9 +480,9 @@ impl Coordinator {
 
     /// Initialize the compute read policies.
     ///
-    /// It is critical to call this once a compute collection is created, so that
-    /// transaction processing doesn't trip over itself when it first tries to pin
-    /// a frontier. It uses a brittle method because it cannot make async calls.
+    /// This should be called only after a compute collection is created, and
+    /// ideally very soon afterwards. The collection is otherwise initialized
+    /// with a read policy that allows no compaction.
     async fn initialize_compute_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
@@ -501,8 +495,8 @@ impl Coordinator {
                 Some(time) => ReadPolicy::lag_writes_by(time),
                 None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
             };
-            self.read_capability_needs.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability_needs[&id].policy()));
+            self.read_capability.insert(id, policy.clone().into());
+            policy_updates.push((id, self.read_capability[&id].policy()));
         }
         self.dataflow_client
             .compute(instance)
@@ -908,15 +902,11 @@ impl Coordinator {
                     )
                     .expect("inserting timestamp bindings cannot fail");
 
-                // Record storage identifiers so that we can review them in `self.maintenance()`.
-                self.storage_compaction_opportunities
-                    .extend(changes.iter().map(|(id, _)| *id));
-
                 // Take the opportunity to compact the catalog here.
                 let mut durability_updates = Vec::new();
                 let mut timestamp_compactions = Vec::new();
                 let storage = self.dataflow_client.storage();
-                for id in self.storage_compaction_opportunities.iter() {
+                for (id, _) in changes.iter() {
                     let collection = storage.collection(*id).unwrap();
                     durability_updates.push((*id, collection.write_frontier.frontier().to_owned()));
                     if let Some(time) = collection.read_capabilities.frontier().first() {
@@ -937,7 +927,27 @@ impl Coordinator {
                         .unwrap();
                 }
 
-                self.maintenance().await;
+                // Allow compaction of persisted tables.
+                let storage = self.dataflow_client.storage();
+                let source_since_updates: Vec<_> = changes
+                    .iter()
+                    .flat_map(|(id, _)| {
+                        storage
+                            .collection(*id)
+                            .ok()
+                            // IMPORTANT: This extracts the read *frontier*, rather than the coordinator's capability.
+                            // It is critical that we only allow compaction for the net of all read capabilities, rather
+                            // than just the capabilities known to the coordinator. There may well be other constraints,
+                            // e.g. on source compaction as a function of dependent indexes and sinks.
+                            .map(|collection| {
+                                (*id, collection.read_capabilities.frontier().to_owned())
+                            })
+                    })
+                    .collect();
+
+                if !source_since_updates.is_empty() {
+                    self.persisted_table_allow_compaction(&source_since_updates);
+                }
             }
         }
     }
@@ -1422,33 +1432,6 @@ impl Coordinator {
         }
     }
 
-    /// Perform maintenance work associated with the coordinator.
-    ///
-    /// Primarily, this involves sequencing compaction commands, which should be
-    /// issued whenever available.
-    async fn maintenance(&mut self) {
-        // Take this opportunity to drain `since_update` commands.
-        // Don't try to compact to an empty frontier. There may be a good reason to do this
-        // in principle, but not in any current Mz use case.
-        // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-
-        let storage = self.dataflow_client.storage();
-        let source_since_updates: Vec<_> = self
-            .storage_compaction_opportunities
-            .drain()
-            .flat_map(|id| {
-                storage
-                    .collection(id)
-                    .ok()
-                    .map(|collection| (id, collection.read_capabilities.frontier().to_owned()))
-            })
-            .collect();
-
-        if !source_since_updates.is_empty() {
-            self.persisted_table_allow_compaction(&source_since_updates);
-        }
-    }
-
     async fn handle_statement(
         &mut self,
         session: &mut Session,
@@ -1594,8 +1577,7 @@ impl Coordinator {
         let (drop_sinks, txn) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
 
-        // Allow compaction of sources from this transaction.
-        // TODO: Remove the above once this is confirmed to replace it.
+        // Release this transaaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
             self.release_read_hold(txn_reads.read_holds).await;
         }
@@ -2156,8 +2138,8 @@ impl Coordinator {
                 // Continue to do those things.
                 let mut source_descriptions = Vec::with_capacity(source_ids.len());
                 for ((source_id, since_ts), description) in source_ids
-                    .clone()
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .zip_eq(since_timestamps)
                     .zip_eq(descriptions)
                 {
@@ -2968,7 +2950,7 @@ impl Coordinator {
                     // Add the used sources and indexes to the recorded ids.
                     timedomain_ids.extend(&determined.storage_ids);
                     timedomain_ids.extend(&determined.compute_ids);
-                    let read_holds = transaction_holds::ReadHolds {
+                    let read_holds = read_holds::ReadHolds {
                         time: determined.timestamp,
                         storage_ids: determined.storage_ids,
                         compute_ids: determined.compute_ids,
@@ -3193,7 +3175,7 @@ impl Coordinator {
         }
     }
 
-    /// The smallest common read frontier among the specified collections.
+    /// The smallest common valid read frontier among the specified collections.
     fn least_valid_read(
         &mut self,
         storage_ids: &[GlobalId],
@@ -3216,9 +3198,10 @@ impl Coordinator {
         since
     }
 
-    /// The greatest common write frontier among the specified collectionts.
+    /// The smallest common valid write frontier among the specified collections.
     ///
-    /// Times not greater or equal to this frontier are complete.
+    /// Times that are not greater or equal to this frontier are complete for all collections
+    /// identified as arguments.
     fn least_valid_write(
         &mut self,
         storage_ids: &[GlobalId],
@@ -4110,7 +4093,7 @@ impl Coordinator {
 
             if !sources_to_drop.is_empty() {
                 for id in &sources_to_drop {
-                    self.read_capability_needs.remove(id);
+                    self.read_capability.remove(id);
                 }
                 self.dataflow_client
                     .storage()
@@ -4124,7 +4107,7 @@ impl Coordinator {
                 // dataflows that use it. We must make sure to remove that here.
                 for id in &tables_to_drop {
                     self.persister.remove_table(*id);
-                    self.read_capability_needs.remove(id);
+                    self.read_capability.remove(id);
                 }
                 self.dataflow_client
                     .storage()
@@ -4239,7 +4222,7 @@ impl Coordinator {
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
         let mut trace_keys = Vec::new();
         for id in indexes {
-            if self.read_capability_needs.remove(&id).is_some() {
+            if self.read_capability.remove(&id).is_some() {
                 trace_keys.push(id)
             } else {
                 tracing::error!("Instructed to drop a non-index index");
@@ -4260,7 +4243,7 @@ impl Coordinator {
         id: GlobalId,
         options: Vec<IndexOption>,
     ) -> Result<(), CoordError> {
-        let needs = match self.read_capability_needs.get_mut(&id) {
+        let needs = match self.read_capability.get_mut(&id) {
             Some(needs) => needs,
             None => {
                 if !self.catalog.is_index_enabled(&id) {
@@ -4562,9 +4545,8 @@ pub async fn serve(
                 read_writes_at_open_ts: false,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
-                read_capability_needs: Default::default(),
+                read_capability: Default::default(),
                 txn_reads: Default::default(),
-                storage_compaction_opportunities: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
@@ -5072,11 +5054,21 @@ pub mod fast_path_peek {
     }
 }
 
-pub mod transaction_holds {
+/// Types and methods related to acquiring and releasing read holds on collections.
+///
+/// A "read hold" prevents the controller from compacting the associated collections,
+/// and ensures that they remain "readable" at a specific time, as long as the hold
+/// is held.
+///
+/// These are most commonly used in support of transactions, which acquire these holds
+/// to ensure that they can continue to use collections over an open-ended series of
+/// queries. However, nothing is specific to transactions here.
+pub mod read_holds {
 
     use mz_dataflow_types::client::ComputeInstanceId;
     use mz_expr::GlobalId;
 
+    /// Relevant information for acquiring or releasing a bundle of read holds.
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
         pub(super) storage_ids: Vec<GlobalId>,
@@ -5085,6 +5077,10 @@ pub mod transaction_holds {
     }
 
     impl crate::coord::Coordinator {
+        /// Acquire read holds on the indicated collections at the indicated time.
+        ///
+        /// This method will panic if the holds cannot be acquired. In the future,
+        /// it would be polite to have it error instead, as it is not unrecoverable.
         pub(super) async fn acquire_read_holds(
             &mut self,
             read_holds: &ReadHolds<mz_repr::Timestamp>,
@@ -5098,7 +5094,7 @@ pub mod transaction_holds {
                     .read_capabilities
                     .frontier()
                     .less_equal(&read_holds.time));
-                let read_needs = self.read_capability_needs.get_mut(id).unwrap();
+                let read_needs = self.read_capability.get_mut(id).unwrap();
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
@@ -5115,18 +5111,21 @@ pub mod transaction_holds {
                     .read_capabilities
                     .frontier()
                     .less_equal(&read_holds.time));
-                let read_needs = self.read_capability_needs.get_mut(id).unwrap();
+                let read_needs = self.read_capability.get_mut(id).unwrap();
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
             compute.set_read_policy(policy_changes).await;
         }
-
+        /// Release read holds on the indicated collections at the indicated time.
+        ///
+        /// This method rellies on a previous call to `acquire_read_holds` with the same
+        /// argument, and its behavior will be erratic if called on anything else, or if
+        /// called more than once on the same bundle of read holds.
         pub(super) async fn release_read_hold(
             &mut self,
             read_holds: ReadHolds<mz_repr::Timestamp>,
         ) {
-            // We may call this method on an unregistered transaction.
             let ReadHolds {
                 time,
                 storage_ids,
@@ -5137,7 +5136,7 @@ pub mod transaction_holds {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
             for id in storage_ids.iter() {
-                let read_needs = self.read_capability_needs.get_mut(id).unwrap();
+                let read_needs = self.read_capability.get_mut(id).unwrap();
                 read_needs.holds.update_iter(Some((time, -1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
@@ -5148,7 +5147,7 @@ pub mod transaction_holds {
             // Update COMPUTE read policies
             let mut policy_changes = Vec::new();
             for id in compute_ids.iter() {
-                let read_needs = self.read_capability_needs.get_mut(id).unwrap();
+                let read_needs = self.read_capability.get_mut(id).unwrap();
                 read_needs.holds.update_iter(Some((time, -1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
@@ -5162,7 +5161,10 @@ pub mod transaction_holds {
 }
 
 /// Information about the read capability requirements of a collection.
-struct ReadCapabilityState<T = mz_repr::Timestamp>
+///
+/// This type tracks both a default policy, as well as various holds that may
+/// be expressed, as by transactions to ensure collections remain readable.
+struct ReadCapability<T = mz_repr::Timestamp>
 where
     T: timely::progress::Timestamp,
 {
@@ -5172,7 +5174,7 @@ where
     holds: MutableAntichain<T>,
 }
 
-impl<T: timely::progress::Timestamp> From<ReadPolicy<T>> for ReadCapabilityState<T> {
+impl<T: timely::progress::Timestamp> From<ReadPolicy<T>> for ReadCapability<T> {
     fn from(base_policy: ReadPolicy<T>) -> Self {
         Self {
             base_policy,
@@ -5181,7 +5183,7 @@ impl<T: timely::progress::Timestamp> From<ReadPolicy<T>> for ReadCapabilityState
     }
 }
 
-impl<T: timely::progress::Timestamp> ReadCapabilityState<T> {
+impl<T: timely::progress::Timestamp> ReadCapability<T> {
     /// Acquires the effective read policy, reflecting both the base policy and any holds.
     fn policy(&self) -> ReadPolicy<T> {
         // TODO: This could be "optimized" when `self.holds.frontier` is empty.
