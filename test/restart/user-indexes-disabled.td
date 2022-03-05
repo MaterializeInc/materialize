@@ -45,8 +45,9 @@ logging_derived_mat logging_derived_mat_primary_idx 1             count       <n
 # mat_view is not considered materialized
 > SHOW MATERIALIZED VIEWS
 
-! SELECT * FROM mat_view
-contains:unable to automatically determine a query timestamp
+# But it is still selectable.
+> SELECT * FROM mat_view
+1
 
 > SHOW INDEXES FROM mat_view;
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
@@ -70,8 +71,9 @@ contains:invalid ALTER on disabled index "materialize.public.mat_view_primary_id
 # mat_data is not considered materialized
 > SHOW MATERIALIZED SOURCES
 
-! SELECT * FROM mat_data
-contains:unable to automatically determine a query timestamp
+# But it is still selectable.
+> SELECT * FROM mat_data
+1
 
 > SHOW INDEXES FROM mat_data;
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
@@ -88,8 +90,8 @@ mat_data  mat_data_primary_idx  1             a            <null>      false    
 
 # 🔬🔬🔬🔬 Non-materialized views
 
-! SELECT * FROM join_view
-contains:unable to automatically determine a query timestamp
+> SELECT * FROM join_view
+1 a
 
 # 🔬🔬 Sinks
 
@@ -190,10 +192,10 @@ mat_data
 
 # 🔬🔬🔬 Non-materialized views
 
-# Still cannot select from non-materialized view because some of its indexes are disabled
+# Can seleect from `join_view` both with and without indexes enabled.
 
-! SELECT * FROM join_view
-contains:unable to automatically determine a query timestamp
+> SELECT * FROM join_view
+1 a
 
 > ALTER INDEX join_data_primary_idx SET ENABLED
 
