@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""Verifies that objects created in previous versions of Materialize are still
+operational after an upgrade.
+"""
+
 import random
 from typing import List, Tuple
 

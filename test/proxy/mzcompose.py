@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""Various tests that mediate Materialize's connections to sources and sinks
+via a Squid proxy."""
+
 from dataclasses import dataclass
 from typing import Dict, List
 
