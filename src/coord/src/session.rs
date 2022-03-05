@@ -226,28 +226,24 @@ impl Session {
         }
     }
 
-    /// Assumes an active transaction. Returns its read timestamp. Errors if not
-    /// a read transaction. Calls get_ts to get a timestamp if the transaction
-    /// doesn't have an operation yet, converting the transaction to a read.
-    pub fn get_transaction_timestamp<F: FnMut(&Session) -> Result<Timestamp, CoordError>>(
-        &mut self,
-        mut get_ts: F,
-    ) -> Result<Timestamp, CoordError> {
+    /// Returns the transaction's read timestamp, if set.
+    ///
+    /// Returns `None` if there is no active transaction, or if the active
+    /// transaction is not a read transaction.
+    pub fn get_transaction_timestamp(&self) -> Option<Timestamp> {
         // If the transaction already has a peek timestamp, use it. Otherwise generate
         // one. We generate one even though we could check here that the transaction
         // isn't in some other conflicting state because we want all of that logic to
         // reside in add_transaction_ops.
-        let ts = match self.transaction.inner() {
+        match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
                 access: _,
-            }) => *ts,
-            _ => get_ts(self)?,
-        };
-        self.add_transaction_ops(TransactionOps::Peeks(ts))?;
-        Ok(ts)
+            }) => Some(*ts),
+            _ => None,
+        }
     }
 
     /// Registers the prepared statement under `name`.
