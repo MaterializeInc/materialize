@@ -60,13 +60,19 @@ enum SourceType<Delimited, ByteStream> {
 }
 
 /// Imports a table (non-durable, local source of input).
+///
+/// The returned collections are the records and any errors, as well as a token which
+/// when dropped will terminate the input.
 pub(crate) fn import_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     storage_state: &mut crate::server::StorageState,
     scope: &mut G,
     id: SourceInstanceId,
     persisted_name: Option<String>,
-) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+) -> (
+    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
+    Rc<dyn Any>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -98,7 +104,12 @@ where
         }
     }
     capability.downgrade(&table_state.upper);
-    table_state.inputs.push(LocalInput { handle, capability });
+    // Convert to reference counted, so that users can drop it.
+    let capability = Rc::new(std::cell::RefCell::new(capability));
+    table_state.inputs.push(LocalInput {
+        handle,
+        capability: Rc::downgrade(&capability),
+    });
 
     // A local "source" is either fed by a local input handle, or by reading from a
     // `persisted_source()`.
@@ -142,7 +153,7 @@ where
         })
         .as_collection();
 
-    (ok_collection, err_collection)
+    ((ok_collection, err_collection), capability)
 }
 
 /// Constructs a `CollectionBundle` and tokens from source arguments.
@@ -196,10 +207,7 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
-            let (ok, err) = import_table(as_of_frontier, storage_state, scope, uid, persisted_name);
-
-            // TODO(mcsherry): Local tables are a special non-source we should relocate.
-            ((ok, err), Rc::new(()))
+            import_table(as_of_frontier, storage_state, scope, uid, persisted_name)
         }
 
         SourceConnector::External {
