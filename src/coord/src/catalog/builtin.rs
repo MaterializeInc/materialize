@@ -1580,7 +1580,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
     END relkind,
-    -- MZ doesn't support constraints so relchecks is filled with 0
+    -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
     -- MZ doesn't support creating rules so relhasrules is filled with false
     false AS relhasrules,
