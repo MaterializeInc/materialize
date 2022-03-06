@@ -2353,7 +2353,6 @@ pub enum BinaryFunc {
     LogNumeric,
     Power,
     PowerNumeric,
-    PgGetConstraintdef,
 }
 
 impl BinaryFunc {
@@ -2595,10 +2594,6 @@ impl BinaryFunc {
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
-            BinaryFunc::PgGetConstraintdef => Err(EvalError::Unsupported {
-                feature: "pg_get_constraintdef".to_string(),
-                issue_no: Some(9483),
-            }),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2733,8 +2728,6 @@ impl BinaryFunc {
             | RoundNumeric | SubNumeric => {
                 ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
-
-            PgGetConstraintdef => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -2830,7 +2823,6 @@ impl BinaryFunc {
                 | ModFloat32
                 | ModFloat64
                 | ModNumeric
-                | PgGetConstraintdef
         )
     }
 
@@ -2972,7 +2964,6 @@ impl BinaryFunc {
             | Power
             | PowerNumeric
             | RepeatString
-            | PgGetConstraintdef
             | ArrayRemove
             | ListRemove
             | LikeEscape => false,
@@ -3143,7 +3134,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
-            BinaryFunc::PgGetConstraintdef => f.write_str("pg_get_constraintdef"),
         }
     }
 }
@@ -3464,7 +3454,6 @@ pub enum UnaryFunc {
     Sleep(Sleep),
     RescaleNumeric(NumericMaxScale),
     PgColumnSize(PgColumnSize),
-    PgGetConstraintdef(PgGetConstraintdef),
     MzRowSize(MzRowSize),
     MzTypeName(MzTypeName),
 }
@@ -3536,7 +3525,6 @@ derive_unary!(
     CastOidToRegType,
     CastRegTypeToOid,
     PgColumnSize,
-    PgGetConstraintdef,
     MzRowSize,
     MzTypeName,
     IsNull,
@@ -3672,7 +3660,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -3910,7 +3897,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4170,7 +4156,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4377,7 +4362,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4451,7 +4435,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)

@@ -3359,7 +3359,6 @@ fn plan_array_subquery(
     ecx: &ExprContext,
     query: &Query<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    // Array subqueries rely on the array_cat function which requires experimental mode
     ecx.require_experimental_mode("array subquery")?;
     plan_vector_like_subquery(
         ecx,

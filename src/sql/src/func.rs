@@ -1646,8 +1646,7 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64), 1395;
             },
             "array_cat" => Scalar {
-                params!(ArrayAny, ArrayAny) => Operation::binary(|ecx, lhs, rhs| {
-                    ecx.require_experimental_mode("array_cat")?;
+                params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(rhs, BinaryFunc::ArrayArrayConcat))
                 }) => ArrayAny, 383;
             },
@@ -1964,12 +1963,56 @@ lazy_static! {
             "pg_backend_pid" => Scalar {
                 params!() => UnmaterializableFunc::PgBackendPid, 2026;
             },
-            // pg_get_constraintdef gives more info about a constraint with in the `pg_constraint`
-            // view. It currently returns no information as the `pg_constraint` view is empty in
-            // materialize
+            // pg_get_constraintdef gives more info about a constraint within the `pg_constraint`
+            // view. Certain meta commands rely on this function not throwing an error, but the
+            // `pg_constraint` view is empty in materialize. Therefore we know any oid provided is
+            // not a valid constraint, so we can return NULL which is what PostgreSQL does when
+            // provided an invalid OID.
             "pg_get_constraintdef" => Scalar {
-                params!(Oid) => UnaryFunc::PgGetConstraintdef(func::PgGetConstraintdef), 1387;
-                params!(Oid, Bool) => BinaryFunc::PgGetConstraintdef, 2508;
+                params!(Oid) => Operation::unary(|_ecx, _oid|
+                    Ok(HirScalarExpr::literal_null(ScalarType::String))), 1387;
+                params!(Oid, Bool) => Operation::binary(|_ecx, _oid, _pretty|
+                    Ok(HirScalarExpr::literal_null(ScalarType::String))), 2508;
+            },
+            // pg_get_indexdef reconstructs the creating command for an index. We only support
+            // arrangement based indexes, so we can hardcode that in.
+            // TODO(jkosh44): In order to include the index WITH options, they will need to be saved somewhere in the catalog
+            "pg_get_indexdef" => Scalar {
+                params!(Oid) => sql_impl_func(
+                    "(SELECT 'CREATE INDEX ' || i.name || ' ON ' || r.name || ' USING arrangement (' || (
+                        SELECT string_agg(cols.col_exp, ',' ORDER BY cols.index_position)
+                        FROM (
+                            SELECT c.name AS col_exp, ic.index_position
+                            FROM mz_catalog.mz_index_columns AS ic
+                            JOIN mz_catalog.mz_indexes AS i2 ON ic.index_id = i2.id
+                            JOIN mz_catalog.mz_columns AS c ON i2.on_id = c.id AND ic.on_position = c.position
+                            WHERE ic.index_id = i.id AND ic.on_expression IS NULL
+                            UNION
+                            SELECT ic.on_expression AS col_exp, ic.index_position
+                            FROM mz_catalog.mz_index_columns AS ic
+                            WHERE ic.index_id = i.id AND ic.on_expression IS NOT NULL
+                        ) AS cols
+                    ) || ')'
+                    FROM mz_catalog.mz_indexes AS i
+                    JOIN mz_catalog.mz_relations AS r ON i.on_id = r.id
+                    WHERE i.oid = $1)"
+                ) => String, 1643;
+                // A position of 0 is treated as if no position was given.
+                // Third parameter, pretty, is ignored.
+                params!(Oid, Int32, Bool) => sql_impl_func(
+                    "(SELECT CASE WHEN $2 = 0 THEN pg_get_indexdef($1) ELSE
+                        (SELECT c.name
+                        FROM mz_catalog.mz_indexes AS i
+                        JOIN mz_catalog.mz_index_columns AS ic ON i.id = ic.index_id
+                        JOIN mz_catalog.mz_columns AS c ON i.on_id = c.id AND ic.on_position = c.position
+                        WHERE i.oid = $1 AND ic.on_expression IS NULL AND ic.index_position = $2
+                        UNION
+                        SELECT ic.on_expression
+                        FROM mz_catalog.mz_indexes AS i
+                        JOIN mz_catalog.mz_index_columns AS ic ON i.id = ic.index_id
+                        WHERE i.oid = $1 AND ic.on_expression IS NOT NULL AND ic.index_position = $2)
+                    END)"
+                ) => String, 2507;
             },
             // pg_get_expr is meant to convert the textual version of
             // pg_node_tree data into parseable expressions. However, we don't

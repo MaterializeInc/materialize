@@ -103,3 +103,9 @@ SELECT atttypid, attname FROM pg_attribute WHERE attrelid = (SELECT oid FROM mz_
 2951  c__uuid
 3802  c_jsonb
 3807  c__jsonb
+
+# Generated queries are unsupported
+query B
+SELECT DISTINCT(attgenerated = '') FROM pg_attribute
+----
+true

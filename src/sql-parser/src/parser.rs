@@ -2319,6 +2319,11 @@ impl<'a> Parser<'a> {
         };
         let on_name = self.parse_object_name()?;
 
+        // Arrangements are the only index type we support, so we can just ignore this
+        if self.parse_keyword(USING) {
+            self.expect_keyword(ARRANGEMENT)?;
+        }
+
         let key_parts = if default_index {
             None
         } else {
