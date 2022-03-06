@@ -581,10 +581,10 @@ impl Coordinator {
                     )
                     .await;
                 }
-                CatalogItem::Index(_) => {
+                CatalogItem::Index(idx) => {
                     // The index is expected to live on some compute instance.
                     let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
-                    if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
+                    if BUILTINS.logs().any(|log| log.id == idx.on) {
                         // TODO: make this one call, not many.
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
@@ -1980,7 +1980,7 @@ impl Coordinator {
         } else {
             None
         };
-        let table_id = self.catalog.allocate_id()?;
+        let table_id = self.catalog.allocate_user_id()?;
         let mut index_depends_on = table.depends_on.clone();
         index_depends_on.push(table_id);
         let table = catalog::Table {
@@ -2158,7 +2158,7 @@ impl Coordinator {
                 materialized,
                 ..
             } = plan;
-            let source_id = self.catalog.allocate_id()?;
+            let source_id = self.catalog.allocate_user_id()?;
             let source_oid = self.catalog.allocate_oid()?;
 
             let persist_details = self.persister.new_serialized_source_persist_details(
@@ -2186,7 +2186,7 @@ impl Coordinator {
                     .catalog
                     .for_session(session)
                     .find_available_name(index_name);
-                let index_id = self.catalog.allocate_id()?;
+                let index_id = self.catalog.allocate_user_id()?;
                 let index = auto_generate_primary_idx(
                     index_name.item.clone(),
                     name,
@@ -2230,7 +2230,7 @@ impl Coordinator {
         let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = match self.catalog.allocate_id() {
+        let id = match self.catalog.allocate_user_id() {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
@@ -2347,7 +2347,7 @@ impl Coordinator {
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
-        let view_id = self.catalog.allocate_id()?;
+        let view_id = self.catalog.allocate_user_id()?;
         let view_oid = self.catalog.allocate_oid()?;
         let optimized_expr = self.view_optimizer.optimize(view.expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
@@ -2375,7 +2375,7 @@ impl Coordinator {
                 .catalog
                 .for_session(session)
                 .find_available_name(index_name);
-            let index_id = self.catalog.allocate_id()?;
+            let index_id = self.catalog.allocate_user_id()?;
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 name,
@@ -2496,7 +2496,7 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let id = self.catalog.allocate_id()?;
+        let id = self.catalog.allocate_user_id()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
             keys: index.keys,
@@ -2554,7 +2554,7 @@ impl Coordinator {
             },
             depends_on: plan.typ.depends_on,
         };
-        let id = self.catalog.allocate_id()?;
+        let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
@@ -3176,7 +3176,7 @@ impl Coordinator {
             TailFrom::Id(from_id) => {
                 let from = self.catalog.get_by_id(&from_id);
                 let from_desc = from.desc().unwrap().clone();
-                let sink_id = self.catalog.allocate_id()?;
+                let sink_id = self.catalog.allocate_user_id()?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id])?;
                 let sink_name = format!("tail-{}", sink_id);
                 self.dataflow_builder(compute_instance)
@@ -4615,7 +4615,18 @@ pub async fn serve(
                 granularity_ns: config.granularity.as_nanos(),
                 active_logs: BUILTINS
                     .logs()
-                    .map(|src| (src.variant.clone(), src.index_id))
+                    .map(|src| {
+                        (
+                            src.variant.clone(),
+                            // NOTE(benesch): this logic will need to learn to
+                            // find the index for the compute instance we're
+                            // creating.
+                            coord
+                                .catalog
+                                .default_index_for(src.id)
+                                .expect("logging sources must have a default index"),
+                        )
+                    })
                     .collect(),
                 log_logging: config.log_logging,
             });
