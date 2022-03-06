@@ -1548,15 +1548,6 @@ impl Coordinator {
             frontier: self.determine_frontier(&[sink.from], compute_instance),
             strict: !sink.with_snapshot,
         };
-        // If the sink depends on tables, the `determine_frontier` call above
-        // will have called `get_local_read_ts` to determine the `as_of` for the
-        // sink. The below call to `catalog_transact` will call
-        // `get_local_write_ts` to emit an update to the system catalog. This
-        // interleaving of reads and writes is only guaranteed to succeed if we
-        // advance local inputs now.
-        //
-        // TODO(benesch): this is brittle. Can we make it less brittle?
-        self.advance_local_inputs().await;
         let ops = vec![
             catalog::Op::DropItem(id),
             catalog::Op::CreateItem {
@@ -5197,7 +5188,7 @@ impl Coordinator {
     }
 }
 
-/// A mechanism for ensuring that a sequence of writes and reads procede correctly through timestamps.
+/// A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 mod timeline {
 
     /// A timeline is either currently writing or currently reading.
