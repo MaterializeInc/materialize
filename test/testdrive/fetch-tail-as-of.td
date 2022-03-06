@@ -14,6 +14,7 @@
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE TABLE t1 (f1 INTEGER);
+> CREATE DEFAULT INDEX ON t1
 
 > INSERT INTO t1 VALUES (123);
 

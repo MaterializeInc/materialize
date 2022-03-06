@@ -878,8 +878,12 @@ EXPLAIN SELECT
   y1 << y2 >> y3 as r2
 FROM nums
 ----
+Source materialize.public.nums (u3):
+| Project (#0..=#5)
+
+Query:
 %0 =
-| Get materialize.public.nums (u5)
+| Get materialize.public.nums (u3)
 | Map ((#0 >> i16toi32(#1)) << i16toi32(#2)), ((#3 << #4) >> #5)
 | Project (#9, #10)
 
@@ -909,8 +913,12 @@ EXPLAIN SELECT
   y1 << y2 & y3 as r2
 FROM nums
 ----
+Source materialize.public.nums (u3):
+| Project (#0..=#5)
+
+Query:
 %0 =
-| Get materialize.public.nums (u5)
+| Get materialize.public.nums (u3)
 | Map ((#0 >> i16toi32(#1)) & #2), ((#3 << #4) & #5)
 | Project (#9, #10)
 
@@ -942,8 +950,12 @@ EXPLAIN SELECT
   x1 & y2 | z3 as r4
 FROM nums
 ----
+Source materialize.public.nums (u3):
+| Project (#0..=#8)
+
+Query:
 %0 =
-| Get materialize.public.nums (u5)
+| Get materialize.public.nums (u3)
 | Map ((#0 & #1) | #2), ((#3 & #4) | #5), ((#6 & #7) | #8), (i32toi64((i16toi32(#0) & #4)) | #8)
 | Project (#9..=#12)
 
@@ -975,8 +987,12 @@ EXPLAIN SELECT
   x1 # y2 & z3 as r4
 FROM nums
 ----
+Source materialize.public.nums (u3):
+| Project (#0..=#8)
+
+Query:
 %0 =
-| Get materialize.public.nums (u5)
+| Get materialize.public.nums (u3)
 | Map ((#0 # #1) & #2), ((#3 # #4) & #5), ((#6 # #7) & #8), (i32toi64((i16toi32(#0) # #4)) & #8)
 | Project (#9..=#12)
 
@@ -1008,8 +1024,12 @@ EXPLAIN SELECT
   x1 # y2 | z3 as r4
 FROM nums
 ----
+Source materialize.public.nums (u3):
+| Project (#0..=#8)
+
+Query:
 %0 =
-| Get materialize.public.nums (u5)
+| Get materialize.public.nums (u3)
 | Map ((#0 # #1) | #2), ((#3 # #4) | #5), ((#6 # #7) | #8), (i32toi64((i16toi32(#0) # #4)) | #8)
 | Project (#9..=#12)
 

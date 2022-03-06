@@ -25,6 +25,11 @@ NULL
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 0)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 0)
@@ -34,6 +39,11 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
 ----
+Source materialize.public.t1 (u1):
+| Filter isnull(#0)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter isnull(#0)
@@ -54,6 +64,11 @@ NULL
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 1)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
@@ -106,8 +121,13 @@ INSERT INTO t2 VALUES (0, -1), (1, 5), (1, -2)
 query T multiline
 EXPLAIN SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
 ----
+Source materialize.public.t2 (u2):
+| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Map ((#0 + #1) > 0)
 | Filter #2, if #2 then {((1 / #0) > 0)} else {false}
 | Project (#0, #1)
@@ -117,8 +137,13 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
 ----
+Source materialize.public.t2 (u2):
+| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Map ((#0 + #1) > 0)
 | Filter #2, if #2 then {((1 / #0) > 0)} else {false}
 | Project (#0, #1)

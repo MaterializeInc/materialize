@@ -39,6 +39,3 @@ DETAIL: The following relations in the query are outside the transaction's time 
 "materialize.public.i2"
 Only the following relations are available:
 "materialize.public.i1"
-"materialize.public.t1"
-"materialize.public.t1_primary_idx"
-"materialize.public.v1"

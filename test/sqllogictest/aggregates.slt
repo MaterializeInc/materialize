@@ -176,8 +176,12 @@ SELECT a, sum(b) from agg_pk group by a order by a
 query T multiline
 EXPLAIN PLAN FOR SELECT a, sum(b) from agg_pk group by a
 ----
+Source materialize.public.agg_pk (u3):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.agg_pk (u5)
+| Get materialize.public.agg_pk (u3)
 | Map i32toi64(#1)
 | Project (#0, #3)
 
@@ -193,8 +197,12 @@ SELECT a, sum(c) from agg_pk group by a order by a
 query T multiline
 EXPLAIN PLAN FOR SELECT a, sum(c) from agg_pk group by a
 ----
+Source materialize.public.agg_pk (u3):
+| Project (#0, #2)
+
+Query:
 %0 =
-| Get materialize.public.agg_pk (u5)
+| Get materialize.public.agg_pk (u3)
 | Map i64tonumeric(#2)
 | Project (#0, #3)
 

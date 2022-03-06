@@ -30,18 +30,31 @@ INSERT INTO t3 VALUES (2, 3), (5, 5);
 query T multiline
 EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
 ----
+Source materialize.public.t1 (u1):
+| Filter !(isnull(#1)), (#0 > 0)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter !(isnull(#1))
+| Project (#0, #1)
+
+Source materialize.public.t3 (u3):
+| Filter (#0 > 0)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 > 0), !(isnull(#1))
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter !(isnull(#1))
 | ArrangeBy (#1)
 
 %2 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 | Filter (#0 > 0)
 
 %3 =
@@ -109,16 +122,16 @@ EXPLAIN SELECT * FROM lineitem
   AND o_orderdate = l_shipDATE - INTERVAL ' 9 MONTHS ';
 ----
 %0 =
-| Get materialize.public.lineitem (u15)
+| Get materialize.public.lineitem (u10)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.orders (u11)
+| Get materialize.public.orders (u7)
 | Filter !(isnull(#0))
 | ArrangeBy (#0, datetots(#3))
 
 %2 =
-| Get materialize.public.customer (u7)
+| Get materialize.public.customer (u4)
 
 %3 =
 | Join %0 %1 %2 (= #0 #8) (= datetots(#11) (#5 - 9 months))
@@ -137,17 +150,17 @@ EXPLAIN SELECT  MIN( o_orderkey  )
   AND o_orderkey  = (  SELECT l_orderkey  FROM lineitem  WHERE l_orderkey  =  38  )
 ----
 %0 = Let l0 =
-| Get materialize.public.lineitem (u15)
+| Get materialize.public.lineitem (u10)
 | Filter (#0 = 38)
 
 %1 =
-| Get materialize.public.lineitem (u15)
+| Get materialize.public.lineitem (u10)
 | Filter (#6 = 1997-01-25)
 | Project (#4)
 | ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.orders (u11)
+| Get materialize.public.orders (u7)
 | ArrangeBy (#0)
 
 %3 =
@@ -200,19 +213,19 @@ EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col
   AND l_extendedprice = MOD (o_totalprice , 5 ) ;
 ----
 %0 =
-| Get materialize.public.lineitem (u15)
+| Get materialize.public.lineitem (u10)
 | Filter (#4 = (#4 % 5))
 | Project (#0, #1, #4, #6)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.orders (u11)
+| Get materialize.public.orders (u7)
 | Filter (#1 = 134), (#2 = (#2 % 5))
 | Project (#2, #3)
 | ArrangeBy (#0, #1)
 
 %2 =
-| Get materialize.public.customer (u7)
+| Get materialize.public.customer (u4)
 | Filter (#0 = 134)
 | Project ()
 
@@ -232,17 +245,17 @@ EXPLAIN SELECT *
   AND l_shipDATE = o_orderdate;
 ----
 %0 =
-| Get materialize.public.lineitem (u15)
+| Get materialize.public.lineitem (u10)
 | Filter (datetots(#7) = (#5 + 6 days))
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.orders (u11)
+| Get materialize.public.orders (u7)
 | Filter (#1 = 229)
 | ArrangeBy (#2, #3)
 
 %2 =
-| Get materialize.public.customer (u7)
+| Get materialize.public.customer (u4)
 | Filter (#0 = 229)
 
 %3 =

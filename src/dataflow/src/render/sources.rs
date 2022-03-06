@@ -17,21 +17,20 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Map, OkErr, Probe, UnorderedInput};
+use timely::dataflow::operators::{Concat, Inspect, Map, OkErr, Probe, UnorderedInput};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
+use timely::progress::Antichain;
 use tracing::debug;
 
+use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
+use mz_dataflow_types::*;
+use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
 use mz_persist::client::{MultiWriteHandle, StreamWriteHandle};
 use mz_persist::operators::source::PersistedSource;
 use mz_persist::operators::stream::{AwaitFrontier, Seal};
 use mz_persist::operators::upsert::PersistentUpsertConfig;
 use mz_persist_types::Codec;
-
-use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
-use mz_dataflow_types::*;
-use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
 use mz_repr::{Diff, Row, RowPacker, Timestamp};
-use timely::progress::Antichain;
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -67,18 +66,39 @@ pub(crate) fn import_table<G>(
     scope: &mut G,
     id: SourceInstanceId,
     persisted_name: Option<String>,
-) -> (
-    LocalInput,
-    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
-)
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let ((handle, capability), ok_stream, err_collection) = {
-        let ((handle, capability), ok_stream) = scope.new_unordered_input();
-        let err_collection = Collection::empty(scope);
-        ((handle, capability), ok_stream, err_collection)
+    let ((mut handle, mut capability), ok_stream) = scope.new_unordered_input();
+    let err_collection = Collection::empty(scope);
+
+    // HACK: input handles do not buffer their input unless attached to a
+    // downstream operator. See TimelyDataflow/timely-dataflow#264.
+    let ok_stream = ok_stream.inspect(|_| ());
+
+    let table_state = match storage_state.table_state.get_mut(&id.source_id) {
+        Some(table_state) => table_state,
+        None => panic!(
+            "table state {} missing for source creation at worker {}",
+            id.source_id,
+            scope.index()
+        ),
     };
+
+    // Make the new local input reflect the latest table state, then add the
+    // local input to the table state.
+    {
+        let mut session = handle.session(capability.clone());
+        for (row, time, diff) in &table_state.data {
+            let mut time = *time;
+            time.advance_by(table_state.since.borrow());
+            assert!(time >= *capability.time());
+            session.give((row.clone(), time, *diff));
+        }
+    }
+    capability.downgrade(&table_state.upper);
+    table_state.inputs.push(LocalInput { handle, capability });
 
     // A local "source" is either fed by a local input handle, or by reading from a
     // `persisted_source()`.
@@ -115,7 +135,6 @@ where
         _ => (ok_stream, err_collection),
     };
 
-    let local_input = LocalInput { handle, capability };
     let as_of_frontier = as_of_frontier.clone();
     let ok_collection = ok_stream
         .map_in_place(move |(_, time, _)| {
@@ -123,7 +142,7 @@ where
         })
         .as_collection();
 
-    (local_input, (ok_collection, err_collection))
+    (ok_collection, err_collection)
 }
 
 /// Constructs a `CollectionBundle` and tokens from source arguments.
@@ -177,9 +196,7 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
-            let (local_input, (ok, err)) =
-                import_table(as_of_frontier, storage_state, scope, uid, persisted_name);
-            storage_state.local_inputs.insert(src_id, local_input);
+            let (ok, err) = import_table(as_of_frontier, storage_state, scope, uid, persisted_name);
 
             // TODO(mcsherry): Local tables are a special non-source we should relocate.
             ((ok, err), Rc::new(()))
