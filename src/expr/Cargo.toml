@@ -31,7 +31,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 num = "0.4.0"
 num-iter = "0.1.42"
-num_enum = "0.5.6"
+num_enum = "0.5.7"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 paste = "1.0.0"
 regex = "1.5.4"
