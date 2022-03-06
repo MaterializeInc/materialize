@@ -88,8 +88,7 @@ pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr>;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc<P> {
     pub id: GlobalId,
-    // TODO(benesch): rename to "plan".
-    pub view: P,
+    pub plan: P,
 }
 
 /// A description of an instantation of a source.
@@ -193,9 +192,9 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
         );
     }
 
-    /// Binds to `id` the relation expression `view`.
-    pub fn insert_view(&mut self, id: GlobalId, view: OptimizedMirRelationExpr) {
-        self.objects_to_build.push(BuildDesc { id, view });
+    /// Binds to `id` the relation expression `plan`.
+    pub fn insert_plan(&mut self, id: GlobalId, plan: OptimizedMirRelationExpr) {
+        self.objects_to_build.push(BuildDesc { id, plan });
     }
 
     /// Exports as `id` an index on `on_id`.
@@ -205,7 +204,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: RelationType) {
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
-        self.insert_view(
+        self.insert_plan(
             id,
             OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::ArrangeBy {
                 input: Box::new(MirRelationExpr::global_get(
@@ -270,7 +269,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
         }
         for desc in self.objects_to_build.iter() {
             if &desc.id == id {
-                return desc.view.arity();
+                return desc.plan.arity();
             }
         }
         panic!("GlobalId {} not found in DataflowDesc", id);
@@ -334,7 +333,7 @@ where
         // The collection is not provided by a source or imported index.
         // It must be a collection whose plan we have handy. Recurse.
         let build = self.build_desc(collection_id);
-        for id in build.view.depends_on() {
+        for id in build.plan.depends_on() {
             self.depends_on_into(id, out)
         }
     }

@@ -3048,9 +3048,9 @@ impl Coordinator {
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         let mut builder = self.dataflow_builder(compute_instance);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
-        for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
+        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             builder.prep_relation_expr(
-                view,
+                plan,
                 ExprPrepStyle::OneShot {
                     logical_time: Some(timestamp),
                     session,
@@ -4865,7 +4865,7 @@ pub mod fast_path_peek {
         if dataflow_plan.objects_to_build.len() >= 1
             && dataflow_plan.objects_to_build[0].id == view_id
         {
-            match &dataflow_plan.objects_to_build[0].view {
+            match &dataflow_plan.objects_to_build[0].plan {
                 // In the case of a constant, we can return the result now.
                 mz_dataflow_types::Plan::Constant { rows } => {
                     return Ok(Plan::Constant(rows.clone()));

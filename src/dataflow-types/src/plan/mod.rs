@@ -933,12 +933,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         // Build each object in order, registering the arrangements it forms.
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build.into_iter() {
-            let (plan, keys) = Self::from_mir(&build.view, &mut arrangements)?;
+            let (plan, keys) = Self::from_mir(&build.plan, &mut arrangements)?;
             arrangements.insert(Id::Global(build.id), keys);
-            objects_to_build.push(crate::BuildDesc {
-                id: build.id,
-                view: plan,
-            });
+            objects_to_build.push(crate::BuildDesc { id: build.id, plan });
         }
 
         Ok(DataflowDescription {

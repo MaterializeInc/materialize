@@ -351,7 +351,7 @@ where
         object: BuildDesc<plan::Plan>,
     ) {
         // First, transform the relation expression into a render plan.
-        let bundle = self.render_plan(object.view, scope, scope.index());
+        let bundle = self.render_plan(object.plan, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
     }
 

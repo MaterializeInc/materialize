@@ -90,7 +90,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
         let mut occurrences_in_later_views = Vec::new();
         for other in (index + 1)..dataflow.objects_to_build.len() {
             if dataflow.objects_to_build[other]
-                .view
+                .plan
                 .depends_on()
                 .contains(&global_id)
             {
@@ -112,19 +112,19 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
             update_let.action(
-                dataflow.objects_to_build[index].view.as_inner_mut(),
+                dataflow.objects_to_build[index].plan.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Assign new identifiers to the other relation.
             update_let.action(
-                dataflow.objects_to_build[other].view.as_inner_mut(),
+                dataflow.objects_to_build[other].plan.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Install the `new_local` name wherever `global_id` was used.
             dataflow.objects_to_build[other]
-                .view
+                .plan
                 .as_inner_mut()
                 .visit_mut_post(&mut |expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
@@ -138,14 +138,14 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
             // a `MirRelationExpr::Let` binding, whose value is `index` and
             // whose body is `other`.
             let body = dataflow.objects_to_build[other]
-                .view
+                .plan
                 .as_inner_mut()
                 .take_dangerous();
             let value = dataflow.objects_to_build[index]
-                .view
+                .plan
                 .as_inner_mut()
                 .take_dangerous();
-            *dataflow.objects_to_build[other].view.as_inner_mut() = MirRelationExpr::Let {
+            *dataflow.objects_to_build[other].plan.as_inner_mut() = MirRelationExpr::Let {
                 id: new_local,
                 value: Box::new(value),
                 body: Box::new(body),
@@ -172,7 +172,7 @@ fn optimize_dataflow_relations(
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
-        optimizer.transform(object.view.as_inner_mut(), &indexes)?;
+        optimizer.transform(object.plan.as_inner_mut(), &indexes)?;
     }
 
     Ok(())
@@ -212,7 +212,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
             .objects_to_build
             .iter_mut()
             .rev()
-            .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
+            .map(|build_desc| (Id::Global(build_desc.id), build_desc.plan.as_inner_mut())),
         &mut demand,
     )?;
 
@@ -296,7 +296,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
             .objects_to_build
             .iter_mut()
             .rev()
-            .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
+            .map(|build_desc| (Id::Global(build_desc.id), build_desc.plan.as_inner_mut())),
         &mut predicates,
     )?;
 
@@ -362,7 +362,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
     // Propagate predicate information from outputs to inputs.
     for build_desc in dataflow.objects_to_build.iter_mut() {
         monotonic_flag.apply(
-            build_desc.view.as_inner_mut(),
+            build_desc.plan.as_inner_mut(),
             &monotonic,
             &mut HashSet::new(),
         )?;

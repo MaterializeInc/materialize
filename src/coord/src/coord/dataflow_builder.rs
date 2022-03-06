@@ -210,7 +210,7 @@ impl<'a> DataflowBuilder<'a> {
                 }
             }
         }
-        dataflow.insert_view(*view_id, view.clone());
+        dataflow.insert_plan(*view_id, view.clone());
 
         Ok(())
     }
@@ -226,8 +226,8 @@ impl<'a> DataflowBuilder<'a> {
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(name, id);
         self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
-        for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
-            self.prep_relation_expr(view, ExprPrepStyle::Index)?;
+        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
+            self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         for key in &mut index_description.key {
             self.prep_scalar_expr(key, ExprPrepStyle::Index)?;
@@ -266,8 +266,8 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<(), CoordError> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
-        for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
-            self.prep_relation_expr(view, ExprPrepStyle::Index)?;
+        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
+            self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         dataflow.export_sink(id, sink_description);
 
