@@ -5264,8 +5264,13 @@ impl Coordinator {
         // (which has happened twice and is the motivation for this test).
 
         let df = DataflowDesc::new("".into(), GlobalId::Explain);
-        let _: () = self.ship_dataflow(df.clone()).await;
-        let _: () = self.ship_dataflows(vec![df.clone()]).await;
-        let _: DataflowDescription<mz_dataflow_types::plan::Plan> = self.finalize_dataflow(df);
+        let _: () = self
+            .ship_dataflow(df.clone(), DEFAULT_COMPUTE_INSTANCE_ID)
+            .await;
+        let _: () = self
+            .ship_dataflows(vec![df.clone()], DEFAULT_COMPUTE_INSTANCE_ID)
+            .await;
+        let _: DataflowDescription<mz_dataflow_types::plan::Plan> =
+            self.finalize_dataflow(df, DEFAULT_COMPUTE_INSTANCE_ID);
     }
 }
