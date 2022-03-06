@@ -274,21 +274,9 @@ pub struct Coordinator {
     /// Channel to communicate source status updates to the timestamper thread.
     metric_scraper: Scraper,
 
-    /// The last known timestamp that was considered "open" (i.e. where writes
-    /// may occur). However, this timestamp is _not_ open when
-    /// `read_writes_at_open_ts == true`; in this case, reads will occur at
-    /// `last_open_local_ts`, and the Coordinator must open a new timestamp
-    /// for writes.
-    ///
-    /// Indirectly, this value aims to represent the Coordinator's desired value
-    /// for `upper` for table frontiers, as long as we know it is open.
-    last_open_local_ts: Timestamp,
-    /// Whether or not we have written at the open timestamp.
-    writes_at_open_ts: bool,
-    /// Whether or not we have read the writes that have occurred at the open
-    /// timestamp. When this is `true`, it signals we need to open a new
-    /// timestamp to support future writes.
-    read_writes_at_open_ts: bool,
+    /// Mechanism for totally ordering write and read timestamps, so that all reads
+    /// reflect exactly the set of writes that precede them, and no writes that follow.
+    global_timeline: timeline::Timeline,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -381,63 +369,14 @@ impl Coordinator {
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
     fn get_local_read_ts(&mut self) -> Timestamp {
-        if self.writes_at_open_ts {
-            // If you have pending writes, you will need to read those writes,
-            // which happened at the last known open time. This also means you
-            // will need to advance to those writes, i.e. close over
-            // `last_open_local_ts`.
-            self.read_writes_at_open_ts = true;
-            self.last_open_local_ts
-        } else {
-            // If there are no writes at the open timestamp, we know we can read
-            // at one unit of time less than the open time (which will always be
-            // closed).
-            self.last_open_local_ts - 1
-        }
+        self.global_timeline.read_ts()
     }
 
     /// Assign a timestamp for a write to a local input. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
     fn get_local_write_ts(&mut self) -> Timestamp {
-        // This assert is valid because:
-        // - Whenever a write precedes a read, the read sets
-        //   `read_writes_at_open_ts = true`, which will advance the
-        //   `last_open_local_ts`.
-        // - The Coordinator always has the opportunity to check the state of
-        //   `read_writes_at_open_ts` after a read, even in the case of
-        //   `ReadThenWrite` plans, which dictates when we advance the
-        //   timestamp.
-        // - Advancing the timestamp sets `read_writes_at_open_ts = false`.
-        assert!(
-            !self.read_writes_at_open_ts,
-            "do not perform writes at time where tables want to read"
-        );
-
-        self.writes_at_open_ts = true;
-
-        self.last_open_local_ts
-    }
-
-    /// Opens a new timestamp for local inputs at which writes may occur, and
-    /// where reads should return quickly at a value 1 less.
-    fn open_new_local_ts(&mut self) {
-        // This is a hack. In a perfect world we would represent time as having a "real" dimension
-        // and a "coordinator" dimension so that clients always observed linearizability from
-        // things the coordinator did without being related to the real dimension.
-        let ts = (self.catalog.config().now)();
-
-        // We cannot depend on `self.catalog.config().now`'s value to increase
-        // (in addition to the normal considerations around clocks in computers,
-        // this feature enables us to drive the Coordinator's time when using a
-        // test harness). Instead, we must manually increment
-        // `last_open_local_ts` if `now` appears non-increasing.
-        self.last_open_local_ts = std::cmp::max(ts, self.last_open_local_ts + 1);
-
-        // Opening a new timestamp means that there cannot be new writes at the
-        // open timestamp.
-        self.writes_at_open_ts = false;
-        self.read_writes_at_open_ts = false;
+        self.global_timeline.write_ts()
     }
 
     fn now_datetime(&self) -> DateTime<Utc> {
@@ -775,12 +714,13 @@ impl Coordinator {
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
-                    self.read_writes_at_open_ts = true;
+                    self.global_timeline
+                        .fast_forward((self.catalog.config().now)());
                 }
             }
 
-            if self.read_writes_at_open_ts {
-                self.advance_local_inputs().await;
+            if let Some(timestamp) = self.global_timeline.should_advance_to() {
+                self.advance_local_inputs(timestamp).await;
             }
         }
     }
@@ -789,12 +729,7 @@ impl Coordinator {
     // a time greater than any previous table read (if wall clock has gone
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
-    async fn advance_local_inputs(&mut self) {
-        self.open_new_local_ts();
-
-        // Close the stream up to the newly opened timestamp.
-        let advance_to = self.last_open_local_ts;
-
+    async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
         // Ensure that the persister is aware of exactly the set of tables for
         // which persistence is enabled.
         soft_assert_eq!(
@@ -4573,9 +4508,7 @@ pub async fn serve(
                 logging_enabled: logging.is_some(),
                 internal_cmd_tx,
                 metric_scraper,
-                last_open_local_ts: 1,
-                writes_at_open_ts: false,
-                read_writes_at_open_ts: false,
+                global_timeline: timeline::Timeline::new(now()),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -5261,5 +5194,96 @@ impl Coordinator {
             .await;
         let _: DataflowDescription<mz_dataflow_types::plan::Plan> =
             self.finalize_dataflow(df, DEFAULT_COMPUTE_INSTANCE_ID);
+    }
+}
+
+/// A mechanism for ensuring that a sequence of writes and reads procede correctly through timestamps.
+mod timeline {
+
+    /// A timeline is either currently writing or currently reading.
+    ///
+    /// At each time, writes happen and then reads happen, meaning that writes at a time are
+    /// visible to exactly reads at that time or greater, and no other times.
+    enum TimelineState {
+        /// The timeline is producing collection updates timestamped with the argument.
+        Writing(mz_repr::Timestamp),
+        /// The timeline is observing collections aot the time of the argument.
+        Reading(mz_repr::Timestamp),
+    }
+
+    /// A type that provides write and read timestamps, reads observe exactly their preceding writes..
+    ///
+    /// Specifically, all read timestamps will be greater or equal to all previously reported write timestamps,
+    /// and strictly less than all subsequently emitted write timestamps.
+    pub struct Timeline {
+        state: TimelineState,
+        advance_to: Option<mz_repr::Timestamp>,
+    }
+
+    impl Timeline {
+        /// Create a new timeline, starting at the indicated time.
+        pub fn new(initially: mz_repr::Timestamp) -> Self {
+            Self {
+                state: TimelineState::Writing(initially),
+                advance_to: Some(initially),
+            }
+        }
+
+        /// Acquire a new timestamp for writing.
+        ///
+        /// This timestamp will be strictly greater than all prior values of `self.read_ts()`,
+        /// and less than or equal to all subsequent values of `self.read_ts()`.
+        pub fn write_ts(&mut self) -> mz_repr::Timestamp {
+            match self.state {
+                TimelineState::Writing(ts) => ts,
+                TimelineState::Reading(ts) => {
+                    self.state = TimelineState::Writing(ts + 1);
+                    ts + 1
+                }
+            }
+        }
+        /// Acquire a new timestamp for reading.
+        ///
+        /// This timestamp will be greater or equal to all prior values of `self.write_ts()`,
+        /// and strictly less than all subsequent values of `self.write_ts()`.
+        pub fn read_ts(&mut self) -> mz_repr::Timestamp {
+            match self.state {
+                TimelineState::Reading(ts) => ts,
+                TimelineState::Writing(ts) => {
+                    self.state = TimelineState::Reading(ts);
+                    self.advance_to = Some(ts + 1);
+                    ts
+                }
+            }
+        }
+        /// Electively advance the tracked times.
+        ///
+        /// If `lower_bound` is strictly greater than the current time (of either state), the
+        /// resulting state will be `Writing(lower_bound)`.
+        pub fn fast_forward(&mut self, lower_bound: mz_repr::Timestamp) {
+            match self.state {
+                TimelineState::Writing(ts) => {
+                    if lower_bound > ts {
+                        self.advance_to = Some(lower_bound);
+                        self.state = TimelineState::Writing(lower_bound);
+                    }
+                }
+                TimelineState::Reading(ts) => {
+                    if lower_bound > ts {
+                        // This may result in repetition in the case `lower_bound == ts + 1`.
+                        // This is documented as fine, and concerned users can protect themselves.
+                        self.advance_to = Some(lower_bound);
+                        self.state = TimelineState::Writing(lower_bound);
+                    }
+                }
+            }
+        }
+        /// Whether and to what the next value of `self.write_ts() has advanced since this method was last called.
+        ///
+        /// This method may produce the same value multiple times, and should not be used as a test for whether
+        /// a write-to-read transition has occurred, so much as an advisory signal that write capabilities can advance.
+        pub fn should_advance_to(&mut self) -> Option<mz_repr::Timestamp> {
+            self.advance_to.take()
+        }
     }
 }
