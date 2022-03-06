@@ -112,6 +112,9 @@ impl<'a> DataflowBuilder<'a> {
 
             // A valid index is any index on `id` that is known to the dataflow
             // layer, as indicated by its presence in `self.compute`.
+            //
+            // TODO: indexes should be imported after the optimization process,
+            // and only those actually used by the optimized plan
             let valid_index = self.catalog.enabled_indexes()[id]
                 .iter()
                 .find(|(id, _keys)| self.compute.collection(*id).is_ok());
@@ -181,37 +184,22 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Imports the view with the specified ID and expression into the provided
     /// dataflow description.
+    ///
+    /// You should generally prefer calling
+    /// [`DataflowBuilder::import_into_dataflow`], which can handle objects of
+    /// any type as long as they exist in the catalog. This method exists for
+    /// when the view does not exist in the catalog, e.g., because it is
+    /// identified by a [`GlobalId::Transient`].
     pub fn import_view_into_dataflow(
         &mut self,
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
     ) -> Result<(), CoordError> {
-        // TODO: We only need to import Get arguments for which we cannot find arrangements.
         for get_id in view.depends_on() {
             self.import_into_dataflow(&get_id, dataflow)?;
-
-            // TODO: indexes should be imported after the optimization process, and only those
-            // actually used by the optimized plan
-            if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
-                for (id, keys) in indexes.iter() {
-                    // Ensure only valid indexes (i.e. those in self.compute) are imported.
-                    // TODO(#8318): Ensure this logic is accounted for.
-                    if self.compute.collection(*id).is_err() {
-                        continue;
-                    }
-                    let on_entry = self.catalog.get_by_id(&get_id);
-                    let on_type = on_entry.desc().unwrap().typ().clone();
-                    let index_desc = IndexDesc {
-                        on_id: get_id,
-                        key: keys.clone(),
-                    };
-                    dataflow.import_index(*id, index_desc, on_type);
-                }
-            }
         }
         dataflow.insert_plan(*view_id, view.clone());
-
         Ok(())
     }
 
