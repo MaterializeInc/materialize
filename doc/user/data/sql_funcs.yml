@@ -684,11 +684,11 @@
     nonpure: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
-  - signature: 'pg_get_constraintdef(oid: oid [, pretty: bool]) -> text'
+  - signature: 'pg_get_constraintdef(oid: oid[, pretty: bool]) -> text'
     description: >-
       Returns the constraint definition for the given `oid`. Currently always
       returns NULL since constraints aren't supported.
-  - signature: ' pg_get_indexdef(index: oid [,column integer, pretty: bool]) -> text'
+  - signature: 'pg_get_indexdef(index: oid[, column integer, pretty: bool]) -> text'
     description: >-
       Reconstructs the creating command for an index. (This is a decompiled
       reconstruction, not the original text of the command.) If column is
