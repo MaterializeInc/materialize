@@ -580,7 +580,7 @@
 - type: Array
   functions:
   - signature: 'array_cat(a1: arrayany, a2: arrayany) -> arrayany'
-    description: '[Experimental](/cli/#experimental-mode)––Concatenates `a1` and `a2`.'
+    description: 'Concatenates `a1` and `a2`.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: >-
       Concatenates the elements of `array` together separated by `sep`.

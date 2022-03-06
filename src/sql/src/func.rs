@@ -1642,8 +1642,7 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64), 1395;
             },
             "array_cat" => Scalar {
-                params!(ArrayAny, ArrayAny) => Operation::binary(|ecx, lhs, rhs| {
-                    ecx.require_experimental_mode("array_cat")?;
+                params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(rhs, BinaryFunc::ArrayArrayConcat))
                 }) => ArrayAny, 383;
             },
