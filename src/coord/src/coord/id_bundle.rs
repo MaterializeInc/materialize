@@ -11,30 +11,30 @@ use std::collections::BTreeSet;
 
 use mz_expr::GlobalId;
 
-/// A bundle of storage and compute identifiers.
+/// A bundle of storage and compute collection identifiers.
 #[derive(Debug, Default, Clone)]
-pub struct IdBundle {
+pub struct CollectionIdBundle {
     /// The identifiers for sources in the storage layer.
     pub storage_ids: BTreeSet<GlobalId>,
     /// The identifiers for indexes in the compute layer.
     pub compute_ids: BTreeSet<GlobalId>,
 }
 
-impl IdBundle {
+impl CollectionIdBundle {
     /// Reports whether the bundle contains any identifiers of any type.
     pub fn is_empty(&self) -> bool {
         self.storage_ids.is_empty() && self.compute_ids.is_empty()
     }
 
     /// Extends the bundle with the identifiers from `other`.
-    pub fn extend(&mut self, other: &IdBundle) {
+    pub fn extend(&mut self, other: &CollectionIdBundle) {
         self.storage_ids.extend(&other.storage_ids);
         self.compute_ids.extend(&other.compute_ids);
     }
 
     /// Returns a new bundle without the identifiers from `other`.
-    pub fn difference(&self, other: &IdBundle) -> IdBundle {
-        IdBundle {
+    pub fn difference(&self, other: &CollectionIdBundle) -> CollectionIdBundle {
+        CollectionIdBundle {
             storage_ids: &self.storage_ids - &other.storage_ids,
             compute_ids: &self.compute_ids - &other.compute_ids,
         }
