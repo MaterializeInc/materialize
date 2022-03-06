@@ -58,7 +58,7 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, FIRST_SYSTEM_INDEX_ID, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::coord::id_bundle::IdBundle;
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session};
 use crate::CoordError;
@@ -164,7 +164,7 @@ impl CatalogState {
     /// Returns the identifiers of all discovered indexes, and the identifiers of
     /// the discovered unmaterialized sources required to satisfy ids. The returned list
     /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> IdBundle {
+    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> CollectionIdBundle {
         fn has_indexes(catalog: &CatalogState, id: GlobalId) -> bool {
             matches!(
                 catalog.get_by_id(&id).item(),
@@ -172,7 +172,7 @@ impl CatalogState {
             )
         }
 
-        fn inner(catalog: &CatalogState, id: GlobalId, id_bundle: &mut IdBundle) {
+        fn inner(catalog: &CatalogState, id: GlobalId, id_bundle: &mut CollectionIdBundle) {
             if !has_indexes(catalog, id) {
                 return;
             }
@@ -202,7 +202,7 @@ impl CatalogState {
             }
         }
 
-        let mut id_bundle = IdBundle::default();
+        let mut id_bundle = CollectionIdBundle::default();
         for id in ids {
             inner(self, *id, &mut id_bundle)
         }
@@ -2253,7 +2253,7 @@ impl Catalog {
         self.get_indexes_on(id).iter().min().cloned()
     }
 
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> IdBundle {
+    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> CollectionIdBundle {
         self.state.nearest_indexes(ids)
     }
 

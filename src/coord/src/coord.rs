@@ -145,7 +145,7 @@ use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::dataflow_builder::{DataflowBuilder, ExprPrepStyle};
-use crate::coord::id_bundle::IdBundle;
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
 use crate::session::{
@@ -2847,7 +2847,7 @@ impl Coordinator {
         uses_ids: &[GlobalId],
         timeline: &Option<Timeline>,
         conn_id: u32,
-    ) -> Result<IdBundle, CoordError> {
+    ) -> Result<CollectionIdBundle, CoordError> {
         // Gather all the used schemas.
         let mut schemas = HashSet::new();
         for id in uses_ids {
@@ -2878,7 +2878,7 @@ impl Coordinator {
         }
 
         // Gather the indexes and unmaterialized sources used by those items.
-        let mut id_bundle = IdBundle::default();
+        let mut id_bundle = CollectionIdBundle::default();
         for id in item_ids {
             id_bundle.extend(&self.catalog.nearest_indexes(&[id]));
         }
@@ -3203,7 +3203,7 @@ impl Coordinator {
     /// The smallest common valid read frontier among the specified collections.
     fn least_valid_read(
         &mut self,
-        id_bundle: &IdBundle,
+        id_bundle: &CollectionIdBundle,
         instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
@@ -3228,7 +3228,7 @@ impl Coordinator {
     /// identified as arguments.
     fn least_valid_write(
         &mut self,
-        id_bundle: &IdBundle,
+        id_bundle: &CollectionIdBundle,
         instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
@@ -3274,7 +3274,7 @@ impl Coordinator {
     fn determine_timestamp(
         &mut self,
         session: &Session,
-        id_bundle: &IdBundle,
+        id_bundle: &CollectionIdBundle,
         when: PeekWhen,
         compute_instance: ComputeInstanceId,
     ) -> Result<Timestamp, CoordError> {
@@ -4372,7 +4372,7 @@ impl Coordinator {
             .collect::<BTreeSet<_>>();
 
         let since = self.least_valid_read(
-            &IdBundle {
+            &CollectionIdBundle {
                 storage_ids,
                 compute_ids,
             },
@@ -5112,12 +5112,12 @@ pub mod read_holds {
 
     use mz_dataflow_types::client::ComputeInstanceId;
 
-    use crate::coord::id_bundle::IdBundle;
+    use crate::coord::id_bundle::CollectionIdBundle;
 
     /// Relevant information for acquiring or releasing a bundle of read holds.
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
-        pub(super) id_bundle: IdBundle,
+        pub(super) id_bundle: CollectionIdBundle,
         pub(super) compute_instance: ComputeInstanceId,
     }
 
@@ -5174,7 +5174,7 @@ pub mod read_holds {
             let ReadHolds {
                 time,
                 id_bundle:
-                    IdBundle {
+                    CollectionIdBundle {
                         storage_ids,
                         compute_ids,
                     },
