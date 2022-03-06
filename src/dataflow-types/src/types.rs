@@ -13,7 +13,7 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,7 @@ use mz_expr::{CollectionPlan, GlobalId, MirRelationExpr, MirScalarExpr, Optimize
 use mz_repr::{Diff, RelationType, Row};
 
 use crate::sources::persistence::SourcePersistDesc;
+use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 
 /// The response from a `Peek`.
@@ -85,9 +86,10 @@ pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr>;
 
 /// An association of a global identifier to an expression.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct BuildDesc<View> {
+pub struct BuildDesc<P> {
     pub id: GlobalId,
-    pub view: View,
+    // TODO(benesch): rename to "plan".
+    pub view: P,
 }
 
 /// A description of an instantation of a source.
@@ -118,7 +120,7 @@ pub struct SourceInstanceKey<T = mz_repr::Timestamp> {
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
+pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
     /// Indexes made available to the dataflow.
@@ -126,15 +128,13 @@ pub struct DataflowDescription<View, T = mz_repr::Timestamp> {
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
     /// dependencies of later objects on prior identifiers.
-    pub objects_to_build: Vec<BuildDesc<View>>,
+    pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view)
     pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
     pub sink_exports: Vec<(GlobalId, crate::types::sinks::SinkDesc<T>)>,
-    /// Maps views to views + indexes needed to generate that view
-    pub dependent_objects: BTreeMap<GlobalId, Vec<GlobalId>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
@@ -156,7 +156,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
             objects_to_build: Vec::new(),
             index_exports: Default::default(),
             sink_exports: Default::default(),
-            dependent_objects: Default::default(),
             as_of: Default::default(),
             debug_name: name,
             id,
@@ -171,15 +170,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     ///
     /// The `requesting_view` argument is currently necessary to correctly track the
     /// dependencies of views on indexes.
-    pub fn import_index(
-        &mut self,
-        id: GlobalId,
-        description: IndexDesc,
-        typ: RelationType,
-        requesting_view: GlobalId,
-    ) {
+    pub fn import_index(&mut self, id: GlobalId, description: IndexDesc, typ: RelationType) {
         self.index_imports.insert(id, (description, typ));
-        self.record_depends_on(requesting_view, id);
     }
 
     /// Imports a source and makes it available as `id`.
@@ -203,9 +195,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
 
     /// Binds to `id` the relation expression `view`.
     pub fn insert_view(&mut self, id: GlobalId, view: OptimizedMirRelationExpr) {
-        for get_id in view.depends_on() {
-            self.record_depends_on(id, get_id);
-        }
         self.objects_to_build.push(BuildDesc { id, view });
     }
 
@@ -230,19 +219,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     }
 
     /// Exports as `id` a sink described by `description`.
-    pub fn export_sink(&mut self, id: GlobalId, description: crate::types::sinks::SinkDesc<T>) {
+    pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc<T>) {
         self.sink_exports.push((id, description));
-    }
-
-    /// Records a dependency of `view_id` on `depended_upon`.
-    // TODO(#7267): This information should ideally be automatically extracted
-    // from the imported sources and indexes, rather than relying on the caller
-    // to correctly specify them.
-    fn record_depends_on(&mut self, view_id: GlobalId, depended_upon: GlobalId) {
-        self.dependent_objects
-            .entry(view_id)
-            .or_insert_with(Vec::new)
-            .push(depended_upon);
     }
 
     /// Returns true iff `id` is already imported.
@@ -299,35 +277,66 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     }
 }
 
-impl<View> DataflowDescription<View> {
-    /// Collects all indexes required to construct all exports.
-    pub fn get_all_imports(&self) -> HashSet<GlobalId> {
-        let mut result = HashSet::new();
-        for (_, desc, _) in &self.index_exports {
-            result.extend(self.get_imports(&desc.on_id))
-        }
-        for (_, sink) in &self.sink_exports {
-            result.extend(self.get_imports(&sink.from))
-        }
-        result
+impl<P, T> DataflowDescription<P, T>
+where
+    P: CollectionPlan,
+{
+    /// Returns the description of the object to build with the specified
+    /// identifier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is not present in `objects_to_build` exactly once.
+    pub fn build_desc(&self, id: GlobalId) -> &BuildDesc<P> {
+        let mut builds = self.objects_to_build.iter().filter(|build| build.id == id);
+        let build = builds
+            .next()
+            .unwrap_or_else(|| panic!("object to build id {id} unexpectedly missing"));
+        assert!(builds.next().is_none());
+        build
     }
 
-    /// Collects all transitively dependent identifiers that do not have their own dependencies.
-    pub fn get_imports(&self, id: &GlobalId) -> HashSet<GlobalId> {
-        let mut result = HashSet::new();
-        let mut worklist = vec![id];
-        while let Some(id) = worklist.pop() {
-            result.insert(*id);
-            if let Some(dependents) = self.dependent_objects.get(id) {
-                for id in dependents.iter() {
-                    if !result.contains(id) {
-                        worklist.push(id);
-                    }
-                }
+    /// Computes the set of identifiers upon which the specified collection
+    /// identifier depends.
+    ///
+    /// `id` must specify a valid object in `objects_to_build`.
+    pub fn depends_on(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
+        let mut out = BTreeSet::new();
+        self.depends_on_into(collection_id, &mut out);
+        out
+    }
+
+    /// Like `depends_on`, but appends to an existing `BTreeSet`.
+    pub fn depends_on_into(&self, collection_id: GlobalId, out: &mut BTreeSet<GlobalId>) {
+        if self.source_imports.contains_key(&collection_id) {
+            // The collection is provided by an imported source. Report the
+            // dependency on the source.
+            out.insert(collection_id);
+            return;
+        }
+
+        // NOTE(benesch): we're not smart enough here to know *which* index
+        // for the collection will be used, if one exists, so we have to report
+        // the dependency on all of them.
+        let mut found_index = false;
+        for (index_id, (desc, _typ)) in &self.index_imports {
+            if desc.on_id == collection_id {
+                // The collection is provided by an imported index. Report the
+                // dependency on the index.
+                out.insert(*index_id);
+                found_index = true;
             }
         }
-        result.retain(|id| self.dependent_objects.get(id).is_none());
-        result
+        if found_index {
+            return;
+        }
+
+        // The collection is not provided by a source or imported index.
+        // It must be a collection whose plan we have handy. Recurse.
+        let build = self.build_desc(collection_id);
+        for id in build.view.depends_on() {
+            self.depends_on_into(id, out)
+        }
     }
 }
 

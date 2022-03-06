@@ -125,7 +125,7 @@ impl<'a> DataflowBuilder<'a> {
                     .get_by_id(id)
                     .desc()
                     .expect("indexes can only be built on items with descs");
-                dataflow.import_index(*index_id, index_desc, desc.typ().clone(), *id);
+                dataflow.import_index(*index_id, index_desc, desc.typ().clone());
             } else {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
@@ -206,7 +206,7 @@ impl<'a> DataflowBuilder<'a> {
                         on_id: get_id,
                         key: keys.clone(),
                     };
-                    dataflow.import_index(*id, index_desc, on_type, *view_id);
+                    dataflow.import_index(*id, index_desc, on_type);
                 }
             }
         }

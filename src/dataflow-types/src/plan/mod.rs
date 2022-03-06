@@ -947,7 +947,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             objects_to_build,
             index_exports: desc.index_exports,
             sink_exports: desc.sink_exports,
-            dependent_objects: desc.dependent_objects,
             as_of: desc.as_of,
             debug_name: desc.debug_name,
             id: desc.id,

@@ -248,7 +248,6 @@ impl<T: timely::progress::Timestamp> Command<T> {
                                 objects_to_build,
                                 index_exports: dataflow.index_exports.clone(),
                                 sink_exports: dataflow.sink_exports.clone(),
-                                dependent_objects: dataflow.dependent_objects.clone(),
                                 as_of: dataflow.as_of.clone(),
                                 debug_name: dataflow.debug_name.clone(),
                                 id: dataflow.id,
