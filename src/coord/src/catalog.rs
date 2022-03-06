@@ -55,8 +55,8 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
-    PG_CATALOG_SCHEMA,
+    Builtin, BUILTINS, BUILTIN_ROLES, FIRST_SYSTEM_INDEX_ID, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session};
@@ -105,6 +105,7 @@ pub struct Catalog {
     state: CatalogState,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
+    system_index_counter: u64,
     transient_revision: u64,
 }
 
@@ -820,6 +821,7 @@ impl Catalog {
                 },
             },
             oid_counter: FIRST_USER_OID,
+            system_index_counter: FIRST_SYSTEM_INDEX_ID,
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
         };
@@ -905,9 +907,10 @@ impl Catalog {
                             desc: log.variant.desc(),
                         }),
                     );
+                    let index_id = catalog.allocate_system_index_id()?;
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        log.index_id,
+                        index_id,
                         oid,
                         FullName {
                             database: DatabaseSpecifier::Ambient,
@@ -930,7 +933,7 @@ impl Catalog {
                             ),
                             conn_id: None,
                             depends_on: vec![log.id],
-                            enabled: catalog.index_enabled_by_default(&log.index_id),
+                            enabled: catalog.index_enabled_by_default(&index_id),
                         }),
                     );
                 }
@@ -1184,8 +1187,17 @@ impl Catalog {
         self.storage.lock().expect("lock poisoned")
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
+    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().allocate_id()
+    }
+
+    fn allocate_system_index_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.system_index_counter;
+        if id == u64::max_value() {
+            return Err(Error::new(ErrorKind::IdExhaustion));
+        }
+        self.system_index_counter += 1;
+        Ok(GlobalId::System(id))
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {

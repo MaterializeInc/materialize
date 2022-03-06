@@ -82,7 +82,6 @@ pub struct BuiltinLog {
     pub name: &'static str,
     pub schema: &'static str,
     pub id: GlobalId,
-    pub index_id: GlobalId,
 }
 
 pub struct BuiltinTable {
@@ -122,37 +121,43 @@ pub struct BuiltinRole {
     pub id: i64,
 }
 
-// Builtin definitions below. Keep these sorted by global ID, and ensure you
-// add new builtins to the `BUILTINS` map.
+// Builtin definitions below. Ensure you add new builtins to the `BUILTINS` map.
+//
+// You SHOULD NOT change the ID of any builtins, nor delete a builtin. If you
+// do, you will break any downstream user objects that depended on the builtin.
 //
 // Builtins are loaded in ID order, so sorting them by global ID makes the
-// source code definition order match the load order.
+// source code definition order match the load order. A builtin must appear
+// AFTER any items it depends upon.
 //
-// A builtin must appear AFTER any items it depends upon. This means you may
-// need to reorder IDs if you change the dependency set of an existing builtin.
-// Unlike user IDs, system IDs are not persisted in the catalog, so it's safe to
-// change a builtin's ID.
+// NOTE(benesch): loading builtins in ID order means we're hosed if an existing
+// view needs to take on a new dependency on a *new* builtin, i.e., a builtin
+// with a global ID that is greater than the existing builtin.
 //
 // Allocate IDs from the following ranges based on the item's type:
 //
-// | Item type | ID range  |
-// | ----------|-----------|
-// | Types     | 1000-1999 |
-// | Funcs     | 2000-2999 |
-// | Logs      | 3000-3999 |
-// | Tables    | 4000-4999 |
-// | Views     | 5000-5999 |
+// | Item type | ID range  | Notes
+// | ----------|-----------|-------------------------
+// | Types     | 1000-1999 |                        |
+// | Funcs     | 2000-2999 |                        |
+// | Logs      | 3000-3999 |                        |
+// | Tables    | 4000-4999 |                        |
+// | Views     | 5000-5999 |                        |
+// | Indexes   | 1000000+  | Dynamically allocated  |
 //
 // WARNING: if you change the definition of an existing builtin item, you must
 // be careful to maintain backwards compatibility! Adding new columns is safe.
 // Removing a column, changing the name of a column, or changing the type of a
 // column is not safe, as persisted user views may depend upon that column.
+
+pub const FIRST_SYSTEM_INDEX_ID: u64 = 1000000;
+
 // The following types are the list of builtin data types available
-// in Materialize. This list is derived from the Type variants supported
-// in pgrepr.
+// in Materialize. This list is derived from the `pg_type` table in PostgreSQL.
 //
 // Builtin types cannot be created, updated, or deleted. Their OIDs
 // are static, unlike other objects, to match the type OIDs defined by Postgres.
+
 pub const TYPE_BOOL: BuiltinType = BuiltinType {
     name: "bool",
     schema: PG_CATALOG_SCHEMA,
@@ -824,7 +829,6 @@ pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Operates),
     id: GlobalId::System(3000),
-    index_id: GlobalId::System(3001),
 };
 
 pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
@@ -832,7 +836,6 @@ pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
     id: GlobalId::System(3002),
-    index_id: GlobalId::System(3003),
 };
 
 pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
@@ -840,7 +843,6 @@ pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Channels),
     id: GlobalId::System(3004),
-    index_id: GlobalId::System(3005),
 };
 
 pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
@@ -848,7 +850,6 @@ pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
     id: GlobalId::System(3006),
-    index_id: GlobalId::System(3007),
 };
 
 pub const MZ_SCHEDULING_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
@@ -856,7 +857,6 @@ pub const MZ_SCHEDULING_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
     id: GlobalId::System(3008),
-    index_id: GlobalId::System(3009),
 };
 
 pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
@@ -864,7 +864,6 @@ pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
     id: GlobalId::System(3010),
-    index_id: GlobalId::System(3011),
 };
 
 pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
@@ -872,7 +871,6 @@ pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
     id: GlobalId::System(3012),
-    index_id: GlobalId::System(3013),
 };
 
 pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
@@ -880,7 +878,6 @@ pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
     id: GlobalId::System(3014),
-    index_id: GlobalId::System(3015),
 };
 
 pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
@@ -888,7 +885,6 @@ pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowCurrent),
     id: GlobalId::System(3016),
-    index_id: GlobalId::System(3017),
 };
 
 pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
@@ -896,7 +892,6 @@ pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowDependency),
     id: GlobalId::System(3018),
-    index_id: GlobalId::System(3019),
 };
 
 pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
@@ -904,7 +899,6 @@ pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::FrontierCurrent),
     id: GlobalId::System(3020),
-    index_id: GlobalId::System(3021),
 };
 
 pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
@@ -912,7 +906,6 @@ pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekCurrent),
     id: GlobalId::System(3022),
-    index_id: GlobalId::System(3023),
 };
 
 pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
@@ -920,7 +913,6 @@ pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekDuration),
     id: GlobalId::System(3024),
-    index_id: GlobalId::System(3025),
 };
 
 pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
@@ -928,7 +920,6 @@ pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::SourceInfo),
     id: GlobalId::System(3026),
-    index_id: GlobalId::System(3027),
 };
 
 pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
@@ -936,7 +927,6 @@ pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
     id: GlobalId::System(3028),
-    index_id: GlobalId::System(3029),
 };
 
 pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
@@ -944,7 +934,6 @@ pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
     id: GlobalId::System(3036),
-    index_id: GlobalId::System(3037),
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
@@ -952,7 +941,6 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
     id: GlobalId::System(3034),
-    index_id: GlobalId::System(3035),
 };
 
 pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
@@ -960,7 +948,6 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
     id: GlobalId::System(3038),
-    index_id: GlobalId::System(3039),
 };
 
 pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
@@ -968,7 +955,6 @@ pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
     id: GlobalId::System(3040),
-    index_id: GlobalId::System(3041),
 };
 
 // Next id BuiltinLog: 3042
@@ -2190,6 +2176,11 @@ lazy_static! {
                     identifier,
                     id,
                 );
+                assert!(
+                    *id < GlobalId::System(FIRST_SYSTEM_INDEX_ID),
+                    "{field_name} for {kind_name} {identifier:?} is not less \
+                     than FIRST_SYSTEM_INDEX_ID ({FIRST_SYSTEM_INDEX_ID}): {id}"
+                )
             };
         use Builtin::*;
         for b in builtins.iter() {
@@ -2198,9 +2189,8 @@ lazy_static! {
                     let name = format!("with ID {:?}", id);
                     encounter("type", "id", &name, id);
                 }
-                Log(BuiltinLog { id, name, index_id, .. }) => {
+                Log(BuiltinLog { id, name, .. }) => {
                     encounter("type", "id", name, id);
-                    encounter("type", "index_id", name, index_id);
                 }
                 Table(BuiltinTable { id, name, .. }) => {
                     encounter("builtin table", "id", name, id);

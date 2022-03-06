@@ -41,7 +41,7 @@ async fn datadriven() {
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
                 "add-table" => {
-                    let id = catalog.allocate_id().unwrap();
+                    let id = catalog.allocate_user_id().unwrap();
                     let oid = catalog.allocate_oid().unwrap();
                     catalog
                         .transact(
