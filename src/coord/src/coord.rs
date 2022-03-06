@@ -106,8 +106,8 @@ use mz_dataflow_types::{
     Update,
 };
 use mz_expr::{
-    permutation_for_arrangement, ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, CollectionPlan, ExprHumanizer, GlobalId, MirRelationExpr,
+    MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, NowFn};
@@ -2343,7 +2343,7 @@ impl Coordinator {
         replace: Option<GlobalId>,
         materialize: bool,
     ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
-        self.validate_timeline(view.expr.global_uses())?;
+        self.validate_timeline(view.expr.depends_on())?;
 
         let mut ops = vec![];
 
@@ -2842,16 +2842,19 @@ impl Coordinator {
     /// When a user starts a transaction, we need to prevent compaction of anything
     /// they might read from. We use a heuristic of "anything in the same database
     /// schemas with the same timeline as whatever the first query is".
-    fn timedomain_for(
+    fn timedomain_for<'a, I>(
         &self,
-        uses_ids: &[GlobalId],
+        uses_ids: I,
         timeline: &Option<Timeline>,
         conn_id: u32,
-    ) -> Result<CollectionIdBundle, CoordError> {
+    ) -> Result<CollectionIdBundle, CoordError>
+    where
+        I: IntoIterator<Item = &'a GlobalId>,
+    {
         // Gather all the used schemas.
         let mut schemas = HashSet::new();
         for id in uses_ids {
-            let entry = self.catalog.get_by_id(&id);
+            let entry = self.catalog.get_by_id(id);
             let name = entry.name();
             schemas.insert((&name.database, &*name.schema));
         }
@@ -2928,7 +2931,7 @@ impl Coordinator {
         // set default instance.
         let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
 
-        let source_ids = source.global_uses();
+        let source_ids = source.depends_on();
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
         let in_transaction = matches!(
@@ -3591,7 +3594,7 @@ impl Coordinator {
             }
             ExplainStage::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
-                self.validate_timeline(decorrelated_plan.global_uses())?;
+                self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter =
@@ -3606,7 +3609,7 @@ impl Coordinator {
             }
             ExplainStage::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
-                self.validate_timeline(decorrelated_plan.global_uses())?;
+                self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let dataflow_plan =
                     mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
@@ -3860,7 +3863,7 @@ impl Coordinator {
 
         // Ensure selection targets are valid, i.e. user-defined tables, or
         // objects local to the dataflow.
-        for id in selection.global_uses() {
+        for id in selection.depends_on() {
             let valid = match self.catalog.try_get_by_id(id) {
                 // TODO: Widen this check when supporting temporary tables.
                 Some(entry) if id.is_user() => entry.is_table(),
@@ -4413,12 +4416,16 @@ impl Coordinator {
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
     /// cdcv2 and realtime data).
-    fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<Option<Timeline>, CoordError> {
+    fn validate_timeline<I>(&self, ids: I) -> Result<Option<Timeline>, CoordError>
+    where
+        I: IntoIterator<Item = GlobalId>,
+    {
         let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
 
         // Recurse through IDs to find all sources and tables, adding new ones to
         // the set until we reach the bottom. Static views will end up with an empty
         // timelines.
+        let mut ids: Vec<_> = ids.into_iter().collect();
         while let Some(id) = ids.pop() {
             // Protect against possible infinite recursion. Not sure if it's possible, but
             // a cheap prevention for the future.
@@ -4434,7 +4441,7 @@ impl Coordinator {
                     ids.push(index.on);
                 }
                 CatalogItem::View(view) => {
-                    ids.extend(view.optimized_expr.global_uses());
+                    ids.extend(view.optimized_expr.depends_on());
                 }
                 CatalogItem::Table(table) => {
                     timelines.insert(id, table.timeline());

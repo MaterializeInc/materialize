@@ -19,7 +19,7 @@ use std::num::NonZeroUsize;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
-use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_repr::{Diff, RelationType, Row};
 
 use crate::sources::persistence::SourcePersistDesc;
@@ -203,7 +203,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
 
     /// Binds to `id` the relation expression `view`.
     pub fn insert_view(&mut self, id: GlobalId, view: OptimizedMirRelationExpr) {
-        for get_id in view.global_uses() {
+        for get_id in view.depends_on() {
             self.record_depends_on(id, get_id);
         }
         self.objects_to_build.push(BuildDesc { id, view });

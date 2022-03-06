@@ -15,7 +15,7 @@
 //! in which the views will be executed.
 
 use mz_dataflow_types::{DataflowDesc, LinearOperator};
-use mz_expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use mz_expr::{CollectionPlan, GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -91,7 +91,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
         for other in (index + 1)..dataflow.objects_to_build.len() {
             if dataflow.objects_to_build[other]
                 .view
-                .global_uses()
+                .depends_on()
                 .contains(&global_id)
             {
                 occurrences_in_later_views.push(other);

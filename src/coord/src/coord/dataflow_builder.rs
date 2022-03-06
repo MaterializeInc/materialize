@@ -18,8 +18,8 @@ use mz_dataflow_types::client::{controller::ComputeController, Client};
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::{
-    GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
-    UnmaterializableFunc,
+    CollectionPlan, GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, UnmaterializableFunc,
 };
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
@@ -188,7 +188,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
     ) -> Result<(), CoordError> {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        for get_id in view.global_uses() {
+        for get_id in view.depends_on() {
             self.import_into_dataflow(&get_id, dataflow)?;
 
             // TODO: indexes should be imported after the optimization process, and only those
