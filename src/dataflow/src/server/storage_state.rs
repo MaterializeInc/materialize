@@ -260,8 +260,15 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 let new_frontier = Antichain::from_elem(advance_to);
                 for (id, table_state) in &mut self.storage_state.table_state {
                     for local_input in &mut table_state.inputs {
-                        local_input.capability.downgrade(&advance_to);
+                        if let Some(capability) = local_input.capability.upgrade() {
+                            capability.borrow_mut().downgrade(&advance_to);
+                        }
                     }
+                    // Discard entries that are no longer active.
+                    table_state
+                        .inputs
+                        .retain(|input| input.capability.upgrade().is_some());
+
                     assert!(advance_to >= table_state.upper);
                     table_state.upper = advance_to;
 
@@ -291,12 +298,19 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
 
                 // Add the new updates to all existing renders of the table.
                 for input in &mut table_state.inputs {
-                    let mut session = input.handle.session(input.capability.clone());
-                    for update in &updates {
-                        assert!(update.timestamp >= *input.capability.time());
-                        session.give((update.row.clone(), update.timestamp, update.diff));
+                    if let Some(capability) = input.capability.upgrade() {
+                        let capability = capability.borrow_mut();
+                        let mut session = input.handle.session(capability.clone());
+                        for update in &updates {
+                            assert!(update.timestamp >= *capability.time());
+                            session.give((update.row.clone(), update.timestamp, update.diff));
+                        }
                     }
                 }
+                // Discard entries that are no longer active.
+                table_state
+                    .inputs
+                    .retain(|input| input.capability.upgrade().is_some());
 
                 // Stash the data for use by future renders of the table.
                 for update in updates {

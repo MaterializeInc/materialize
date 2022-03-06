@@ -363,7 +363,8 @@ where
 
 pub struct LocalInput {
     pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
-    pub capability: ActivateCapability<Timestamp>,
+    /// A weak reference to the capability, in case all uses are dropped.
+    pub capability: std::rc::Weak<RefCell<ActivateCapability<Timestamp>>>,
 }
 
 /// An in-progress peek, and data to eventually fulfill it.
