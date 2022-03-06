@@ -58,6 +58,7 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, FIRST_SYSTEM_INDEX_ID, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
+use crate::coord::id_bundle::IdBundle;
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session};
 use crate::CoordError;
@@ -163,7 +164,7 @@ impl CatalogState {
     /// Returns the identifiers of all discovered indexes, and the identifiers of
     /// the discovered unmaterialized sources required to satisfy ids. The returned list
     /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
+    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> IdBundle {
         fn has_indexes(catalog: &CatalogState, id: GlobalId) -> bool {
             matches!(
                 catalog.get_by_id(&id).item(),
@@ -171,12 +172,7 @@ impl CatalogState {
             )
         }
 
-        fn inner(
-            catalog: &CatalogState,
-            id: GlobalId,
-            indexes: &mut Vec<GlobalId>,
-            unmaterialized: &mut Vec<GlobalId>,
-        ) {
+        fn inner(catalog: &CatalogState, id: GlobalId, id_bundle: &mut IdBundle) {
             if !has_indexes(catalog, id) {
                 return;
             }
@@ -184,7 +180,9 @@ impl CatalogState {
             // Include all indexes on an id so the dataflow builder can safely use any
             // of them.
             if !catalog.enabled_indexes[&id].is_empty() {
-                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
+                id_bundle
+                    .compute_ids
+                    .extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
                 return;
             }
 
@@ -192,29 +190,23 @@ impl CatalogState {
                 view @ CatalogItem::View(_) => {
                     // Unmaterialized view. Recursively search its dependencies.
                     for id in view.uses() {
-                        inner(catalog, *id, indexes, unmaterialized)
+                        inner(catalog, *id, id_bundle)
                     }
                 }
                 CatalogItem::Source(_) | CatalogItem::Table(_) => {
                     // Unmaterialized source or table. Record that we are
                     // missing at least one index.
-                    unmaterialized.push(id);
+                    id_bundle.storage_ids.insert(id);
                 }
                 _ => unreachable!(),
             }
         }
 
-        let mut indexes = vec![];
-        let mut unmaterialized = vec![];
+        let mut id_bundle = IdBundle::default();
         for id in ids {
-            inner(self, *id, &mut indexes, &mut unmaterialized)
+            inner(self, *id, &mut id_bundle)
         }
-        indexes.sort();
-        indexes.dedup();
-
-        unmaterialized.sort();
-        unmaterialized.dedup();
-        (indexes, unmaterialized)
+        id_bundle
     }
 
     /// Computes the IDs of any indexes that transitively depend on this catalog
@@ -2261,7 +2253,7 @@ impl Catalog {
         self.get_indexes_on(id).iter().min().cloned()
     }
 
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
+    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> IdBundle {
         self.state.nearest_indexes(ids)
     }
 

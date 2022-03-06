@@ -145,6 +145,7 @@ use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::dataflow_builder::{DataflowBuilder, ExprPrepStyle};
+use crate::coord::id_bundle::IdBundle;
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
 use crate::session::{
@@ -154,6 +155,8 @@ use crate::session::{
 use crate::sink_connector;
 use crate::tail::PendingTail;
 use crate::util::ClientTransmitter;
+
+pub mod id_bundle;
 
 mod dataflow_builder;
 mod prometheus;
@@ -2844,7 +2847,7 @@ impl Coordinator {
         uses_ids: &[GlobalId],
         timeline: &Option<Timeline>,
         conn_id: u32,
-    ) -> Result<(Vec<GlobalId>, Vec<GlobalId>), CoordError> {
+    ) -> Result<IdBundle, CoordError> {
         // Gather all the used schemas.
         let mut schemas = HashSet::new();
         for id in uses_ids {
@@ -2875,18 +2878,13 @@ impl Coordinator {
         }
 
         // Gather the indexes and unmaterialized sources used by those items.
-        let mut storage_ids = vec![];
-        let mut compute_ids = vec![];
+        let mut id_bundle = IdBundle::default();
         for id in item_ids {
-            let (indexes, sources) = self.catalog.nearest_indexes(&[id]);
-            storage_ids.extend(sources);
-            compute_ids.extend(indexes);
+            id_bundle.extend(&self.catalog.nearest_indexes(&[id]));
         }
 
         // Filter out ids from different timelines.
-        for ids in [&mut storage_ids, &mut compute_ids] {
-            ids.sort();
-            ids.dedup();
+        for ids in [&mut id_bundle.storage_ids, &mut id_bundle.compute_ids] {
             ids.retain(|&id| {
                 let id_timeline = self
                     .validate_timeline(vec![id])
@@ -2904,7 +2902,7 @@ impl Coordinator {
             });
         }
 
-        Ok((storage_ids, compute_ids))
+        Ok(id_bundle)
     }
 
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -2961,22 +2959,19 @@ impl Coordinator {
                 _ => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
-                    let (storage_ids, compute_ids) =
-                        self.timedomain_for(&source_ids, &timeline, conn_id)?;
+                    let id_bundle = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
                     let timestamp = self.determine_timestamp(
                         session,
-                        &storage_ids,
-                        &compute_ids,
+                        &id_bundle,
                         PeekWhen::Immediately,
                         compute_instance,
                     )?;
                     let read_holds = read_holds::ReadHolds {
                         time: timestamp,
-                        storage_ids,
-                        compute_ids,
+                        id_bundle,
                         compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
                     };
                     self.acquire_read_holds(&read_holds).await;
@@ -2995,33 +2990,22 @@ impl Coordinator {
             //
             // Using nearest_indexes here is a hack until #8318 is fixed. It's
             // used because that's what determine_timestamp uses.
-            let (compute_ids, storage_ids) = self.catalog.nearest_indexes(&source_ids);
-            let storage_ids = BTreeSet::from_iter(storage_ids);
-            let compute_ids = BTreeSet::from_iter(compute_ids);
-
-            let read_txn = self.txn_reads.get(&conn_id).unwrap();
-            let allowed_storage_ids =
-                BTreeSet::from_iter(read_txn.read_holds.storage_ids.iter().copied());
-            let allowed_compute_ids =
-                BTreeSet::from_iter(read_txn.read_holds.compute_ids.iter().copied());
-
+            let id_bundle = self.catalog.nearest_indexes(&source_ids);
+            let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
             // after the transaction started.
-            let outside_storage = &storage_ids - &allowed_storage_ids;
-            let outside_compute = &compute_ids - &allowed_compute_ids;
-            if !outside_storage.is_empty() || !outside_compute.is_empty() {
-                let mut names: Vec<_> = allowed_storage_ids
-                    .into_iter()
-                    .chain(allowed_compute_ids)
+            let outside = id_bundle.difference(allowed_id_bundle);
+            if !outside.is_empty() {
+                let mut names: Vec<_> = allowed_id_bundle
+                    .iter()
                     // This could filter out a view that has been replaced in another transaction.
                     .filter_map(|id| self.catalog.try_get_by_id(id))
                     .map(|item| item.name().to_string())
                     .collect();
-                let mut outside: Vec<_> = outside_storage
-                    .into_iter()
-                    .chain(outside_compute)
+                let mut outside: Vec<_> = outside
+                    .iter()
                     .filter_map(|id| self.catalog.try_get_by_id(id))
                     .map(|item| item.name().to_string())
                     .collect();
@@ -3036,8 +3020,8 @@ impl Coordinator {
 
             timestamp
         } else {
-            let (compute_ids, storage_ids) = self.catalog.nearest_indexes(&source_ids);
-            self.determine_timestamp(session, &storage_ids, &compute_ids, when, compute_instance)?
+            let id_bundle = self.catalog.nearest_indexes(&source_ids);
+            self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
 
         let source = self.view_optimizer.optimize(source)?;
@@ -3147,11 +3131,10 @@ impl Coordinator {
             // Updates greater or equal to this frontier will be produced.
             let frontier = if let Some(ts) = ts {
                 // If a timestamp was explicitly requested, use that.
-                let (compute_ids, storage_ids) = coord.catalog.nearest_indexes(uses);
+                let id_bundle = coord.catalog.nearest_indexes(uses);
                 let ts = coord.determine_timestamp(
                     session,
-                    &storage_ids,
-                    &compute_ids,
+                    &id_bundle,
                     PeekWhen::AtTimestamp(ts),
                     compute_instance,
                 )?;
@@ -3220,20 +3203,19 @@ impl Coordinator {
     /// The smallest common valid read frontier among the specified collections.
     fn least_valid_read(
         &mut self,
-        storage_ids: &[GlobalId],
-        compute_ids: &[GlobalId],
+        id_bundle: &IdBundle,
         instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         {
             let storage = self.dataflow_client.storage();
-            for id in storage_ids.iter() {
+            for id in id_bundle.storage_ids.iter() {
                 since.join_assign(&storage.collection(*id).unwrap().implied_capability)
             }
         }
         {
             let compute = self.dataflow_client.compute(instance).unwrap();
-            for id in compute_ids.iter() {
+            for id in id_bundle.compute_ids.iter() {
                 since.join_assign(&compute.collection(*id).unwrap().implied_capability)
             }
         }
@@ -3246,14 +3228,13 @@ impl Coordinator {
     /// identified as arguments.
     fn least_valid_write(
         &mut self,
-        storage_ids: &[GlobalId],
-        compute_ids: &[GlobalId],
+        id_bundle: &IdBundle,
         instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
         {
             let storage = self.dataflow_client.storage();
-            for id in storage_ids.iter() {
+            for id in id_bundle.storage_ids.iter() {
                 since.extend(
                     storage
                         .collection(*id)
@@ -3267,7 +3248,7 @@ impl Coordinator {
         }
         {
             let compute = self.dataflow_client.compute(instance).unwrap();
-            for id in compute_ids.iter() {
+            for id in id_bundle.compute_ids.iter() {
                 since.extend(
                     compute
                         .collection(*id)
@@ -3293,8 +3274,7 @@ impl Coordinator {
     fn determine_timestamp(
         &mut self,
         session: &Session,
-        unmaterialized_source_ids: &[GlobalId],
-        index_ids: &[GlobalId],
+        id_bundle: &IdBundle,
         when: PeekWhen,
         compute_instance: ComputeInstanceId,
     ) -> Result<Timestamp, CoordError> {
@@ -3310,7 +3290,7 @@ impl Coordinator {
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
 
-        let since = self.least_valid_read(&unmaterialized_source_ids, &index_ids, compute_instance);
+        let since = self.least_valid_read(&id_bundle, DEFAULT_COMPUTE_INSTANCE_ID);
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
@@ -3358,11 +3338,7 @@ impl Coordinator {
 
                 // Compute a timestamp to which we should advance the candidate (if it is in
                 // advance).
-                let advance_to: Timestamp = if unmaterialized_source_ids
-                    .iter()
-                    .any(|id| self.catalog.uses_tables(*id))
-                    || index_ids.iter().any(|id| self.catalog.uses_tables(*id))
-                {
+                let advance_to = if id_bundle.iter().any(|id| self.catalog.uses_tables(id)) {
                     // If the view depends on any tables, we enforce linearizability by choosing
                     // the latest input time.  If the candidate is already advanced past read_ts
                     // due to the since work above (if joined with some other view), a peek will
@@ -3375,11 +3351,7 @@ impl Coordinator {
                     // advanced already.
                     self.get_local_read_ts()
                 } else {
-                    let upper = self.least_valid_write(
-                        &unmaterialized_source_ids,
-                        &index_ids,
-                        compute_instance,
-                    );
+                    let upper = self.least_valid_write(&id_bundle, DEFAULT_COMPUTE_INSTANCE_ID);
 
                     // We peek at the largest element not in advance of `upper`, which
                     // involves a subtraction. If `upper` contains a zero timestamp there
@@ -3414,7 +3386,8 @@ impl Coordinator {
         if since.less_equal(&timestamp) {
             Ok(timestamp)
         } else {
-            let invalid_indexes = index_ids
+            let invalid_indexes = id_bundle
+                .compute_ids
                 .iter()
                 .filter_map(|id| {
                     let since = self
@@ -3433,7 +3406,7 @@ impl Coordinator {
                     }
                 })
                 .collect::<Vec<_>>();
-            let invalid_sources = unmaterialized_source_ids.iter().filter_map(|id| {
+            let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
                 let since = self
                     .dataflow_client
                     .storage()
@@ -3481,24 +3454,20 @@ impl Coordinator {
         // nearest_indexes. We don't care about the indexes being incomplete because
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
-        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(source_ids);
+        let id_bundle = self.catalog.nearest_indexes(source_ids);
 
-        let since = self.least_valid_read(&unmaterialized_source_ids, &index_ids, instance);
+        let since = self.least_valid_read(&id_bundle, instance);
 
-        let mut candidate = if unmaterialized_source_ids
-            .iter()
-            .any(|id| self.catalog.uses_tables(*id))
-            || index_ids.iter().any(|id| self.catalog.uses_tables(*id))
-        {
+        let mut candidate = if id_bundle.iter().any(|id| self.catalog.uses_tables(id)) {
             // If the sink depends on any tables, we enforce linearizability by choosing
             // the latest input time.
             self.get_local_read_ts()
-        } else if unmaterialized_source_ids.is_empty() && !index_ids.is_empty() {
+        } else if id_bundle.storage_ids.is_empty() && !id_bundle.compute_ids.is_empty() {
             // If the sink does not need to create any indexes and requires at least 1
             // index, use the upper. For something like a static view, the indexes are
             // complete but the index count is 0, and we want 0 instead of max for the
             // time, so we should fall through to the else in that case.
-            let upper = self.least_valid_write(&[], &index_ids, instance);
+            let upper = self.least_valid_write(&id_bundle, instance);
             if let Some(ts) = upper.elements().get(0) {
                 // We don't need to worry about `ts == 0` like determine_timestamp, because
                 // it's fine to not have any timestamps completed yet, which will just cause
@@ -4391,18 +4360,24 @@ impl Coordinator {
         // operations if this function fails, and materialized will be in an unsafe
         // state if we do not correctly clean up the catalog.
 
-        let storage_inputs = dataflow
+        let storage_ids = dataflow
             .source_imports
             .iter()
             .map(|(id, _)| *id)
-            .collect::<Vec<_>>();
-        let compute_inputs = dataflow
+            .collect::<BTreeSet<_>>();
+        let compute_ids = dataflow
             .index_imports
             .iter()
             .map(|(id, _)| *id)
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
 
-        let since = self.least_valid_read(&storage_inputs, &compute_inputs, compute_instance);
+        let since = self.least_valid_read(
+            &IdBundle {
+                storage_ids,
+                compute_ids,
+            },
+            compute_instance,
+        );
 
         // Ensure that the dataflow's `as_of` is at least `since`.
         if let Some(as_of) = &mut dataflow.as_of {
@@ -5136,13 +5111,13 @@ pub mod fast_path_peek {
 pub mod read_holds {
 
     use mz_dataflow_types::client::ComputeInstanceId;
-    use mz_expr::GlobalId;
+
+    use crate::coord::id_bundle::IdBundle;
 
     /// Relevant information for acquiring or releasing a bundle of read holds.
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
-        pub(super) storage_ids: Vec<GlobalId>,
-        pub(super) compute_ids: Vec<GlobalId>,
+        pub(super) id_bundle: IdBundle,
         pub(super) compute_instance: ComputeInstanceId,
     }
 
@@ -5158,7 +5133,7 @@ pub mod read_holds {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
             let mut storage = self.dataflow_client.storage();
-            for id in read_holds.storage_ids.iter() {
+            for id in read_holds.id_bundle.storage_ids.iter() {
                 let collection = storage.collection(*id).unwrap();
                 assert!(collection
                     .read_capabilities
@@ -5175,7 +5150,7 @@ pub mod read_holds {
                 .dataflow_client
                 .compute(read_holds.compute_instance)
                 .unwrap();
-            for id in read_holds.compute_ids.iter() {
+            for id in read_holds.id_bundle.compute_ids.iter() {
                 let collection = compute.collection(*id).unwrap();
                 assert!(collection
                     .read_capabilities
@@ -5189,7 +5164,7 @@ pub mod read_holds {
         }
         /// Release read holds on the indicated collections at the indicated time.
         ///
-        /// This method rellies on a previous call to `acquire_read_holds` with the same
+        /// This method relies on a previous call to `acquire_read_holds` with the same
         /// argument, and its behavior will be erratic if called on anything else, or if
         /// called more than once on the same bundle of read holds.
         pub(super) async fn release_read_hold(
@@ -5198,8 +5173,11 @@ pub mod read_holds {
         ) {
             let ReadHolds {
                 time,
-                storage_ids,
-                compute_ids,
+                id_bundle:
+                    IdBundle {
+                        storage_ids,
+                        compute_ids,
+                    },
                 compute_instance,
             } = read_holds;
 
