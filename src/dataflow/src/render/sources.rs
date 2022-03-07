@@ -44,7 +44,7 @@ use crate::server::LocalInput;
 use crate::server::StorageState;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::{
-    self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
+    self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader, LokiSourceReader,
     PersistentTimestampBindingsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
     SourceConfig,
 };
@@ -262,6 +262,20 @@ where
                 );
 
                 (ok_stream.as_collection(), capability)
+            } else if let ExternalSourceConnector::Loki(loki_connector) = connector {
+                // TODO(bsull) pass the query here.
+                let source =
+                    LokiSourceReader::new("".to_string(), "".to_string(), loki_connector.address);
+                let ((ok_stream, err_stream), capability) =
+                    source::create_source_simple(source_config, source);
+                error_collections.push(
+                    err_stream
+                        .map(DataflowError::SourceError)
+                        .pass_through("source-errors")
+                        .as_collection(),
+                );
+
+                (ok_stream.as_collection(), capability)
             } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
                 let source =
                     PostgresSourceReader::new(uid, pg_connector, source_config.base_metrics);
@@ -323,6 +337,7 @@ where
                         );
                         ((SourceType::ByteStream(ok), ts, err), cap)
                     }
+                    ExternalSourceConnector::Loki(_) => unreachable!(),
                     ExternalSourceConnector::Postgres(_) => unreachable!(),
                     ExternalSourceConnector::PubNub(_) => unreachable!(),
                 };

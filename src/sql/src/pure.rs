@@ -203,6 +203,9 @@ pub fn purify(
                     let _ = mz_postgres_util::publication_info(&conn, &publication).await?;
                 }
                 CreateSourceConnector::PubNub { .. } => (),
+                CreateSourceConnector::Loki { .. } => {
+                    // TODO(bsull): do we need to do anything here?
+                }
             }
 
             purify_source_format(

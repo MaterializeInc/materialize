@@ -119,7 +119,9 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     Some(rt_default)
                 }
                 ExternalSourceConnector::Kafka(_) => Some(rt_default),
-                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => None,
+                ExternalSourceConnector::Loki(_)
+                | ExternalSourceConnector::Postgres(_)
+                | ExternalSourceConnector::PubNub(_) => None,
             }
         } else {
             debug!(

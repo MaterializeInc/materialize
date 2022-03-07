@@ -2010,7 +2010,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
+        match self
+            .expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB, LOKI])?
+        {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2120,6 +2122,13 @@ impl<'a> Parser<'a> {
                     pattern,
                     compression,
                 })
+            }
+            LOKI => {
+                self.expect_keyword(ADDRESS)?;
+                let address = self.parse_literal_string()?;
+                self.expect_keyword(QUERY)?;
+                let query = self.parse_literal_string()?;
+                Ok(CreateSourceConnector::Loki { address, query })
             }
             _ => unreachable!(),
         }
