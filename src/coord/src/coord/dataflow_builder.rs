@@ -95,16 +95,17 @@ impl<'a> DataflowBuilder<'a> {
             let mut valid_indexes = index_oracle.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
                 for (index_id, idx) in valid_indexes {
-                    let index_desc = IndexDesc {
-                        on_id: *id,
-                        key: idx.keys.to_vec(),
-                    };
                     let desc = self
                         .catalog
                         .get_by_id(id)
                         .desc()
                         .expect("indexes can only be built on items with descs");
-                    dataflow.import_index(index_id, index_desc, desc.typ().clone());
+                    dataflow.import_index(IndexDesc {
+                        id: index_id,
+                        on_id: *id,
+                        on_type: desc.typ().clone(),
+                        key: idx.keys.to_vec(),
+                    });
                 }
             } else {
                 drop(valid_indexes);
@@ -209,13 +210,15 @@ impl<'a> DataflowBuilder<'a> {
             self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         let mut index_description = mz_dataflow_types::IndexDesc {
+            id,
             on_id: index.on,
+            on_type,
             key: index.keys.clone(),
         };
         for key in &mut index_description.key {
             self.prep_scalar_expr(key, ExprPrepStyle::Index)?;
         }
-        dataflow.export_index(id, index_description, on_type);
+        dataflow.export_index(index_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle())?;

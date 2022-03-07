@@ -257,8 +257,8 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
             }
 
             // Import declared indexes into the rendering context.
-            for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
+            for index in dataflow.index_imports.values() {
+                context.import_index(compute_state, &mut tokens, scope, region, index);
             }
 
             // We first determine indexes and sinks to export, then build the declared object, and
@@ -270,7 +270,7 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
                 .index_exports
                 .iter()
                 .cloned()
-                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.depends_on(idx.on_id), idx))
+                .map(|index| (dataflow.depends_on(index.on_id), index))
                 .collect::<Vec<_>>();
 
             // Determine sinks to export
@@ -287,8 +287,8 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
             }
 
             // Export declared indexes.
-            for (idx_id, imports, idx) in indexes {
-                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
+            for (imports, index) in indexes {
+                context.export_index(compute_state, &mut tokens, imports, &index);
             }
 
             // Export declared sinks.
@@ -309,10 +309,9 @@ where
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
-        idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
-        if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
+        if let Some(traces) = compute_state.traces.get_mut(&idx.id) {
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 scope,
@@ -330,17 +329,17 @@ where
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
                     idx.key.clone(),
-                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                    ArrangementFlavor::Trace(idx.id, ok_arranged, err_arranged),
                 ),
             );
             tokens.insert(
-                idx_id,
+                idx.id,
                 Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
             );
         } else {
             panic!(
                 "import of index {} failed while building dataflow {}",
-                idx_id, self.dataflow_id
+                idx.id, self.dataflow_id
             );
         }
     }
@@ -360,7 +359,6 @@ where
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: BTreeSet<GlobalId>,
-        idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
         // put together tokens that belong to the export
@@ -370,16 +368,16 @@ where
                 needed_tokens.push(Rc::clone(&token));
             }
         }
-        let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
+        let bundle = self.lookup_id(Id::Global(idx.id)).unwrap_or_else(|| {
             panic!(
                 "Arrangement alarmingly absent! id: {:?}",
-                Id::Global(idx_id)
+                Id::Global(idx.id)
             )
         });
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 compute_state.traces.set(
-                    idx_id,
+                    idx.id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
@@ -387,7 +385,7 @@ where
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                compute_state.traces.set(idx_id, trace);
+                compute_state.traces.set(idx.id, trace);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -397,7 +395,7 @@ where
                 );
                 panic!(
                     "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
-                    Id::Global(idx_id),
+                    Id::Global(idx.id),
                     &idx.key
                 );
             }

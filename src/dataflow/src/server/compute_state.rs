@@ -96,16 +96,16 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                             .reported_frontiers
                             .insert(*sink_id, Antichain::from_elem(0));
                     }
-                    for (idx_id, idx, _) in dataflow.index_exports.iter() {
+                    for idx in dataflow.index_exports.iter() {
                         self.compute_state
                             .reported_frontiers
-                            .insert(*idx_id, Antichain::from_elem(0));
+                            .insert(idx.id, Antichain::from_elem(0));
                         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(*idx_id, true));
-                            logger.log(MaterializedEvent::Frontier(*idx_id, 0, 1));
+                            logger.log(MaterializedEvent::Dataflow(idx.id, true));
+                            logger.log(MaterializedEvent::Frontier(idx.id, 0, 1));
                             for import_id in dataflow.depends_on(idx.on_id) {
                                 logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: *idx_id,
+                                    dataflow: idx.id,
                                     source: import_id,
                                 })
                             }

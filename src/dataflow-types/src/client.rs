@@ -290,8 +290,8 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         start.push(*sink_id)
                     }
-                    for (index_id, _, _) in dataflow.index_exports.iter() {
-                        start.push(*index_id);
+                    for index in dataflow.index_exports.iter() {
+                        start.push(index.id);
                     }
                 }
             }

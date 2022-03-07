@@ -81,7 +81,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
                 occurs_in_export = true;
             }
         }
-        for (_, index_desc, _) in dataflow.index_exports.iter() {
+        for index_desc in dataflow.index_exports.iter() {
             if index_desc.on_id == global_id {
                 occurs_in_export = true;
             }
@@ -191,20 +191,18 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
 
     // Demand all columns of inputs to sinks.
     for (_id, sink) in dataflow.sink_exports.iter() {
-        let input_id = sink.from;
         demand
-            .entry(Id::Global(input_id))
+            .entry(Id::Global(sink.from))
             .or_insert_with(BTreeSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
+            .extend(0..dataflow.arity_of(sink.from));
     }
 
     // Demand all columns of inputs to exported indexes.
-    for (_id, desc, _typ) in dataflow.index_exports.iter() {
-        let input_id = desc.on_id;
+    for desc in dataflow.index_exports.iter() {
         demand
-            .entry(Id::Global(input_id))
+            .entry(Id::Global(desc.on_id))
             .or_insert_with(BTreeSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
+            .extend(0..dataflow.arity_of(desc.on_id));
     }
 
     optimize_dataflow_demand_inner(

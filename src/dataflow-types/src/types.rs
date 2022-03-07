@@ -123,14 +123,14 @@ pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
     /// Indexes made available to the dataflow.
-    pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
+    pub index_imports: BTreeMap<GlobalId, IndexDesc>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
     /// dependencies of later objects on prior identifiers.
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view)
-    pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
+    pub index_exports: Vec<IndexDesc>,
     /// sinks to be created
     /// (id of new sink, description of sink)
     pub sink_exports: Vec<(GlobalId, crate::types::sinks::SinkDesc<T>)>,
@@ -169,8 +169,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     ///
     /// The `requesting_view` argument is currently necessary to correctly track the
     /// dependencies of views on indexes.
-    pub fn import_index(&mut self, id: GlobalId, description: IndexDesc, typ: RelationType) {
-        self.index_imports.insert(id, (description, typ));
+    pub fn import_index(&mut self, index: IndexDesc) {
+        self.index_imports.insert(index.id, index);
     }
 
     /// Imports a source and makes it available as `id`.
@@ -201,20 +201,20 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
-    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: RelationType) {
+    pub fn export_index(&mut self, index: IndexDesc) {
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_plan(
-            id,
+            index.id,
             OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::ArrangeBy {
                 input: Box::new(MirRelationExpr::global_get(
-                    description.on_id,
-                    on_type.clone(),
+                    index.on_id,
+                    index.on_type.clone(),
                 )),
-                keys: vec![description.key.clone()],
+                keys: vec![index.key.clone()],
             }),
         );
-        self.index_exports.push((id, description, on_type));
+        self.index_exports.push(index);
     }
 
     /// Exports as `id` a sink described by `description`.
@@ -256,19 +256,19 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     }
 
     /// The number of columns associated with an identifier in the dataflow.
-    pub fn arity_of(&self, id: &GlobalId) -> usize {
+    pub fn arity_of(&self, id: GlobalId) -> usize {
         for (source_id, source) in self.source_imports.iter() {
-            if source_id == id {
+            if *source_id == id {
                 return source.description.desc.arity();
             }
         }
-        for (_index_id, (desc, typ)) in self.index_imports.iter() {
-            if &desc.on_id == id {
-                return typ.arity();
+        for index in self.index_imports.values() {
+            if index.on_id == id {
+                return index.on_type.arity();
             }
         }
         for desc in self.objects_to_build.iter() {
-            if &desc.id == id {
+            if desc.id == id {
                 return desc.plan.arity();
             }
         }
@@ -318,11 +318,11 @@ where
         // for the collection will be used, if one exists, so we have to report
         // the dependency on all of them.
         let mut found_index = false;
-        for (index_id, (desc, _typ)) in &self.index_imports {
-            if desc.on_id == collection_id {
+        for index in self.index_imports.values() {
+            if index.on_id == collection_id {
                 // The collection is provided by an imported index. Report the
                 // dependency on the index.
-                out.insert(*index_id);
+                out.insert(index.id);
                 found_index = true;
             }
         }
@@ -1792,8 +1792,12 @@ pub mod sinks {
 /// or reused in other computations
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
+    /// The identity of the index itself.
+    pub id: GlobalId,
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
+    /// The type of the collection the index is on.
+    pub on_type: RelationType,
     /// Expressions to be arranged, in order of decreasing primacy.
     pub key: Vec<MirScalarExpr>,
 }

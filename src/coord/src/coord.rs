@@ -2983,14 +2983,12 @@ impl Coordinator {
                 },
             )?;
         }
-        dataflow.export_index(
-            index_id,
-            IndexDesc {
-                on_id: view_id,
-                key: key.clone(),
-            },
-            typ,
-        );
+        dataflow.export_index(IndexDesc {
+            id: index_id,
+            on_id: view_id,
+            on_type: typ,
+            key: key.clone(),
+        });
 
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
@@ -4184,7 +4182,7 @@ impl Coordinator {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            output_ids.extend(dataflow.index_exports.iter().map(|(id, _, _)| *id));
+            output_ids.extend(dataflow.index_exports.iter().map(|idx| idx.id));
             output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
@@ -4753,19 +4751,19 @@ pub mod fast_path_peek {
                         })?;
                     // We should only get excited if we can track down an index for `id`.
                     // If `keys` is non-empty, that means we think one exists.
-                    for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                    for idx in dataflow_plan.index_imports.values() {
                         if let Some((key, val)) = key_val {
-                            if Id::Global(desc.on_id) == *id && &desc.key == key {
+                            if Id::Global(idx.on_id) == *id && idx.key == *key {
                                 // Indicate an early exit with a specific index and key_val.
                                 return Ok(Plan::PeekExisting(
-                                    *index_id,
+                                    idx.id,
                                     val.clone(),
                                     map_filter_project,
                                 ));
                             }
-                        } else if Id::Global(desc.on_id) == *id {
+                        } else if Id::Global(idx.on_id) == *id {
                             // Indicate an early exit with a specific index and no key_val.
-                            return Ok(Plan::PeekExisting(*index_id, None, map_filter_project));
+                            return Ok(Plan::PeekExisting(idx.id, None, map_filter_project));
                         }
                     }
                 }
@@ -4848,7 +4846,7 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     let mut output_ids = Vec::new();
-                    output_ids.extend(dataflow.index_exports.iter().map(|(id, _, _)| *id));
+                    output_ids.extend(dataflow.index_exports.iter().map(|idx| idx.id));
                     output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
 
                     // Very important: actually create the dataflow (here, so we can destructure).

@@ -233,9 +233,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
                     ),
                 );
             }
-            for (index_id, _, _) in dataflow.index_exports.iter() {
+            for index in dataflow.index_exports.iter() {
                 self.compute.collections.insert(
-                    *index_id,
+                    index.id,
                     CollectionState::new(
                         as_of.clone(),
                         storage_dependencies.clone(),
