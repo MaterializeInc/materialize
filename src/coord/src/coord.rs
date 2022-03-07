@@ -1546,7 +1546,7 @@ impl Coordinator {
         // Materialize and their sink, they'll need to reason about the
         // timestamps we emit anyway, so might as emit as much historical detail
         // as we possibly can.
-        let id_bundle = self.catalog.nearest_indexes(&[sink.from]);
+        let id_bundle = self.sufficient_collections_instanced(compute_instance, &[sink.from]);
         let frontier = self.least_valid_read(&id_bundle, compute_instance);
         let as_of = SinkAsOf {
             frontier,
@@ -2796,9 +2796,7 @@ impl Coordinator {
 
         // Gather the indexes and unmaterialized sources used by those items.
         let mut id_bundle = CollectionIdBundle::default();
-        for id in item_ids {
-            id_bundle.extend(&self.catalog.nearest_indexes(&[id]));
-        }
+        id_bundle.extend(&self.sufficient_collections_global(item_ids.iter()));
 
         // Filter out ids from different timelines.
         for ids in [&mut id_bundle.storage_ids, &mut id_bundle.compute_ids] {
@@ -2907,7 +2905,8 @@ impl Coordinator {
             //
             // Using nearest_indexes here is a hack until #8318 is fixed. It's
             // used because that's what determine_timestamp uses.
-            let id_bundle = self.catalog.nearest_indexes(&source_ids);
+            // Unknown what the comment above means; not using `nearest_indexes` now.
+            let id_bundle = self.sufficient_collections_instanced(compute_instance, &source_ids);
             let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
@@ -2937,7 +2936,7 @@ impl Coordinator {
 
             timestamp
         } else {
-            let id_bundle = self.catalog.nearest_indexes(&source_ids);
+            let id_bundle = self.sufficient_collections_instanced(compute_instance, &source_ids);
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
 
@@ -3046,7 +3045,7 @@ impl Coordinator {
         let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
             // Determine the frontier of updates to tail *from*.
             // Updates greater or equal to this frontier will be produced.
-            let id_bundle = coord.catalog.nearest_indexes(uses);
+            let id_bundle = coord.sufficient_collections_instanced(compute_instance, uses);
             // If a timestamp was explicitly requested, use that.
             let timestamp =
                 coord.determine_timestamp(session, &id_bundle, when, compute_instance)?;
