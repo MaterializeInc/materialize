@@ -1312,7 +1312,7 @@ pub fn plan_view(
     expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     expr.finish(finishing);
-    let relation_expr = expr.optimize_and_lower(&scx.into());
+    let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
         scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
