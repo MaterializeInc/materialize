@@ -9,7 +9,7 @@
 
 # Test that non-views can be used in TAIL.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
 > CREATE TABLE t1 (f1 INTEGER);
 
@@ -25,8 +25,8 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > COMMIT
 
 > TAIL (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
-0 1 1 a
-0 1 2 a
+<TIMESTAMP> 1 1 a
+<TIMESTAMP> 1 2 a
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT count(*) FROM t1
 

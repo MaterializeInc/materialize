@@ -131,7 +131,7 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
-    MutationKind, Params, PeekPlan, PeekWhen, Plan, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
+    MutationKind, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
     SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
@@ -1541,8 +1541,15 @@ impl Coordinator {
             _ => unreachable!(),
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        // We don't try to linearize the as of for the sink; we just pick the
+        // least valid read timestamp. If users want linearizability across
+        // Materialize and their sink, they'll need to reason about the
+        // timestamps we emit anyway, so might as emit as much historical detail
+        // as we possibly can.
+        let id_bundle = self.catalog.nearest_indexes(&[sink.from]);
+        let frontier = self.least_valid_read(&id_bundle, compute_instance);
         let as_of = SinkAsOf {
-            frontier: self.determine_frontier(&[sink.from], compute_instance),
+            frontier,
             strict: !sink.with_snapshot,
         };
         let ops = vec![
@@ -2851,7 +2858,7 @@ impl Coordinator {
         // single-statement transaction (TransactionStatus::Started), we don't need to
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
-        let timestamp = if in_transaction && when == PeekWhen::Immediately {
+        let timestamp = if in_transaction && when == QueryWhen::Immediately {
             // Queries are independent of the logical timestamp iff there are no referenced
             // sources or indexes and there is no reference to `mz_logical_timestamp()`.
             let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
@@ -2876,7 +2883,7 @@ impl Coordinator {
                     let timestamp = self.determine_timestamp(
                         session,
                         &id_bundle,
-                        PeekWhen::Immediately,
+                        QueryWhen::Immediately,
                         compute_instance,
                     )?;
                     let read_holds = read_holds::ReadHolds {
@@ -3019,7 +3026,7 @@ impl Coordinator {
         let TailPlan {
             from,
             with_snapshot,
-            ts,
+            when,
             copy_to,
             emit_progress,
         } = plan;
@@ -3030,7 +3037,7 @@ impl Coordinator {
 
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
-        if ts.is_none() {
+        if when == QueryWhen::Immediately {
             // If this isn't a TAIL AS OF, the TAIL can be in a transaction if it's the
             // only operation.
             session.add_transaction_ops(TransactionOps::Tail)?;
@@ -3039,19 +3046,10 @@ impl Coordinator {
         let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
             // Determine the frontier of updates to tail *from*.
             // Updates greater or equal to this frontier will be produced.
-            let frontier = if let Some(ts) = ts {
-                // If a timestamp was explicitly requested, use that.
-                let id_bundle = coord.catalog.nearest_indexes(uses);
-                let ts = coord.determine_timestamp(
-                    session,
-                    &id_bundle,
-                    PeekWhen::AtTimestamp(ts),
-                    compute_instance,
-                )?;
-                Antichain::from_elem(ts)
-            } else {
-                coord.determine_frontier(uses, compute_instance)
-            };
+            let id_bundle = coord.catalog.nearest_indexes(uses);
+            // If a timestamp was explicitly requested, use that.
+            let timestamp =
+                coord.determine_timestamp(session, &id_bundle, when, compute_instance)?;
 
             Ok::<_, CoordError>(SinkDesc {
                 from,
@@ -3059,7 +3057,7 @@ impl Coordinator {
                 connector: SinkConnector::Tail(TailSinkConnector::default()),
                 envelope: None,
                 as_of: SinkAsOf {
-                    frontier,
+                    frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
                 },
             })
@@ -3070,7 +3068,7 @@ impl Coordinator {
                 let from = self.catalog.get_by_id(&from_id);
                 let from_desc = from.desc().unwrap().clone();
                 let sink_id = self.catalog.allocate_user_id()?;
-                let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id])?;
+                let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("tail-{}", sink_id);
                 self.dataflow_builder(compute_instance)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
@@ -3173,7 +3171,7 @@ impl Coordinator {
         since
     }
 
-    /// Determines the timestamp for a peek.
+    /// Determines the timestamp for a query.
     ///
     /// Timestamp determination may fail due to the restricted validity of
     /// traces. Each has a `since` and `upper` frontier, and are only valid
@@ -3185,7 +3183,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
-        when: PeekWhen,
+        when: QueryWhen,
         compute_instance: ComputeInstanceId,
     ) -> Result<Timestamp, CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
@@ -3206,7 +3204,7 @@ impl Coordinator {
         // timestamp, or the latest timestamp known to be immediately available.
         let timestamp: Timestamp = match when {
             // Explicitly requested timestamps should be respected.
-            PeekWhen::AtTimestamp(mut timestamp) => {
+            QueryWhen::AtTimestamp(mut timestamp) => {
                 let temp_storage = RowArena::new();
                 self.dataflow_builder(compute_instance).prep_scalar_expr(
                     &mut timestamp,
@@ -3241,7 +3239,7 @@ impl Coordinator {
             // These two strategies vary in terms of which traces drive the
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
-            PeekWhen::Immediately => {
+            QueryWhen::Immediately => {
                 // Initialize candidate to the minimum correct time.
                 let mut candidate = Timestamp::minimum();
                 candidate.advance_by(since.borrow());
@@ -3341,64 +3339,6 @@ impl Coordinator {
                 invalid
             );
         }
-    }
-
-    /// Determine the frontier of updates to start *from* for a sink based on
-    /// `source_id`.
-    ///
-    /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(
-        &mut self,
-        source_ids: &[GlobalId],
-        instance: ComputeInstanceId,
-    ) -> Antichain<Timestamp> {
-        // This function differs from determine_timestamp because sinks/tail don't care
-        // about indexes existing or timestamps being complete. If data don't exist
-        // yet (upper = 0), it is not a problem for the sink to wait for it. If the
-        // timestamp we choose isn't as fresh as possible, that's also fine because we
-        // produce timestamps describing when the diff occurred, so users can determine
-        // if that's fresh enough.
-
-        // If source_id is already indexed, then nearest_indexes will return the
-        // same index that default_index_for does, so we can stick with only using
-        // nearest_indexes. We don't care about the indexes being incomplete because
-        // callers of this function (CREATE SINK and TAIL) are responsible for creating
-        // indexes if needed.
-        let id_bundle = self.catalog.nearest_indexes(source_ids);
-
-        let since = self.least_valid_read(&id_bundle, instance);
-
-        let mut candidate = if id_bundle.iter().any(|id| self.catalog.uses_tables(id)) {
-            // If the sink depends on any tables, we enforce linearizability by choosing
-            // the latest input time.
-            self.get_local_read_ts()
-        } else if id_bundle.storage_ids.is_empty() && !id_bundle.compute_ids.is_empty() {
-            // If the sink does not need to create any indexes and requires at least 1
-            // index, use the upper. For something like a static view, the indexes are
-            // complete but the index count is 0, and we want 0 instead of max for the
-            // time, so we should fall through to the else in that case.
-            let upper = self.least_valid_write(&id_bundle, instance);
-            if let Some(ts) = upper.elements().get(0) {
-                // We don't need to worry about `ts == 0` like determine_timestamp, because
-                // it's fine to not have any timestamps completed yet, which will just cause
-                // this sink to wait.
-                ts.saturating_sub(1)
-            } else {
-                Timestamp::max_value()
-            }
-        } else {
-            // If the sink does need to create an index, use 0, which will cause the since
-            // to be used below.
-            Timestamp::min_value()
-        };
-
-        // Ensure that the timestamp is >= since. This is necessary because when a
-        // Frontiers is created, its upper = 0, but the since is > 0 until update_upper
-        // has run.
-        if !since.less_equal(&candidate) {
-            candidate.advance_by(since.borrow());
-        }
-        Antichain::from_elem(candidate)
     }
 
     fn sequence_explain(
@@ -3794,7 +3734,7 @@ impl Coordinator {
                 &mut session,
                 PeekPlan {
                     source: selection,
-                    when: PeekWhen::AtTimestamp(ts),
+                    when: QueryWhen::AtTimestamp(ts),
                     finishing,
                     copy_to: None,
                 },
