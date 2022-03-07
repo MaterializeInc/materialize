@@ -2039,20 +2039,6 @@ where
     }
 }
 
-fn date_trunc_interval<'a>(a: Datum, int: Interval) -> Result<Datum<'a>, EvalError> {
-    let mut int2 = int.clone();
-    let units = a.unwrap_str();
-    units
-        .parse()
-        .map_err(|_| EvalError::UnknownUnits(units.to_owned()))
-        .and_then(|dtf| {
-            // truncate_low_fields should never return an error in our case
-            int2.truncate_low_fields(dtf, Some(0))
-                .map_err(|e| EvalError::Internal(e.to_string()))?;
-            Ok(int2.into())
-        })
-}
-
 fn date_trunc_inner<'a, T>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
@@ -2083,6 +2069,18 @@ where
             issue_no: None,
         }),
     }
+}
+
+fn date_trunc_interval<'a>(a: Datum, mut int: Interval) -> Result<Datum<'a>, EvalError> {
+    let units = a.unwrap_str();
+    let dtf = units
+        .parse()
+        .map_err(|_| EvalError::UnknownUnits(units.to_owned()))?;
+
+    // truncate_low_fields should never return an error in our case
+    int.truncate_low_fields(dtf, Some(0))
+        .map_err(|e| EvalError::Internal(e.to_string()))?;
+    Ok(int.into())
 }
 
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
@@ -2963,9 +2961,9 @@ impl BinaryFunc {
             | DatePartTime
             | DatePartTimestamp
             | DatePartTimestampTz
+            | DateTruncInterval
             | DateTruncTimestamp
             | DateTruncTimestampTz
-            | DateTruncInterval
             | TimezoneTimestamp
             | TimezoneTimestampTz
             | TimezoneTime { .. }
