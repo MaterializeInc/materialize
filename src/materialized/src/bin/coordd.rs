@@ -46,16 +46,6 @@ struct Args {
     /// The address of the storage dataflowd servers to connect to.
     #[clap(long)]
     storaged_addr: Vec<String>,
-    /// Number of dataflow worker threads. This must match the number of
-    /// workers that the targeted dataflowd was started with.
-    #[clap(
-        short,
-        long,
-        env = "COORDD_DATAFLOWD_WORKERS",
-        value_name = "N",
-        default_value = "1"
-    )]
-    workers: usize,
     /// Where to store data.
     #[clap(
         short = 'D',
@@ -148,7 +138,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let metrics = Metrics::register_with(
         &mut metrics_registry,
-        args.workers,
+        usize::MAX,
         coord_handle.start_instant(),
     );
 

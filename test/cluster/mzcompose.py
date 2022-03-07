@@ -38,7 +38,7 @@ SERVICES = [
     ),
     Coordd(
         name="materialized",
-        options="--workers 4 dataflowd_1:6876 dataflowd_2:6876",
+        options="dataflowd_1:6876 dataflowd_2:6876",
     ),
     Dataflowd(
         name="dataflowd_compute_1",
@@ -62,7 +62,7 @@ SERVICES = [
     ),
     Coordd(
         name="materialized_compute_storage",
-        options="--workers 4 dataflowd_compute_1:6876 dataflowd_compute_2:6876 --storaged-addr dataflowd_storage:6876",
+        options="dataflowd_compute_1:6876 dataflowd_compute_2:6876 --storaged-addr dataflowd_storage:6876",
     ),
     Testdrive(
         volumes=[
