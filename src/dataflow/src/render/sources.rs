@@ -10,6 +10,7 @@
 //! Logic related to the creation of dataflow sources.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
@@ -17,7 +18,9 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Inspect, Map, OkErr, Probe, UnorderedInput};
+use timely::dataflow::operators::unordered_input::UnorderedHandle;
+use timely::dataflow::operators::ActivateCapability;
+use timely::dataflow::operators::{Concat, Map, OkErr, Probe, UnorderedInput};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
 use timely::progress::Antichain;
 use tracing::debug;
@@ -59,57 +62,34 @@ enum SourceType<Delimited, ByteStream> {
     ByteStream(ByteStream),
 }
 
+/// A description of a table imported by [`import_table`].
+struct ImportedTable<G>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    /// The collection containing the records from the table.
+    ok_collection: Collection<G, Row, Diff>,
+    /// The collection containing errors from the etable.
+    err_collection: Collection<G, DataflowError, Diff>,
+    /// A handle for inserting records into the table.
+    handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
+    /// The initial capability associated with the insert handle.
+    capability: ActivateCapability<Timestamp>,
+}
+
 /// Imports a table (non-durable, local source of input).
-///
-/// The returned collections are the records and any errors, as well as a token which
-/// when dropped will terminate the input.
-pub(crate) fn import_table<G>(
+fn import_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     storage_state: &mut crate::server::StorageState,
     scope: &mut G,
     id: SourceInstanceId,
     persisted_name: Option<String>,
-) -> (
-    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
-    Rc<dyn Any>,
-)
+) -> ImportedTable<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let ((mut handle, mut capability), ok_stream) = scope.new_unordered_input();
+    let ((handle, capability), ok_stream) = scope.new_unordered_input();
     let err_collection = Collection::empty(scope);
-
-    // HACK: input handles do not buffer their input unless attached to a
-    // downstream operator. See TimelyDataflow/timely-dataflow#264.
-    let ok_stream = ok_stream.inspect(|_| ());
-
-    let table_state = match storage_state.table_state.get_mut(&id.source_id) {
-        Some(table_state) => table_state,
-        None => panic!(
-            "table state {} missing for source creation at worker {}",
-            id.source_id,
-            scope.index()
-        ),
-    };
-
-    // Make the new local input reflect the latest table state, then add the
-    // local input to the table state.
-    {
-        let mut session = handle.session(capability.clone());
-        for (row, time, diff) in &table_state.data {
-            let mut time = *time;
-            time.advance_by(table_state.since.borrow());
-            assert!(time >= *capability.time());
-            session.give((row.clone(), time, *diff));
-        }
-    }
-    capability.downgrade(&table_state.upper);
-    // Convert to reference counted, so that users can drop it.
-    let capability = Rc::new(std::cell::RefCell::new(capability));
-    table_state.inputs.push(LocalInput {
-        handle,
-        capability: Rc::downgrade(&capability),
-    });
 
     // A local "source" is either fed by a local input handle, or by reading from a
     // `persisted_source()`.
@@ -153,7 +133,12 @@ where
         })
         .as_collection();
 
-    ((ok_collection, err_collection), capability)
+    ImportedTable {
+        ok_collection,
+        err_collection,
+        handle,
+        capability,
+    }
 }
 
 /// Constructs a `CollectionBundle` and tokens from source arguments.
@@ -207,7 +192,38 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
-            import_table(as_of_frontier, storage_state, scope, uid, persisted_name)
+            let mut table = import_table(as_of_frontier, storage_state, scope, uid, persisted_name);
+
+            let table_state = match storage_state.table_state.get_mut(&src_id) {
+                Some(table_state) => table_state,
+                None => panic!(
+                    "table state {} missing for source creation at worker {}",
+                    src_id,
+                    scope.index()
+                ),
+            };
+
+            // Make the new local input reflect the latest table state, then add the
+            // local input to the table state.
+            {
+                let mut session = table.handle.session(table.capability.clone());
+                for (row, time, diff) in &table_state.data {
+                    let mut time = *time;
+                    time.advance_by(table_state.since.borrow());
+                    assert!(time >= *table.capability.time());
+                    session.give((row.clone(), time, *diff));
+                }
+            }
+            table.capability.downgrade(&table_state.upper);
+
+            // Convert to reference counted, so that users can drop it.
+            let capability = Rc::new(RefCell::new(table.capability));
+            table_state.inputs.push(LocalInput {
+                handle: table.handle,
+                capability: Rc::downgrade(&capability),
+            });
+
+            ((table.ok_collection, table.err_collection), capability)
         }
 
         SourceConnector::External {
