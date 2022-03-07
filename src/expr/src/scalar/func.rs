@@ -5126,7 +5126,10 @@ fn array_to_string<'a>(
             out.push_str(delimiter);
         }
     }
-    out.truncate(out.len() - delimiter.len()); // lop off last delimiter
+    if out.len() > 0 {
+        // Lop off last delimiter only if string is not empty
+        out.truncate(out.len() - delimiter.len());
+    }
     Ok(Datum::String(temp_storage.push_string(out)))
 }
 
