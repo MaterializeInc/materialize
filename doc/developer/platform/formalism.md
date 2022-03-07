@@ -13,31 +13,29 @@ It does not intend to describe the **current behavior** of the system.
 Various liberties are taken in the names of commands and types, in the interest of simplicity.
 Not all commands here may be found in the implementation, nor all implementation commands found here.
 
-# Background
-
 You may wish to consult the
 [VLDB](https://vldb.org/pvldb/vol13/p1793-mcsherry.pdf) and
 [CIDR](https://github.com/TimelyDataflow/differential-dataflow/blob/master/differentialdataflow.pdf)
 papers on differential dataflow, as well as the [DD
 library](https://github.com/TimelyDataflow/differential-dataflow).
 
-# In a Nutshell
+# In a nutshell
 
-In abstract, Materialize's purpose is to store and query *time-varying
-collections* (TVCs). A TVC is a map of partially ordered *times* to *collection
-versions*: a multiset of typed *pieces of data*. Because the past and future of
-a TVC may be unknown, Materialize represents a TVC as a *partial TVC* (pTVC),
-which is an accurate representation of a TVC during a range of times bounded by
-two *frontiers*.
+A *time-varying collections* (TVC) is a map of partially ordered *times* to
+*collection versions*, where each collection version is a multiset of typed
+*pieces of data*. Because the past and future of a TVC may be unknown,
+Materialize represents a TVC as a *partial TVC* (pTVC), which is an accurate
+representation of a TVC during a range of times bounded by two *frontiers*.
 
 To avoid storing and processing the entire collection version for every single
 time, Materialize uses sets of *updates* as a differential representation of a
 pTVC. These updates are triples of `[data, time, diff]`: the piece of data
 being changed, the time of the change, and the change in multiplicity of that
 data. Materialize can *compact* a pTVC by merging updates from the past, and
-*append* new updates to a pTVC as they arrive. Both compact and append preserve
-correctness: these differential representations of a pTVC are faithful to the
-"real" TVC within the pTVC's frontiers.
+*append* new updates to a pTVC as they arrive. Compaction advances the lower
+*since frontier* of the pTVC, and appending advances the *upper frontier*. Both
+compact and append preserve correctness: these differential representations of
+a pTVC are faithful to the "real" TVC between `since` and `upper`.
 
 Materialize identifies each TVC by a unique `GlobalId`, and maintains a mutable map of `GlobalId`s to the current pTVC representing that `GlobalID`'s TVC.
 
@@ -45,8 +43,8 @@ Internally, Materialize is separated into two layers: *storage* and *compute*.
 The storage layer records updates from (e.g.) external data sources. The
 compute layer provides materialized views: new TVCs which are derived from
 other TVCs in some way. The ability to write and read to these layers is given
-by a first-class *capability* object, which constrains the evolution of pTVC
-frontiers.
+by a first-class *capability* object, which constrains when pTVCs can be
+compacted and appended to.
 
 Users issue SQL queries to Materialize, but the storage and compute layers are
 defined in terms of low-level operations on update triples. The *adapter*
@@ -59,7 +57,7 @@ indices are maintained by the compute layer.
 Finally: Materialize's adapter supports SQL transactions, but there are
 significant constraints on how these transactions can mix reads and writes.
 
-# In Depth
+# In depth
 
 ## Data
 
@@ -67,13 +65,15 @@ The term *piece of data*, in this document, means a single, opaque piece of
 arbitrary typed data. For example, one might use a piece of data to represent a
 single row in an SQL database, or a single key-value pair in a key-value store.
 
-A piece of data is often written as simply `data` in this document, but we
-emphasize that each piece of data is an opaque, atomic object rather than a
-composite type. When we describe an update to a row, that data includes the
-entire new row, not just the columns inside it which changed.
+In this document, we often denote a piece of data as `data`. However, we want
+to emphasize that as far as updates are concerned, each piece of data is an
+opaque, atomic object rather than a composite type. When we describe an update
+to a row, that data includes the entire new row, not just the columns inside it
+which changed.
 
 We say "piece of data" instead of "datum" because "datum" has a different
-meaning in Materialize's internals: it refers to a cell within a row.
+meaning in Materialize's internals: it refers to a cell within a row. In the
+CIDR differential dataflow paper, a piece of data is called a "record".
 
 ## Times
 
@@ -88,7 +88,7 @@ the usual way for join semilattices: for any two times `t1` and `t2` in `T`,
 `t1 <=t t2` iff `join(t1, t2) = t2`. We also define a strict partial order over
 times `<t`, such that `t1 < t2` iff `t1 <= t2` and `t1 != t2`.
 
-`T` contains a minimal time `t0` such that `t0 <= t` for all `t` in `T`. Times
+`T` contains a minimal time `t0` such that `t0 <=t t` for all `t` in `T`. Times
 are therefore
 [well-founded](https://en.wikipedia.org/wiki/Well-founded_relation).
 
@@ -97,15 +97,19 @@ our join and `t0 = 0`. The usual senses of `<=` and `<` then serve as
 `<=t` and `<t`, respectively.
 
 A *frontier* is a set of times in `T`. We use frontiers to specify a lower (or
-upper) bound on times in `T`. We say that a time `t` *is later than* a frontier
-`F` iff there exists some `f` in `F` such that `f <t t`. Similarly, we can
-define times which come before `F`, are at least `F`, are at most `F`, and so
+upper) bound on times in `T`. We say that a time `t` *is later than* or *after*
+a frontier `F` iff there exists some `f` in `F` such that `f <t t`. We write
+this `F <=t t`. Similarly we can speak of a time `t` which is later than or
+equal to F, by which we mean there exists some `f` in `F` such that `f <=t t`:
+we write this `F <=t t`.
 
-on, in the obvious ways. For integers, a frontier could be the singleton set `F
-= {5}`; the set of times before `F` are therefore `{1, 2, 3, 4}`, and the times
-after `F` are `{6, 7, ...}`.
+For integers, a frontier could be the singleton set `F = {5}`; the set of times
+after `F` are `{6, 7, 8, ...}`.
 
 The latest frontier is the empty set `{}`. No time is later than `{}`.
+
+Throughout this document, "time" generally refers to Materialize time. We say
+"wall-clock time" to describe time in the real world.
 
 ## Collection Versions
 
@@ -124,7 +128,7 @@ Multiplicities may be negative: partially ordered delivery of updates to
 collection versions requires commutativity. However, users generally don't see
 collection versions with negative multiplicities.
 
-The *empty* collection version `c-empty` is an empty multiset.
+The *empty* collection version `cv0` is an empty multiset.
 
 ## Time-varying collections
 
@@ -136,7 +140,7 @@ possible times.
 A *read* of a TVC `tvc` at time `t` means the collection version stored in
 `tvc` for `t`. We write this as `read(tvc, t) => collection-version`.
 
-Every TVC begins with the empty collection version: `read(tvc, t0) = c-empty`.
+Every TVC begins with the empty collection version: `read(tvc, t0) = cv0`.
 
 ## Partial time-varying collections
 
@@ -152,9 +156,9 @@ past, and the `upper` frontier tells us which versions have yet to be learned.
 At times between `since` and `upper`, a pTVC should be identical to its
 corresponding TVC.
 
-We think of `since` as the "read frontier": times earlier than `since` cannot
+We think of `since` as the "read frontier": times not later than `since` cannot
 be correctly read. We think of `upper` as the "write frontier": times later
-than or equal to it may still be written to the TVC.
+than or equal to `upper` may still be written to the TVC.
 
 A *read* of a pTVC `ptvc` at time `t` is the collection version in `ptvc` which
 corresponds to `t`. We write this as `read(ptvc, t) => collection-version`.
@@ -178,9 +182,9 @@ order; time generally flows left to right, and the precise order is shown by
 arrows. The `since` frontier is formed by two times labeled "since"; the
 `upper` frontier is formed by two times labeled "upper". Times later than
 `upper` are drawn in orange: these times are in the unknown future of the pTVC.
-Times earlier than or concurrent with `since` are drawn in gray: these times
-are in the forgotten past. Only times in blue--those between `since` and
-`upper`--can be correctly read.
+Times not later than or equal to `since` are drawn in gray: these times are in
+the forgotten past. Only times in blue--those between `since` and `upper`--can
+be correctly read.
 
 ## Update-set representations of TVCs and pTVCs
 
@@ -191,39 +195,36 @@ triple `[data, time, diff]`. The `data` specifies what element of the
 collection version is changing, the `time` gives the time the change took
 place, and the `diff` is the change in multiplicity for that element.
 
-Given a collection version `c1` and an update `u = [data, time, diff]`, we can
-*apply* `u` to `c1` to produce a new collection version `c2`: `apply(c1, u)
-=> c2`. `c2` is exactly `c1`, but with `multiplicity(c2, data) =
-multiplicity(c1, data) + diff`.
+Given a collection version `cv1` and an update `u = [data, time, diff]`, we can
+*apply* `u` to `cv1` to produce a new collection version `cv2`: `apply(cv1, u)
+=> cv2`. `cv2` is exactly `cv1`, but with `multiplicity(cv2, data) =
+multiplicity(cv1, data) + diff`.
 
 We can also apply a countable set of updates to a collection version by
 applying each update in turn. We write this `apply(collection, updates)`. Since
 `apply` is commutative, the order does not matter. In practice, these are
-computers: all sets are countable. If you're wondering about uncountable sets,
+computers: all sets are countable. (If you're wondering about uncountable sets,
 the [Möbius
 inversion](https://en.wikipedia.org/wiki/M%C3%B6bius_inversion_formula) might
-be helpful.
+be helpful.)
 
-Given a time `t` and two collection versions `c1` and `c2`, we can find their
-*difference*: a minimal set of updates which, when applied to `c1`, yields
-`c2`.
+Given a time `t` and two collection versions `cv1` and `cv2`, we can find their
+*difference*: a minimal set of updates which, when applied to `cv1`, yields
+`cv2`.
 
 ```
-diff(t, c1, c2) = { u = [data, t, diff] |
-                    (data in c1 or data in c2) and
-                    (diff = multiplicity(c2, data) - multiplicity(c1, data))
-                  }
+diff(t, cv1, cv2) = { u = [data, t, diff] |
+                      (data in cv1 or data in cv2) and
+                      (diff = multiplicity(cv2, data) - multiplicity(cv1, data))
+                    }
 ```
 
 Given a frontier `f`, a set of updates `updates` can be *compacted* together
 into a (likely smaller) set of updates where the sum of the diffs for each
 `data` in the set is preserved, and every update has a time `t` such that `f
 <=t t`. We write this as `compact(updates, f)`. Since the diffs for each data
-are unchanged, `apply(c, updates) = apply(c, compact(updates, f))` for any
-collection version `c`. These compacted updates have the same effect when
-applied as the original set, thanks to commutativity. For any collection
-version `c` and set of updates `updates`, `apply(c, updates) = apply(c,
-compact(updates))`.
+are unchanged, and updates commute, `apply(c, updates) = apply(c,
+compact(updates, f))` for any collection version `c`.
 
 ### Isomorphism between update and time-function representations
 
@@ -234,7 +235,7 @@ an update-set representation to a time-function representation.
 
 ```
 read(updates, t) =
-  apply(c-empty, { u = [data, time, diff] | u in updates and time <=t t })
+  apply(cv0, { u = [data, time, diff] | u in updates and time <=t t })
 ```
 
 Similarly, given a time-function representation `tvc`, we can obtain an
@@ -244,7 +245,7 @@ all prior times:
 
 ```
 updates(tvc, t) = diff(t,
-                       apply(c-empty, prior-updates(tvc, t)),
+                       apply(cv0, prior-updates(tvc, t)),
                        read(tvc, t))
 ```
 
@@ -256,7 +257,7 @@ prior-updates(tvc, t) = ⋃ updates(tvc, prior-t) for all prior-t <t t
 ```
 
 These mutually-recursive relations bottom out in the initial time `t0`, and the
-corresponding initial collection version `c-empty`. Using these definitions, we
+corresponding initial collection version `cv0`. Using these definitions, we
 can inductively transform an entire time-function representation `tvc` into a
 set of updates for all times by taking the union over all times:
 
@@ -267,8 +268,8 @@ updates(tvc) = ⋃ updates(tvc, t) for all t in T
 This may seem a bit abstract---the formalism is shaped this way because
 collection versions are only partially ordered. If we take our times `T` to be
 the (totally ordered) naturals, we obtain a much simpler definition: the update
-set for a given time `t` is simply the difference between the version at `t`
-and the version at `t-1`.
+set for a given time `t` is simply the difference between the version at `t-1`
+and the version at `t`.
 
 ```
 updates(tvc, t) = diff(t, read(tvc, t - 1), read(tvc, t))
@@ -280,14 +281,17 @@ We have argued that the time-function and update-set representations of a TVC
 are equivalent. Similarly, we can also represent a pTVC as a set of updates
 together with `since` and `upper` frontiers: `ptvc = [updates, since, upper]`.
 We use the same definition for reads as we gave for TVCs above. We wish to
-ensure that each such pTVC maintains the correctness invariant: `read(ptvc, t)
+ensure that every such pTVC maintains the correctness invariant: `read(ptvc, t)
 = read(tvc, t)` so long as `t` is at least `since` and not later than `upper`.
 
 First, consider the empty pTVC `ptvc0 = [{}, {t0}, {t0}]`. `ptvc0` is trivially
-correct since there are no times earlier than than the upper frontier `{t0}`.
+correct since there are no times not later than than the upper frontier `{t0}`.
 
-Next we consider two ways a pTVC could evolve, and show that each evolution
-preserves correctness.
+Next we consider two ways a pTVC could evolve, and wave our hands frantically
+while claiming that each evolution preserves correctness. This is not an
+exhaustive proof--we do not discuss, for example, the question of a pTVC
+which contains incorrect updates later than its upper frontier. However, this
+sketch should give a rough feeling for how and why Materialize works.
 
 ### pTVC append
 
@@ -326,26 +330,27 @@ way that the collection versions read at times later than or equal to `since'`
 remain unchanged. We write this `ptvc' = compact(ptvc, since')`:
 
 ```
+updates' = compact(updates, since')
 ptvc' = [updates', since', upper]
 ```
 
-One imagines that `updates'` would contain no updates with times prior to or
-concurrent with `since'`. It would presumably differ from `updates` only along
-the "boundary layer"--the earliest wavefront of times which delineate the
-leading edge of the set of times which are at or later than `since'`. Updates
-prior to or concurrent with `since'` would be merged forward into that boundary
-layer.
+Since `updates'` has been compacted to `since'`, it contains no updates with
+times prior to or concurrent with `since'`. Presumably, `updates'` differs from
+`updates` only along the "boundary layer"--the times along the leading edge of
+the set of times which are at or later than `since'`. Updates prior to or
+concurrent with `since'` have been merged forward into that boundary layer,
+preserving correctness.
 
 How exactly compaction works is described in [K-Pg: Shared State in
 Differential
 Dataflows](https://github.com/TimelyDataflow/differential-dataflow/blob/master/sigmod2019-submission.pdf)
 
-## Time evolution of pTVCs
+### Time evolution of pTVCs
 
-Materialize's goal is to keep track of a window of each TVC of interest over
-time. At any given moment, a TVC is represented by a single `ptvc = [updates,
-since, upper]` triple. Each TVC these begins as the empty `ptvc0`, which is a
-correct representation of TVC. As new information about the TVC becomes
+Materialize's goal is to keep track of a window of each relevant TVC over time.
+At any given moment a TVC is represented by a single `ptvc = [updates, since,
+upper]` triple. Each TVC begins with the empty `ptvc0`, which is a correct
+representation of every TVC. As new information about the TVC becomes
 available, Materialize appends those updates using `append(ptvc, upper',
 new-updates)`. To reclaim storage space, Materialize compacts ptvcs using
 `compact(ptvc, since')`. Since both `append` and `compact` preserve pTVC
@@ -353,14 +358,14 @@ correctness, Materializ always allows us to query a range of times (those
 between the current `since` and `upper`), and obtain the same results as would
 be observed in the "real" TVC.
 
-Since and upper frontiers never move backward, and often move forward as the
-system operate.
+During this process the `since` and `upper` frontiers never move
+backwards---and typically, they advance.
 
 ## The TVC Map
 
 To track these changing pTVCs over time, Materialize maintains a mutable *TVC
 map*. The keys in this map are `GlobalId`s, and the values are pTVCs. Each TVC
-has at most one GlobalID over the entire history of a Materialize cluster. In
+has at most one `GlobalID` over the entire history of a Materialize cluster. In
 short, the TVC map allows one to ask "What is the current pTVC view of the TVC
 identified by `GlobalId` `gid`?
 
