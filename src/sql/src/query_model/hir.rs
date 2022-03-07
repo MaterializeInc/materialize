@@ -23,8 +23,9 @@ use crate::query_model::model::{
     Grouping, Model, OuterJoin, QuantifierType, Select, Values,
 };
 
-impl From<HirRelationExpr> for Result<Model, QGMError> {
-    fn from(expr: HirRelationExpr) -> Self {
+impl TryFrom<HirRelationExpr> for Model {
+    type Error = QGMError;
+    fn try_from(expr: HirRelationExpr) -> Result<Self, Self::Error> {
         FromHir::generate(expr)
     }
 }

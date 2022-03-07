@@ -58,12 +58,12 @@ impl HirRelationExpr {
     /// Return `Result::Err` if the path is not possible.
     fn try_qgm_path(self) -> Result<mz_expr::MirRelationExpr, QGMError> {
         // create a query graph model from this HirRelationExpr
-        let mut model = Result::<Model, QGMError>::from(self)?;
+        let mut model = Model::try_from(self)?;
 
         // perform optimizing algebraic rewrites on the qgm
         model.optimize();
 
         // decorrelate and lower the optimized query graph model into a MirRelationExpr
-        model.into()
+        model.try_into()
     }
 }

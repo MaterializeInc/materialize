@@ -26,8 +26,9 @@ use mz_ore::id_gen::IdGen;
 use mz_repr::{Datum, RelationType, ScalarType};
 use std::collections::HashMap;
 
-impl From<Model> for Result<mz_expr::MirRelationExpr, QGMError> {
-    fn from(model: Model) -> Result<mz_expr::MirRelationExpr, QGMError> {
+impl TryFrom<Model> for mz_expr::MirRelationExpr {
+    type Error = QGMError;
+    fn try_from(model: Model) -> Result<Self, Self::Error> {
         Lowerer::new(&model).lower()
     }
 }
