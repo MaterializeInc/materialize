@@ -90,6 +90,8 @@ impl SimpleSource for LokiSourceReader {
         let stream = self.new_stream();
         tokio::pin!(stream);
 
+        let source_id = self.source_id;
+
         while let Some(entry) = stream.next().await {
             match entry {
                 Ok(result) => {
@@ -104,7 +106,7 @@ impl SimpleSource for LokiSourceReader {
                         let row = Row::pack_slice(&[Datum::String(&line)]);
 
                         timestamper.insert(row).await.map_err(|e| SourceError {
-                            source_id: self.source_id,
+                            source_id: source_id,
                             error: SourceErrorDetails::FileIO(e.to_string()),
                         })?;
                     }
@@ -150,7 +152,7 @@ mod test {
     #[tokio::test]
     async fn connect() {
         let user = "5442";
-        let pw = "eyJrIjoiYWRiM2UyOWYxOWY1OTg1YWUwN2ZiNDYwZmQyYTdmNTU4MjE2MzRmMCIsIm4iOiJMYXB0b3AgQWRtaW4iLCJpZCI6NDA1NTQ0fQ==";
+        let pw = "";
         let endpoint = "https://logs-prod-us-central1.grafana.net";
 
         let loki = LokiSourceReader::new(
