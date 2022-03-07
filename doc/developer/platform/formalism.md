@@ -21,7 +21,45 @@ You may wish to consult the
 papers on differential dataflow, as well as the [DD
 library](https://github.com/TimelyDataflow/differential-dataflow).
 
-# Data Model
+# In a Nutshell
+
+In abstract, Materialize's purpose is to store and query *time-varying
+collections* (TVCs). A TVC is a map of partially ordered *times* to *collection
+versions*: a multiset of typed *pieces of data*. Because the past and future of
+a TVC may be unknown, Materialize represents a TVC as a *partial TVC* (pTVC),
+which is an accurate representation of a TVC during a range of times bounded by
+two *frontiers*.
+
+To avoid storing and processing the entire collection version for every single
+time, Materialize uses sets of *updates* as a differential representation of a
+pTVC. These updates are triples of `[data, time, diff]`: the piece of data
+being changed, the time of the change, and the change in multiplicity of that
+data. Materialize can *compact* a pTVC by merging updates from the past, and
+*append* new updates to a pTVC as they arrive. Both compact and append preserve
+correctness: these differential representations of a pTVC are faithful to the
+"real" TVC within the pTVC's frontiers.
+
+Materialize identifies each TVC by a unique `GlobalId`, and maintains a mutable map of `GlobalId`s to the current pTVC representing that `GlobalID`'s TVC.
+
+Internally, Materialize is separated into two layers: *storage* and *compute*.
+The storage layer records updates from (e.g.) external data sources. The
+compute layer provides materialized views: new TVCs which are derived from
+other TVCs in some way. The ability to write and read to these layers is given
+by a first-class *capability* object, which constrains the evolution of pTVC
+frontiers.
+
+Users issue SQL queries to Materialize, but the storage and compute layers are
+defined in terms of low-level operations on update triples. The *adapter*
+translates these SQL queries into low-level commands. Since SQL does not
+(generally) include an explicit model of time, the adapter picks timestamps for
+SQL statements using a stateful *timeline* object. To map table names to
+`GlobalIds` and capabilities, Materialize maintains a *source* mapping. SQL
+indices are maintained by the compute layer.
+
+Finally: Materialize's adapter supports SQL transactions, but there are
+significant constraints on how these transactions can mix reads and writes.
+
+# In Depth
 
 ## Data
 
@@ -62,6 +100,7 @@ A *frontier* is a set of times in `T`. We use frontiers to specify a lower (or
 upper) bound on times in `T`. We say that a time `t` *is later than* a frontier
 `F` iff there exists some `f` in `F` such that `f <t t`. Similarly, we can
 define times which come before `F`, are at least `F`, are at most `F`, and so
+
 on, in the obvious ways. For integers, a frontier could be the singleton set `F
 = {5}`; the set of times before `F` are therefore `{1, 2, 3, 4}`, and the times
 after `F` are `{6, 7, ...}`.
@@ -297,30 +336,33 @@ leading edge of the set of times which are at or later than `since'`. Updates
 prior to or concurrent with `since'` would be merged forward into that boundary
 layer.
 
-How this is accomplished (and showing that this is even possible) is left as an
-exercise for the reader, who is hopefully smarter than this author; but we
-trust that Very Smart People have figured this out.
+How exactly compaction works is described in [K-Pg: Shared State in
+Differential
+Dataflows](https://github.com/TimelyDataflow/differential-dataflow/blob/master/sigmod2019-submission.pdf)
 
 ## Time evolution of pTVCs
 
-Materialize's goal is to keep track of a window of a TVC over time. At any
-given moment, a TVC is represented by a single `ptvc = [updates, since, upper]`
-triple. Each TVC these begins as the empty `ptvc0`, which is a correct
-representation of TVC. As new information about the TVC becomes available,
-Materialize appends those updates using `append(ptvc, upper', new-updates)`. To
-reclaim storage space, Materialize compacts ptvcs using `compact(ptvc,
-since')`. Since both `append` and `compact` preserve pTVC correctness,
-Materializ always allows us to query a range of times (those between the
-current `since` and `upper`), and obtain the same results as would be observed
-in the "real" TVC.
+Materialize's goal is to keep track of a window of each TVC of interest over
+time. At any given moment, a TVC is represented by a single `ptvc = [updates,
+since, upper]` triple. Each TVC these begins as the empty `ptvc0`, which is a
+correct representation of TVC. As new information about the TVC becomes
+available, Materialize appends those updates using `append(ptvc, upper',
+new-updates)`. To reclaim storage space, Materialize compacts ptvcs using
+`compact(ptvc, since')`. Since both `append` and `compact` preserve pTVC
+correctness, Materializ always allows us to query a range of times (those
+between the current `since` and `upper`), and obtain the same results as would
+be observed in the "real" TVC.
 
-The two frontiers never move backward, and often move forward as the system
-operates.
+Since and upper frontiers never move backward, and often move forward as the
+system operate.
 
-## Evolution
+## The TVC Map
 
-Materialize maintains a (partial) map from `GlobalId`s to pTVCs.
-A `GlobalId` is never re-used to mean a different TVC.
+To track these changing pTVCs over time, Materialize maintains a mutable *TVC
+map*. The keys in this map are `GlobalId`s, and the values are pTVCs. Each TVC
+has at most one GlobalID over the entire history of a Materialize cluster. In
+short, the TVC map allows one to ask "What is the current pTVC view of the TVC
+identified by `GlobalId` `gid`?
 
 The life cycle of each `GlobalId` follows several steps:
 
@@ -328,7 +370,8 @@ The life cycle of each `GlobalId` follows several steps:
 
     In this state, the `GlobalId` cannot be used in queries, as we do not yet know what its initial `since` will be.
 
-1. The `GlobalId` is bound to some definition, with an initially equal `since` and `upper`.
+1. The `GlobalId` is bound to some definition with an initially equal `since`
+   and `upper` (e.g. `ptvc0`).
 
     The partial TVC can now be used in queries, those reading from `since` onward, though results may not be immediately available.
     The collection is initially not useful, as it will not be able to immediately respond about any time greater or equal to `since` but not greater or equal to `upper`.
