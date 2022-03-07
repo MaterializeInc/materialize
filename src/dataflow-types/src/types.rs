@@ -1215,6 +1215,7 @@ pub mod sources {
         S3(S3SourceConnector),
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
+        Loki(LokiSourceConnector),
     }
 
     impl ExternalSourceConnector {
@@ -1282,6 +1283,7 @@ pub mod sources {
                     };
                     columns
                 }
+                Self::Loki(_) => vec![],
                 Self::Postgres(_) => vec![],
                 Self::PubNub(_) => vec![],
             }
@@ -1295,6 +1297,7 @@ pub mod sources {
                 ExternalSourceConnector::File(_) => Some("mz_line_no"),
                 ExternalSourceConnector::AvroOcf(_) => Some("mz_obj_no"),
                 ExternalSourceConnector::S3(_) => Some("mz_record"),
+                ExternalSourceConnector::Loki(_) => None,
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
             }
@@ -1340,9 +1343,9 @@ pub mod sources {
                         Vec::new()
                     }
                 }
-                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => {
-                    Vec::new()
-                }
+                ExternalSourceConnector::Loki(_)
+                | ExternalSourceConnector::Postgres(_)
+                | ExternalSourceConnector::PubNub(_) => Vec::new(),
             }
         }
 
@@ -1354,6 +1357,7 @@ pub mod sources {
                 ExternalSourceConnector::File(_) => "file",
                 ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
                 ExternalSourceConnector::S3(_) => "s3",
+                ExternalSourceConnector::Loki(_) => "loki",
                 ExternalSourceConnector::Postgres(_) => "postgres",
                 ExternalSourceConnector::PubNub(_) => "pubnub",
             }
@@ -1375,6 +1379,7 @@ pub mod sources {
                 ExternalSourceConnector::S3(_) => None,
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
+                ExternalSourceConnector::Loki(_) => None,
             }
         }
 
@@ -1386,6 +1391,7 @@ pub mod sources {
                 ExternalSourceConnector::Kafka(_)
                 | ExternalSourceConnector::Kinesis(_)
                 | ExternalSourceConnector::File(_)
+                | ExternalSourceConnector::Loki(_)
                 | ExternalSourceConnector::AvroOcf(_)
                 | ExternalSourceConnector::PubNub(_) => false,
             }
@@ -1416,6 +1422,12 @@ pub mod sources {
     pub struct PubNubSourceConnector {
         pub subscribe_key: String,
         pub channel: String,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct LokiSourceConnector {
+        pub address: String,
+        pub query: String,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

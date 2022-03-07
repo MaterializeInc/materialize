@@ -494,6 +494,12 @@ pub enum CreateSourceConnector {
         /// The PubNub channel to subscribe to
         channel: String,
     },
+    Loki {
+        /// The address of the Loki HTTP endpoint.
+        address: String,
+        /// The LogQL query to issue to Loki.
+        query: String,
+    },
 }
 
 impl AstDisplay for CreateSourceConnector {
@@ -568,6 +574,13 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(&display::escape_single_quote_string(subscribe_key));
                 f.write_str("' CHANNEL '");
                 f.write_str(&display::escape_single_quote_string(channel));
+                f.write_str("'");
+            }
+            CreateSourceConnector::Loki { address, query } => {
+                f.write_str("LOKI ADDRESS '");
+                f.write_str(&display::escape_single_quote_string(address));
+                f.write_str("' QUERY '");
+                f.write_str(&display::escape_single_quote_string(query));
                 f.write_str("'");
             }
         }
