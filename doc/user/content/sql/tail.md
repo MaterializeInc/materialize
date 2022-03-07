@@ -1,54 +1,51 @@
 ---
 title: "TAIL"
-description: "`TAIL` streams updates from a relation as they occur."
+description: "`TAIL` streams updates from an arbitrary `SELECT` statement as they occur."
 menu:
-  main:
-    parent: "sql"
+    main:
+        parent: "sql"
 ---
 
-`TAIL` streams updates from a source, table, or view as they occur.
+`TAIL` queries and streams updates as they occur from a source, table, view, or an arbitrary `SELECT` statement.
 
 ## Conceptual framework
 
-The `TAIL` statement is a more general form of a [`SELECT`](/sql/select)
-statement. While a `SELECT` statement computes a relation at a moment in time, a
-tail operation computes how a relation *changes* over time.
+While a `SELECT` computes rows at a given time, a
+`TAIL` can compute the same rows and stream their _updates_ over time.
 
-Fundamentally, `TAIL` produces a sequence of updates. An update describes either
-the insertion or deletion of a row to the relation at a specific time. Taken
-together, the updates describes the complete set of changes to a relation, in
-order, while the `TAIL` is active.
+Fundamentally, `TAIL` produces a sequence of updates as rows. Each row describes either
+the insertion or deletion of a row at a specific time. Update rows, taken together, describe the complete set of changes in order since the TAIL is active.
 
-Clients can use `TAIL` to:
+You can use `TAIL` to:
 
-  - Power event processors that react to every change to a relation.
-  - Replicate the complete history of a relation while the `TAIL` is active.
+-   Power event processors that react to every change to a relation or an arbitrary `SELECT` statement.
+-   Replicate the complete history of a relation while the `TAIL` is active.
 
 ## Syntax
 
 {{< diagram "tail-stmt.svg" >}}
 
-Field | Use
-------|-----
-_object&lowbar;name_ | The name of the source, table, or view that you want to tail.
-_select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to tail.
-_timestamp&lowbar;expression_ | The logical time at which the `TAIL` begins as a [`bigint`] representing milliseconds since the Unix epoch. See [`AS OF`](#as-of) below.
+| Field                  | Use                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| _object_name_          | The name of the source, table, or view that you want to tail.                                                                            |
+| _select_stmt_          | The [`SELECT` statement](../select) whose output you want to tail.                                                                       |
+| _timestamp_expression_ | The logical time at which the `TAIL` begins as a [`bigint`] representing milliseconds since the Unix epoch. See [`AS OF`](#as-of) below. |
 
 ### `WITH` options
 
 The following options are valid within the `WITH` clause.
 
-Option name | Value type | Default | Describes
-------------|------------|---------|----------
-`SNAPSHOT`  | `boolean`     | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below.
-`PROGRESS`  | `boolean`     | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.
+| Option name | Value type | Default | Describes                                                                                                                         |
+| ----------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below. |
+| `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.                                              |
 
 ## Details
 
 ### Output
 
-`TAIL` emits a sequence of updates. Each row contains all of the columns of
-the tailed relation, prepended with several additional columns that describe
+`TAIL` emits a sequence of updates as rows. Each row contains all of the columns of
+the tailed relation or derived from the `SELECT` statement, prepended with several additional columns that describe
 the nature of the update:
 
 <table>
@@ -111,23 +108,9 @@ the nature of the update:
 </tbody>
 </table>
 
-`TAIL` will continue to run until canceled, or until all updates the tailed
-item could undergo have been presented. The latter case typically occurs when
-tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
-[file sources](/sql/create-source/text-file) that were created in non-tailing
-mode (`tail = false`).
-
-{{< warning >}}
-
-Many PostgreSQL drivers wait for a query to complete before returning its
-results. Since `TAIL` can run forever, naively executing a `TAIL` using your
-driver's standard query API may never return.
-
-Either use an API in your driver that does not buffer rows or use the
-[`FETCH`](/sql/fetch) statement to fetch rows from a `TAIL` in batches.
-See the [examples](#examples) for details.
-
-{{< /warning >}}
+{{< version-changed v0.20.0 >}}
+Support arbitrary SELECT statements in `TAIL`.
+{{</ version-changed >}}
 
 {{< version-changed v0.8.1 >}}
 Columns names added by `TAIL` now prepended by `mz_`.
@@ -158,6 +141,14 @@ Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
 The [`PROGRESS`](#progress) option has been added.
 {{</ version-changed >}}
 
+### Life of a tail
+
+`TAIL` will continue to run until canceled, session ends, or until all updates the tailed
+item could undergo have been presented. The latter case typically occurs when
+tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
+[file sources](/sql/create-source/text-file) that were created in non-tailing
+mode (`tail = false`).
+
 ### `AS OF`
 
 The `AS OF` clause specifies the time at which a `TAIL` operation begins.
@@ -166,9 +157,9 @@ See [`SNAPSHOT`](#snapshot) below for details on what this means.
 If you don't specify `AS OF` explicitly, Materialize will pick a timestamp
 automatically:
 
-  - If the tailed relation is [materialized](/overview/api-components/#indexes),
+-   If the tailed relation is [materialized](/overview/api-components/#indexes),
     Materialize picks the latest time for which results are computed.
-  - If the tailed relation is not materialized, Materialize picks time `0`.
+-   If the tailed relation is not materialized, Materialize picks time `0`.
 
 A given timestamp will be rejected if data it would report has already been
 compacted by Materialize. See the
@@ -186,8 +177,7 @@ For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to 
 `AS OF` timestamp. For example, `TAIL ... AS OF 21` would present an insert that
 occured at time 15 as if it occurred at time 21.
 
-To see only updates after the `AS OF` timestamp, specify `WITH (SNAPSHOT =
-false)`.
+To see only updates after the `AS OF` timestamp, specify `WITH (SNAPSHOT = false)`.
 
 ### `PROGRESS`
 
@@ -237,7 +227,7 @@ This allows you to limit the number of rows and the time window of your requests
 ```sql
 BEGIN;
 DECLARE c CURSOR FOR TAIL t;
-````
+```
 
 Now use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it is ready:
 
@@ -265,6 +255,24 @@ A `0s` timeout can be used to return rows that are available now without waiting
 FETCH ALL c WITH (timeout='0s');
 ```
 
+### Using clients
+
+{{< tabs tabID="Clients" >}}
+{{< tab "Shell">}}
+
+If you want to use `TAIL` from an interactive SQL session (for example in `psql`), wrap the query in `COPY`.
+
+```sql
+COPY (TAIL (SELECT * FROM mz_catalog.mz_tables)) TO STDOUT;
+```
+
+[`bigint`]: /sql/types/bigint
+[`numeric`]: /sql/types/numeric
+
+{{< /tab >}}
+
+{{< tab "Python">}}
+
 #### `FETCH` with Python and psycopg2
 
 ```python
@@ -284,7 +292,7 @@ with conn.cursor() as cur:
             print(row)
 ```
 
-#### Streaming with Python and psycopg3
+#### `Streaming` with Python and psycopg3
 
 {{< warning >}}
 psycopg3 is not yet stable.
@@ -309,6 +317,9 @@ with conn.cursor() as cur:
         print(row)
 ```
 
+{{< /tab >}}
+{{< tab "C#">}}
+
 #### `FETCH` with C# and Npgsql
 
 ```csharp
@@ -328,33 +339,123 @@ while (true)
 }
 ```
 
+{{< /tab >}}
+{{< tab "Node.js">}}
+
 #### `FETCH` with Node.js and pg
 
 ```js
-import pg from 'pg';
+import pg from "pg";
 
 async function main() {
-  const client = new pg.Client('postgres://materialize@localhost:6875/materialize');
-  await client.connect();
+    const client = new pg.Client(
+        "postgres://materialize@localhost:6875/materialize"
+    );
+    await client.connect();
 
-  await client.query('BEGIN');
-  await client.query('DECLARE c CURSOR FOR TAIL t');
-  while (true) {
-    const res = await client.query('FETCH ALL c');
-    console.log(res.rows);
-  }
+    await client.query("BEGIN");
+    await client.query("DECLARE c CURSOR FOR TAIL t");
+    while (true) {
+        const res = await client.query("FETCH ALL c");
+        console.log(res.rows);
+    }
 }
 
 main();
 ```
 
-### Interactive `TAIL`
+{{< /tab >}}
 
-If you want to use `TAIL` from an interactive SQL session (for example in `psql`), wrap the query in `COPY`.
+{{< tab "PHP">}}
 
-```sql
-COPY (TAIL t) TO STDOUT
+#### `FETCH` with PHP
+
+```php
+ <?php
+ // Include the Postgres connection details
+ require 'connect.php';
+ // Begin a transaction
+ $connection->beginTransaction();
+ // Declare a cursor
+ $statement = $connection->prepare('DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_catalog.mz_tables)');
+ // Execute the statement
+ $statement->execute();
+ /* Fetch all of the remaining rows in the result set */
+ while (true) {
+     $tail = $connection->prepare('FETCH ALL c');
+     $tail->execute();
+     $result = $tail->fetchAll(PDO::FETCH_ASSOC);
+     print_r($result);
+ }
 ```
 
-[`bigint`]: /sql/types/bigint
-[`numeric`]: /sql/types/numeric
+{{< /tab >}}
+
+{{< tab "Java">}}
+
+#### `FETCH` with Java
+
+```java
+  import java.sql.*;
+
+  /* ... */
+
+  String url = "jdbc:postgresql://localhost:6875/materialize";
+  Connection conn = DriverManager.getConnection(url, "materialize", "materialize");
+  Statement stmt = conn.createStatement();
+
+  conn.setAutoCommit(false);
+
+  stmt.executeUpdate("DECLARE c CURSOR FOR TAIL (SELECT * FROM antennas_performance);");
+
+  while (true) {
+      ResultSet fetchResultSet = stmt.executeQuery("FETCH 100 c WITH (timeout='1s');");
+
+      while (fetchResultSet.next()) {
+          System.out.println(fetchResultSet.getString(3));
+      }
+  }
+```
+
+{{< /tab >}}
+{{< /tabs >}}
+
+{{< warning >}}
+
+Many PostgreSQL drivers wait for a query to complete before returning its
+results. Since `TAIL` can run forever, naively executing a `TAIL` using your
+driver's standard query API may never return.
+
+Either use an API in your driver that does not buffer rows or use the
+[`FETCH`](/sql/fetch) statement to fetch rows from a `TAIL` in batches.
+See the [examples](#examples) for details.
+
+{{< /warning >}}
+
+### Using `AS OF`
+
+Begin creating a view:
+
+```sql
+CREATE VIEW most_tired_worker AS
+  SELECT worker, max(elapsed_ns)
+  FROM mz_catalog.mz_scheduling_elapsed
+  WHERE worker = 0
+  GROUP BY worker;
+```
+
+Set the compaction in the index creation:
+
+```sql
+CREATE INDEX most_tired_worker_idx
+  ON most_tired_worker (worker, max)
+  WITH (logical_compaction_window = '10 seconds');
+```
+
+Stream out changes from ten seconds before the statement is executed:
+
+```sql
+COPY (TAIL most_tired_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
+```
+
+Take into account, for this example, that ten logical seconds need to pass by inside Materialize to recover changes from the last ten seconds.

@@ -2,10 +2,10 @@
 title: "Troubleshooting"
 description: "Troubleshoot performance issues."
 menu:
-  main:
-    parent: operations
+    main:
+        parent: operations
 aliases:
-  - /ops/diagnosing-using-sql
+    - /ops/diagnosing-using-sql
 ---
 
 You can use the queries below for spot debugging, but it may also be
@@ -29,6 +29,7 @@ This logging source indicates the upper frontier of materializations.
 
 This source provides timestamp-based progress, which reveals not the
 volume of data, but how closely the contents track source timestamps.
+
 ```sql
 -- For each materialization, the next timestamp to be added.
 select * from mz_materialization_frontiers;
@@ -142,9 +143,9 @@ Work is distributed across workers by the hash of their keys. Thus, work can
 become skewed if situations arise where Materialize needs to use arrangements
 with very few or no keys. Example situations include:
 
-* Views that maintain order by/limit/offset
-* Cross joins
-* Joins where the join columns have very few unique values
+-   Views that maintain order by/limit/offset
+-   Cross joins
+-   Joins where the join columns have very few unique values
 
 Additionally, the operators that implement data sources may demonstrate skew, as
 they (currently) have a granularity determined by the source itself. For
@@ -191,9 +192,11 @@ value `x` at position `n`, then it is part of the `x` subregion of the region
 defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
+
 ```sql
 select * from mz_dataflow_operator_addresses where id=515 and worker=0;
 ```
+
 ```
  id  | worker | address
 -----+--------+----------
@@ -243,7 +246,8 @@ To see how much disk space a Materialize installation is using, open a terminal 
 ```nofmt
 $ du -h -d 1 /path/to/materialize/mzdata
 ```
-`materialize` is the directory for the Materialize installation, and  `materialize/mzdata` is the directory where Materialize stores its [log file](../monitoring/#logging) and the [system catalog](/sql/system-catalog).
+
+`materialize` is the directory for the Materialize installation, and `materialize/mzdata` is the directory where Materialize stores its [log file](../monitoring/#logging) and the [system catalog](/sql/system-catalog).
 
 The response lists the disk space for the data directory and any subdirectories:
 
@@ -253,3 +257,18 @@ The response lists the disk space for the data directory and any subdirectories:
 ```
 
 The `mzdata` directory is typically less than 10MB in size.
+
+### How many tails are running?
+
+You can count the number of tails running in Materialize with a query or another tail.
+Every time a tail is invoked, a dataflow is created, and each uses the same name prefix.
+
+```sql
+-- Report the number of tails running
+SELECT count(1) FROM (
+    SELECT id
+    FROM mz_dataflow_names
+    WHERE substring(name, 0, 15) = 'Dataflow: tail'
+    GROUP BY id
+);
+```
