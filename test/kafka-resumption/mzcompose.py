@@ -45,9 +45,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, failure_mode in enumerate(
         [
             "toxiproxy-close-connection.td",
+            "toxiproxy-limit-connection.td",
             "toxiproxy-timeout.td",
+            # TODO: Enable https://github.com/MaterializeInc/materialize/issues/11085
+            # "toxiproxy-timeout-hold.td",
         ]
     ):
+        c.start_and_wait_for_tcp(["toxiproxy"])
         c.run(
             "testdrive-svc",
             "--no-reset",
@@ -62,3 +66,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "verify-success.td",
             "cleanup.td",
         )
+        c.kill("toxiproxy")
