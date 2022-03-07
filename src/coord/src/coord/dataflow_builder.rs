@@ -69,31 +69,6 @@ impl Coordinator {
             compute,
         }
     }
-
-    /// Prepares the arguments to an index build dataflow, by interrogating the catalog.
-    ///
-    /// Returns `None` if the index entry in the catalog in not enabled.
-    pub fn prepare_index_build(
-        catalog: &CatalogState,
-        index_id: &GlobalId,
-    ) -> Option<(String, IndexDesc)> {
-        let index_entry = catalog.get_by_id(&index_id);
-        let index = match index_entry.item() {
-            CatalogItem::Index(index) => index,
-            _ => unreachable!("cannot create index dataflow on non-index"),
-        };
-        if !index.enabled {
-            None
-        } else {
-            Some((
-                index_entry.name().to_string(),
-                mz_dataflow_types::IndexDesc {
-                    on_id: index.on,
-                    key: index.keys.clone(),
-                },
-            ))
-        }
-    }
 }
 
 impl<'a> DataflowBuilder<'a> {
@@ -112,6 +87,9 @@ impl<'a> DataflowBuilder<'a> {
 
             // A valid index is any index on `id` that is known to the dataflow
             // layer, as indicated by its presence in `self.compute`.
+            //
+            // TODO: indexes should be imported after the optimization process,
+            // and only those actually used by the optimized plan
             let valid_index = self.catalog.enabled_indexes()[id]
                 .iter()
                 .find(|(id, _keys)| self.compute.collection(*id).is_ok());
@@ -181,54 +159,56 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Imports the view with the specified ID and expression into the provided
     /// dataflow description.
+    ///
+    /// You should generally prefer calling
+    /// [`DataflowBuilder::import_into_dataflow`], which can handle objects of
+    /// any type as long as they exist in the catalog. This method exists for
+    /// when the view does not exist in the catalog, e.g., because it is
+    /// identified by a [`GlobalId::Transient`].
     pub fn import_view_into_dataflow(
         &mut self,
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
     ) -> Result<(), CoordError> {
-        // TODO: We only need to import Get arguments for which we cannot find arrangements.
         for get_id in view.depends_on() {
             self.import_into_dataflow(&get_id, dataflow)?;
-
-            // TODO: indexes should be imported after the optimization process, and only those
-            // actually used by the optimized plan
-            if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
-                for (id, keys) in indexes.iter() {
-                    // Ensure only valid indexes (i.e. those in self.compute) are imported.
-                    // TODO(#8318): Ensure this logic is accounted for.
-                    if self.compute.collection(*id).is_err() {
-                        continue;
-                    }
-                    let on_entry = self.catalog.get_by_id(&get_id);
-                    let on_type = on_entry.desc().unwrap().typ().clone();
-                    let index_desc = IndexDesc {
-                        on_id: get_id,
-                        key: keys.clone(),
-                    };
-                    dataflow.import_index(*id, index_desc, on_type);
-                }
-            }
         }
         dataflow.insert_plan(*view_id, view.clone());
-
         Ok(())
     }
 
     /// Builds a dataflow description for the index with the specified ID.
+    ///
+    /// Returns `None` if the index is not enabled.
+    ///
+    /// TODO(benesch): The `DataflowBuilder` shouldn't be in charge of checking
+    /// whether the index is enabled, but it will be easier to clean that up
+    /// when the concept of a "cluster" has been plumbed a bit further.
     pub fn build_index_dataflow(
         &mut self,
-        name: String,
         id: GlobalId,
-        mut index_description: IndexDesc,
-    ) -> Result<DataflowDesc, CoordError> {
-        let on_entry = self.catalog.get_by_id(&index_description.on_id);
+    ) -> Result<Option<DataflowDesc>, CoordError> {
+        let index_entry = self.catalog.get_by_id(&id);
+        let index = match index_entry.item() {
+            CatalogItem::Index(index) => index,
+            _ => unreachable!("cannot create index dataflow on non-index"),
+        };
+        if !index.enabled {
+            return Ok(None);
+        }
+        let on_entry = self.catalog.get_by_id(&index.on);
         let on_type = on_entry.desc().unwrap().typ().clone();
+        let name = index_entry.name().to_string();
         let mut dataflow = DataflowDesc::new(name, id);
-        self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
+        self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
+        let mut index_description = mz_dataflow_types::IndexDesc {
+            on_id: index.on,
+            key: index.keys.clone(),
+        };
         for key in &mut index_description.key {
             self.prep_scalar_expr(key, ExprPrepStyle::Index)?;
         }
@@ -237,7 +217,7 @@ impl<'a> DataflowBuilder<'a> {
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
 
-        Ok(dataflow)
+        Ok(Some(dataflow))
     }
 
     /// Builds a dataflow description for the sink with the specified name,

@@ -536,13 +536,10 @@ impl Coordinator {
                         )
                         .await;
                     } else {
-                        let index_id = entry.id();
-                        if let Some((name, description)) =
-                            Self::prepare_index_build(self.catalog.state(), &index_id)
-                        {
-                            let df = self
-                                .dataflow_builder(compute_instance)
-                                .build_index_dataflow(name, index_id, description)?;
+                        let df = self
+                            .dataflow_builder(compute_instance)
+                            .build_index_dataflow(entry.id())?;
+                        if let Some(df) = df {
                             self.ship_dataflow(df, compute_instance).await;
                         }
                     }
@@ -1990,12 +1987,8 @@ impl Coordinator {
                 for (source_id, idx_id) in metadata {
                     source_ids.push(source_id);
                     if let Some(index_id) = idx_id {
-                        if let Some((name, description)) =
-                            Self::prepare_index_build(builder.catalog, &index_id)
-                        {
-                            let df = builder.build_index_dataflow(name, index_id, description)?;
-                            dfs.push(df);
-                        }
+                        let df = builder.build_index_dataflow(index_id)?;
+                        dfs.extend(df);
                     }
                 }
                 Ok((dfs, source_ids))
@@ -2347,12 +2340,8 @@ impl Coordinator {
         match self
             .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
                 if let Some(index_id) = index_id {
-                    if let Some((name, description)) =
-                        Self::prepare_index_build(&builder.catalog, &index_id)
-                    {
-                        let df = builder.build_index_dataflow(name, index_id, description)?;
-                        return Ok(Some(df));
-                    }
+                    let df = builder.build_index_dataflow(index_id)?;
+                    return Ok(df);
                 }
                 Ok(None)
             })
@@ -2394,12 +2383,8 @@ impl Coordinator {
             .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
                 let mut dfs = vec![];
                 for index_id in index_ids {
-                    if let Some((name, description)) =
-                        Self::prepare_index_build(builder.catalog, &index_id)
-                    {
-                        let df = builder.build_index_dataflow(name, index_id, description)?;
-                        dfs.push(df);
-                    }
+                    let df = builder.build_index_dataflow(index_id)?;
+                    dfs.extend(df);
                 }
                 Ok(dfs)
             })
@@ -2445,12 +2430,8 @@ impl Coordinator {
         let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
         match self
             .catalog_transact_dataflow(compute_instance, vec![op], |mut builder| {
-                if let Some((name, description)) = Self::prepare_index_build(builder.catalog, &id) {
-                    let df = builder.build_index_dataflow(name, id, description)?;
-                    Ok(Some(df))
-                } else {
-                    Ok(None)
-                }
+                let df = builder.build_index_dataflow(id)?;
+                Ok(df)
             })
             .await
         {
@@ -3944,9 +3925,9 @@ impl Coordinator {
             let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
             let df = self
                 .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
-                    let (name, description) = Self::prepare_index_build(builder.catalog, &plan.id)
+                    let df = builder
+                        .build_index_dataflow(plan.id)?
                         .expect("index enabled");
-                    let df = builder.build_index_dataflow(name, plan.id, description)?;
                     Ok(df)
                 })
                 .await?;
