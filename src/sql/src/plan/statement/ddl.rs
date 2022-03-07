@@ -1466,9 +1466,8 @@ pub fn plan_create_views(
                                         .collect::<Vec<String>>()
                                         .join(", ")
                                 ));
-                            } else {
-                                targets.clone().unwrap()
                             }
+                            targets.unwrap()
                         } else {
                             details
                                 .tables
