@@ -58,7 +58,6 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, FIRST_SYSTEM_INDEX_ID, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session};
 use crate::CoordError;
@@ -156,60 +155,6 @@ impl CatalogState {
 
     pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
         &self.enabled_indexes
-    }
-
-    /// Finds the nearest indexes that can satisfy the views or sources whose
-    /// identifiers are listed in `ids`.
-    ///
-    /// Returns the identifiers of all discovered indexes, and the identifiers of
-    /// the discovered unmaterialized sources required to satisfy ids. The returned list
-    /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
-    pub fn nearest_indexes<'a, I>(&self, ids: I) -> CollectionIdBundle
-    where
-        I: IntoIterator<Item = &'a GlobalId>,
-    {
-        fn has_indexes(catalog: &CatalogState, id: GlobalId) -> bool {
-            matches!(
-                catalog.get_by_id(&id).item(),
-                CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_)
-            )
-        }
-
-        fn inner(catalog: &CatalogState, id: GlobalId, id_bundle: &mut CollectionIdBundle) {
-            if !has_indexes(catalog, id) {
-                return;
-            }
-
-            // Include all indexes on an id so the dataflow builder can safely use any
-            // of them.
-            if !catalog.enabled_indexes[&id].is_empty() {
-                id_bundle
-                    .compute_ids
-                    .extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
-                return;
-            }
-
-            match catalog.get_by_id(&id).item() {
-                view @ CatalogItem::View(_) => {
-                    // Unmaterialized view. Recursively search its dependencies.
-                    for id in view.uses() {
-                        inner(catalog, *id, id_bundle)
-                    }
-                }
-                CatalogItem::Source(_) | CatalogItem::Table(_) => {
-                    // Unmaterialized source or table. Record that we are
-                    // missing at least one index.
-                    id_bundle.storage_ids.insert(id);
-                }
-                _ => unreachable!(),
-            }
-        }
-
-        let mut id_bundle = CollectionIdBundle::default();
-        for id in ids {
-            inner(self, *id, &mut id_bundle)
-        }
-        id_bundle
     }
 
     /// Computes the IDs of any indexes that transitively depend on this catalog
@@ -2254,13 +2199,6 @@ impl Catalog {
         // The default index is the index with the smallest ID, i.e. the one
         // created in closest temporal proximity to the object itself.
         self.get_indexes_on(id).iter().min().cloned()
-    }
-
-    pub fn nearest_indexes<'a, I>(&self, ids: I) -> CollectionIdBundle
-    where
-        I: IntoIterator<Item = &'a GlobalId>,
-    {
-        self.state.nearest_indexes(ids)
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {

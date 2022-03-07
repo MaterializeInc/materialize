@@ -67,6 +67,83 @@ impl Coordinator {
             compute,
         }
     }
+
+    /// Identifies a bundle of storage and compute collection ids sufficient for building
+    /// a dataflow for the identifiers in `ids`, optionally on compute instance `instance`.
+    pub fn sufficient_collections_global<'b, I>(&self, ids: I) -> crate::coord::CollectionIdBundle
+    where
+        I: IntoIterator<Item = &'b GlobalId>,
+    {
+        Self::sufficient_collections_inner(&self.catalog.state(), |_id| true, ids)
+    }
+
+    /// Identifies a bundle of storage and compute collection ids sufficient for building
+    /// a dataflow for the identifiers in `ids`, optionally on compute instance `instance`.
+    pub fn sufficient_collections_instanced<'b, I>(
+        &mut self,
+        instance: mz_dataflow_types::client::ComputeInstanceId,
+        ids: I,
+    ) -> crate::coord::CollectionIdBundle
+    where
+        I: IntoIterator<Item = &'b GlobalId>,
+    {
+        let compute = self.dataflow_client.compute(instance).unwrap();
+        Self::sufficient_collections_inner(
+            &self.catalog.state(),
+            |id| compute.collection(*id).is_ok(),
+            ids,
+        )
+    }
+
+    /// Identifies a bundle of storage and compute collection ids sufficient for building
+    /// a dataflow for the identifiers in `ids`, optionally on compute instance `instance`.
+    pub fn sufficient_collections_inner<'b, I, P>(
+        catalog: &CatalogState,
+        predicate: P,
+        ids: I,
+    ) -> crate::coord::CollectionIdBundle
+    where
+        I: IntoIterator<Item = &'b GlobalId>,
+        P: Fn(&GlobalId) -> bool,
+    {
+        let mut id_bundle = crate::coord::CollectionIdBundle::default();
+        let mut todo: std::collections::BTreeSet<GlobalId> = ids.into_iter().cloned().collect();
+
+        // Iteratively extract the largest element, potentially introducing lesser elements.
+        while let Some(id) = todo.iter().rev().next().cloned() {
+            // Extract available indexes as those that are enabled, and installed on the cluster.
+            let available_indexes = catalog
+                .enabled_indexes()
+                .get(&id)
+                .unwrap_or(&Vec::new())
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|id| predicate(id))
+                .collect::<Vec<_>>();
+
+            if !available_indexes.is_empty() {
+                id_bundle.compute_ids.extend(available_indexes);
+            } else {
+                match catalog.get_by_id(&id).item() {
+                    // Unmaterialized view. Search its dependencies.
+                    view @ CatalogItem::View(_) => {
+                        todo.extend(view.uses());
+                    }
+                    CatalogItem::Source(_) | CatalogItem::Table(_) => {
+                        // Unmaterialized source or table. Record that we are
+                        // missing at least one index.
+                        id_bundle.storage_ids.insert(id);
+                    }
+                    _ => {
+                        // Non-indexable thing; no work to do.
+                    }
+                }
+            }
+            todo.remove(&id);
+        }
+
+        id_bundle
+    }
 }
 
 impl<'a> DataflowBuilder<'a> {
