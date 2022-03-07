@@ -32,7 +32,7 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
-    PeekWhen, Plan, ReadThenWritePlan, TailFrom, TailPlan,
+    Plan, ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -151,12 +151,7 @@ pub fn plan_select(
     let query::PlannedQuery {
         expr, finishing, ..
     } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
-
-    let when = match as_of.map(|e| query::plan_as_of(scx, e)).transpose()? {
-        Some(ts) => PeekWhen::AtTimestamp(ts),
-        None => PeekWhen::Immediately,
-    };
-
+    let when = query::plan_as_of(scx, as_of)?;
     Ok(Plan::Peek(PeekPlan {
         source: expr,
         when,
@@ -365,11 +360,11 @@ pub fn plan_tail(
         }
     };
 
-    let ts = as_of.map(|e| query::plan_as_of(scx, e)).transpose()?;
+    let when = query::plan_as_of(scx, as_of)?;
     let options = TailOptions::try_from(options)?;
     Ok(Plan::Tail(TailPlan {
         from,
-        ts,
+        when,
         with_snapshot: options.snapshot.unwrap_or(true),
         copy_to,
         emit_progress: options.progress.unwrap_or(false),

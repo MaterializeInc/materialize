@@ -229,7 +229,7 @@ pub struct SetVariablePlan {
 #[derive(Debug)]
 pub struct PeekPlan {
     pub source: MirRelationExpr,
-    pub when: PeekWhen,
+    pub when: QueryWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
 }
@@ -238,7 +238,7 @@ pub struct PeekPlan {
 pub struct TailPlan {
     pub from: TailFrom,
     pub with_snapshot: bool,
-    pub ts: Option<MirScalarExpr>,
+    pub when: QueryWhen,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
 }
@@ -416,9 +416,9 @@ pub struct Type {
     pub depends_on: Vec<GlobalId>,
 }
 
-/// Specifies when a `Peek` should occur.
+/// Specifies when a `Peek` or `Tail` should occur.
 #[derive(Debug, PartialEq)]
-pub enum PeekWhen {
+pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
     Immediately,
