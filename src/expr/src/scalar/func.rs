@@ -2040,34 +2040,16 @@ where
 }
 
 fn date_trunc_interval<'a>(a: Datum, int: Interval) -> Result<Datum<'a>, EvalError> {
-    use mz_repr::adt::datetime::DateTimeField;
+    let mut int2 = int.clone();
     let units = a.unwrap_str();
     units
         .parse()
         .map_err(|_| EvalError::UnknownUnits(units.to_owned()))
-        .and_then(|dtu| match dtu {
-            DateTimeUnits::Millennium => Ok(DateTimeField::Millennium),
-            DateTimeUnits::Century => Ok(DateTimeField::Century),
-            DateTimeUnits::Decade => Ok(DateTimeField::Decade),
-            DateTimeUnits::Year => Ok(DateTimeField::Year),
-            DateTimeUnits::Month => Ok(DateTimeField::Month),
-            DateTimeUnits::Day => Ok(DateTimeField::Day),
-            DateTimeUnits::Hour => Ok(DateTimeField::Hour),
-            DateTimeUnits::Minute => Ok(DateTimeField::Minute),
-            DateTimeUnits::Second => Ok(DateTimeField::Second),
-            DateTimeUnits::Milliseconds => Ok(DateTimeField::Milliseconds),
-            DateTimeUnits::Microseconds => Ok(DateTimeField::Microseconds),
-            other => Err(EvalError::Undefined(format!(
-                "truncate interval by \"{}\"",
-                other
-            ))),
-        })
         .and_then(|dtf| {
-            let mut int2 = int.clone();
+            // truncate_low_fields should never return an error in our case
             int2.truncate_low_fields(dtf, Some(0))
-                // truncate_low_fields should never return an error in our case
-                .map_err(|e| EvalError::Internal(e.to_string()))
-                .map(|_| int2.into())
+                .map_err(|e| EvalError::Internal(e.to_string()))?;
+            Ok(int2.into())
         })
 }
 
@@ -2694,10 +2676,10 @@ impl BinaryFunc {
             | AddTimeInterval
             | SubTimeInterval => input1_type,
 
-            DateTruncInterval => ScalarType::Interval.nullable(true),
-
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
             | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
+
+            DateTruncInterval => ScalarType::Interval.nullable(true),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
                 ScalarType::Timestamp.nullable(in_nullable)

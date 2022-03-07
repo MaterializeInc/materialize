@@ -199,7 +199,7 @@ SELECT date_trunc('days',  INTERVAL '1234 years 11 months 23 days 23:59:12.12345
 ----
 1234 years 11 months 23 days
 
-query error truncate interval by "week" is undefined
+query error unit 'weeks' not recognized
 SELECT date_trunc('weeks',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 
 query T
@@ -221,8 +221,6 @@ query T
 SELECT date_trunc('millennium',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
 1000 years
-
-
 
 mode standard
 
