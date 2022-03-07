@@ -69,31 +69,6 @@ impl Coordinator {
             compute,
         }
     }
-
-    /// Prepares the arguments to an index build dataflow, by interrogating the catalog.
-    ///
-    /// Returns `None` if the index entry in the catalog in not enabled.
-    pub fn prepare_index_build(
-        catalog: &CatalogState,
-        index_id: &GlobalId,
-    ) -> Option<(String, IndexDesc)> {
-        let index_entry = catalog.get_by_id(&index_id);
-        let index = match index_entry.item() {
-            CatalogItem::Index(index) => index,
-            _ => unreachable!("cannot create index dataflow on non-index"),
-        };
-        if !index.enabled {
-            None
-        } else {
-            Some((
-                index_entry.name().to_string(),
-                mz_dataflow_types::IndexDesc {
-                    on_id: index.on,
-                    key: index.keys.clone(),
-                },
-            ))
-        }
-    }
 }
 
 impl<'a> DataflowBuilder<'a> {
@@ -204,19 +179,36 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Builds a dataflow description for the index with the specified ID.
+    ///
+    /// Returns `None` if the index is not enabled.
+    ///
+    /// TODO(benesch): The `DataflowBuilder` shouldn't be in charge of checking
+    /// whether the index is enabled, but it will be easier to clean that up
+    /// when the concept of a "cluster" has been plumbed a bit further.
     pub fn build_index_dataflow(
         &mut self,
-        name: String,
         id: GlobalId,
-        mut index_description: IndexDesc,
-    ) -> Result<DataflowDesc, CoordError> {
-        let on_entry = self.catalog.get_by_id(&index_description.on_id);
+    ) -> Result<Option<DataflowDesc>, CoordError> {
+        let index_entry = self.catalog.get_by_id(&id);
+        let index = match index_entry.item() {
+            CatalogItem::Index(index) => index,
+            _ => unreachable!("cannot create index dataflow on non-index"),
+        };
+        if !index.enabled {
+            return Ok(None);
+        }
+        let on_entry = self.catalog.get_by_id(&index.on);
         let on_type = on_entry.desc().unwrap().typ().clone();
+        let name = index_entry.name().to_string();
         let mut dataflow = DataflowDesc::new(name, id);
-        self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
+        self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
+        let mut index_description = mz_dataflow_types::IndexDesc {
+            on_id: index.on,
+            key: index.keys.clone(),
+        };
         for key in &mut index_description.key {
             self.prep_scalar_expr(key, ExprPrepStyle::Index)?;
         }
@@ -225,7 +217,7 @@ impl<'a> DataflowBuilder<'a> {
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
 
-        Ok(dataflow)
+        Ok(Some(dataflow))
     }
 
     /// Builds a dataflow description for the sink with the specified name,
