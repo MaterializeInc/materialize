@@ -36,7 +36,7 @@
 //! use mz_transform::{Transform, TransformArgs};
 //! Filter.transform(&mut expr, TransformArgs {
 //!   id_gen: &mut Default::default(),
-//!   indexes: &std::collections::HashMap::new(),
+//!   indexes: &mz_transform::EmptyIndexOracle,
 //! });
 //!
 //! let correct = input.filter(vec![predicate0]);

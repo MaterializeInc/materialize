@@ -114,10 +114,8 @@ impl Coordinator {
             // Extract available indexes as those that are enabled, and installed on the cluster.
             let available_indexes = catalog
                 .enabled_indexes()
-                .get(&id)
-                .unwrap_or(&Vec::new())
-                .iter()
-                .map(|(id, _)| *id)
+                .indexes_on(id)
+                .map(|(id, _)| id)
                 .filter(|id| predicate(id))
                 .collect::<Vec<_>>();
 
@@ -165,8 +163,10 @@ impl<'a> DataflowBuilder<'a> {
             //
             // TODO: indexes should be imported after the optimization process,
             // and only those actually used by the optimized plan
-            let valid_index = self.catalog.enabled_indexes()[id]
-                .iter()
+            let valid_index = self
+                .catalog
+                .enabled_indexes()
+                .indexes_on(*id)
                 .find(|(id, _keys)| self.compute.collection(*id).is_ok());
             if let Some((index_id, keys)) = valid_index {
                 let index_desc = IndexDesc {
@@ -178,7 +178,7 @@ impl<'a> DataflowBuilder<'a> {
                     .get_by_id(id)
                     .desc()
                     .expect("indexes can only be built on items with descs");
-                dataflow.import_index(*index_id, index_desc, desc.typ().clone());
+                dataflow.import_index(index_id, index_desc, desc.typ().clone());
             } else {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
