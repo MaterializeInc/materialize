@@ -264,8 +264,13 @@ where
                 (ok_stream.as_collection(), capability)
             } else if let ExternalSourceConnector::Loki(loki_connector) = connector {
                 // TODO(bsull) pass the query here.
-                let source =
-                    LokiSourceReader::new("".to_string(), "".to_string(), loki_connector.address);
+                let source = LokiSourceReader::new(
+                    uid,
+                    "".to_string(),
+                    "".to_string(),
+                    loki_connector.address,
+                    loki_connector.query,
+                );
                 let ((ok_stream, err_stream), capability) =
                     source::create_source_simple(source_config, source);
                 error_collections.push(
