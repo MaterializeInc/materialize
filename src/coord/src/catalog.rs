@@ -51,7 +51,7 @@ use mz_sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
-use mz_transform::Optimizer;
+use mz_transform::{IndexOracle, Optimizer};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
@@ -116,7 +116,7 @@ pub struct CatalogState {
     by_oid: HashMap<u32, GlobalId>,
     /// Contains only enabled indexes from objects in the catalog; does not
     /// contain indexes disabled by e.g. the disable_user_indexes flag.
-    enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    enabled_indexes: EnabledIndexes,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
@@ -153,7 +153,7 @@ impl CatalogState {
         }
     }
 
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+    pub fn enabled_indexes(&self) -> &EnabledIndexes {
         &self.enabled_indexes
     }
 
@@ -234,12 +234,13 @@ impl CatalogState {
     pub fn populate_enabled_indexes(&mut self, id: GlobalId, item: &CatalogItem) {
         match item {
             CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.enabled_indexes.entry(id).or_insert_with(Vec::new);
+                self.enabled_indexes.0.entry(id).or_insert_with(Vec::new);
             }
             CatalogItem::Index(index) => {
                 if index.enabled {
                     let idxs = self
                         .enabled_indexes
+                        .0
                         .get_mut(&index.on)
                         .expect("object known to exist");
 
@@ -338,6 +339,35 @@ impl CatalogState {
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
+    }
+}
+
+/// Maintains the set of currently-enabled indexes.
+///
+/// TODO: hoist this out of the catalog and derive it on the fly based on the
+/// set of indexes installed on each cluster.
+#[derive(Debug, Clone)]
+pub struct EnabledIndexes(HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>);
+
+impl EnabledIndexes {
+    /// Returns an iterator over the indexes built on the identified collection.
+    ///
+    /// Indexes are described by the ID of the index itself and the scalar
+    /// expressions that form the key of the index.
+    // TODO(benesch): this slight variant on `IndexOracle::indexes_on` will
+    // vanish shortly, when this type is hoisted out of the catalog.
+    pub fn indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &[MirScalarExpr])> {
+        self.0
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .map(|(id, key)| (*id, key.as_slice()))
+    }
+}
+
+impl IndexOracle for EnabledIndexes {
+    fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
+        Box::new(EnabledIndexes::indexes_on(self, id).map(|(_id, key)| key))
     }
 }
 
@@ -741,7 +771,7 @@ impl Catalog {
                 by_name: BTreeMap::new(),
                 by_id: BTreeMap::new(),
                 by_oid: HashMap::new(),
-                enabled_indexes: HashMap::new(),
+                enabled_indexes: EnabledIndexes(HashMap::new()),
                 ambient_schemas: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
                 roles: HashMap::new(),
@@ -1945,6 +1975,7 @@ impl Catalog {
                     if let CatalogItem::Index(index) = &metadata.item {
                         let indexes = state
                             .enabled_indexes
+                            .0
                             .get_mut(&index.on)
                             .expect("catalog out of sync");
                         let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
@@ -1956,7 +1987,7 @@ impl Catalog {
                             None => panic!("catalog out of sync"),
                         };
                     }
-                    state.enabled_indexes.remove(&id);
+                    state.enabled_indexes.0.remove(&id);
                 }
 
                 Action::UpdateItem {
@@ -2162,7 +2193,7 @@ impl Catalog {
     ///
     /// Note that when `self.config.disable_user_indexes` is `true`, this does
     /// not include any user indexes.
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+    pub fn enabled_indexes(&self) -> &EnabledIndexes {
         &self.state.enabled_indexes
     }
 

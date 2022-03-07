@@ -15,11 +15,11 @@
 //! in which the views will be executed.
 
 use mz_dataflow_types::{DataflowDesc, LinearOperator};
-use mz_expr::{CollectionPlan, GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use mz_expr::{CollectionPlan, GlobalId, Id, LocalId, MirRelationExpr};
 use mz_ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::{monotonic::MonotonicFlag, Optimizer, TransformError};
+use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -28,7 +28,7 @@ use crate::{monotonic::MonotonicFlag, Optimizer, TransformError};
 /// information to dataflow sources and lifts monotonicity information.
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
-    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
@@ -161,7 +161,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 /// dataflow using the supplied set of indexes.
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
-    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    indexes: &dyn IndexOracle,
     optimizer: &Optimizer,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow
@@ -172,7 +172,7 @@ fn optimize_dataflow_relations(
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
-        optimizer.transform(object.plan.as_inner_mut(), &indexes)?;
+        optimizer.transform(object.plan.as_inner_mut(), indexes)?;
     }
 
     Ok(())
