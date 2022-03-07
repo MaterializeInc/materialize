@@ -148,6 +148,7 @@ SELECT ('{hello=>{\{\}=>\"\"}}'::map[text=>map[text=>text]])::text
 # Test map operators.
 
 ## ?
+
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ? 'a'
 ----
@@ -181,6 +182,9 @@ SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 
 ----
 true
 
+query error unable to determine which implementation to use
+SELECT NULL ? 'a'
+
 ## ?&
 query error malformed array literal: missing opening left brace
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
@@ -190,6 +194,9 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[1]
 
 query error cannot determine type of empty array
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[]
+
+query error could not determine polymorphic type because input has type unknown
+SELECT NULL ?& 'a'
 
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[NULL]
@@ -250,6 +257,9 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
 
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY[1]
+
+query error could not determine polymorphic type because input has type unknown
+SELECT NULL ?| 'a'
 
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY[NULL]
@@ -453,6 +463,12 @@ query T
 SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'hello'::text -> 'world'::text
 ----
 nested
+
+query error unable to determine which implementation to use
+SELECT NULL -> 'hello'::text
+
+query error could not determine polymorphic type because input has type unknown
+SELECT NULL -> '{a}'::text[]
 
 # 🔬 CREATE TYPE .. AS MAP
 

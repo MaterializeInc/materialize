@@ -467,6 +467,14 @@ lazy_static! {
                 if from_type.unwrap_record_element_type().len() != to_type.unwrap_record_element_type().len() {
                     return None;
                 }
+
+                if let (l @ ScalarType::Record {custom_oid: Some(..), ..}, r) = (from_type, to_type) {
+                    // Changing `from`'s custom_oid requires at least Assignment context
+                    if ccx == CastContext::Implicit && l != r {
+                        return None;
+                    }
+                }
+
                 let cast_exprs = from_type.unwrap_record_element_type()
                     .iter()
                     .zip_eq(to_type.unwrap_record_element_type())

@@ -15,9 +15,21 @@
 //! plan_* functions which correspond to operations on scalars typically return a `HirScalarExpr` and a `ScalarType`. (The latter is because it's not always possible to infer from a `HirScalarExpr` what the intended type is - notably in the case of decimals where the scale/precision are encoded only in the type).
 
 //! Aggregates are particularly twisty.
-//! In SQL, a GROUP BY turns any columns not in the group key into vectors of values. Then anywhere later in the scope, an aggregate function can be applied to that group. Inside the arguments of an aggregate function, other normal functions are applied element-wise over the vectors. Thus `SELECT sum(foo.x + foo.y) FROM foo GROUP BY x` means adding the scalar `x` to the vector `y` and summing the results.
-//! In `HirRelationExpr`, aggregates can only be applied immediately at the time of grouping.
-//! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `HirRelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
+//!
+//! In SQL, a GROUP BY turns any columns not in the group key into vectors of
+//! values. Then anywhere later in the scope, an aggregate function can be
+//! applied to that group. Inside the arguments of an aggregate function, other
+//! normal functions are applied element-wise over the vectors. Thus `SELECT
+//! sum(foo.x + foo.y) FROM foo GROUP BY x` means adding the scalar `x` to the
+//! vector `y` and summing the results.
+//!
+//! In `HirRelationExpr`, aggregates can only be applied immediately at the time
+//! of grouping.
+//!
+//! To deal with this, whenever we see a SQL GROUP BY we look ahead for
+//! aggregates and precompute them in the `HirRelationExpr::Reduce`. When we
+//! reach the same aggregates during normal planning later on, we look them up
+//! in an `ExprContext` to find the precomputed versions.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
