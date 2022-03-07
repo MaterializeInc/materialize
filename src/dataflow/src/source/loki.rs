@@ -11,7 +11,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::warn;
 
 use mz_dataflow_types::SourceErrorDetails;
-use mz_expr::SourceInstanceId;
+use mz_expr::{GlobalId, SourceInstanceId};
 use mz_repr::{Datum, Row};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
@@ -64,11 +64,14 @@ impl LokiSourceReader {
             .await
     }
 
-    fn new_stream(self) -> impl stream::Stream<Item = Result<QueryResult, reqwest::Error>> {
-        let polls = IntervalStream::new(tokio::time::interval(self.batch_window));
+    fn new_stream(
+        query: String,
+        batch_window: Duration,
+        conn_info: ConnectionInfo,
+    ) -> impl stream::Stream<Item = Result<QueryResult, reqwest::Error>> {
+        let polls = IntervalStream::new(tokio::time::interval(batch_window));
 
-        let batch_window = self.batch_window;
-        let conn_info = self.conn_info.clone();
+        let conn_info = conn_info;
         polls.then(move |_tick| {
             let start = SystemTime::now() - batch_window;
             let end = SystemTime::now();
@@ -77,7 +80,7 @@ impl LokiSourceReader {
                 conn_info.clone(),
                 start.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
                 end.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-                self.query.clone(),
+                query.clone(),
             )
             .and_then(|resp| resp.json::<QueryResult>())
         })
@@ -87,10 +90,8 @@ impl LokiSourceReader {
 #[async_trait]
 impl SimpleSource for LokiSourceReader {
     async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
-        let stream = self.new_stream();
+        let stream = Self::new_stream(self.query, self.batch_window, self.conn_info);
         tokio::pin!(stream);
-
-        let source_id = self.source_id;
 
         while let Some(entry) = stream.next().await {
             match entry {
@@ -106,7 +107,7 @@ impl SimpleSource for LokiSourceReader {
                         let row = Row::pack_slice(&[Datum::String(&line)]);
 
                         timestamper.insert(row).await.map_err(|e| SourceError {
-                            source_id: source_id,
+                            source_id: self.source_id.clone(),
                             error: SourceErrorDetails::FileIO(e.to_string()),
                         })?;
                     }
@@ -154,8 +155,13 @@ mod test {
         let user = "5442";
         let pw = "";
         let endpoint = "https://logs-prod-us-central1.grafana.net";
+        let uid = SourceInstanceId {
+            source_id: GlobalId::Explain,
+            dataflow_id: 1,
+        };
 
         let loki = LokiSourceReader::new(
+            uid,
             user.to_string(),
             pw.to_string(),
             endpoint.to_string(),
