@@ -51,7 +51,7 @@ ENVELOPE ...
 ```
 
 This will add a new column to the row from the kafka source that is of type
-`list[Record { name: text, values: bytea}]` with the name `headers`, with
+`list[Record { key: text, values: bytea}]` with the name `headers`, with
 the column name being overrideable
 
 ## Implementation notes
@@ -81,7 +81,8 @@ and its `FORMAT`. This would significantly complicate the Kafka `CREATE SOURCE` 
 
 ## Open questions
 
-- How do we deal with header names clashing with other columns? Do we add an `as <name>` syntax?
-- Should we support nullable headers?
+- Should we support nullable headers? As far as we can tell, headers can be empty, but not null.
 - Can `ENVELOPE DEBEZIUM`, etc. be supported somehow?
+  - [This](https://debezium.io/documentation/reference/1.0/configuration/event-flattening.html#_adding_metadata_fields_to_the_header)
+  suggests that users can't add headers to debezium messages, but its unclear
 - Will some users expect a new value without a header to keep the header value from the previous message? The current design does not handle this
