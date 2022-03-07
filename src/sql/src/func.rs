@@ -2512,6 +2512,18 @@ lazy_static! {
                     })
                 }), 3931;
             },
+            "unnest" => Table {
+                vec![ArrayAny] => Operation::unary(move |ecx, e| {
+                    let el_typ = ecx.scalar_type(&e).unwrap_array_element_type().clone();
+                    Ok(TableFuncPlan {
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::UnnestArray { el_typ },
+                            exprs: vec![e],
+                        },
+                        column_names: vec!["unnest".into()],
+                    })
+                }) => ReturnType::set_of(ListElementAny), 2331;
+            },
             // Note that these implementations' input to `generate_series` is
             // contrived to match Flink's expected values. There are other,
             // equally valid windows we could generate.
@@ -2692,16 +2704,6 @@ lazy_static! {
                 }), oid::FUNC_REPEAT_OID;
             },
             "unnest" => Table {
-                vec![ArrayAny] => Operation::unary(move |ecx, e| {
-                    let el_typ = ecx.scalar_type(&e).unwrap_array_element_type().clone();
-                    Ok(TableFuncPlan {
-                        expr: HirRelationExpr::CallTable {
-                            func: TableFunc::UnnestArray { el_typ },
-                            exprs: vec![e],
-                        },
-                        column_names: vec!["unnest".into()],
-                    })
-                }) => ReturnType::set_of(ListElementAny), 2331;
                 vec![ListAny] => Operation::unary(move |ecx, e| {
                     let el_typ = ecx.scalar_type(&e).unwrap_list_element_type().clone();
                     Ok(TableFuncPlan {
