@@ -746,13 +746,17 @@ pub mod partitioned {
                         }
                     }
 
-                    Box::new(
-                        Some(Response::Compute(
-                            ComputeResponse::FrontierUppers(list),
-                            instance,
-                        ))
-                        .into_iter(),
-                    )
+                    if list.is_empty() {
+                        Box::new(None.into_iter())
+                    } else {
+                        Box::new(
+                            Some(Response::Compute(
+                                ComputeResponse::FrontierUppers(list),
+                                instance,
+                            ))
+                            .into_iter(),
+                        )
+                    }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
