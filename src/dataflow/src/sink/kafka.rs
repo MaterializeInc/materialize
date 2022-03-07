@@ -216,7 +216,7 @@ impl KafkaSinkSendRetryManager {
         self.outstanding_send_count -= 1;
     }
     fn sends_flushed(&mut self) -> bool {
-        self.outstanding_send_count == 0 && self.q.len() == 0
+        self.outstanding_send_count == 0 && self.q.is_empty()
     }
     fn pop_retry(&mut self) -> Option<OwnedMessage> {
         self.q.pop_front()
@@ -679,14 +679,11 @@ impl KafkaSinkState {
     }
 
     async fn flush(&self) -> KafkaResult<()> {
-        loop {
-            self.flush_inner().await?;
-            if {
-                let mut guard = self.retry_manager.lock().unwrap();
-                guard.sends_flushed()
-            } {
-                break;
-            }
+        self.flush_inner().await?;
+        while !{
+            let mut guard = self.retry_manager.lock().unwrap();
+            guard.sends_flushed()
+        } {
             while let Some(msg) = {
                 let mut guard = self.retry_manager.lock().unwrap();
                 guard.pop_retry()
@@ -702,6 +699,7 @@ impl KafkaSinkState {
                 };
                 self.send(transformed_msg).await?;
             }
+            self.flush_inner().await?;
         }
         Ok(())
     }
