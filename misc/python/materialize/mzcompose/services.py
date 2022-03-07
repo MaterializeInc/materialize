@@ -691,3 +691,19 @@ class Kgen(Service):
                 "entrypoint": entrypoint,
             },
         )
+
+
+class Loki(Service):
+    def __init__(
+        self,
+        name: str = "loki",
+        image: str = "grafana/loki",
+        port: int = 3100,
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+            },
+        )
