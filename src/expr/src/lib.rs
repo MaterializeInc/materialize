@@ -11,6 +11,7 @@
 
 #![warn(missing_debug_implementations)]
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Deref;
 
@@ -38,8 +39,8 @@ pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
-    compare_columns, AggregateExpr, ColumnOrder, JoinImplementation, MirRelationExpr,
-    RowSetFinishing, RECURSION_LIMIT,
+    compare_columns, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
+    MirRelationExpr, RowSetFinishing, RECURSION_LIMIT,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
@@ -76,6 +77,12 @@ impl Deref for OptimizedMirRelationExpr {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl CollectionPlan for OptimizedMirRelationExpr {
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        self.0.depends_on_into(out)
     }
 }
 

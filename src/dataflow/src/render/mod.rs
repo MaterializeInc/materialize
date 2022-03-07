@@ -100,7 +100,7 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
@@ -270,7 +270,7 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
                 .index_exports
                 .iter()
                 .cloned()
-                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.get_imports(&idx.on_id), idx))
+                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.depends_on(idx.on_id), idx))
                 .collect::<Vec<_>>();
 
             // Determine sinks to export
@@ -278,7 +278,7 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
                 .sink_exports
                 .iter()
                 .cloned()
-                .map(|(sink_id, sink)| (sink_id, dataflow.get_imports(&sink.from), sink))
+                .map(|(sink_id, sink)| (sink_id, dataflow.depends_on(sink.from), sink))
                 .collect::<Vec<_>>();
 
             // Build declared objects.
@@ -351,7 +351,7 @@ where
         object: BuildDesc<plan::Plan>,
     ) {
         // First, transform the relation expression into a render plan.
-        let bundle = self.render_plan(object.view, scope, scope.index());
+        let bundle = self.render_plan(object.plan, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
     }
 
@@ -359,7 +359,7 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: HashSet<GlobalId>,
+        import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {

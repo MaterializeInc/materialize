@@ -228,13 +228,13 @@ impl<T: timely::progress::Timestamp> Command<T> {
                         let mut builds_parts = vec![Vec::new(); parts];
                         // Partition each build description among `parts`.
                         for build_desc in dataflow.objects_to_build {
-                            let build_part = build_desc.view.partition_among(parts);
-                            for (view, objects_to_build) in
+                            let build_part = build_desc.plan.partition_among(parts);
+                            for (plan, objects_to_build) in
                                 build_part.into_iter().zip(builds_parts.iter_mut())
                             {
                                 objects_to_build.push(crate::BuildDesc {
                                     id: build_desc.id,
-                                    view,
+                                    plan,
                                 });
                             }
                         }
@@ -248,7 +248,6 @@ impl<T: timely::progress::Timestamp> Command<T> {
                                 objects_to_build,
                                 index_exports: dataflow.index_exports.clone(),
                                 sink_exports: dataflow.sink_exports.clone(),
-                                dependent_objects: dataflow.dependent_objects.clone(),
                                 as_of: dataflow.as_of.clone(),
                                 debug_name: dataflow.debug_name.clone(),
                                 id: dataflow.id,

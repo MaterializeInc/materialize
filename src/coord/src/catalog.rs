@@ -164,7 +164,10 @@ impl CatalogState {
     /// Returns the identifiers of all discovered indexes, and the identifiers of
     /// the discovered unmaterialized sources required to satisfy ids. The returned list
     /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> CollectionIdBundle {
+    pub fn nearest_indexes<'a, I>(&self, ids: I) -> CollectionIdBundle
+    where
+        I: IntoIterator<Item = &'a GlobalId>,
+    {
         fn has_indexes(catalog: &CatalogState, id: GlobalId) -> bool {
             matches!(
                 catalog.get_by_id(&id).item(),
@@ -2253,7 +2256,10 @@ impl Catalog {
         self.get_indexes_on(id).iter().min().cloned()
     }
 
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> CollectionIdBundle {
+    pub fn nearest_indexes<'a, I>(&self, ids: I) -> CollectionIdBundle
+    where
+        I: IntoIterator<Item = &'a GlobalId>,
+    {
         self.state.nearest_indexes(ids)
     }
 

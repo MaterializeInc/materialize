@@ -18,8 +18,8 @@ use mz_dataflow_types::client::{controller::ComputeController, Client};
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::{
-    GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
-    UnmaterializableFunc,
+    CollectionPlan, GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, UnmaterializableFunc,
 };
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
@@ -125,7 +125,7 @@ impl<'a> DataflowBuilder<'a> {
                     .get_by_id(id)
                     .desc()
                     .expect("indexes can only be built on items with descs");
-                dataflow.import_index(*index_id, index_desc, desc.typ().clone(), *id);
+                dataflow.import_index(*index_id, index_desc, desc.typ().clone());
             } else {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
@@ -188,7 +188,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
     ) -> Result<(), CoordError> {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        for get_id in view.global_uses() {
+        for get_id in view.depends_on() {
             self.import_into_dataflow(&get_id, dataflow)?;
 
             // TODO: indexes should be imported after the optimization process, and only those
@@ -206,11 +206,11 @@ impl<'a> DataflowBuilder<'a> {
                         on_id: get_id,
                         key: keys.clone(),
                     };
-                    dataflow.import_index(*id, index_desc, on_type, *view_id);
+                    dataflow.import_index(*id, index_desc, on_type);
                 }
             }
         }
-        dataflow.insert_view(*view_id, view.clone());
+        dataflow.insert_plan(*view_id, view.clone());
 
         Ok(())
     }
@@ -226,8 +226,8 @@ impl<'a> DataflowBuilder<'a> {
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(name, id);
         self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
-        for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
-            self.prep_relation_expr(view, ExprPrepStyle::Index)?;
+        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
+            self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         for key in &mut index_description.key {
             self.prep_scalar_expr(key, ExprPrepStyle::Index)?;
@@ -266,8 +266,8 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<(), CoordError> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
-        for BuildDesc { view, .. } in &mut dataflow.objects_to_build {
-            self.prep_relation_expr(view, ExprPrepStyle::Index)?;
+        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
+            self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         dataflow.export_sink(id, sink_description);
 

@@ -46,7 +46,7 @@ use mz_dataflow_types::{
         UnplannedSourceEnvelope, UpsertStyle,
     },
 };
-use mz_expr::GlobalId;
+use mz_expr::{CollectionPlan, GlobalId};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
@@ -1352,7 +1352,7 @@ pub fn plan_create_view(
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
-            if view.expr.global_uses().contains(&item.id()) {
+            if view.expr.depends_on().contains(&item.id()) {
                 bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     item.name()

@@ -103,7 +103,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
                             logger.log(MaterializedEvent::Dataflow(*idx_id, true));
                             logger.log(MaterializedEvent::Frontier(*idx_id, 0, 1));
-                            for import_id in dataflow.get_imports(&idx.on_id) {
+                            for import_id in dataflow.depends_on(idx.on_id) {
                                 logger.log(MaterializedEvent::DataflowDependency {
                                     dataflow: *idx_id,
                                     source: import_id,
