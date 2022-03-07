@@ -32,10 +32,9 @@ use crate::client::{
 };
 use crate::logging::LoggingConfig;
 
-pub use storage::StorageController;
-pub use storage::StorageControllerState;
+pub use storage::{StorageController, StorageControllerMut, StorageControllerState};
 mod storage;
-pub use compute::ComputeController;
+pub use compute::{ComputeController, ComputeControllerMut};
 mod compute;
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -76,20 +75,44 @@ where
 }
 
 impl<C: Client<T>, T> Controller<C, T> {
-    /// Acquires a handle to a controller for the storage instance.
+    /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage(&mut self) -> StorageController<C, T> {
+    pub fn storage(&self) -> StorageController<T> {
         StorageController {
+            storage: &self.storage,
+        }
+    }
+
+    /// Acquires a mutable handle to a controller for the storage instance.
+    #[inline]
+    pub fn storage_mut(&mut self) -> StorageControllerMut<C, T> {
+        StorageControllerMut {
             storage: &mut self.storage,
             client: &mut self.client,
         }
     }
-    /// Acquires a handle to a controller for the indicated compute instance, if it exists.
+
+    /// Acquires an immutable handle to a controller for the indicated compute instance, if it exists.
     #[inline]
-    pub fn compute(&mut self, instance: ComputeInstanceId) -> Option<ComputeController<C, T>> {
-        let compute = self.compute.get_mut(&instance)?;
+    pub fn compute(&self, instance: ComputeInstanceId) -> Option<ComputeController<T>> {
+        let compute = self.compute.get(&instance)?;
         // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
         Some(ComputeController {
+            _instance: instance,
+            compute,
+            storage: &self.storage,
+        })
+    }
+
+    /// Acquires a mutable handle to a controller for the indicated compute instance, if it exists.
+    #[inline]
+    pub fn compute_mut(
+        &mut self,
+        instance: ComputeInstanceId,
+    ) -> Option<ComputeControllerMut<C, T>> {
+        let compute = self.compute.get_mut(&instance)?;
+        // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
+        Some(ComputeControllerMut {
             instance,
             compute,
             storage: &mut self.storage,
@@ -104,7 +127,7 @@ impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
         if let Some(response) = response.as_ref() {
             match response {
                 Response::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
-                    self.compute(*instance)
+                    self.compute_mut(*instance)
                         // TODO: determine if this is an error, or perhaps just a late
                         // response about a terminated instance.
                         .expect("Reference to absent instance")
@@ -112,7 +135,7 @@ impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
                         .await;
                 }
                 Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
-                    self.storage()
+                    self.storage_mut()
                         .update_write_frontiers(&feedback.changes)
                         .await;
                 }

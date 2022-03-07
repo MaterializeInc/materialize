@@ -14,7 +14,8 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use mz_dataflow_types::client::{controller::ComputeController, Client};
+use mz_dataflow_types::client::controller::ComputeController;
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::{
@@ -39,8 +40,8 @@ pub struct DataflowBuilder<'a> {
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
-    /// its `storage()` method.
-    pub compute: ComputeController<'a, Box<dyn Client>, mz_repr::Timestamp>,
+    /// its `storage_mut()` method.
+    pub compute: ComputeController<'a, mz_repr::Timestamp>,
 }
 
 /// The styles in which an expression can be prepared for use in a dataflow.
@@ -58,10 +59,7 @@ pub enum ExprPrepStyle<'a> {
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder<'a>(
-        &'a mut self,
-        instance: mz_dataflow_types::client::ComputeInstanceId,
-    ) -> DataflowBuilder {
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),

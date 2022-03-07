@@ -403,7 +403,7 @@ impl Coordinator {
             policy_updates.push((id, self.read_capability[&id].policy()));
         }
         self.dataflow_client
-            .storage()
+            .storage_mut()
             .set_read_policy(policy_updates)
             .await;
     }
@@ -429,7 +429,7 @@ impl Coordinator {
             policy_updates.push((id, self.read_capability[&id].policy()));
         }
         self.dataflow_client
-            .compute(instance)
+            .compute_mut(instance)
             .unwrap()
             .set_read_policy(policy_updates)
             .await;
@@ -474,7 +474,7 @@ impl Coordinator {
                         .expect("loading timestamps from coordinator cannot fail");
 
                     self.dataflow_client
-                        .storage()
+                        .storage_mut()
                         .create_sources(vec![CreateSourceCommand {
                             id: entry.id(),
                             desc: source_description,
@@ -508,7 +508,7 @@ impl Coordinator {
                         .source_description_for(entry.id())
                         .unwrap();
                     self.dataflow_client
-                        .storage()
+                        .storage_mut()
                         .create_sources(vec![CreateSourceCommand {
                             id: entry.id(),
                             desc: source_description,
@@ -776,7 +776,7 @@ impl Coordinator {
         }
 
         self.dataflow_client
-            .storage()
+            .storage_mut()
             .advance_all_table_timestamps(advance_to)
             .await
             .unwrap();
@@ -851,7 +851,7 @@ impl Coordinator {
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
                     self.dataflow_client
-                        .storage()
+                        .storage_mut()
                         .update_durability_frontiers(durability_updates)
                         .await
                         .unwrap();
@@ -1482,7 +1482,7 @@ impl Coordinator {
             // Allow dataflow to cancel any pending peeks.
             if let Some(uuids) = self.client_pending_peeks.get(&conn_id) {
                 self.dataflow_client
-                    .compute(compute_instance)
+                    .compute_mut(compute_instance)
                     .unwrap()
                     .cancel_peeks(uuids)
                     .await
@@ -1946,7 +1946,7 @@ impl Coordinator {
                     .source_description_for(table_id)
                     .unwrap();
                 self.dataflow_client
-                    .storage()
+                    .storage_mut()
                     .create_sources(vec![CreateSourceCommand {
                         id: table_id,
                         desc: source_description,
@@ -2046,7 +2046,7 @@ impl Coordinator {
                 }
 
                 self.dataflow_client
-                    .storage()
+                    .storage_mut()
                     .create_sources(source_descriptions)
                     .await
                     .unwrap();
@@ -2721,7 +2721,7 @@ impl Coordinator {
                         } else {
                             for (id, updates) in volatile_updates {
                                 self.dataflow_client
-                                    .storage()
+                                    .storage_mut()
                                     .table_insert(id, updates)
                                     .await
                                     .unwrap();
@@ -3112,7 +3112,7 @@ impl Coordinator {
 
     /// The smallest common valid read frontier among the specified collections.
     fn least_valid_read(
-        &mut self,
+        &self,
         id_bundle: &CollectionIdBundle,
         instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
@@ -3137,7 +3137,7 @@ impl Coordinator {
     /// Times that are not greater or equal to this frontier are complete for all collections
     /// identified as arguments.
     fn least_valid_write(
-        &mut self,
+        &self,
         id_bundle: &CollectionIdBundle,
         instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
@@ -4034,7 +4034,7 @@ impl Coordinator {
                     self.read_capability.remove(id);
                 }
                 self.dataflow_client
-                    .storage()
+                    .storage_mut()
                     .drop_sources(sources_to_drop)
                     .await
                     .unwrap();
@@ -4048,14 +4048,14 @@ impl Coordinator {
                     self.read_capability.remove(id);
                 }
                 self.dataflow_client
-                    .storage()
+                    .storage_mut()
                     .drop_sources(tables_to_drop)
                     .await
                     .unwrap();
             }
             if !sinks_to_drop.is_empty() {
                 self.dataflow_client
-                    .compute(compute_instance)
+                    .compute_mut(compute_instance)
                     .unwrap()
                     .drop_sinks(sinks_to_drop)
                     .await
@@ -4129,7 +4129,7 @@ impl Coordinator {
                 let _ = task::spawn(|| "builtin_table_updates_write_fut:{id}", write_fut);
             } else {
                 self.dataflow_client
-                    .storage()
+                    .storage_mut()
                     .table_insert(id, updates)
                     .await
                     .unwrap();
@@ -4149,7 +4149,7 @@ impl Coordinator {
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute_mut(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .drop_sinks(dataflow_names)
                 .await
@@ -4168,7 +4168,7 @@ impl Coordinator {
         }
         if !trace_keys.is_empty() {
             self.dataflow_client
-                .compute(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute_mut(DEFAULT_COMPUTE_INSTANCE_ID)
                 .unwrap()
                 .drop_indexes(trace_keys)
                 .await
@@ -4206,7 +4206,7 @@ impl Coordinator {
                     };
                     needs.base_policy = policy;
                     self.dataflow_client
-                        .compute(compute_instance)
+                        .compute_mut(compute_instance)
                         .unwrap()
                         .set_read_policy(vec![(id, needs.policy())])
                         .await;
@@ -4232,7 +4232,7 @@ impl Coordinator {
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
         self.dataflow_client
-            .compute(instance)
+            .compute_mut(instance)
             .unwrap()
             .create_dataflows(dataflow_plans)
             .await
@@ -4261,7 +4261,7 @@ impl Coordinator {
     ///
     /// Panics if the dataflow descriptions contain an invalid plan.
     fn finalize_dataflow(
-        &mut self,
+        &self,
         mut dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
     ) -> mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan> {
@@ -4896,7 +4896,7 @@ pub mod fast_path_peek {
 
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client
-                        .compute(compute_instance)
+                        .compute_mut(compute_instance)
                         .unwrap()
                         .create_dataflows(vec![dataflow])
                         .await
@@ -4962,7 +4962,7 @@ pub mod fast_path_peek {
                 .insert(uuid);
             let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
             self.dataflow_client
-                .compute(compute_instance)
+                .compute_mut(compute_instance)
                 .unwrap()
                 .peek(
                     id,
@@ -5044,9 +5044,9 @@ pub mod read_holds {
         ) {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
-            let mut storage = self.dataflow_client.storage();
+            let mut storage = self.dataflow_client.storage_mut();
             for id in read_holds.id_bundle.storage_ids.iter() {
-                let collection = storage.collection(*id).unwrap();
+                let collection = storage.as_ref().collection(*id).unwrap();
                 assert!(collection
                     .read_capabilities
                     .frontier()
@@ -5060,10 +5060,10 @@ pub mod read_holds {
             let mut policy_changes = Vec::new();
             let mut compute = self
                 .dataflow_client
-                .compute(read_holds.compute_instance)
+                .compute_mut(read_holds.compute_instance)
                 .unwrap();
             for id in read_holds.id_bundle.compute_ids.iter() {
-                let collection = compute.collection(*id).unwrap();
+                let collection = compute.as_ref().collection(*id).unwrap();
                 assert!(collection
                     .read_capabilities
                     .frontier()
@@ -5101,7 +5101,7 @@ pub mod read_holds {
                 policy_changes.push((*id, read_needs.policy()));
             }
             self.dataflow_client
-                .storage()
+                .storage_mut()
                 .set_read_policy(policy_changes)
                 .await;
             // Update COMPUTE read policies
@@ -5112,7 +5112,7 @@ pub mod read_holds {
                 policy_changes.push((*id, read_needs.policy()));
             }
             self.dataflow_client
-                .compute(compute_instance)
+                .compute_mut(compute_instance)
                 .expect("Reference to absent compute instance")
                 .set_read_policy(policy_changes)
                 .await;
