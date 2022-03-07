@@ -544,6 +544,7 @@ class Testdrive(Service):
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
+        loki_addr: Optional[str] = None,
     ) -> None:
         if environment is None:
             environment = [
@@ -581,6 +582,9 @@ class Testdrive(Service):
             entrypoint.append("--no-reset")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
+
+        if loki_addr:
+            entrypoint.append(f"--loki-addr={loki_addr}")
 
         if kafka_default_partitions:
             entrypoint.append(f"--kafka-default-partitions={kafka_default_partitions}")

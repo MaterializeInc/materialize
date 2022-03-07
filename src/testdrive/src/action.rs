@@ -44,6 +44,7 @@ mod file;
 mod http;
 mod kafka;
 mod kinesis;
+mod loki;
 mod mysql;
 mod postgres;
 mod protobuf;
@@ -126,6 +127,10 @@ pub struct Config {
     pub aws_config: AwsConfig,
     /// The ID of the AWS account that `aws_config` configures.
     pub aws_account: String,
+
+    // === Loki options. ===
+    /// The address of the Loki server that testdrive will send connect to.
+    pub loki_addr: Url,
 }
 
 pub struct State {
@@ -167,6 +172,9 @@ pub struct State {
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
+
+    // === Loki state. ===
+    loki_client: loki::Client,
 
     // === Database driver state. ===
     mysql_clients: HashMap<String, mysql_async::Conn>,
@@ -430,6 +438,10 @@ pub(crate) async fn build(
         "testdrive.materialized-user".into(),
         state.materialized_user.clone(),
     );
+    vars.insert(
+        "testdrive.loki-addr".into(),
+        state.loki_client.url().to_string(),
+    );
 
     for (key, value) in env::vars() {
         vars.insert(format!("env.{}", key), value);
@@ -493,6 +505,7 @@ pub(crate) async fn build(
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
+                    "loki-ingest" => Box::new(loki::build_ingest(builtin).map_err(wrap_err)?),
                     "mysql-connect" => Box::new(mysql::build_connect(builtin).map_err(wrap_err)?),
                     "mysql-execute" => Box::new(mysql::build_execute(builtin).map_err(wrap_err)?),
                     "postgres-connect" => {
@@ -764,6 +777,8 @@ pub async fn create_state(
     let s3_client = mz_aws_util::s3::client(&config.aws_config);
     let sqs_client = mz_aws_util::sqs::client(&config.aws_config);
 
+    let loki_client = loki::Client::new(config.loki_addr.clone(), config.default_timeout);
+
     let state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
@@ -803,6 +818,9 @@ pub async fn create_state(
         s3_buckets_created: BTreeSet::new(),
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
+
+        // === Loki state. ===
+        loki_client,
 
         // === Database driver state. ===
         mysql_clients: HashMap::new(),

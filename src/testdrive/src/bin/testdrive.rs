@@ -167,6 +167,11 @@ struct Args {
     /// Cannot be specified if --aws-region is specified.
     #[clap(long, conflicts_with = "aws-region", value_name = "URL")]
     aws_endpoint: Option<Uri>,
+
+    // === Loki options. ===
+    /// Address of the Loki server that testdrive will interact with.
+    #[clap(long, value_name = "URL", default_value = "http://localhost:3100")]
+    loki_addr: Url,
 }
 
 #[tokio::main]
@@ -278,6 +283,9 @@ async fn main() {
         // === AWS options. ===
         aws_config,
         aws_account,
+
+        // === Loki options. ===
+        loki_addr: args.loki_addr,
     };
 
     // Build the list of files to test.

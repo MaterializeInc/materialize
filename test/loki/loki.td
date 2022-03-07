@@ -7,12 +7,25 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ loki-ingest job=foo node=node1
+first line
+second line
+
+$ loki-ingest job=bar node=node1
+first line
+
+$ loki-ingest job=foo node=node2
+first line
+
+$ loki-ingest job=bar node=node2
+first line
+second line
 
 # The raw source that brings in data as a single text column containing JSON
 > CREATE SOURCE loki_system_logs_raw
   FROM LOKI
-  ADDRESS 'http://loki:3100'
-  QUERY '{job="varlogs"}'
+  ADDRESS '${testdrive.loki-addr}'
+  QUERY '{job="foo"}'
   FORMAT TEXT;
 
 # Extract the JSON fields
@@ -24,11 +37,20 @@
 
 # Create a materialized aggregation
 > CREATE MATERIALIZED VIEW logs_by_filename AS
-  SELECT labels->'filename', COUNT(*) FROM loki_system_logs GROUP BY labels->'filename';
+  SELECT labels->>'job' AS job,
+    labels->>'node' AS node,
+    COUNT(*) AS n FROM loki_system_logs
+  GROUP BY labels->>'job', labels->>'node';
+
+> SELECT n FROM logs_by_filename WHERE job = 'foo' AND node = 'node1';
+2
+
+$ loki-ingest job=foo node=node1
+another line
 
 # See the data change
-> SELECT COUNT(*) > 0 FROM logs_by_filename ;
-true
+> SELECT n FROM logs_by_filename WHERE job = 'foo' AND node = 'node1';
+3
 
 # Test that the volatility bit is set correctly.
 # > SELECT name, volatility FROM mz_sources WHERE name = 'market_orders_raw'
