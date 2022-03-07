@@ -23,10 +23,12 @@ use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_dataflow_types::postgres_source::PostgresTable;
+use mz_postgres_util::TableInfo;
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use mz_dataflow_types::{
     postgres_source::PostgresSourceDetails,
@@ -53,8 +55,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::{
-    CreateClusterStatement, CreateSecretStatement, CsrSeedCompiledOrLegacy, RawIdent,
-    SourceIncludeMetadata,
+    CreateClusterStatement, CreateSecretStatement, CreateViewsSourceTarget,
+    CsrSeedCompiledOrLegacy, Op, Query, RawName, Select, SelectItem, SetExpr,
+    SourceIncludeMetadata, SubscriptPosition, TableFactor, TableWithJoins, RawIdent,
 };
 
 use crate::ast::display::AstDisplay;
@@ -1409,7 +1412,220 @@ pub fn plan_create_views(
                 materialize: materialized,
             }))
         }
-        CreateViewsDefinitions::Source { .. } => bail!("cannot create view from source"),
+        CreateViewsDefinitions::Source {
+            name: source_name,
+            targets,
+        } => {
+            let source_connector = normalize::unresolved_object_name(source_name.clone())
+                .map_err(anyhow::Error::new)
+                .and_then(|name| {
+                    scx.catalog
+                        .resolve_item(&name)
+                        .and_then(|item| item.source_connector())
+                        .map(|s| s.clone())
+                        .map_err(anyhow::Error::new)
+                });
+            match source_connector? {
+                SourceConnector::External {
+                    connector:
+                        ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                            conn: _,
+                            publication: _,
+                            details,
+                            ..
+                        }),
+                    ..
+                } => {
+                    // If the user specified targets, validate they are all in the PostgresSourceDetails
+                    // otherwise create them from the contents of PostgresSourceDetails
+                    let targets = {
+                        if targets.is_some() {
+                            let known: HashSet<String> =
+                                HashSet::from_iter(details.tables.iter().flat_map(|t| {
+                                    // It is easier to put both schema_name.table_name and table_name into the hashset than to peel off the namespace from a string
+                                    vec![
+                                        format!("{}", UnresolvedObjectName::qualified(&[&t.name])),
+                                        format!(
+                                            "{}",
+                                            UnresolvedObjectName::qualified(&[
+                                                &t.namespace,
+                                                &t.name
+                                            ])
+                                        ),
+                                    ]
+                                }));
+                            let wanted: HashSet<String> = HashSet::from_iter(
+                                targets.clone().unwrap().iter().map(|t| t.name.to_string()),
+                            );
+                            let diff = wanted.difference(&known);
+                            if diff.clone().count() > 0 {
+                                error!("During create views user specified tables not found: {:?}  Known tables: {:?}", diff, known);
+                                return Err(anyhow!(
+                                    "Table(s) {} not found in source, try recreating materialized source.",
+                                    diff.map(|d| d.to_owned())
+                                        .collect::<Vec<String>>()
+                                        .join(", ")
+                                ));
+                            } else {
+                                targets.clone().unwrap()
+                            }
+                        } else {
+                            details
+                                .tables
+                                .iter()
+                                .map(|t| {
+                                    let name =
+                                        UnresolvedObjectName::qualified(&[&t.namespace, &t.name]);
+                                    CreateViewsSourceTarget {
+                                        name: name.clone(),
+                                        alias: Some(name),
+                                    }
+                                })
+                                .collect()
+                        }
+                    };
+
+                    let mut viewdefs = Vec::with_capacity(details.tables.len());
+
+                    // An index from table_name -> schema_name -> PostgresTable
+                    let mut details_info_idx: HashMap<String, HashMap<String, PostgresTable>> =
+                        HashMap::new();
+                    for table in details.tables {
+                        details_info_idx
+                            .entry(table.name.clone())
+                            .or_default()
+                            .entry(table.namespace.clone())
+                            .or_insert(table);
+                    }
+
+                    for target in targets {
+                        let view_name = target.alias.clone().unwrap_or_else(|| target.name.clone());
+                        let name = normalize::unresolved_object_name(target.name.clone())
+                            .map_err(anyhow::Error::new)?;
+                        let schemas = details_info_idx.get(&name.item).ok_or_else(|| {
+                            anyhow!("table {} not found in upstream database", name)
+                        })?;
+                        let t = if let Some(schema) = &name.schema {
+                            schemas.get(schema).ok_or_else(|| {
+                                anyhow!("schema {} does not exist in upstream database", schema)
+                            })?
+                        } else {
+                            schemas.values().exactly_one().or_else(|_| {
+                                Err(anyhow!(
+                                    "table {} is ambiguous, consider specifying the schema",
+                                    name
+                                ))
+                            })?
+                        };
+                        let table_info: TableInfo = t.clone().into();
+                        let mut projection = vec![];
+                        for (i, column) in table_info.schema.iter().enumerate() {
+                            let mut ty =
+                                mz_pgrepr::Type::from_oid_and_typmod(column.oid, column.typmod)?;
+                            // Ignore precision constraints on date/time types until we support
+                            // it. This should be safe enough because our types are wide enough
+                            // to support the maximum possible precision.
+                            //
+                            // See: https://github.com/MaterializeInc/materialize/issues/10837
+                            match &mut ty {
+                                mz_pgrepr::Type::Interval { constraints } => *constraints = None,
+                                mz_pgrepr::Type::Time { precision } => *precision = None,
+                                mz_pgrepr::Type::TimeTz { precision } => *precision = None,
+                                mz_pgrepr::Type::Timestamp { precision } => *precision = None,
+                                mz_pgrepr::Type::TimestampTz { precision } => *precision = None,
+                                _ => (),
+                            }
+                            // NOTE(benesch): this *looks* gross, but it is
+                            // safe enough. The `fmt::Display`
+                            // representation on `pgrepr::Type` promises to
+                            // produce an unqualified type name that does
+                            // not require quoting.
+                            //
+                            // TODO(benesch): converting `json` to `jsonb`
+                            // is wrong. We ought to support the `json` type
+                            // directly.
+                            let mut ty = format!("pg_catalog.{}", ty);
+                            if ty == "pg_catalog.json" {
+                                ty = "pg_catalog.jsonb".into();
+                            }
+                            let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
+                            projection.push(SelectItem::Expr {
+                                expr: Expr::Cast {
+                                    expr: Box::new(Expr::Subscript {
+                                        expr: Box::new(Expr::Identifier(vec![Ident::new(
+                                            "row_data",
+                                        )])),
+                                        positions: vec![SubscriptPosition {
+                                            start: Some(Expr::Value(Value::Number(
+                                                // LIST is one based
+                                                (i + 1).to_string(),
+                                            ))),
+                                            end: None,
+                                            explicit_slice: false,
+                                        }],
+                                    }),
+                                    data_type,
+                                },
+                                alias: Some(Ident::new(column.name.clone())),
+                            });
+                        }
+                        let query = Query {
+                            ctes: vec![],
+                            body: SetExpr::Select(Box::new(Select {
+                                distinct: None,
+                                projection,
+                                from: vec![TableWithJoins {
+                                    relation: TableFactor::Table {
+                                        name: RawName::Name(source_name.clone()),
+                                        alias: None,
+                                    },
+                                    joins: vec![],
+                                }],
+                                selection: Some(Expr::Op {
+                                    op: Op::bare("="),
+                                    expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
+                                    expr2: Some(Box::new(Expr::Value(Value::Number(
+                                        table_info.rel_id.to_string(),
+                                    )))),
+                                }),
+                                group_by: vec![],
+                                having: None,
+                                options: vec![],
+                            })),
+                            order_by: vec![],
+                            limit: None,
+                            offset: None,
+                        };
+
+                        viewdefs.push(ViewDefinition {
+                            name: view_name,
+                            columns: table_info
+                                .schema
+                                .iter()
+                                .map(|c| Ident::new(c.name.clone()))
+                                .collect(),
+                            with_options: vec![],
+                            query,
+                        });
+                    }
+                    let views = viewdefs
+                        .into_iter()
+                        .map(|mut vd| plan_view(scx, &mut vd, &Params::empty(), temporary))
+                        .collect::<Result<Vec<(FullName, View)>, _>>()?;
+                    Ok(Plan::CreateViews(CreateViewsPlan {
+                        views,
+                        if_not_exists: if_exists == IfExistsBehavior::Skip,
+                        materialize: materialized,
+                    }))
+                }
+                SourceConnector::External { connector, .. } => {
+                    bail!("cannot generate views from {} sources", connector.name())
+                }
+                SourceConnector::Local { .. } => {
+                    bail!("cannot generate views from local sources")
+                }
+            }
+        }
     }
 }
 
