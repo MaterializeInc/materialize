@@ -25,7 +25,6 @@ $ psql-execute command="\d tbl"
 Indexes:
     "tbl_ind" arrangement (b)
     "tbl_lower_ind" arrangement (pg_catalog.lower(b),a)
-    "tbl_primary_idx" arrangement (a,b)
 
 > DROP TABLE tbl CASCADE
 
