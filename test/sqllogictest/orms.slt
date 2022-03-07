@@ -1,0 +1,63 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (i bigint, t text);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+# SQLAlchemy get_indexes query, issue #10025
+query TTTTTTTTTTTT
+SELECT
+    i.relname as relname,
+    ix.indisunique, ix.indexprs,
+    a.attname, a.attnum, c.conrelid, ix.indkey::varchar,
+    ix.indoption::varchar, i.reloptions, am.amname,
+    pg_get_expr(ix.indpred, ix.indrelid),
+    NULL as indnkeyatts
+FROM
+    pg_class t
+        join pg_index ix on t.oid = ix.indrelid
+        join pg_class i on i.oid = ix.indexrelid
+        left outer join
+            pg_attribute a
+            on t.oid = a.attrelid and a.attnum = ANY(ix.indkey)
+        left outer join
+            pg_constraint c
+            on (ix.indrelid = c.conrelid and
+                ix.indexrelid = c.conindid and
+                c.contype in ('p', 'u', 'x'))
+        left outer join
+            pg_am am
+            on i.relam = am.oid
+WHERE
+    t.relkind IN ('r', 'v', 'f', 'm', 'p')
+    and t.oid = 't'::regclass
+    and ix.indisprimary = 'f'
+ORDER BY
+    t.relname,
+    i.relname
+----
+t_primary_idx false NULL i 1 NULL 1␠2 0␠0 NULL NULL NULL NULL t_primary_idx false NULL t 2 NULL 1␠2 0␠0 NULL NULL NULL NULL
+
+# Check how expressions are serialized with `{}`
+statement ok
+CREATE INDEX complex_index ON t (t::varchar, i::string);
+
+query T
+SELECT ix.indexprs
+FROM pg_class t
+JOIN pg_index ix ON t.oid = ix.indrelid
+WHERE t.oid = 't'::regclass
+  AND ix.indexrelid = 'complex_index'::regclass
+----
+{t::[s1039 AS pg_catalog.varchar]}, {i::[s1004 AS pg_catalog.text]}

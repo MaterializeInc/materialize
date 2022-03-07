@@ -37,6 +37,7 @@ relforcerowsecurity false       boolean
 relreplident        false       character
 relispartition      false       boolean
 relhasoids          false       boolean
+reloptions          true        text[]
 
 > SHOW COLUMNS FROM pg_database
 name         nullable  type
@@ -59,7 +60,10 @@ indisunique     false       boolean
 indisclustered  false       boolean
 indisvalid      false       boolean
 indisreplident  false       boolean
-indkey          false       bigint[]
+indkey          false       int2vector
+indoption       false       int2vector
+indexprs        true        text
+indpred         true        text
 
 > SHOW COLUMNS FROM pg_description
 name         nullable  type
