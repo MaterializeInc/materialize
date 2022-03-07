@@ -7,11 +7,12 @@ use async_trait::async_trait;
 use futures::future::TryFutureExt;
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
+use serde_json::json;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::warn;
 
 use mz_dataflow_types::SourceErrorDetails;
-use mz_expr::{GlobalId, SourceInstanceId};
+use mz_expr::SourceInstanceId;
 use mz_repr::{Datum, Row};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
@@ -100,7 +101,11 @@ impl SimpleSource for LokiSourceReader {
 
                     let lines: Vec<String> = streams
                         .iter()
-                        .flat_map(|s| s.values.iter().map(|v| v.line.clone()))
+                        .flat_map(|s| {
+                            s.values.iter().map(|v| {
+                                json!({"line": v.line.clone(), "labels": s.labels}).to_string()
+                            })
+                        })
                         .collect();
 
                     for line in lines {
@@ -149,6 +154,7 @@ struct LogEntry {
 mod test {
 
     use super::*;
+    use mz_expr::GlobalId;
 
     #[tokio::test]
     async fn connect() {
@@ -168,7 +174,8 @@ mod test {
             "{job=\"systemd-journal\"}".to_owned(),
         );
 
-        let fut = loki.new_stream().take(5);
+        let fut =
+            LokiSourceReader::new_stream(loki.query, loki.batch_window, loki.conn_info).take(5);
         fut.for_each(|data| async move {
             println!("{:?}", data);
         })
