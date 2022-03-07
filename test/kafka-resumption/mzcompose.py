@@ -47,7 +47,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "toxiproxy-close-connection.td",
             "toxiproxy-limit-connection.td",
             "toxiproxy-timeout.td",
-            "toxiproxy-timeout-hold.td",
+            # TODO: Enable https://github.com/MaterializeInc/materialize/issues/11085
+            # "toxiproxy-timeout-hold.td",
         ]
     ):
         c.start_and_wait_for_tcp(["toxiproxy"])
