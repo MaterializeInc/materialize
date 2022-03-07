@@ -91,3 +91,9 @@ prost = { git = "https://github.com/MaterializeInc/prost.git" }
 prost-types = { git = "https://github.com/MaterializeInc/prost.git" }
 prost-build = { git = "https://github.com/MaterializeInc/prost.git" }
 prost-derive = { git = "https://github.com/MaterializeInc/prost.git" }
+
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+timely = { path = "../timely-dataflow/timely" }
+[patch."https://github.com/TimelyDataflow/differential-dataflow"]
+differential-dataflow = { path = "../differential-dataflow" }
+dogsdogsdogs = { path = "../differential-dataflow/dogsdogsdogs" }

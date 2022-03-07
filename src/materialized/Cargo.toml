@@ -144,6 +144,7 @@ walkdir = "2.3.2"
 # access to the file system.
 dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
+timely-console = ["tokio-console", "timely/tracing"]
 
 [package.metadata.cargo-udeps.ignore]
 # krb5 used to build a binary

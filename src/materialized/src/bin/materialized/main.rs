@@ -377,10 +377,20 @@ struct Args {
     #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
     telemetry_interval: Option<Duration>,
 
+    #[clap(flatten)]
+    console_args: ConsoleArgs,
+}
+
+#[derive(Parser)]
+struct ConsoleArgs {
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
     tokio_console: bool,
+
+    #[cfg(feature = "timely-console")]
+    #[clap(long, hide = true)]
+    disable_timely_console: bool,
 }
 
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
@@ -420,6 +430,59 @@ fn main() {
     if let Err(err) = run(Args::parse()) {
         eprintln!("materialized: {:#}", err);
         process::exit(1);
+    }
+}
+
+fn finish_and_init_tracing<
+    L: tracing_subscriber::layer::Layer<S> + Send + Sync + 'static,
+    S: ::tracing::Subscriber + Send + Sync + 'static,
+>(
+    stack: tracing_subscriber::layer::Layered<L, S>,
+    #[allow(unused)] args: ConsoleArgs,
+) where
+    tracing_subscriber::layer::Layered<L, S>: tracing_subscriber::util::SubscriberInitExt,
+    for<'ls> S: tracing_subscriber::registry::LookupSpan<'ls>,
+{
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    #[cfg(not(feature = "tokio-console"))]
+    let tokio_console = false;
+    #[cfg(not(feature = "timely-console"))]
+    let disable_timely_console = false;
+
+    #[cfg(feature = "tokio-console")]
+    let tokio_console = args.tokio_console;
+    #[cfg(feature = "timely-console")]
+    let disable_timely_console = args.disable_timely_console;
+
+    #[allow(clippy::if_same_then_else)]
+    if disable_timely_console && tokio_console {
+        #[cfg(feature = "tokio-console")]
+        {
+            use tracing_subscriber::filter::FilterExt;
+            use tracing_subscriber::filter::Targets;
+            use tracing_subscriber::layer::SubscriberExt;
+            use tracing_subscriber::Layer;
+            stack
+                .with(tokio_console.then(|| {
+                    console_subscriber::spawn().with_filter(
+                        Targets::from_str("timely.console.span=trace")
+                            .unwrap()
+                            .not(),
+                    )
+                }))
+                .init();
+        }
+    } else if tokio_console {
+        #[cfg(feature = "tokio-console")]
+        {
+            use tracing_subscriber::layer::SubscriberExt;
+            stack
+                .with(tokio_console.then(|| console_subscriber::spawn()))
+                .init();
+        }
+    } else {
+        stack.init()
     }
 }
 
@@ -553,7 +616,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         use tracing_subscriber::filter::{LevelFilter, Targets};
         use tracing_subscriber::fmt;
         use tracing_subscriber::layer::{Layer, SubscriberExt};
-        use tracing_subscriber::util::SubscriberInitExt;
 
         let filter = Targets::from_str(&args.log_filter)
             .context("parsing --log-filter option")?
@@ -583,10 +645,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                             .with_filter(filter),
                     );
 
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
+                finish_and_init_tracing(stack, args.console_args);
             }
             log_file => {
                 // Logging to a file. If the user did not explicitly specify
@@ -629,10 +688,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                             .with_filter(filter),
                     );
 
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
+                finish_and_init_tracing(stack, args.console_args);
             }
         }
     }
