@@ -1438,8 +1438,8 @@ pub fn plan_create_views(
                 } => {
                     // If the user specified targets, validate they are all in the PostgresSourceDetails
                     // otherwise create them from the contents of PostgresSourceDetails
-                    let targets = {
-                        if targets.is_some() {
+                    let targets = match targets {
+                        Some(targets) => {
                             let known: HashSet<String> =
                                 HashSet::from_iter(details.tables.iter().flat_map(|t| {
                                     // It is easier to put both schema_name.table_name and table_name into the hashset than to peel off the namespace from a string
@@ -1454,9 +1454,8 @@ pub fn plan_create_views(
                                         ),
                                     ]
                                 }));
-                            let wanted: HashSet<String> = HashSet::from_iter(
-                                targets.clone().unwrap().iter().map(|t| t.name.to_string()),
-                            );
+                            let wanted: HashSet<String> =
+                                HashSet::from_iter(targets.iter().map(|t| t.name.to_string()));
                             let diff = wanted.difference(&known);
                             if diff.clone().count() > 0 {
                                 error!("During create views user specified tables not found: {:?}  Known tables: {:?}", diff, known);
@@ -1467,21 +1466,20 @@ pub fn plan_create_views(
                                         .join(", ")
                                 ));
                             }
-                            targets.unwrap()
-                        } else {
-                            details
-                                .tables
-                                .iter()
-                                .map(|t| {
-                                    let name =
-                                        UnresolvedObjectName::qualified(&[&t.namespace, &t.name]);
-                                    CreateViewsSourceTarget {
-                                        name: name.clone(),
-                                        alias: Some(name),
-                                    }
-                                })
-                                .collect()
+                            targets
                         }
+                        None => details
+                            .tables
+                            .iter()
+                            .map(|t| {
+                                let name =
+                                    UnresolvedObjectName::qualified(&[&t.namespace, &t.name]);
+                                CreateViewsSourceTarget {
+                                    name: name.clone(),
+                                    alias: Some(name),
+                                }
+                            })
+                            .collect(),
                     };
 
                     let mut viewdefs = Vec::with_capacity(details.tables.len());
