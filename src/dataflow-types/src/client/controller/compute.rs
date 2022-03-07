@@ -44,8 +44,15 @@ pub(super) struct ComputeControllerState<T> {
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
 }
 
-/// A controller for a compute instance.
-pub struct ComputeController<'a, C, T> {
+/// An immutable controller for a compute instance.
+pub struct ComputeController<'a, T> {
+    pub(super) _instance: ComputeInstanceId, // likely to be needed soon
+    pub(super) compute: &'a ComputeControllerState<T>,
+    pub(super) storage: &'a super::StorageControllerState<T>,
+}
+
+/// A mutable controller for a compute instance.
+pub struct ComputeControllerMut<'a, C, T> {
     pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a mut ComputeControllerState<T>,
     pub(super) storage: &'a mut super::StorageControllerState<T>,
@@ -95,22 +102,43 @@ impl<T: Timestamp + Lattice> ComputeControllerState<T> {
 }
 
 // Public interface
-impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
-    /// Acquires a handle to a controller for the storage instance.
+impl<'a, T: Timestamp + Lattice> ComputeController<'a, T> {
+    /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage(&mut self) -> crate::client::controller::StorageController<C, T> {
+    pub fn storage(&self) -> crate::client::controller::StorageController<T> {
         crate::client::controller::StorageController {
-            storage: &mut self.storage,
-            client: &mut self.client,
+            storage: &self.storage,
         }
     }
+
     /// Acquire a handle to the collection state associated with `id`.
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+    pub fn collection(&self, id: GlobalId) -> Result<&'a CollectionState<T>, ComputeError> {
         self.compute
             .collections
             .get(&id)
             .ok_or(ComputeError::IdentifierMissing(id))
     }
+}
+
+impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
+    /// Constructs an immutable handle from this mutable handle.
+    pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
+        ComputeController {
+            _instance: self.instance,
+            storage: &self.storage,
+            compute: &self.compute,
+        }
+    }
+
+    /// Acquires a mutable handle to a controller for the storage instance.
+    #[inline]
+    pub fn storage_mut(&mut self) -> crate::client::controller::StorageControllerMut<C, T> {
+        crate::client::controller::StorageControllerMut {
+            storage: &mut self.storage,
+            client: &mut self.client,
+        }
+    }
+
     /// Creates and maintains the described dataflows, and initializes state for their output.
     ///
     /// This method creates dataflows whose inputs are still readable at the dataflow `as_of`
@@ -153,7 +181,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
             for (index_id, _) in dataflow.index_imports.iter() {
-                let collection = self.collection(*index_id)?;
+                let collection = self.as_ref().collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*index_id))?;
@@ -180,7 +208,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
                 .iter()
                 .map(|id| (*id, changes.clone()))
                 .collect();
-            self.storage()
+            self.storage_mut()
                 .update_read_capabilities(&mut storage_read_updates)
                 .await;
             // Update compute read capabilities for inputs.
@@ -243,7 +271,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     pub async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
-        self.validate_ids(identifiers.iter().cloned())?;
+        self.as_ref().validate_ids(identifiers.iter().cloned())?;
 
         let compaction_commands = identifiers
             .into_iter()
@@ -255,7 +283,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
     /// Drops the read capability for the indexes and allows their resources to be reclaimed.
     pub async fn drop_indexes(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
-        self.validate_ids(identifiers.iter().cloned())?;
+        self.as_ref().validate_ids(identifiers.iter().cloned())?;
 
         let compaction_commands = identifiers
             .into_iter()
@@ -274,7 +302,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
     ) -> Result<(), ComputeError> {
-        let since = self.collection(id)?.read_capabilities.frontier();
+        let since = self.as_ref().collection(id)?.read_capabilities.frontier();
 
         if !since.less_equal(&timestamp) {
             Err(ComputeError::PeekSinceViolation(id))?;
@@ -362,7 +390,17 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 }
 
 // Internal interface
-impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
+impl<'a, T: Timestamp + Lattice> ComputeController<'a, T> {
+    /// Validate that a collection exists for all identifiers, and error if any do not.
+    pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
+        for id in ids {
+            self.collection(id)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
     /// Acquire a mutable reference to the collection state, should it exist.
     pub(super) fn collection_mut(
         &mut self,
@@ -372,13 +410,6 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
             .collections
             .get_mut(&id)
             .ok_or(ComputeError::IdentifierMissing(id))
-    }
-    /// Validate that a collection exists for all identifiers, and error if any do not.
-    pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
-        for id in ids {
-            self.collection(id)?;
-        }
-        Ok(())
     }
 
     /// Accept write frontier updates from the compute layer.
@@ -457,6 +488,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
         for (id, change) in compute_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
+                    .as_ref()
                     .collection(*id)
                     .unwrap()
                     .read_capabilities
@@ -477,7 +509,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeController<'a, C, T> {
 
         // We may have storage consequences to process.
         if !storage_todo.is_empty() {
-            self.storage()
+            self.storage_mut()
                 .update_read_capabilities(&mut storage_todo)
                 .await;
         }

@@ -38,8 +38,13 @@ pub struct StorageControllerState<T> {
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
 }
 
-/// A controller for a storage instance.
-pub struct StorageController<'a, C, T> {
+/// An immutable controller for a storage instance.
+pub struct StorageController<'a, T> {
+    pub(super) storage: &'a StorageControllerState<T>,
+}
+
+/// A mutable controller for a storage instance.
+pub struct StorageControllerMut<'a, C, T> {
     pub(super) storage: &'a mut StorageControllerState<T>,
     pub(super) client: &'a mut C,
 }
@@ -70,13 +75,24 @@ impl<T> StorageControllerState<T> {
 }
 
 // Public interface
-impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError> {
+impl<'a, T: Timestamp + Lattice> StorageController<'a, T> {
+    /// Acquire an immutable reference to the collection state, should it exist.
+    pub fn collection(&self, id: GlobalId) -> Result<&'a CollectionState<T>, StorageError> {
         self.storage
             .collections
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
+}
+
+impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
+    /// Constructs an immutable handle from this mutable handle.
+    pub fn as_ref<'b>(&'b self) -> StorageController<'b, T> {
+        StorageController {
+            storage: &self.storage,
+        }
+    }
+
     /// Create the sources described in the individual CreateSourceCommand commands.
     ///
     /// Each command carries the source id, the  source description, an initial `since` read
@@ -102,7 +118,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             }
         }
         for binding in bindings.iter() {
-            if let Ok(collection) = self.collection(binding.id) {
+            if let Ok(collection) = self.as_ref().collection(binding.id) {
                 let (ref desc, ref since) = collection.description;
                 if (desc, since) != (&binding.desc, &binding.since) {
                     Err(StorageError::SourceIdReused(binding.id))?
@@ -124,7 +140,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
     }
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     pub async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        self.validate_ids(identifiers.iter().cloned())?;
+        self.as_ref().validate_ids(identifiers.iter().cloned())?;
         let compaction_commands = identifiers
             .into_iter()
             .map(|id| (id, Antichain::new()))
@@ -160,7 +176,8 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         frontiers: Vec<(GlobalId, Antichain<T>)>,
     ) -> Result<(), StorageError> {
         // Validate that the ids exist.
-        self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+        self.as_ref()
+            .validate_ids(frontiers.iter().map(|(id, _)| *id))?;
 
         let policies = frontiers
             .into_iter()
@@ -221,7 +238,20 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
 }
 
 // Internal interface
-impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
+impl<'a, T: Timestamp + Lattice> StorageController<'a, T> {
+    /// Validate that a collection exists for all identifiers, and error if any do not.
+    pub(super) fn validate_ids(
+        &self,
+        ids: impl Iterator<Item = GlobalId>,
+    ) -> Result<(), StorageError> {
+        for id in ids {
+            self.collection(id)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
     /// Acquire a mutable reference to the collection state, should it exist.
     pub(super) fn collection_mut(
         &mut self,
@@ -231,13 +261,6 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
             .collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
-    }
-    /// Validate that a collection exists for all identifiers, and error if any do not.
-    pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), StorageError> {
-        for id in ids {
-            self.collection(id)?;
-        }
-        Ok(())
     }
 
     /// Accept write frontier updates from the compute layer.
@@ -300,6 +323,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageController<'a, C, T> {
         for (id, change) in storage_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
+                    .as_ref()
                     .collection(*id)
                     .unwrap()
                     .read_capabilities
