@@ -9,6 +9,25 @@
 
 $ set-sql-timeout duration=1s
 
+# Test \d <object> command
+> CREATE TABLE tbl (a int, b text)
+
+> CREATE INDEX tbl_ind ON tbl (b)
+
+> CREATE INDEX tbl_lower_ind ON tbl (lower(b), a)
+
+$ psql-execute command="\d tbl"
+\                Table "public.tbl"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | NULL
+ b      | text    |           |          | NULL
+Indexes:
+    "tbl_ind" arrangement (b)
+    "tbl_lower_ind" arrangement (pg_catalog.lower(b),a)
+
+> DROP TABLE tbl CASCADE
+
 # What schemas do we have by default?
 > SHOW SCHEMAS
 public
@@ -490,7 +509,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-43
+19
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing

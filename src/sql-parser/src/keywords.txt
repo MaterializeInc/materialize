@@ -28,6 +28,7 @@ Alter
 And
 Any
 Arn
+Arrangement
 Array
 As
 Asc
@@ -85,6 +86,7 @@ Default
 Delete
 Delimited
 Desc
+Details
 Discard
 Discover
 Distinct

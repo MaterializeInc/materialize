@@ -64,3 +64,35 @@ addEventListener("DOMContentLoaded", () => {
   }}();
 </script>
 {{end}}
+
+{{/* Tabs */}}
+<script>
+  $(document).ready(function () {
+
+    // make nav-tab lists from tab-panes
+    $('.tab-content').find('.tab-pane').each(function (idx, item) {
+      var navTabs = $(this).closest('.code-tabs').find('.nav-tabs'),
+        title = $(this).attr('title');
+      navTabs.append('<li><a href="#">' + title + '</a></li');
+    });
+
+    // activate first tab and tab-pane
+    $('.nav-tabs li:first-child').addClass('active').click()
+    $('.tab-content div:first-child').addClass('active').click()
+
+    // click
+    $('.nav-tabs a').click(function (e) {
+
+      e.preventDefault();
+
+      var tab = $(this).parent(),
+        tabIndex = tab.index(),
+        tabPanel = $(this).closest('.code-tabs'),
+        tabPane = tabPanel.find('.tab-pane').eq(tabIndex);
+      tabPanel.find('.active').removeClass('active');
+      tab.addClass('active');
+      tabPane.addClass('active');
+
+    });
+  });
+</script>

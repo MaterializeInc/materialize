@@ -108,14 +108,33 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 
 > CREATE MATERIALIZED VIEW join (b, foo_sum, bar_sum) AS SELECT * FROM foo JOIN bar USING (b);
 
-! SELECT * FROM bar;
-contains:At least one input has no complete timestamps yet:
+# Verify that we don't see any data yet. We can't use `set-sql-timeout` here
+# because the SELECT is blocked in the coordinator. For the same reason we
+# can't use `DECLARE c CURSOR FOR SELECT ...` (see #10763).
 
-! SELECT * FROM foo;
-contains:At least one input has no complete timestamps yet:
+> BEGIN
 
-! SELECT * FROM join ;
-contains:At least one input has no complete timestamps yet:
+> DECLARE c CURSOR FOR TAIL (SELECT * FROM bar)
+
+> FETCH ALL c WITH (timeout = '2s');
+
+> ROLLBACK
+
+> BEGIN
+
+> DECLARE c CURSOR FOR TAIL (SELECT * FROM foo)
+
+> FETCH ALL c WITH (timeout = '2s');
+
+> ROLLBACK
+
+> BEGIN
+
+> DECLARE c CURSOR FOR TAIL (SELECT * FROM join)
+
+> FETCH ALL c WITH (timeout = '2s');
+
+> ROLLBACK
 
 $ kafka-ingest format=avro topic=foo schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}

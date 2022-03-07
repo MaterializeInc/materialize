@@ -381,12 +381,12 @@ Field       | Type       | Meaning
 The `mz_peek_active` source describes all read queries ("peeks") that are
 pending in the dataflow layer.
 
-Field    | Type       | Meaning
----------|------------|--------
-`uuid`   | [`text`]   | The ID of the connection that requested the peek. `uuid` is a misnomer; connection IDs are 32-bit unsigned integers.
-`worker` | [`bigint`] | The ID of the worker thread servicing the peek.
-`id`     | [`text`]   | The ID of the index the peek is targeting.
-`time`   | [`bigint`] | The timestamp the peek has requested.
+Field      | Type       | Meaning
+-----------|------------|--------
+`id`       | [`uuid`]   | The ID of the peek request.
+`worker`   | [`bigint`] | The ID of the worker thread servicing the peek.
+`index_id` | [`text`]   | The ID of the index the peek is targeting.
+`time`     | [`bigint`] | The timestamp the peek has requested.
 
 ### `mz_peek_durations`
 
@@ -629,12 +629,15 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_access_methods`](https://www.postgresql.org/docs/current/catalog-pg-access-methods.html)
   * [`pg_attribute`](https://www.postgresql.org/docs/current/catalog-pg-attribute.html)
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
+  * [`pg_collation`](https://www.postgresql.org/docs/current/catalog-pg-collation.html)
   * [`pg_constraint`](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
   * [`pg_database`](https://www.postgresql.org/docs/current/catalog-pg-database.html)
   * [`pg_description`](https://www.postgresql.org/docs/current/catalog-pg-description.html)
   * [`pg_enum`](https://www.postgresql.org/docs/current/catalog-pg-enum.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
+  * [`pg_inherits`](https://www.postgresql.org/docs/current/catalog-pg-inherits.html)
   * [`pg_namespace`](https://www.postgresql.org/docs/current/catalog-pg-namespace.html)
+  * [`pg_policy`](https://www.postgresql.org/docs/current/catalog-pg-policy.html)
   * [`pg_proc`](https://www.postgresql.org/docs/current/catalog-pg-proc.html)
   * [`pg_range`](https://www.postgresql.org/docs/current/catalog-pg-range.html)
   * [`pg_roles`](https://www.postgresql.org/docs/current/catalog-pg-roles.html)
@@ -679,6 +682,7 @@ Materialize should use the documented [`mz_catalog`](#mz_catalog) API instead.
 [`text`]: /sql/types/text
 [`timestamp`]: /sql/types/timestamp
 [`timestamp with time zone`]: /sql/types/timestamp
+[`uuid`]: /sql/types/uuid
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [oid]: /sql/types/oid
 [`text array`]: /sql/types/array

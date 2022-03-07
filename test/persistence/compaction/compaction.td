@@ -157,8 +157,11 @@ f1
 7
 8
 
-# All of the previously inserted batches get compacted together into one batch.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
------
-1
+# TODO: This suddenly started flaking fairly frequently with nothing related in
+# persist seemingly changing. Reenable when we figure out what's going on.
+#
+# # All of the previously inserted batches get compacted together into one batch.
+# > SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
+# value
+# -----
+# 1

@@ -11,8 +11,6 @@ use mz_pgrepr::Type;
 use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
 use mz_repr::strconv;
 
-use crate::EvalError;
-
 sqlfunc!(
     #[sqlname = "oidtostring"]
     #[preserves_uniqueness = true]
@@ -70,17 +68,8 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    fn pg_get_constraintdef(_oid: Option<Oid>) -> Result<String, EvalError> {
-        Err(EvalError::Unsupported {
-            feature: "pg_get_constraintdef".to_string(),
-            issue_no: Some(9483),
-        })
-    }
-);
-
-sqlfunc!(
     fn mz_type_name<'a>(oid: Oid) -> Option<String> {
-        if let Some(t) = Type::from_oid(oid.0) {
+        if let Ok(t) = Type::from_oid(oid.0) {
             Some(t.name().to_string())
         } else {
             None

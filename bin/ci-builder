@@ -105,7 +105,8 @@ files=$(cat \
     | LC_ALL=C sort -z \
     | xargs -0 sha1sum)
 files+="
-date:$rust_date
+rust-version:$rust_version
+rust-date:$rust_date
 arch:$arch_gcc
 "
 tag=$(echo "$files" | python3 -c '

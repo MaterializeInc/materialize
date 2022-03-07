@@ -193,11 +193,11 @@ WHERE l_quantity = 24
   AND l_quantity BETWEEN 3 AND 2 + 2
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#0)
 
 %2 =
@@ -239,11 +239,11 @@ WHERE c_acctbal >= o_totalprice
   AND l_shipDATE >= o_orderdate
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#0) (#1)
 
 %2 =
@@ -298,11 +298,11 @@ GROUP BY 1,
          2
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#0) (#1)
 
 %2 =
@@ -362,13 +362,13 @@ GROUP BY 1,
          2
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | Filter (#3 != 1), (#3 != 2), (#3 != 6)
 | Project (#2..=#5, #12)
 | ArrangeBy (#4)
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#1)
 
 %2 =
@@ -409,12 +409,12 @@ WHERE l_commitDATE >= '1998-03-22'
   OR l_receiptDATE = o_orderdate
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | Project (#0, #4, #11, #12)
 | ArrangeBy (#2)
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | Project (#0, #4)
 
 %2 = Let l0 =
@@ -423,7 +423,7 @@ WHERE l_commitDATE >= '1998-03-22'
 | Project (#0..=#4)
 
 %3 = Let l1 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | Filter (null || (((#0 <= 100) && (#0 >= 59)) && (#11 >= 1998-03-22)))
 
 %4 =
@@ -488,12 +488,12 @@ WHERE l_quantity = 17
                     33)
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | Project (#0, #4)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#0)
 
 %2 =
@@ -537,11 +537,11 @@ WHERE l_receiptDATE BETWEEN '1992-06-21' AND '1992-11-22'
 GROUP BY 1
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#0) (#1)
 
 %2 =
@@ -595,13 +595,13 @@ GROUP BY 1,
          2
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | Filter (#3 != 4)
 | Project (#5, #10)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#1)
 
 %2 =
@@ -649,11 +649,11 @@ WHERE o_orderkey BETWEEN 117 AND 165 + 124
 GROUP BY 1
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#0) (#1)
 
 %2 =
@@ -703,13 +703,13 @@ WHERE l_extendedprice < o_totalprice
 GROUP BY 1
 ----
 %0 =
-| Get materialize.public.lineitem (u9)
+| Get materialize.public.lineitem (u7)
 | Filter (#10 <= 1994-03-17), (#0 >= 53)
 | Project (#0, #5)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.orders (u5)
+| Get materialize.public.orders (u4)
 | ArrangeBy (#0)
 
 %2 =

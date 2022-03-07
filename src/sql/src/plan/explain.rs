@@ -473,7 +473,7 @@ impl<'a> Explanation<'a> {
             ),
             Parameter(i) => write!(f, "${}", i),
             Literal(row, _) => write!(f, "{}", row.unpack_first()),
-            CallNullary(func) => write!(f, "{}()", func),
+            CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
                 write!(f, "{}(", func)?;
                 self.fmt_scalar_expr(f, expr)?;

@@ -14,4 +14,13 @@
   CONNECTION 'host=toxiproxy port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source'
 
+> DROP SOURCE IF EXISTS mz_source_alter CASCADE;
+
+> CREATE MATERIALIZED SOURCE mz_source_alter
+  FROM POSTGRES
+  CONNECTION 'host=toxiproxy port=5432 user=postgres password=postgres dbname=postgres'
+  PUBLICATION 'mz_source_alter'
+
 > CREATE MATERIALIZED VIEWS FROM SOURCE mz_source;
+
+> CREATE MATERIALIZED VIEWS FROM SOURCE mz_source_alter;

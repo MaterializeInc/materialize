@@ -189,8 +189,10 @@ class Composition:
         name: str,
         preserve_ports: bool = False,
         silent: bool = False,
+        munge_services: bool = True,
     ):
         self.name = name
+        self.description = None
         self.repo = repo
         self.preserve_ports = preserve_ports
         self.silent = silent
@@ -226,6 +228,7 @@ class Composition:
             module = importlib.util.module_from_spec(spec)
             assert isinstance(spec.loader, importlib.abc.Loader)
             spec.loader.exec_module(module)
+            self.description = inspect.getdoc(module)
             for name, fn in getmembers(module, isfunction):
                 if name.startswith("workflow_"):
                     # The name of the workflow is the name of the function
@@ -250,7 +253,8 @@ class Composition:
         )
 
         # The CLI driver will handle acquiring these dependencies.
-        self.dependencies = self._munge_services(compose["services"].items())
+        if munge_services:
+            self.dependencies = self._munge_services(compose["services"].items())
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.

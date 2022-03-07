@@ -32,7 +32,7 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
-    PeekWhen, Plan, ReadThenWritePlan, TailFrom, TailPlan,
+    Plan, ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -65,7 +65,7 @@ pub fn plan_insert(
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
-    let expr = expr.optimize_and_lower(&scx.into());
+    let expr = expr.optimize_and_lower(&scx.into())?;
 
     Ok(Plan::Insert(InsertPlan { id, values: expr }))
 }
@@ -116,7 +116,7 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, anyhow::Error> {
     selection.bind_parameters(&params)?;
-    let selection = selection.optimize_and_lower(&scx.into());
+    let selection = selection.optimize_and_lower(&scx.into())?;
     let mut assignments_outer = HashMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(&params)?;
@@ -151,12 +151,7 @@ pub fn plan_select(
     let query::PlannedQuery {
         expr, finishing, ..
     } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
-
-    let when = match as_of.map(|e| query::plan_as_of(scx, e)).transpose()? {
-        Some(ts) => PeekWhen::AtTimestamp(ts),
-        None => PeekWhen::Immediately,
-    };
-
+    let when = query::plan_as_of(scx, as_of)?;
     Ok(Plan::Peek(PeekPlan {
         source: expr,
         when,
@@ -268,7 +263,7 @@ pub fn plan_query(
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
     Ok(query::PlannedQuery {
-        expr: expr.optimize_and_lower(&scx.into()),
+        expr: expr.optimize_and_lower(&scx.into())?,
         desc,
         finishing,
         depends_on,
@@ -365,11 +360,11 @@ pub fn plan_tail(
         }
     };
 
-    let ts = as_of.map(|e| query::plan_as_of(scx, e)).transpose()?;
+    let when = query::plan_as_of(scx, as_of)?;
     let options = TailOptions::try_from(options)?;
     Ok(Plan::Tail(TailPlan {
         from,
-        ts,
+        when,
         with_snapshot: options.snapshot.unwrap_or(true),
         copy_to,
         emit_progress: options.progress.unwrap_or(false),

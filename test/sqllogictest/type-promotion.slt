@@ -280,7 +280,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map lower(chartostr(strtochar("a")))
+| Map lower(chartostr(strtochar(strtochar("a"))))
 
 EOF
 
@@ -291,7 +291,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (strtochar("a") < strtochar(strtovarchar("a")))
+| Map (strtochar(strtochar("a")) < strtochar(strtovarchar("a")))
 
 EOF
 
@@ -303,7 +303,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (chartostr(strtochar("a")) < "a")
+| Map (chartostr(strtochar(strtochar("a"))) < "a")
 
 EOF
 
@@ -324,7 +324,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map coalesce(strtochar("a"), strtochar(strtovarchar("a")), strtochar("a"))
+| Map coalesce(strtochar(strtochar("a")), strtochar(strtovarchar("a")), strtochar("a"))
 
 EOF
 

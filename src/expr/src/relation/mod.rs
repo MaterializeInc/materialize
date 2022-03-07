@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -46,6 +46,21 @@ pub mod join_input_mapper;
 ///
 /// Until we fix those, we need to stick with the larger recursion limit.
 pub const RECURSION_LIMIT: usize = 2048;
+
+/// A trait for types that describe how to build a collection.
+pub trait CollectionPlan {
+    /// Appends global identifiers on which this plan depends to `out`.
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>);
+
+    /// Returns the global identifiers on which this plan depends.
+    ///
+    /// See [`CollectionPlan::depends_on_into`] to reuse an existing `BTreeSet`.
+    fn depends_on(&self) -> BTreeSet<GlobalId> {
+        let mut out = BTreeSet::new();
+        self.depends_on_into(&mut out);
+        out
+    }
+}
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -1039,32 +1054,6 @@ impl MirRelationExpr {
         }
     }
 
-    /// Returns the distinct global identifiers on which this expression
-    /// depends.
-    ///
-    /// See [`MirRelationExpr::global_uses_into`] to reuse an existing vector.
-    pub fn global_uses(&self) -> Vec<GlobalId> {
-        let mut out = vec![];
-        self.global_uses_into(&mut out);
-        out.sort();
-        out.dedup();
-        out
-    }
-
-    /// Appends global identifiers on which this expression depends to `out`.
-    ///
-    /// Unlike [`MirRelationExpr::global_uses`], this method does not deduplicate
-    /// the global identifiers.
-    pub fn global_uses_into(&self, out: &mut Vec<GlobalId>) {
-        if let MirRelationExpr::Get {
-            id: Id::Global(id), ..
-        } = self
-        {
-            out.push(*id);
-        }
-        self.visit_children(|expr| expr.global_uses_into(out))
-    }
-
     /// Pretty-print this MirRelationExpr to a string.
     ///
     /// This method allows an additional `ExprHumanizer` which can annotate
@@ -1372,6 +1361,18 @@ impl MirRelationExpr {
         F: FnMut(&mut MirScalarExpr),
     {
         MirRelationExprVisitor::new().visit_scalars_mut(self, f)
+    }
+}
+
+impl CollectionPlan for MirRelationExpr {
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        if let MirRelationExpr::Get {
+            id: Id::Global(id), ..
+        } = self
+        {
+            out.insert(*id);
+        }
+        self.visit_children(|expr| expr.depends_on_into(out))
     }
 }
 

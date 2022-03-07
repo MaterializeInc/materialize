@@ -30,7 +30,7 @@ use std::mem;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use mz_expr::{func as expr_func, GlobalId, Id, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_expr::{func as expr_func, GlobalId, Id, LocalId, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -68,8 +68,8 @@ use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::Params;
 use crate::plan::{transform_ast, PlanContext};
+use crate::plan::{Params, QueryWhen};
 
 pub struct PlannedQuery<E> {
     pub expr: E,
@@ -729,10 +729,12 @@ where
 }
 
 /// Plans an expression in the AS OF position of a `SELECT` or `TAIL` statement.
-pub fn plan_as_of<'a>(
-    scx: &'a StatementContext,
-    mut expr: Expr<Raw>,
-) -> Result<MirScalarExpr, PlanError> {
+pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Raw>>) -> Result<QueryWhen, PlanError> {
+    let mut expr = match expr {
+        None => return Ok(QueryWhen::Immediately),
+        Some(expr) => expr,
+    };
+
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
@@ -750,9 +752,10 @@ pub fn plan_as_of<'a>(
         allow_subqueries: false,
         allow_windows: false,
     };
-    Ok(plan_expr(ecx, &expr)?
+    let expr = plan_expr(ecx, &expr)?
         .type_as_any(ecx)?
-        .lower_uncorrelated()?)
+        .lower_uncorrelated()?;
+    Ok(QueryWhen::AtTimestamp(expr))
 }
 
 pub fn plan_default_expr(
@@ -2941,16 +2944,8 @@ fn plan_cast(
         Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
         _ => plan_expr(ecx, expr)?,
     };
-
-    let expr = match expr {
-        // Maintain the stringness of literals strings to preserve any
-        // side effects of Explicit casts (going through plan_coerce
-        // uses Assignment casts).
-        CoercibleScalarExpr::LiteralString(..) => expr.type_as(&ecx, &ScalarType::String)?,
-        expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
-    };
-
     let ecx = &ecx.with_name("CAST");
+    let expr = typeconv::plan_coerce(ecx, expr, &to_scalar_type)?;
     let expr = typeconv::plan_cast(ecx, CastContext::Explicit, expr, &to_scalar_type)?;
     Ok(expr.into())
 }
@@ -3367,7 +3362,6 @@ fn plan_array_subquery(
     ecx: &ExprContext,
     query: &Query<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    // Array subqueries rely on the array_cat function which requires experimental mode
     ecx.require_experimental_mode("array subquery")?;
     plan_vector_like_subquery(
         ecx,

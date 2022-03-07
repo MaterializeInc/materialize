@@ -33,6 +33,7 @@ def workflow_default(c: Composition) -> None:
         restart_pg_during_replication,
         restart_mz_during_replication,
     ]:
+        print(f">>> Running scenario {scenario.__name__}")
         begin(c)
         scenario(c)
         end(c)
@@ -86,19 +87,20 @@ def disconnect_pg_during_snapshot(c: Composition) -> None:
         "toxiproxy-restore-connection.td",
         "delete-rows-t1.td",
         "delete-rows-t2.td",
+        "alter-table.td",
     )
 
 
 def restart_pg_during_snapshot(c: Composition) -> None:
     restart_pg(c)
 
-    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td")
+    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
 
 
 def restart_mz_during_snapshot(c: Composition) -> None:
     restart_mz(c)
 
-    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td")
+    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
 
 
 def disconnect_pg_during_replication(c: Composition) -> None:
@@ -107,13 +109,16 @@ def disconnect_pg_during_replication(c: Composition) -> None:
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "delete-rows-t2.td",
+        "alter-table.td",
         "toxiproxy-close-connection.td",
         "toxiproxy-restore-connection.td",
     )
 
 
 def restart_pg_during_replication(c: Composition) -> None:
-    c.run("testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td")
+    c.run(
+        "testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td"
+    )
 
     restart_pg(c)
 
@@ -121,7 +126,9 @@ def restart_pg_during_replication(c: Composition) -> None:
 
 
 def restart_mz_during_replication(c: Composition) -> None:
-    c.run("testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td")
+    c.run(
+        "testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td"
+    )
 
     restart_mz(c)
 

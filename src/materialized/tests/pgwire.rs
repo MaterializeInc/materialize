@@ -480,7 +480,12 @@ fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
     pg_test_inner(dir)
 }
 
+// Ignore this test for now because many things have changed and will change
+// about how the coordinator works and communicates with dataflow. We are going
+// to, at the least, wait for that work to stabilize before deciding if/how to
+// test it, which may or may not involve coordtest or a similar thing.
 #[tokio::test]
+#[ignore]
 async fn test_coordtest() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 

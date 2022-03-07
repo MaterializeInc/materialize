@@ -25,13 +25,11 @@ $ kafka-create-topic topic=data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
-! SELECT * FROM data
-contains:unable to automatically determine a query timestamp
+> SELECT * FROM data
 
 > CREATE VIEW data_view as SELECT * from data
 
-! SELECT * FROM data_view
-contains:unable to automatically determine a query timestamp
+> SELECT * FROM data_view
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b
@@ -134,9 +132,13 @@ b  max
 ------
 2  1
 
-# Cannot select from unmaterialized view.
-! SELECT * from data_view
-contains:unable to automatically determine a query timestamp
+> SELECT * from data_view
+a  b
+----
+1  1
+2  1
+3  1
+1  2
 
 # Can create sink from unmaterialized view.
 > CREATE SINK not_mat_sink2 FROM data_view
@@ -184,8 +186,12 @@ b  c
 # Unmaterialize test5.
 > DROP INDEX idx1
 
-! SELECT * from test5
-contains:unable to automatically determine a query timestamp
+# Still works.
+> SELECT * from test5
+b  c
+------
+1  3
+2  1
 
 > SHOW FULL VIEWS LIKE 'test5'
 name        type     materialized  volatility
@@ -202,13 +208,21 @@ d
 -1
 3
 
-# Dependencies have not re-materialized as a result of creating a dependent
+# Dependencies are still queryable after creating a dependent
 # materialized view.
-! SELECT * from test5
-contains:unable to automatically determine a query timestamp
+> SELECT * from test5
+b  c
+------
+1  3
+2  1
 
-! SELECT * from data_view
-contains:unable to automatically determine a query timestamp
+> SELECT * from data_view
+a  b
+----
+1  1
+2  1
+3  1
+1  2
 
 # Rematerialize data_view creating an index on it.
 > CREATE INDEX data_view_idx on data_view(a)
@@ -365,16 +379,27 @@ c  d
 # Unmaterialize source.
 > DROP INDEX mat_data_primary_idx1
 
-! SELECT * from mat_data
-contains:unable to automatically determine a query timestamp
+# Still works.
+> SELECT * from mat_data
+a  b
+----
+-1 0
+-1 1
+3  4
+1  2
 
 > SELECT * from test7
 count
 -----
 4
 
-! SELECT * from test8
-contains:unable to automatically determine a query timestamp
+> SELECT * from test8
+c  d
+-----
+0  1
+-1 1
+-4 -3
+-2 -1
 
 $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=2
 {"a": -3, "b": 0}

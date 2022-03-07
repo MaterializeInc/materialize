@@ -191,9 +191,9 @@ impl LogVariant {
             }
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
-                .with_column("uuid", ScalarType::String.nullable(false))
+                .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
-                .with_column("id", ScalarType::String.nullable(false))
+                .with_column("index_id", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 

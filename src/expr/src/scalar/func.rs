@@ -59,7 +59,7 @@ mod impls;
 pub use impls::*;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub enum NullaryFunc {
+pub enum UnmaterializableFunc {
     CurrentDatabase,
     CurrentSchemasWithSystem,
     CurrentSchemasWithoutSystem,
@@ -75,50 +75,52 @@ pub enum NullaryFunc {
     Version,
 }
 
-impl NullaryFunc {
+impl UnmaterializableFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
-            NullaryFunc::CurrentDatabase => ScalarType::String.nullable(false),
+            UnmaterializableFunc::CurrentDatabase => ScalarType::String.nullable(false),
             // TODO: The `CurrentSchemas` functions should should return name[].
-            NullaryFunc::CurrentSchemasWithSystem => {
+            UnmaterializableFunc::CurrentSchemasWithSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            NullaryFunc::CurrentSchemasWithoutSystem => {
+            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            NullaryFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
-            NullaryFunc::CurrentUser => ScalarType::String.nullable(false),
-            NullaryFunc::MzClusterId => ScalarType::Uuid.nullable(false),
-            NullaryFunc::MzLogicalTimestamp => ScalarType::Numeric {
+            UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzClusterId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
             .nullable(false),
-            NullaryFunc::MzSessionId => ScalarType::Uuid.nullable(false),
-            NullaryFunc::MzUptime => ScalarType::Interval.nullable(true),
-            NullaryFunc::MzVersion => ScalarType::String.nullable(false),
-            NullaryFunc::PgBackendPid => ScalarType::Int32.nullable(false),
-            NullaryFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
-            NullaryFunc::Version => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
+            UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
+            UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
+            UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::Version => ScalarType::String.nullable(false),
         }
     }
 }
 
-impl fmt::Display for NullaryFunc {
+impl fmt::Display for UnmaterializableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NullaryFunc::CurrentDatabase => f.write_str("current_database"),
-            NullaryFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
-            NullaryFunc::CurrentSchemasWithoutSystem => f.write_str("current_schemas(false)"),
-            NullaryFunc::CurrentTimestamp => f.write_str("current_timestamp"),
-            NullaryFunc::CurrentUser => f.write_str("current_user"),
-            NullaryFunc::MzClusterId => f.write_str("mz_cluster_id"),
-            NullaryFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
-            NullaryFunc::MzSessionId => f.write_str("mz_session_id"),
-            NullaryFunc::MzUptime => f.write_str("mz_uptime"),
-            NullaryFunc::MzVersion => f.write_str("mz_version"),
-            NullaryFunc::PgBackendPid => f.write_str("pg_backend_pid"),
-            NullaryFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
-            NullaryFunc::Version => f.write_str("version"),
+            UnmaterializableFunc::CurrentDatabase => f.write_str("current_database"),
+            UnmaterializableFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
+            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
+                f.write_str("current_schemas(false)")
+            }
+            UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
+            UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
+            UnmaterializableFunc::MzClusterId => f.write_str("mz_cluster_id"),
+            UnmaterializableFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
+            UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
+            UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
+            UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
+            UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
+            UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
+            UnmaterializableFunc::Version => f.write_str("version"),
         }
     }
 }
@@ -468,7 +470,7 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
     // Supporting other encodings is tracked by #2282.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
@@ -537,7 +539,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
@@ -2351,7 +2353,6 @@ pub enum BinaryFunc {
     LogNumeric,
     Power,
     PowerNumeric,
-    PgGetConstraintdef,
 }
 
 impl BinaryFunc {
@@ -2593,10 +2594,6 @@ impl BinaryFunc {
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
-            BinaryFunc::PgGetConstraintdef => Err(EvalError::Unsupported {
-                feature: "pg_get_constraintdef".to_string(),
-                issue_no: Some(9483),
-            }),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2731,8 +2728,6 @@ impl BinaryFunc {
             | RoundNumeric | SubNumeric => {
                 ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
-
-            PgGetConstraintdef => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -2828,7 +2823,6 @@ impl BinaryFunc {
                 | ModFloat32
                 | ModFloat64
                 | ModNumeric
-                | PgGetConstraintdef
         )
     }
 
@@ -2970,7 +2964,6 @@ impl BinaryFunc {
             | Power
             | PowerNumeric
             | RepeatString
-            | PgGetConstraintdef
             | ArrayRemove
             | ListRemove
             | LikeEscape => false,
@@ -3141,7 +3134,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
-            BinaryFunc::PgGetConstraintdef => f.write_str("pg_get_constraintdef"),
         }
     }
 }
@@ -3462,7 +3454,6 @@ pub enum UnaryFunc {
     Sleep(Sleep),
     RescaleNumeric(NumericMaxScale),
     PgColumnSize(PgColumnSize),
-    PgGetConstraintdef(PgGetConstraintdef),
     MzRowSize(MzRowSize),
     MzTypeName(MzTypeName),
 }
@@ -3534,7 +3525,6 @@ derive_unary!(
     CastOidToRegType,
     CastRegTypeToOid,
     PgColumnSize,
-    PgGetConstraintdef,
     MzRowSize,
     MzTypeName,
     IsNull,
@@ -3670,7 +3660,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -3908,7 +3897,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4168,7 +4156,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4375,7 +4362,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4449,7 +4435,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -5141,7 +5126,10 @@ fn array_to_string<'a>(
             out.push_str(delimiter);
         }
     }
-    out.truncate(out.len() - delimiter.len()); // lop off last delimiter
+    if out.len() > 0 {
+        // Lop off last delimiter only if string is not empty
+        out.truncate(out.len() - delimiter.len());
+    }
     Ok(Datum::String(temp_storage.push_string(out)))
 }
 
@@ -5425,7 +5413,7 @@ fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
                 EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
             })?;
             // nth from the back
-            byte_indices.nth(n).unwrap_or_else(|| string.len())
+            byte_indices.nth(n).unwrap_or(string.len())
         }
         Ordering::Less => {
             let n = usize::try_from(n.abs() - 1).map_err(|_| {
@@ -5460,7 +5448,7 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         let n = usize::try_from(n).map_err(|_| {
             EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
         })?;
-        byte_indices.nth(n).unwrap_or_else(|| string.len())
+        byte_indices.nth(n).unwrap_or(string.len())
     };
 
     Ok(Datum::String(&string[start_in_bytes..]))
@@ -5801,11 +5789,14 @@ fn mz_render_typmod<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let oid = oid.unwrap_uint32();
     let typmod = typmod.unwrap_int32();
-    let typ = Type::from_oid_and_typmod(oid, typmod);
-    let constraint = typ.as_ref().and_then(|typ| typ.constraint());
-    Ok(Datum::String(
-        temp_storage.push_string(constraint.display_or("").to_string()),
-    ))
+    let s = match Type::from_oid_and_typmod(oid, typmod) {
+        Ok(typ) => typ.constraint().display_or("").to_string(),
+        // Match dubious PostgreSQL behavior of outputting the unmodified
+        // `typmod` when positive if the type OID/typmod is invalid.
+        Err(_) if typmod >= 0 => format!("({typmod})"),
+        Err(_) => "".into(),
+    };
+    Ok(Datum::String(temp_storage.push_string(s)))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -5914,6 +5905,7 @@ impl VariadicFunc {
 
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
+        let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
             Coalesce | Greatest | Least => {
                 assert!(input_types.len() > 0);
@@ -5924,7 +5916,8 @@ impl VariadicFunc {
                     "coalesce/greatest/least inputs did not have uniform type: {:?}",
                     input_types
                 );
-                input_types.into_first().nullable(true)
+                let nullable = input_types.iter().all(|ty| ty.nullable);
+                input_types.into_first().nullable(nullable)
             }
             Concat => ScalarType::String.nullable(true),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
@@ -5977,7 +5970,7 @@ impl VariadicFunc {
                 custom_name: None,
             }
             .nullable(false),
-            SplitPart => ScalarType::String.nullable(true),
+            SplitPart => ScalarType::String.nullable(in_nullable),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),

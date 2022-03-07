@@ -175,8 +175,8 @@ fn try_push_reduce_through_join(
     // 1) Partition the join constraints into constraints containing a group
     //    key and onstraints that don't.
     let (new_join_equivalences, component_equivalences): (Vec<_>, Vec<_>) = equivalences
-        .to_vec()
-        .into_iter()
+        .iter()
+        .cloned()
         .partition(|cls| cls.iter().any(|expr| group_key.contains(expr)));
 
     // 2) Find the connected components that remain after removing constraints

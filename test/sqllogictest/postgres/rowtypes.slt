@@ -36,6 +36,16 @@ create type complex as (r float8, i float8);
 statement ok
 create type quad as (c1 complex, c2 complex);
 
+# and with various container types as fields
+statement ok
+CREATE TYPE int4_list AS LIST (element_type = int4);
+
+statement ok
+CREATE TYPE int4_map AS MAP (key_type = text, value_type = int4);
+
+statement ok
+CREATE TYPE melange AS (a int[][], b text[], c int4_list, d int4_map);
+
 # Some simple tests of conversions and row construction
 query T
 select (1.1, 2.2)::complex
@@ -61,6 +71,11 @@ query T
 select ROW((1.1, 2.2), ROW(3.3, 4.4)::complex)::quad
 ----
  ("(1.1,2.2)","(3.3,4.4)")
+
+query T
+select ROW(ARRAY[[1, 2], [3, 4]], ARRAY['abc', 'def'], LIST[5, 6, 7], '{g=>8, h=>9}')::melange::text;
+----
+({{1,2},{3,4}},{abc,def},{5,6,7},{g=>8,h=>9})
 
 # implicit casting of nested records to a named composite type
 

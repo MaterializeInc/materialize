@@ -11,29 +11,29 @@
 
 #![warn(missing_debug_implementations, missing_docs)]
 
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize, Serializer};
+use tracing::error;
+
+use mz_expr::{
+    permutation_for_arrangement, CollectionPlan, EvalError, GlobalId, Id, JoinInputMapper, LocalId,
+    MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
+};
+use mz_repr::{Datum, Diff, Row};
+
+use self::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use self::reduce::{KeyValPlan, ReducePlan};
+use self::threshold::ThresholdPlan;
+use self::top_k::TopKPlan;
+use crate::DataflowDescription;
+
 pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
-
-use join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
-use mz_expr::permutation_for_arrangement;
-use reduce::{KeyValPlan, ReducePlan};
-use threshold::ThresholdPlan;
-use top_k::TopKPlan;
-use tracing::error;
-
-use serde::{Deserialize, Serialize, Serializer};
-
-use crate::DataflowDescription;
-use mz_expr::{
-    EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, TableFunc,
-};
-
-use mz_repr::{Datum, Diff, Row};
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 
 // This function exists purely to convert the HashMap into a BTreeMap,
 // so that the value will be stable, for the benefit of tests
@@ -933,12 +933,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         // Build each object in order, registering the arrangements it forms.
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build.into_iter() {
-            let (plan, keys) = Self::from_mir(&build.view, &mut arrangements)?;
+            let (plan, keys) = Self::from_mir(&build.plan, &mut arrangements)?;
             arrangements.insert(Id::Global(build.id), keys);
-            objects_to_build.push(crate::BuildDesc {
-                id: build.id,
-                view: plan,
-            });
+            objects_to_build.push(crate::BuildDesc { id: build.id, plan });
         }
 
         Ok(DataflowDescription {
@@ -947,7 +944,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             objects_to_build,
             index_exports: desc.index_exports,
             sink_exports: desc.sink_exports,
-            dependent_objects: desc.dependent_objects,
             as_of: desc.as_of,
             debug_name: desc.debug_name,
             id: desc.id,
@@ -1135,6 +1131,69 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input_mfp: input_mfp.clone(),
                     })
                     .collect(),
+            }
+        }
+    }
+}
+
+impl<T> CollectionPlan for Plan<T> {
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        match self {
+            Plan::Constant { rows: _ } => (),
+            Plan::Get {
+                id,
+                keys: _,
+                mfp: _,
+                key_val: _,
+            } => match id {
+                Id::Global(id) => {
+                    out.insert(*id);
+                }
+                Id::Local(_) | Id::LocalBareSource => (),
+            },
+            Plan::Let { id: _, value, body } => {
+                value.depends_on_into(out);
+                body.depends_on_into(out);
+            }
+            Plan::Join { inputs, plan: _ } | Plan::Union { inputs } => {
+                for input in inputs {
+                    input.depends_on_into(out);
+                }
+            }
+            Plan::Mfp {
+                input,
+                mfp: _,
+                input_key_val: _,
+            }
+            | Plan::FlatMap {
+                input,
+                func: _,
+                exprs: _,
+                mfp: _,
+                input_key: _,
+            }
+            | Plan::ArrangeBy {
+                input,
+                forms: _,
+                input_key: _,
+                input_mfp: _,
+            }
+            | Plan::Reduce {
+                input,
+                key_val_plan: _,
+                plan: _,
+                input_key: _,
+            }
+            | Plan::TopK {
+                input,
+                top_k_plan: _,
+            }
+            | Plan::Negate { input }
+            | Plan::Threshold {
+                input,
+                threshold_plan: _,
+            } => {
+                input.depends_on_into(out);
             }
         }
     }
